@@ -1,0 +1,499 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  author
+  admin
+}
+
+enum NovelStatus {
+  draft
+  published
+  archived
+}
+
+enum ChapterStatus {
+  draft
+  published
+  scheduled
+  archived
+}
+
+enum Visibility {
+  public
+  followers
+  private
+}
+
+enum CommentTargetType {
+  novel
+  chapter
+  post
+}
+
+enum MessageType {
+  text
+  novelCard
+  postCard
+  system
+}
+
+enum ConversationType {
+  direct
+  system
+}
+
+enum CoverSourceType {
+  upload
+  ai_generated
+}
+
+enum ContentAuditStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AiProviderType {
+  text
+  image
+}
+
+enum AgentSessionStatus {
+  active
+  archived
+}
+
+enum AgentRunMode {
+  plan
+  act
+  review
+}
+
+enum AgentRunStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum AgentType {
+  writingOrchestrator
+  storyPlanner
+  draftWriter
+  continuityEditor
+  styleEditor
+  loreLibrarian
+  coverPromptAgent
+}
+
+enum AgentActionKind {
+  planChapter
+  draftChapter
+  continueChapter
+  rewriteSelection
+  polishSelection
+  reviewContinuity
+  generateCoverPrompt
+}
+
+enum AgentArtifactType {
+  chapterPlan
+  chapterDraft
+  chapterContinuation
+  rewriteSelection
+  polishSelection
+  continuityReview
+  coverPrompt
+}
+
+enum ProjectMemoryType {
+  novelSummary
+  worldbuilding
+  characterCard
+  chapterSummary
+  timelineEvent
+  foreshadowing
+  stylePreference
+  continuityRule
+}
+
+enum SmsVerificationPurpose {
+  login
+  register
+}
+
+model User {
+  id                      String               @id @default(cuid()) @db.VarChar(64)
+  email                   String?              @unique @db.VarChar(255)
+  phone                   String?              @unique @db.VarChar(32)
+  passwordHash            String               @map("password_hash") @db.VarChar(255)
+  nickname                String               @db.VarChar(64)
+  avatarUrl               String?              @map("avatar_url")
+  profileCoverUrl         String?              @map("profile_cover_url")
+  bio                     String?
+  role                    UserRole             @default(user)
+  isAuthor                Boolean              @default(false) @map("is_author")
+  followerCount           Int                  @default(0) @map("follower_count")
+  followingCount          Int                  @default(0) @map("following_count")
+  novelCount              Int                  @default(0) @map("novel_count")
+  postCount               Int                  @default(0) @map("post_count")
+  unreadMessageCount      Int                  @default(0) @map("unread_message_count")
+  unreadNotificationCount Int                  @default(0) @map("unread_notification_count")
+  createdAt               DateTime             @default(now()) @map("created_at")
+  updatedAt               DateTime             @updatedAt @map("updated_at")
+  novels                  Novel[]
+  chapters                Chapter[]
+  comments                Comment[]
+  posts                   Post[]
+  coverAssets             CoverAsset[]
+  conversationMembers     ConversationMember[]
+  messages                Message[]
+  aiUsageLogs             AiUsageLog[]
+  agentSessions           AgentSession[]
+  agentRuns               AgentRun[]
+  smsVerificationCodes    SmsVerificationCode[]
+
+  @@map("users")
+}
+
+model SmsVerificationCode {
+  id         String                 @id @default(cuid()) @db.VarChar(64)
+  userId     String?                @map("user_id") @db.VarChar(64)
+  phone      String                 @db.VarChar(32)
+  purpose    SmsVerificationPurpose
+  codeHash   String                 @map("code_hash") @db.VarChar(128)
+  expiresAt  DateTime               @map("expires_at")
+  consumedAt DateTime?              @map("consumed_at")
+  attempts   Int                    @default(0)
+  provider   String                 @default("tencentcloud") @db.VarChar(32)
+  meta       Json?
+  createdAt  DateTime               @default(now()) @map("created_at")
+  updatedAt  DateTime               @updatedAt @map("updated_at")
+  user       User?                  @relation(fields: [userId], references: [id])
+
+  @@index([phone, purpose, createdAt])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sms_verification_codes")
+}
+
+model Novel {
+  id              String       @id @default(cuid()) @db.VarChar(64)
+  authorId        String       @map("author_id") @db.VarChar(64)
+  title           String       @db.VarChar(128)
+  displayTitle    String?      @map("display_title") @db.VarChar(128)
+  slug            String       @unique @db.VarChar(160)
+  summary         String
+  categoryId      String?      @map("category_id") @db.VarChar(64)
+  categoryName    String?      @map("category_name") @db.VarChar(64)
+  tagNames        String[]     @default([]) @map("tag_names")
+  status          NovelStatus  @default(draft)
+  visibility      Visibility   @default(public)
+  coverAssetId    String?      @unique @map("cover_asset_id") @db.VarChar(64)
+  coverPrompt     String?      @map("cover_prompt")
+  wordCount       Int          @default(0) @map("word_count")
+  chapterCount    Int          @default(0) @map("chapter_count")
+  commentCount    Int          @default(0) @map("comment_count")
+  favoriteCount   Int          @default(0) @map("favorite_count")
+  likeCount       Int          @default(0) @map("like_count")
+  viewCount       Int          @default(0) @map("view_count")
+  lastChapterTitle String?     @map("last_chapter_title") @db.VarChar(128)
+  lastPublishedAt DateTime?    @map("last_published_at")
+  publishedAt     DateTime?    @map("published_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  author          User         @relation(fields: [authorId], references: [id])
+  coverAsset      CoverAsset?  @relation("NovelCover", fields: [coverAssetId], references: [id])
+  coverAssets     CoverAsset[] @relation("CoverAssetCandidates")
+  chapters        Chapter[]
+  comments        Comment[]
+  posts           Post[]
+  aiUsageLogs     AiUsageLog[]
+  agentSessions   AgentSession[]
+  agentRuns       AgentRun[]
+  projectMemoryEntries ProjectMemoryEntry[]
+
+  @@index([authorId])
+  @@index([status, visibility])
+  @@index([categoryId])
+  @@map("novels")
+}
+
+model Chapter {
+  id           String        @id @default(cuid()) @db.VarChar(64)
+  novelId      String        @map("novel_id") @db.VarChar(64)
+  authorId     String        @map("author_id") @db.VarChar(64)
+  title        String        @db.VarChar(128)
+  summary      String?
+  content      String
+  orderIndex   Int           @map("order_index")
+  wordCount    Int           @default(0) @map("word_count")
+  status       ChapterStatus @default(draft)
+  visibility   Visibility    @default(public)
+  commentCount Int           @default(0) @map("comment_count")
+  publishedAt  DateTime?     @map("published_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  novel        Novel         @relation(fields: [novelId], references: [id])
+  author       User          @relation(fields: [authorId], references: [id])
+  comments     Comment[]
+  aiUsageLogs  AiUsageLog[]
+  agentRuns    AgentRun[]
+  projectMemoryEntries ProjectMemoryEntry[]
+
+  @@unique([novelId, orderIndex])
+  @@index([novelId, status])
+  @@map("chapters")
+}
+
+model Comment {
+  id          String             @id @default(cuid()) @db.VarChar(64)
+  userId      String             @map("user_id") @db.VarChar(64)
+  targetType  CommentTargetType  @map("target_type")
+  targetId    String             @map("target_id") @db.VarChar(64)
+  novelId     String?            @map("novel_id") @db.VarChar(64)
+  chapterId   String?            @map("chapter_id") @db.VarChar(64)
+  postId      String?            @map("post_id") @db.VarChar(64)
+  parentId    String?            @map("parent_id") @db.VarChar(64)
+  rootId      String?            @map("root_id") @db.VarChar(64)
+  content     String
+  likeCount   Int                @default(0) @map("like_count")
+  replyCount  Int                @default(0) @map("reply_count")
+  auditStatus ContentAuditStatus @default(pending) @map("audit_status")
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+  author      User               @relation(fields: [userId], references: [id])
+  novel       Novel?             @relation(fields: [novelId], references: [id])
+  chapter     Chapter?           @relation(fields: [chapterId], references: [id])
+  post        Post?              @relation(fields: [postId], references: [id])
+
+  @@index([targetType, targetId])
+  @@index([parentId])
+  @@index([novelId])
+  @@index([chapterId])
+  @@index([postId])
+  @@map("comments")
+}
+
+model Topic {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  name      String   @unique @db.VarChar(64)
+  slug      String   @unique @db.VarChar(80)
+  postCount Int      @default(0) @map("post_count")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  posts     Post[]
+
+  @@map("topics")
+}
+
+model Post {
+  id            String             @id @default(cuid()) @db.VarChar(64)
+  userId        String             @map("user_id") @db.VarChar(64)
+  topicId       String?            @map("topic_id") @db.VarChar(64)
+  relatedNovelId String?           @map("related_novel_id") @db.VarChar(64)
+  content       String
+  excerpt       String             @db.VarChar(240)
+  imageUrls     String[]           @default([]) @map("image_urls")
+  likeCount     Int                @default(0) @map("like_count")
+  commentCount  Int                @default(0) @map("comment_count")
+  favoriteCount Int                @default(0) @map("favorite_count")
+  auditStatus   ContentAuditStatus @default(pending) @map("audit_status")
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+  author        User               @relation(fields: [userId], references: [id])
+  topic         Topic?             @relation(fields: [topicId], references: [id])
+  relatedNovel  Novel?             @relation(fields: [relatedNovelId], references: [id])
+  comments      Comment[]
+
+  @@index([userId])
+  @@index([topicId])
+  @@index([relatedNovelId])
+  @@map("posts")
+}
+
+model Conversation {
+  id                 String               @id @default(cuid()) @db.VarChar(64)
+  type               ConversationType     @default(direct)
+  title              String?              @db.VarChar(128)
+  avatarUrl          String?              @map("avatar_url")
+  unreadCount        Int                  @default(0) @map("unread_count")
+  lastMessagePreview String?              @map("last_message_preview") @db.VarChar(240)
+  lastMessageAt      DateTime?            @map("last_message_at")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  members            ConversationMember[]
+  messages           Message[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  id             String       @id @default(cuid()) @db.VarChar(64)
+  conversationId String       @map("conversation_id") @db.VarChar(64)
+  userId         String       @map("user_id") @db.VarChar(64)
+  joinedAt       DateTime     @default(now()) @map("joined_at")
+  lastReadAt     DateTime?    @map("last_read_at")
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_members")
+}
+
+model Message {
+  id             String    @id @default(cuid()) @db.VarChar(64)
+  conversationId String    @map("conversation_id") @db.VarChar(64)
+  senderId       String    @map("sender_id") @db.VarChar(64)
+  type           MessageType
+  content        String
+  relatedId      String?   @map("related_id") @db.VarChar(64)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  sender         User      @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model CoverAsset {
+  id             String          @id @default(cuid()) @db.VarChar(64)
+  novelId        String?         @map("novel_id") @db.VarChar(64)
+  ownerUserId    String          @map("owner_user_id") @db.VarChar(64)
+  sourceType     CoverSourceType @map("source_type")
+  imageUrl       String          @map("image_url")
+  prompt         String?
+  negativePrompt String?         @map("negative_prompt")
+  modelName      String?         @map("model_name") @db.VarChar(128)
+  width          Int?
+  height         Int?
+  createdAt      DateTime        @default(now()) @map("created_at")
+  owner          User            @relation(fields: [ownerUserId], references: [id])
+  novel          Novel?          @relation("CoverAssetCandidates", fields: [novelId], references: [id])
+  novelAsCover   Novel?          @relation("NovelCover")
+
+  @@index([ownerUserId])
+  @@index([novelId])
+  @@map("cover_assets")
+}
+
+model AiUsageLog {
+  id             String         @id @default(cuid()) @db.VarChar(64)
+  userId         String         @map("user_id") @db.VarChar(64)
+  novelId        String?        @map("novel_id") @db.VarChar(64)
+  chapterId      String?        @map("chapter_id") @db.VarChar(64)
+  coverAssetId   String?        @map("cover_asset_id") @db.VarChar(64)
+  targetType     String         @map("target_type") @db.VarChar(32)
+  targetId       String?        @map("target_id") @db.VarChar(64)
+  providerType   AiProviderType @map("provider_type")
+  providerMode   String         @map("provider_mode") @db.VarChar(16)
+  modelName      String         @map("model_name") @db.VarChar(128)
+  action         String         @db.VarChar(64)
+  requestTokens  Int?           @map("request_tokens")
+  responseTokens Int?           @map("response_tokens")
+  durationMs     Int            @map("duration_ms")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  user           User           @relation(fields: [userId], references: [id])
+  novel          Novel?         @relation(fields: [novelId], references: [id])
+  chapter        Chapter?       @relation(fields: [chapterId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([targetType, targetId])
+  @@map("ai_usage_logs")
+}
+
+model AgentSession {
+  id        String             @id @default(cuid()) @db.VarChar(64)
+  userId    String             @map("user_id") @db.VarChar(64)
+  novelId   String             @map("novel_id") @db.VarChar(64)
+  title     String             @db.VarChar(160)
+  status    AgentSessionStatus @default(active)
+  lastRunAt DateTime?          @map("last_run_at")
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+  user      User               @relation(fields: [userId], references: [id])
+  novel     Novel              @relation(fields: [novelId], references: [id])
+  runs      AgentRun[]
+
+  @@index([userId, novelId])
+  @@index([novelId, updatedAt])
+  @@map("agent_sessions")
+}
+
+model AgentRun {
+  id            String         @id @default(cuid()) @db.VarChar(64)
+  sessionId     String         @map("session_id") @db.VarChar(64)
+  userId        String         @map("user_id") @db.VarChar(64)
+  novelId       String         @map("novel_id") @db.VarChar(64)
+  chapterId     String?        @map("chapter_id") @db.VarChar(64)
+  mode          AgentRunMode
+  action        AgentActionKind
+  agentType     AgentType      @map("agent_type")
+  status        AgentRunStatus @default(queued)
+  inputSummary  String?        @map("input_summary")
+  outputSummary String?        @map("output_summary")
+  errorMessage  String?        @map("error_message")
+  startedAt     DateTime?      @map("started_at")
+  finishedAt    DateTime?      @map("finished_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  session       AgentSession   @relation(fields: [sessionId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
+  novel         Novel          @relation(fields: [novelId], references: [id])
+  chapter       Chapter?       @relation(fields: [chapterId], references: [id])
+  artifacts     AgentArtifact[]
+  memoryEntries ProjectMemoryEntry[]
+
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
+  @@index([novelId, createdAt])
+  @@map("agent_runs")
+}
+
+model AgentArtifact {
+  id           String            @id @default(cuid()) @db.VarChar(64)
+  runId        String            @map("run_id") @db.VarChar(64)
+  artifactType AgentArtifactType @map("artifact_type")
+  title        String            @db.VarChar(160)
+  summary      String?
+  content      String
+  metadata     Json?
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+  run          AgentRun          @relation(fields: [runId], references: [id])
+
+  @@index([runId, createdAt])
+  @@map("agent_artifacts")
+}
+
+model ProjectMemoryEntry {
+  id              String            @id @default(cuid()) @db.VarChar(64)
+  runId           String?           @map("run_id") @db.VarChar(64)
+  novelId         String            @map("novel_id") @db.VarChar(64)
+  sourceChapterId String?           @map("source_chapter_id") @db.VarChar(64)
+  memoryType      ProjectMemoryType @map("memory_type")
+  title           String            @db.VarChar(160)
+  content         String
+  importance      Int               @default(50)
+  embeddingRef    String?           @map("embedding_ref") @db.VarChar(255)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  run             AgentRun?         @relation(fields: [runId], references: [id])
+  novel           Novel             @relation(fields: [novelId], references: [id])
+  sourceChapter   Chapter?          @relation(fields: [sourceChapterId], references: [id])
+
+  @@index([runId])
+  @@index([novelId, memoryType])
+  @@index([sourceChapterId])
+  @@map("project_memory_entries")
+}

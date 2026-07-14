@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --app-bg: #f4f0e8;
+  --surface-default: rgba(255, 252, 247, 0.94);
+  --surface-muted: #ede7de;
+  --surface-contrast: #17212d;
+  --surface-contrast-hover: #1f2d3d;
+  --text-primary: #111827;
+  --text-secondary: #5f6977;
+  --text-tertiary: #7b8593;
+  --text-contrast: #f8fafc;
+  --border-subtle: rgba(17, 24, 39, 0.08);
+  --border-strong: rgba(17, 24, 39, 0.14);
+  --border-contrast: rgba(255, 255, 255, 0.12);
+  --accent-strong: #28435f;
+  --accent-soft: rgba(40, 67, 95, 0.1);
+  --accent-border: rgba(40, 67, 95, 0.18);
+  --focus-ring: rgba(40, 67, 95, 0.22);
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+  --shadow-soft: 0 10px 28px rgba(17, 24, 39, 0.04);
+  --shell-max-width: 1360px;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-bg: #111318;
+  --surface-default: rgba(22, 26, 33, 0.94);
+  --surface-muted: #171b22;
+  --surface-contrast: #f2f4f7;
+  --surface-contrast-hover: #ffffff;
+  --text-primary: #f3f5f7;
+  --text-secondary: #b4bcc7;
+  --text-tertiary: #8993a2;
+  --text-contrast: #121620;
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.22);
+  --border-contrast: rgba(17, 24, 39, 0.08);
+  --accent-strong: #c9d6e6;
+  --accent-soft: rgba(160, 184, 211, 0.12);
+  --accent-border: rgba(160, 184, 211, 0.22);
+  --focus-ring: rgba(160, 184, 211, 0.2);
+  --shadow-soft: none;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--text-primary);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+::placeholder {
+  color: var(--text-tertiary);
+}
+
+@layer base {
+  body {
+    min-width: 320px;
+  }
+
+  img {
+    display: block;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    color: inherit;
+  }
+}
+
+.app-main-scroll {
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
