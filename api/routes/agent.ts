@@ -36,6 +36,7 @@ const router = Router()
 function writeSse(res: Response, event: string, payload: unknown) {
   res.write(`event: ${event}\n`)
   res.write(`data: ${JSON.stringify(payload)}\n\n`)
+  ;(res as Response & { flush?: () => void }).flush?.()
 }
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
@@ -445,6 +446,18 @@ router.post('/actions/execute', async (req: Request, res: Response): Promise<voi
       return
     }
 
+    const acceptsEventStream = String(req.headers.accept ?? '').includes('text/event-stream')
+
+    if (acceptsEventStream) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      })
+      res.flushHeaders?.()
+    }
+
     const payload = await executeWorkspaceAgentData(userId, {
       novelId: body.novelId,
       sessionId: body.sessionId,
@@ -461,7 +474,32 @@ router.post('/actions/execute', async (req: Request, res: Response): Promise<voi
       protagonist: body.protagonist,
       tone: body.tone,
       stylePreference: body.stylePreference,
-    })
+    }, acceptsEventStream
+      ? {
+          onProgress: (event) => {
+            writeSse(res, String(event.stage ?? 'status'), {
+              type: event.type ?? 'status',
+              stage: event.stage,
+              message: event.message,
+              runId: event.runId ?? null,
+              createdAt: event.createdAt,
+              data: event.data ?? {},
+            })
+          },
+        }
+      : undefined)
+
+    if (acceptsEventStream) {
+      writeSse(res, 'result', {
+        type: 'result',
+        ...payload,
+      })
+      writeSse(res, 'done', {
+        type: 'done',
+      })
+      res.end()
+      return
+    }
 
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {

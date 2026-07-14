@@ -490,11 +490,13 @@ export interface AgentActionPlanStep {
 export interface AgentActionPlan {
   mode: 'plan' | 'execute' | 'review'
   summary: string
+  thinking?: string[]
   steps: AgentActionPlanStep[]
 }
 
 export type AgentExecutionMode = 'plan' | 'build' | 'review'
 export type AgentExecutionAgentRole = 'primary' | 'specialist'
+export type AgentRouteStatusEvent = 'agent.selected' | 'route.decided' | 'specialist.started'
 
 export interface AgentExecutionAgent {
   agentType: AgentType
@@ -509,6 +511,23 @@ export interface AgentRouteDecision {
   task: string
   intentLabel: string
   summary: string
+  factors?: string[]
+}
+
+export interface AgentRuleBundle {
+  summary: string
+  rules: string[]
+}
+
+export interface AgentStoryMemoryDigestItem {
+  title: string
+  memoryType: ProjectMemoryType
+  excerpt: string
+}
+
+export interface AgentStoryMemoryDigest {
+  summary: string
+  items: AgentStoryMemoryDigestItem[]
 }
 
 export interface AgentActionHandoff {

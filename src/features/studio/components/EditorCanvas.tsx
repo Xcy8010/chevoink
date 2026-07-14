@@ -4,7 +4,8 @@ import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 
-import { type ChapterDraftState, type SaveState } from '../types'
+import { type ChapterDraftState, type ChapterPendingReview, type SaveState } from '../types'
+import ChapterChangeReview from './ChapterChangeReview'
 import { SaveStatusPill } from './StudioControls'
 
 type EditorCanvasProps = {
@@ -24,6 +25,10 @@ type EditorCanvasProps = {
   onStatusChange: (nextStatus: ChapterStatus) => void
   onChange: (next: ChapterDraftState) => void
   onRetrySave?: () => void
+  pendingChapterReview?: ChapterPendingReview | null
+  pendingChapterReviewBusy?: boolean
+  onKeepPendingReview?: () => void
+  onRevertPendingReview?: () => void
   embedded?: boolean
 }
 
@@ -44,6 +49,10 @@ export default function EditorCanvas({
   onStatusChange: _onStatusChange,
   onChange,
   onRetrySave,
+  pendingChapterReview = null,
+  pendingChapterReviewBusy = false,
+  onKeepPendingReview,
+  onRevertPendingReview,
   embedded = false,
 }: EditorCanvasProps) {
   const sectionClassName = embedded
@@ -125,7 +134,12 @@ export default function EditorCanvas({
             <Settings2 className="h-4 w-4" />
             章节设置
           </Button>
-          <Button onClick={onSave} variant="secondary" size="sm" disabled={chapterSaveState === 'saving'}>
+          <Button
+            onClick={onSave}
+            variant="secondary"
+            size="sm"
+            disabled={chapterSaveState === 'saving' || pendingChapterReviewBusy || Boolean(pendingChapterReview)}
+          >
             <Save className="h-4 w-4" />
             保存
           </Button>
@@ -137,20 +151,37 @@ export default function EditorCanvas({
       </div>
 
       <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
-        <textarea
-          value={chapterDraft.content}
-          onChange={(event) => {
-            onChange({ ...chapterDraft, content: event.target.value })
-            emitSelection(event.target)
-          }}
-          onSelect={(event) => emitSelection(event.currentTarget)}
-          onClick={(event) => emitSelection(event.currentTarget)}
-          onKeyUp={(event) => emitSelection(event.currentTarget)}
-          onBlur={(event) => emitSelection(event.currentTarget)}
-          rows={20}
-          className="min-h-[34rem] w-full flex-1 resize-y overflow-y-auto rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5 text-sm leading-8 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[var(--focus-ring)]"
-          placeholder="继续写这一章。章节标题、摘要、状态和可见范围已移到章节设置里。"
-        />
+        {pendingChapterReview ? (
+          <ChapterChangeReview
+            review={pendingChapterReview}
+            busy={pendingChapterReviewBusy}
+            onKeep={onKeepPendingReview ?? (() => undefined)}
+            onRevert={onRevertPendingReview ?? (() => undefined)}
+            className="min-h-0 flex-1"
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
+            <div className="border-b border-[var(--border-subtle)] pb-4">
+              <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
+              </p>
+            </div>
+            <textarea
+              value={chapterDraft.content}
+              onChange={(event) => {
+                onChange({ ...chapterDraft, content: event.target.value })
+                emitSelection(event.target)
+              }}
+              onSelect={(event) => emitSelection(event.currentTarget)}
+              onClick={(event) => emitSelection(event.currentTarget)}
+              onKeyUp={(event) => emitSelection(event.currentTarget)}
+              onBlur={(event) => emitSelection(event.currentTarget)}
+              rows={20}
+              className="mt-4 min-h-[30rem] w-full flex-1 resize-y overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
+              placeholder="继续写这一章的正文。"
+            />
+          </div>
+        )}
       </div>
     </Surface>
   )

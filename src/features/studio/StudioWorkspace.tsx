@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, Clock3, FileText, Globe2, LoaderCircle, Lock, RefreshCcw, Upload, Users, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -14,6 +14,8 @@ import type {
   AgentExecutionAgent,
   AgentExecutionMode,
   AgentRouteDecision,
+  AgentRuleBundle,
+  AgentStoryMemoryDigest,
   AgentWorkspaceToolPolicy,
   Chapter,
   CoverAsset,
@@ -53,12 +55,15 @@ import WritingAgentPanel from './components/WritingAgentPanel'
 import { ActionCommandButton, InputLabel } from './components/StudioControls'
 import type {
   AgentArtifact,
+  AgentLocalRollbackChapterSnapshot,
+  AgentLocalRollbackSnapshot,
   AgentRunState,
   AgentRunStatusMode,
   AgentRunStatusItem,
   AgentTab,
   AgentTaskType,
   ChapterDraftState,
+  ChapterPendingReview,
   CoverFormState,
   EditableNovelStatus,
   EditorSelectionState,
@@ -190,6 +195,49 @@ function extractNovelTitleCandidate(content: string): string | null {
   return null
 }
 
+function extractExplicitNovelTitleFromPrompt(promptText: string): string | null {
+  const normalized = promptText.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const quotedMatches = Array.from(normalized.matchAll(/[《“"]([^》”"\n]{1,24})[》”"]/g))
+  if (quotedMatches.length > 0 && /改成|改为|命名为|起名为|取名为|叫做|叫|换成/u.test(normalized)) {
+    const quoted = quotedMatches.at(-1)?.[1]?.trim()
+    if (quoted) {
+      return quoted
+    }
+  }
+
+  const directPatterns = [
+    /(?:把|将)?(?:作品|作品名|作品名字|书名|小说名|这部作品|这本书|这篇小说)(?:的)?(?:名字|名称|名)?(?:改成|改为|命名为|起名为|取名为|叫做|叫|换成)\s*([^\n，。！？；]{1,24})$/u,
+    /(?:改成|改为|命名为|起名为|取名为|叫做|叫|换成)\s*([^\n，。！？；]{1,24})$/u,
+  ]
+
+  for (const pattern of directPatterns) {
+    const match = normalized.match(pattern)
+    const candidate = match?.[1]?.trim()
+    if (!candidate) {
+      continue
+    }
+
+    const cleaned = candidate
+      .replace(/[》”"]$/u, '')
+      .replace(/[。！？；，,.]$/u, '')
+      .trim()
+
+    if (
+      cleaned &&
+      cleaned.length <= 24 &&
+      !/^(一个名|一个名字|名字|书名|作品名|小说名)$/u.test(cleaned)
+    ) {
+      return cleaned
+    }
+  }
+
+  return null
+}
+
 function extractChapterTitleCandidate(content: string, fallbackOrder: number): string | null {
   const parsed = extractChapterDraftFromContent(content, fallbackOrder)
   const parsedTitle = parsed?.title?.trim()
@@ -202,6 +250,18 @@ function extractChapterTitleCandidate(content: string, fallbackOrder: number): s
     .split('\n')
     .map((line) => stripLeadingListMarker(line))
     .filter(Boolean)
+
+  for (const line of lines) {
+    const labeledTitleMatch = line.match(/^(?:推荐章节名|章节标题|章节名称|章节名|标题|本章标题|建议标题)[:：]\s*(.+)$/)
+    if (labeledTitleMatch?.[1]?.trim()) {
+      return formatGeneratedChapterTitle(labeledTitleMatch[1].trim(), fallbackOrder)
+    }
+
+    const chapterHeadingMatch = line.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章(?:\s*[:：\-]\s*.+)?)$/)
+    if (chapterHeadingMatch?.[1]?.trim() && chapterHeadingMatch[1].trim() !== `第 ${fallbackOrder} 章`) {
+      return formatGeneratedChapterTitle(chapterHeadingMatch[1].trim(), fallbackOrder)
+    }
+  }
 
   for (const line of lines) {
     const quoted = extractQuotedTitle(line)
@@ -222,6 +282,23 @@ function extractChapterTitleCandidate(content: string, fallbackOrder: number): s
   return null
 }
 
+function formatGeneratedChapterTitle(rawTitle: string, fallbackOrder: number) {
+  const normalized = stripLeadingListMarker(rawTitle).replace(/^#{1,6}\s*/, '').trim()
+
+  if (!normalized) {
+    return `第 ${fallbackOrder} 章`
+  }
+
+  const chapterHeadingMatch = normalized.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[:：\-]\s*(.+))?$/)
+  if (chapterHeadingMatch) {
+    const chapterPrefix = chapterHeadingMatch[1].trim()
+    const chapterName = chapterHeadingMatch[2]?.trim()
+    return chapterName ? `${chapterPrefix}：${chapterName}` : chapterPrefix
+  }
+
+  return `第 ${fallbackOrder} 章：${normalized}`
+}
+
 function extractChapterDraftFromContent(content: string, fallbackOrder: number) {
   const lines = content
     .split('\n')
@@ -232,13 +309,12 @@ function extractChapterDraftFromContent(content: string, fallbackOrder: number) 
     return null
   }
 
-  const firstLine = stripLeadingListMarker(lines[0])
-  const titleMatch =
-    firstLine.match(/^(?:章节标题|章节名|标题)[:：]\s*(.+)$/) ??
-    firstLine.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章[^\n]*)$/)
+  const firstLine = stripLeadingListMarker(lines[0]).replace(/^#{1,6}\s*/, '').trim()
+  const labeledTitleMatch = firstLine.match(/^(?:章节标题|章节名|标题)[:：]\s*(.+)$/)
+  const chapterHeadingMatch = firstLine.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[:：\-]\s*(.+))?$/)
 
-  if (titleMatch) {
-    const title = (titleMatch[1] ?? titleMatch[0]).trim()
+  if (labeledTitleMatch || chapterHeadingMatch) {
+    const rawTitle = labeledTitleMatch?.[1] ?? firstLine
     const body = content
       .split('\n')
       .slice(1)
@@ -246,8 +322,8 @@ function extractChapterDraftFromContent(content: string, fallbackOrder: number) 
       .trim()
 
     return {
-      title: title || `第 ${fallbackOrder} 章`,
-      content: body || content.trim(),
+      title: formatGeneratedChapterTitle(rawTitle.trim(), fallbackOrder),
+      content: body,
     }
   }
 
@@ -257,17 +333,370 @@ function extractChapterDraftFromContent(content: string, fallbackOrder: number) 
   }
 }
 
+function isLikelyStandaloneTitleResult(content: string, fallbackOrder: number) {
+  const normalized = stripLeadingAssistantPreface(content)
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) {
+    return false
+  }
+
+  const candidateTitle = extractChapterTitleCandidate(normalized, fallbackOrder)
+  if (!candidateTitle) {
+    return false
+  }
+
+  const parsed = extractChapterDraftFromContent(normalized, fallbackOrder)
+  if (parsed?.content.trim() === '') {
+    return true
+  }
+
+  if (lines.length === 1) {
+    const compact = lines[0].replace(/\s+/g, '').trim()
+    return compact.length > 0 && compact.length <= 40 && !/[，。！？；：]/.test(compact)
+  }
+
+  if (
+    lines.length === 2 &&
+    /^第\s*[0-9一二三四五六七八九十百零]+\s*章$/u.test(lines[0]) &&
+    lines[1].length <= 40 &&
+    !/[，。！？；：]/.test(lines[1])
+  ) {
+    return true
+  }
+
+  return false
+}
+
+function stripCodeFenceWrapper(content: string) {
+  const trimmed = content.trim()
+
+  if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) {
+    return trimmed
+  }
+
+  return trimmed
+    .replace(/^```[a-zA-Z0-9_-]*\s*/, '')
+    .replace(/\s*```$/, '')
+    .trim()
+}
+
+function stripLeadingAssistantPreface(content: string) {
+  const normalized = stripCodeFenceWrapper(content)
+
+  const explicitPrefacePatterns = [
+    /^(?:抱歉|不好意思)[^\n]{0,80}?(?:以下|下面)是(?:完整的)?(?:章节|正文)内容[：:]\s*/u,
+    /^(?:以下|下面)是(?:完整的)?(?:章节|正文)内容[：:]\s*/u,
+    /^(?:我来(?:直接)?|我已经(?:为你)?|这就)(?:补上|整理|写出|给出)[^\n]{0,80}?[：:]\s*/u,
+  ]
+
+  for (const pattern of explicitPrefacePatterns) {
+    if (pattern.test(normalized)) {
+      return normalized.replace(pattern, '').trim()
+    }
+  }
+
+  const headingMatches = [
+    normalized.search(/(^|\n)#{1,6}\s+/),
+    normalized.search(/(^|\n)第\s*[0-9一二三四五六七八九十百零]+\s*章[^\n]*/),
+    normalized.search(/(^|\n)(?:章节标题|章节名|标题)[:：]/),
+  ].filter((index) => index > 0)
+
+  const firstHeadingIndex = headingMatches.length > 0 ? Math.min(...headingMatches) : -1
+  if (firstHeadingIndex > 0) {
+    const prefix = normalized.slice(0, firstHeadingIndex)
+    if (
+      containsAnyKeyword(prefix, ['抱歉', '不好意思', '以下是', '下面是', '完整的章节内容', '正文内容', '我来', '我已经'])
+    ) {
+      return normalized.slice(firstHeadingIndex).trim()
+    }
+  }
+
+  return normalized
+}
+
+function isLikelyConversationalWriteback(content: string) {
+  const normalized = stripCodeFenceWrapper(content).trim()
+
+  if (!normalized) {
+    return false
+  }
+
+  const compact = normalized.replace(/\s+/g, '')
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const firstLine = lines[0] ?? ''
+  const hasBodyLikeStructure =
+    lines.length >= 3 ||
+    /[\n]/.test(normalized) ||
+    /[“”"『「」』]/.test(normalized) ||
+    /(?:忽然|随后|此刻|这时|然后|门外|脚步|空气|目光|声音)/.test(normalized)
+
+  if (
+    /^(?:标题|章节标题|章节名|书名|作品名)[:：]\s*[^\n]{1,40}$/u.test(firstLine) ||
+    /^《[^》\n]{1,40}》$/u.test(firstLine)
+  ) {
+    return true
+  }
+
+  if (hasBodyLikeStructure || compact.length > 120) {
+    return [
+      /当前正文的第?[一1二2三3四4五5六6七7八8九9十0]+行/u,
+      /如果你觉得[^。！？\n]{0,80}(?:不合适|不满意|可以|想要)/u,
+      /可以直接告诉我[^。！？\n]{0,80}/u,
+      /我来给出修改后的完整/u,
+      /已经写进去了/u,
+      /不需要做任何操作/u,
+    ].some((pattern) => pattern.test(normalized))
+  }
+
+  return [
+    /^(?:抱歉|不好意思)[^。！？\n]{0,80}(?:标题|章节名|书名|作品名|这一章|这章)/u,
+    /^(?:可以|建议|推荐|不如)[^。！？\n]{0,50}(?:叫|命名为|取名为)/u,
+    /^(?:以下|下面|这里是)[^。！？\n]{0,60}(?:标题|章节名|书名|作品名|正文|内容)/u,
+    /^(?:我(?:来|给你|先|已经)|这就)[^。！？\n]{0,60}(?:标题|章节名|书名|作品名|整理|补上|给出)/u,
+    /^(?:当前正文的第?[一1二2三3四4五5六6七7八8九9十0]+行就是)/u,
+    /^(?:如果你觉得|如果保持现在的状态)/u,
+  ].some((pattern) => pattern.test(compact))
+}
+
+function prepareWritableChapterContent(content: string, fallbackOrder: number) {
+  const normalized = stripLeadingAssistantPreface(content)
+
+  if (isLikelyConversationalWriteback(normalized)) {
+    return ''
+  }
+
+  const parsed = extractChapterDraftFromContent(normalized, fallbackOrder)
+
+  if (parsed?.content && parsed.content.trim() && parsed.content.trim() !== normalized) {
+    return parsed.content.trim()
+  }
+
+  return normalized
+}
+
+function prepareWritableChapterDraft(content: string, fallbackOrder: number) {
+  const normalized = stripLeadingAssistantPreface(content)
+
+  if (isLikelyConversationalWriteback(normalized)) {
+    return null
+  }
+
+  if (isLikelyStandaloneTitleResult(normalized, fallbackOrder)) {
+    return {
+      title: extractChapterTitleCandidate(normalized, fallbackOrder) ?? '',
+      content: '',
+    }
+  }
+
+  const parsed = extractChapterDraftFromContent(normalized, fallbackOrder)
+  return {
+    title: parsed?.title?.trim() || '',
+    content: parsed ? parsed.content.trim() : normalized,
+  }
+}
+
+function isGenericChapterTitle(title: string, fallbackOrder: number) {
+  const normalized = title.replace(/\s+/g, '').trim()
+
+  if (!normalized) {
+    return true
+  }
+
+  return (
+    normalized === `第${fallbackOrder}章` ||
+    normalized === `第${fallbackOrder}章：第${fallbackOrder}章` ||
+    /^第[0-9一二三四五六七八九十百零]+章$/.test(normalized)
+  )
+}
+
+function resolveChapterTitleForWrite(currentTitle: string, generatedTitle: string, fallbackOrder: number) {
+  const normalizedCurrent = currentTitle.trim()
+  const normalizedGenerated = generatedTitle.trim()
+
+  if (
+    normalizedGenerated &&
+    normalizedGenerated !== `第 ${fallbackOrder} 章` &&
+    (!normalizedCurrent || isGenericChapterTitle(normalizedCurrent, fallbackOrder))
+  ) {
+    return normalizedGenerated
+  }
+
+  return normalizedCurrent || normalizedGenerated || `第 ${fallbackOrder} 章`
+}
+
+function replaceSelectionContentPrecisely(options: {
+  currentContent: string
+  replacement: string
+  selection: EditorSelectionState
+}) {
+  const { currentContent, replacement, selection } = options
+  const selectedText = selection.text.trim()
+
+  if (selection.end > selection.start && currentContent.slice(selection.start, selection.end) === selection.text) {
+    return `${currentContent.slice(0, selection.start)}${replacement}${currentContent.slice(selection.end)}`.trim()
+  }
+
+  if (selectedText) {
+    const selectedIndex = currentContent.indexOf(selection.text)
+    if (selectedIndex >= 0) {
+      return `${currentContent.slice(0, selectedIndex)}${replacement}${currentContent.slice(selectedIndex + selection.text.length)}`.trim()
+    }
+  }
+
+  return null
+}
+
 function containsAnyKeyword(value: string, keywords: string[]) {
   return keywords.some((keyword) => value.includes(keyword))
 }
 
-function shouldAutoRenameNovel(promptText: string, task: AgentTaskType) {
-  const normalized = promptText.trim()
-  return (
-    task === 'generate-novel-title' &&
-    containsAnyKeyword(normalized, ['命名', '起名', '取名', '书名', '作品名', '小说名']) &&
-    !containsAnyKeyword(normalized, ['候选', '备选', '多个', '几个', '建议', '方案'])
+function hasNovelNamingIntent(promptText: string) {
+  const normalized = promptText.replace(/\s+/g, '')
+  const mentionsNovelSubject = containsAnyKeyword(normalized, [
+    '书名',
+    '作品名',
+    '小说名',
+    '作品',
+    '小说',
+    '这本书',
+    '这部作品',
+    '这篇小说',
+  ])
+  const mentionsNamingAction = containsAnyKeyword(normalized, [
+    '命名',
+    '命个名',
+    '命一个名',
+    '起名',
+    '起个名',
+    '起个名字',
+    '取名',
+    '取个名',
+    '取个名字',
+    '改名',
+    '改个名',
+    '改个名字',
+    '换个名字',
+    '想个名字',
+  ])
+  const requestsMultipleOptions = containsAnyKeyword(normalized, ['候选', '备选', '多个', '几个', '建议', '方案'])
+  const mentionsChapterContext = containsAnyKeyword(normalized, [
+    '章节',
+    '章名',
+    '章节名',
+    '章节标题',
+    '这章',
+    '本章',
+    '这一章',
+  ])
+
+  return (mentionsNovelSubject && mentionsNamingAction) || (
+    containsAnyKeyword(normalized, ['书名', '作品名', '小说名']) &&
+    !requestsMultipleOptions &&
+    !mentionsChapterContext
   )
+}
+
+function parseChapterOrderToken(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    return null
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized)
+  }
+
+  const numerals = new Map([
+    ['零', 0],
+    ['一', 1],
+    ['二', 2],
+    ['两', 2],
+    ['三', 3],
+    ['四', 4],
+    ['五', 5],
+    ['六', 6],
+    ['七', 7],
+    ['八', 8],
+    ['九', 9],
+  ])
+
+  let result = 0
+  let current = 0
+
+  for (const char of normalized) {
+    if (char === '十') {
+      result += (current || 1) * 10
+      current = 0
+      continue
+    }
+
+    if (char === '百') {
+      result += (current || 1) * 100
+      current = 0
+      continue
+    }
+
+    const numeric = numerals.get(char)
+    if (numeric === undefined) {
+      return null
+    }
+
+    current = numeric
+  }
+
+  return result + current || null
+}
+
+function extractRequestedChapterOrder(promptText: string) {
+  const normalized = promptText.replace(/\s+/g, '')
+  const match = normalized.match(/第([0-9零一二三四五六七八九十百两]+)章/u)
+
+  if (!match) {
+    return null
+  }
+
+  return parseChapterOrderToken(match[1])
+}
+
+function resolveRequestedChapterOrder(promptText: string, chapterCount: number) {
+  const explicitOrder = extractRequestedChapterOrder(promptText)
+  if (explicitOrder && explicitOrder > 0) {
+    return explicitOrder
+  }
+
+  const normalized = promptText.replace(/\s+/g, '')
+  if (containsAnyKeyword(normalized, ['下一章', '下章'])) {
+    return Math.max(1, chapterCount + 1)
+  }
+
+  return Math.max(1, chapterCount + 1)
+}
+
+function resolveRequestedExistingChapterId(
+  promptText: string,
+  chapters: StudioPayload['chapters'],
+) {
+  const requestedOrder = extractRequestedChapterOrder(promptText)
+  if (!requestedOrder) {
+    return null
+  }
+
+  return chapters.find((chapter) => chapter.orderIndex === requestedOrder)?.id ?? null
+}
+
+function shouldAutoRenameNovel(promptText: string, task: AgentTaskType) {
+  if (task !== 'generate-novel-title' && task !== 'workspace-agent') {
+    return false
+  }
+
+  return hasNovelNamingIntent(promptText)
 }
 
 function shouldAutoRenameChapter(promptText: string, task: AgentTaskType) {
@@ -283,6 +712,8 @@ function shouldAutoRenameChapter(promptText: string, task: AgentTaskType) {
       '章节名称',
       '章节名',
       '章名',
+      '加标题',
+      '起标题',
       '给章节命名',
       '帮我给章节命名',
       '给这章命名',
@@ -295,9 +726,68 @@ function shouldAutoRenameChapter(promptText: string, task: AgentTaskType) {
   )
 }
 
-function shouldAutoCreateChapter(promptText: string) {
+function isTitleOnlyChapterRequest(promptText: string, task: AgentTaskType) {
   const normalized = promptText.trim()
-  return containsAnyKeyword(normalized, ['创建章节', '新建章节', '新增章节', '加一章', '开一章'])
+
+  if (task !== 'generate-chapter-titles' && task !== 'workspace-agent') {
+    return false
+  }
+
+  const titleIntentKeywords = [
+    '标题',
+    '题目',
+    '章节标题',
+    '章节名称',
+    '章节名',
+    '章名',
+    '给第二章加标题',
+    '给这章加标题',
+    '给这一章加标题',
+    '给本章加标题',
+    '给第二章起标题',
+    '给这章起标题',
+    '给这一章起标题',
+    '给本章起标题',
+    '命名',
+    '改名',
+  ]
+  const bodyIntentKeywords = [
+    '正文',
+    '内容',
+    '续写',
+    '扩写',
+    '补写',
+    '补全',
+    '展开',
+    '写一段',
+    '写点',
+    '写进去',
+    '写入',
+  ]
+
+  return containsAnyKeyword(normalized, titleIntentKeywords) && !containsAnyKeyword(normalized, bodyIntentKeywords)
+}
+
+function shouldAutoCreateChapter(promptText: string, currentChapterOrder?: number | null, chapterCount?: number) {
+  const normalized = promptText.replace(/\s+/g, '')
+  const explicitCreateKeywords = ['创建章节', '新建章节', '新增章节', '加一章', '开一章']
+  const bodyIntentKeywords = ['写', '起草', '生成', '续写', '扩写', '正文', '内容']
+
+  if (containsAnyKeyword(normalized, explicitCreateKeywords)) {
+    return true
+  }
+
+  const chapterOrder = extractRequestedChapterOrder(normalized)
+  if (chapterOrder === null) {
+    return containsAnyKeyword(normalized, ['下一章', '下章']) && containsAnyKeyword(normalized, bodyIntentKeywords)
+  }
+
+  if (!containsAnyKeyword(normalized, bodyIntentKeywords)) {
+    return false
+  }
+
+  const baselineOrder = Math.max(currentChapterOrder ?? 0, chapterCount ?? 0)
+  return chapterOrder > baselineOrder
 }
 
 function shouldAutoWriteChapter(promptText: string, task: AgentTaskType) {
@@ -305,6 +795,10 @@ function shouldAutoWriteChapter(promptText: string, task: AgentTaskType) {
 
   if (task === 'continue-chapter') {
     return true
+  }
+
+  if (isTitleOnlyChapterRequest(normalized, task)) {
+    return false
   }
 
   const explicitWriteKeywords = [
@@ -333,6 +827,16 @@ function shouldAutoWriteChapter(promptText: string, task: AgentTaskType) {
     '写本章',
     '生成正文',
     '填充正文',
+    '多写一点',
+    '多写一些',
+    '再写一点',
+    '再写一些',
+    '补充内容',
+    '扩充内容',
+    '丰富内容',
+    '展开写',
+    '展开这一章',
+    '补全这一章',
   ]
 
   if (task === 'draft-chapter') {
@@ -365,6 +869,113 @@ type AgentExecutionStep =
       forceWriteMode?: 'create' | 'append' | 'replace'
     }
 
+function resolveWriteStepFromApplyStrategies(availableApplyStrategies?: string[] | null): AgentExecutionStep | null {
+  if (!availableApplyStrategies?.length) {
+    return null
+  }
+
+  for (const strategy of availableApplyStrategies) {
+    if (strategy === 'appendChapterContent') {
+      return {
+        kind: 'write_chapter',
+        forceWriteMode: 'append',
+      }
+    }
+
+    if (strategy === 'replaceChapterContent') {
+      return {
+        kind: 'write_chapter',
+        forceWriteMode: 'replace',
+      }
+    }
+  }
+
+  return null
+}
+
+function resolveFallbackExecutionPlanFromTask(
+  task: AgentTaskType,
+  availableApplyStrategies?: string[] | null,
+  options?: {
+    hasSelectedPersistedChapter?: boolean
+    hasAnyChapter?: boolean
+  },
+) {
+  const strategyWriteStep = resolveWriteStepFromApplyStrategies(availableApplyStrategies)
+  const hasSelectedPersistedChapter = options?.hasSelectedPersistedChapter ?? false
+  const hasAnyChapter = options?.hasAnyChapter ?? false
+
+  switch (task) {
+    case 'generate-novel-title':
+      return { steps: [{ kind: 'rename_novel' as const }] }
+    case 'generate-chapter-titles':
+      return { steps: [{ kind: 'rename_chapter' as const }] }
+    case 'continue-chapter':
+      return {
+        steps: [
+          strategyWriteStep ?? {
+            kind: 'write_chapter' as const,
+            forceWriteMode: hasSelectedPersistedChapter || hasAnyChapter ? 'append' : 'create',
+          },
+        ],
+      }
+    case 'draft-chapter':
+      return {
+        steps: [
+          strategyWriteStep ?? {
+            kind: 'write_chapter' as const,
+            forceWriteMode: hasSelectedPersistedChapter ? 'replace' : 'create',
+          },
+        ],
+      }
+    case 'rewrite-selection':
+    case 'polish-selection':
+      return {
+        steps: [strategyWriteStep ?? { kind: 'write_chapter' as const, forceWriteMode: 'replace' }],
+      }
+    case 'workspace-agent':
+      return {
+        steps: [],
+      }
+    default:
+      return {
+        steps: strategyWriteStep ? [strategyWriteStep] : [],
+      }
+  }
+}
+
+function shouldAutoApplyWriteFromStrategies(
+  task: AgentTaskType,
+  availableApplyStrategies?: string[] | null,
+  options?: {
+    hasSelectedPersistedChapter?: boolean
+    hasAnyChapter?: boolean
+  },
+) {
+  const strategyWriteStep = resolveWriteStepFromApplyStrategies(availableApplyStrategies)
+
+  if (!strategyWriteStep) {
+    return null
+  }
+
+  if (task === 'draft-chapter' || task === 'continue-chapter' || task === 'rewrite-selection' || task === 'polish-selection') {
+    return strategyWriteStep
+  }
+
+  if (task === 'workspace-agent') {
+    const hasSelectedPersistedChapter = options?.hasSelectedPersistedChapter ?? false
+    const hasAnyChapter = options?.hasAnyChapter ?? false
+    if (strategyWriteStep.kind === 'write_chapter' && strategyWriteStep.forceWriteMode === 'append') {
+      return {
+        kind: 'write_chapter',
+        forceWriteMode: hasSelectedPersistedChapter || hasAnyChapter ? 'append' : 'create',
+      }
+    }
+  }
+
+  return null
+}
+
 function shouldAppendToExistingChapter(promptText: string, task: AgentTaskType, currentContent: string) {
   const normalized = promptText.trim()
 
@@ -376,7 +987,21 @@ function shouldAppendToExistingChapter(promptText: string, task: AgentTaskType, 
     return false
   }
 
-  return containsAnyKeyword(normalized, ['续写', '接着写', '往后写', '补在后面', '追加', '补写'])
+  return containsAnyKeyword(normalized, [
+    '续写',
+    '接着写',
+    '往后写',
+    '补在后面',
+    '追加',
+    '补写',
+    '多写一点',
+    '多写一些',
+    '再写一点',
+    '再写一些',
+    '扩充',
+    '丰富',
+    '展开',
+  ])
 }
 
 function getAgentWorkspaceStorageKey(novelId: string) {
@@ -529,6 +1154,85 @@ function asArtifactRouteDecision(value: unknown): AgentRouteDecision | null {
   return candidate as AgentRouteDecision
 }
 
+function buildHistoryStatusItems(
+  actionPlan: AgentActionPlan | null,
+  routeDecision: AgentRouteDecision | null,
+  runId: string,
+  createdAt: string,
+): AgentRunStatusItem[] {
+  const thinkingItems = Array.isArray(actionPlan?.thinking)
+    ? actionPlan.thinking
+        .map((item, index) =>
+          typeof item === 'string' && item.trim()
+            ? {
+                id: `${runId}-thinking-${index + 1}`,
+                event: 'task.thinking',
+                text: item.trim(),
+                createdAt,
+              }
+            : null,
+        )
+        .filter((item): item is AgentRunStatusItem => Boolean(item))
+    : []
+  const stepItems =
+    actionPlan?.steps.flatMap((step, index) => {
+      const reasoning =
+        typeof step.payload?.reasoning === 'string' && step.payload.reasoning.trim()
+          ? [
+              {
+                id: `${runId}-step-thinking-${index + 1}`,
+                event: 'task.thinking',
+                text: step.payload.reasoning.trim(),
+                createdAt,
+              } satisfies AgentRunStatusItem,
+            ]
+          : []
+
+      const title =
+        typeof step.title === 'string' && step.title.trim() ? step.title.trim() : '按顺序执行一项工作台操作。'
+
+      return [
+        ...reasoning,
+        {
+          id: `${runId}-step-${index + 1}`,
+          event: 'task.step',
+          text: title,
+          createdAt,
+        } satisfies AgentRunStatusItem,
+      ]
+    }) ?? []
+
+  if (thinkingItems.length > 0 || stepItems.length > 0) {
+    return [
+      ...(actionPlan?.summary?.trim()
+        ? [
+            {
+              id: `${runId}-task-summary`,
+              event: 'task.decomposed',
+              text: actionPlan.summary.trim(),
+              createdAt,
+            } satisfies AgentRunStatusItem,
+          ]
+        : []),
+      ...thinkingItems,
+      ...stepItems,
+    ]
+  }
+
+  if (!routeDecision) {
+    return []
+  }
+
+  return [
+    {
+      id: `${runId}-route-decided`,
+      event: 'route.decided',
+      text: routeDecision.summary,
+      createdAt,
+    },
+  ]
+}
+
 function asArtifactToolPolicy(value: unknown): AgentWorkspaceToolPolicy | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null
@@ -543,6 +1247,32 @@ function asArtifactToolPolicy(value: unknown): AgentWorkspaceToolPolicy | null {
   }
 
   return candidate as AgentWorkspaceToolPolicy
+}
+
+function asArtifactRuleBundle(value: unknown): AgentRuleBundle | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Partial<AgentRuleBundle>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.rules)) {
+    return null
+  }
+
+  return candidate as AgentRuleBundle
+}
+
+function asArtifactStoryMemoryDigest(value: unknown): AgentStoryMemoryDigest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Partial<AgentStoryMemoryDigest>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.items)) {
+    return null
+  }
+
+  return candidate as AgentStoryMemoryDigest
 }
 
 function mapRunModeToExecutionMode(mode: 'plan' | 'act' | 'review'): AgentExecutionMode {
@@ -586,6 +1316,17 @@ function buildArtifactsFromHistory(items: AgentSessionHistoryItem[]): AgentArtif
         (artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
           ? asArtifactRouteDecision((artifact.metadata as Record<string, unknown>).routeDecision)
           : null)
+      const ruleBundle =
+        item.ruleBundle ??
+        (artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+          ? asArtifactRuleBundle((artifact.metadata as Record<string, unknown>).ruleBundle)
+          : null)
+      const storyMemoryDigest =
+        item.storyMemoryDigest ??
+        (artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+          ? asArtifactStoryMemoryDigest((artifact.metadata as Record<string, unknown>).storyMemoryDigest)
+          : null)
+      const routeStatuses = buildHistoryStatusItems(actionPlan, routeDecision, item.run.id, item.run.createdAt)
 
       return {
         id: `history-${item.run.id}-${artifact.id}`,
@@ -593,13 +1334,14 @@ function buildArtifactsFromHistory(items: AgentSessionHistoryItem[]): AgentArtif
         type: mapHistoryArtifactType(artifact.artifactType),
         title: artifact.title,
         content: artifact.content,
+        rawContent: artifact.content,
         promptText,
         createdAt: artifact.createdAt,
         status: item.run.status === 'running' ? 'streaming' : 'ready',
         runId: item.run.id,
         sessionId: item.run.sessionId,
         runStatusMode: item.run.status === 'running' ? 'live' : 'history',
-        runStatuses: [],
+        runStatuses: routeStatuses,
         memoryEntries: item.memoryEntries.map((entry) => ({
           id: entry.id,
           memoryType: entry.memoryType,
@@ -616,6 +1358,8 @@ function buildArtifactsFromHistory(items: AgentSessionHistoryItem[]): AgentArtif
         handoff,
         activeAgent,
         routeDecision,
+        ruleBundle,
+        storyMemoryDigest,
         executionMode,
         toolPolicy,
       }
@@ -632,6 +1376,74 @@ function buildNovelFormState(novel: Novel): NovelFormState {
     visibility: novel.visibility,
     status: novel.status === 'published' ? 'published' : 'draft',
   }
+}
+
+function mergeRestoredArtifactsWithSnapshot(
+  restoredArtifacts: AgentArtifact[],
+  snapshotArtifacts: AgentArtifact[],
+): AgentArtifact[] {
+  if (snapshotArtifacts.length === 0) {
+    return restoredArtifacts
+  }
+
+  const snapshotByBackendArtifactId = new Map(
+    snapshotArtifacts
+      .filter((artifact) => typeof artifact.backendArtifactId === 'string' && artifact.backendArtifactId)
+      .map((artifact) => [artifact.backendArtifactId as string, artifact]),
+  )
+
+  return restoredArtifacts.map((artifact) => {
+    const snapshotArtifact =
+      (artifact.backendArtifactId ? snapshotByBackendArtifactId.get(artifact.backendArtifactId) : null) ??
+      snapshotArtifacts.find(
+        (candidate) =>
+          candidate.runId === artifact.runId &&
+          candidate.promptText === artifact.promptText &&
+          candidate.createdAt === artifact.createdAt,
+      ) ??
+      null
+
+    if (!snapshotArtifact) {
+      return artifact
+    }
+
+    const snapshotStatuses =
+      Array.isArray(snapshotArtifact.runStatuses) && snapshotArtifact.runStatuses.length > 0
+        ? snapshotArtifact.runStatuses
+        : null
+    const snapshotMemoryEntries =
+      Array.isArray(snapshotArtifact.memoryEntries) && snapshotArtifact.memoryEntries.length > 0
+        ? snapshotArtifact.memoryEntries
+        : null
+    const snapshotApplyStrategies = Array.isArray(snapshotArtifact.availableApplyStrategies)
+      ? snapshotArtifact.availableApplyStrategies
+      : artifact.availableApplyStrategies
+
+    return {
+      ...artifact,
+      content: snapshotArtifact.content?.trim() ? snapshotArtifact.content : artifact.content,
+      rawContent: snapshotArtifact.rawContent ?? artifact.rawContent ?? artifact.content,
+      runStatusMode: snapshotArtifact.runStatusMode ?? artifact.runStatusMode,
+      runStatuses: snapshotStatuses ?? artifact.runStatuses,
+      memoryEntries: snapshotMemoryEntries ?? artifact.memoryEntries,
+      availableApplyStrategies: snapshotApplyStrategies,
+      replacedChapterContent: snapshotArtifact.replacedChapterContent ?? artifact.replacedChapterContent,
+      appendedToChapter: snapshotArtifact.appendedToChapter ?? artifact.appendedToChapter,
+      renamedNovel: snapshotArtifact.renamedNovel ?? artifact.renamedNovel,
+      renamedChapter: snapshotArtifact.renamedChapter ?? artifact.renamedChapter,
+      savedAsPlan: snapshotArtifact.savedAsPlan ?? artifact.savedAsPlan,
+      appliedToCover: snapshotArtifact.appliedToCover ?? artifact.appliedToCover,
+      actionSummary: snapshotArtifact.actionSummary ?? artifact.actionSummary,
+      handoff: snapshotArtifact.handoff ?? artifact.handoff,
+      activeAgent: snapshotArtifact.activeAgent ?? artifact.activeAgent,
+      routeDecision: snapshotArtifact.routeDecision ?? artifact.routeDecision,
+      ruleBundle: snapshotArtifact.ruleBundle ?? artifact.ruleBundle,
+      storyMemoryDigest: snapshotArtifact.storyMemoryDigest ?? artifact.storyMemoryDigest,
+      executionMode: snapshotArtifact.executionMode ?? artifact.executionMode,
+      toolPolicy: snapshotArtifact.toolPolicy ?? artifact.toolPolicy,
+      actionPlan: snapshotArtifact.actionPlan ?? artifact.actionPlan,
+    }
+  })
 }
 
 function buildNovelUpdatePayload(novelForm: NovelFormState): UpdateNovelRequest {
@@ -731,7 +1543,7 @@ function resolveExecutionAgentForTask(task: AgentTaskType): AgentExecutionAgent 
       return {
         agentType: 'writingOrchestrator',
         role: 'primary',
-        title: '主控 Agent',
+        title: 'Chevoink Agent',
         description: '负责理解当前指令、组织工作区上下文，并决定交给哪个专职代理处理。',
       }
   }
@@ -905,6 +1717,80 @@ function buildBlankChapterDraft(orderIndex: number): ChapterDraftState {
   }
 }
 
+function buildRollbackSnapshotFromChapter(chapter: Chapter): AgentLocalRollbackChapterSnapshot {
+  return {
+    id: chapter.id,
+    title: chapter.title,
+    summary: chapter.summary ?? '',
+    content: chapter.content,
+    status: chapter.status,
+    visibility: chapter.visibility,
+    wordCount: chapter.wordCount ?? chapter.content.length,
+    updatedAt: chapter.updatedAt,
+  }
+}
+
+function buildRollbackSnapshotFromDraft(chapter: ChapterDraftState): AgentLocalRollbackChapterSnapshot {
+  return {
+    id: chapter.id,
+    title: chapter.title,
+    summary: chapter.summary,
+    content: chapter.content,
+    status: chapter.status,
+    visibility: chapter.visibility,
+    wordCount: chapter.content.length,
+    updatedAt: null,
+  }
+}
+
+function cloneChapterDraftState(chapter: ChapterDraftState): ChapterDraftState {
+  return {
+    ...chapter,
+  }
+}
+
+function buildPendingChapterReview(options: {
+  before: ChapterDraftState | null
+  after: ChapterDraftState
+  rollbackSnapshot: AgentLocalRollbackSnapshot
+  description: string
+  artifactId?: string | null
+  runId?: string | null
+}): ChapterPendingReview {
+  return {
+    id: `chapter-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    chapterId: options.after.id,
+    artifactId: options.artifactId ?? null,
+    runId: options.runId ?? null,
+    before: options.before ? cloneChapterDraftState(options.before) : null,
+    after: cloneChapterDraftState(options.after),
+    rollbackSnapshot: options.rollbackSnapshot,
+    description: options.description,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function buildChapterReviewDescription(
+  mode: 'create' | 'append' | 'replace',
+  chapterTitle: string,
+) {
+  if (mode === 'create') {
+    return `已创建新章节《${chapterTitle}》并写入正文，请确认是否采纳。`
+  }
+
+  if (mode === 'append') {
+    return `已将新内容追加到《${chapterTitle}》，请确认是否采纳。`
+  }
+
+  return `已更新《${chapterTitle}》的正文内容，请确认是否采纳。`
+}
+
+function isChapterContentApplyStrategy(
+  strategy: 'replaceChapterContent' | 'appendChapterContent' | 'saveChapterSummary' | 'setNovelCoverPrompt',
+) {
+  return strategy === 'replaceChapterContent' || strategy === 'appendChapterContent'
+}
+
 function toChapterListItem(chapter: Chapter): StudioPayload['chapters'][number] {
   return {
     id: chapter.id,
@@ -1013,6 +1899,8 @@ export default function StudioWorkspace() {
   const [coverKeywords, setCoverKeywords] = useState<string[]>([])
   const [coverMessage, setCoverMessage] = useState('先整理提示词，再生成候选封面。')
   const [editorChapterSettingsOpen, setEditorChapterSettingsOpen] = useState(false)
+  const [pendingChapterReview, setPendingChapterReview] = useState<ChapterPendingReview | null>(null)
+  const [pendingChapterReviewBusy, setPendingChapterReviewBusy] = useState(false)
   const [workspaceDialog, setWorkspaceDialog] = useState<{
     title: string
     description: string
@@ -1045,6 +1933,11 @@ export default function StudioWorkspace() {
           .webkitSpeechRecognition) &&
         navigator.mediaDevices?.getUserMedia,
     )
+
+  useEffect(() => {
+    setPendingChapterReview(null)
+    setPendingChapterReviewBusy(false)
+  }, [activeNovelId])
 
   useEffect(() => {
     if (!studioQuery.data) {
@@ -1102,7 +1995,10 @@ export default function StudioWorkspace() {
           return
         }
 
-        const restoredArtifacts = buildArtifactsFromHistory(historyItems)
+        const restoredArtifacts = mergeRestoredArtifactsWithSnapshot(
+          buildArtifactsFromHistory(historyItems),
+          snapshot?.artifacts ?? [],
+        )
         if (restoredArtifacts.length === 0) {
           return
         }
@@ -1269,10 +2165,20 @@ export default function StudioWorkspace() {
       return
     }
 
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('切换作品')
+      return
+    }
+
     navigate(`/studio/novel/${novelId}`)
   }
 
   function handleCreateWorkspaceNovel() {
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('新建作品')
+      return
+    }
+
     if (createNovelMutation.isPending) {
       return
     }
@@ -1366,19 +2272,26 @@ export default function StudioWorkspace() {
     void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
   }
 
-  async function resolvePersistedAgentChapterTarget(options?: { preferCached?: boolean }): Promise<ChapterDraftState | null> {
+  async function resolvePersistedAgentChapterTarget(options?: {
+    preferCached?: boolean
+    promptText?: string
+  }): Promise<ChapterDraftState | null> {
     const preferCached = options?.preferCached ?? false
+    const requestedChapterId = options?.promptText
+      ? resolveRequestedExistingChapterId(options.promptText, chapters)
+      : null
+    const targetChapterId = requestedChapterId ?? selectedChapterId
 
-    if (!selectedChapterId || selectedChapterId.startsWith('local-')) {
+    if (!targetChapterId || targetChapterId.startsWith('local-')) {
       return chapterDraft && !chapterDraft.localOnly ? chapterDraft : null
     }
 
-    const cachedChapter = queryClient.getQueryData<Chapter>(['studio-chapter', activeNovelId, selectedChapterId])
+    const cachedChapter = queryClient.getQueryData<Chapter>(['studio-chapter', activeNovelId, targetChapterId])
     if (preferCached && cachedChapter) {
       return buildChapterDraft(cachedChapter)
     }
 
-    if (chapterDraft && !chapterDraft.localOnly) {
+    if (chapterDraft && !chapterDraft.localOnly && chapterDraft.id === targetChapterId) {
       return chapterDraft
     }
 
@@ -1386,8 +2299,8 @@ export default function StudioWorkspace() {
       return buildChapterDraft(cachedChapter)
     }
 
-    const fetchedChapter = await getChapterContent(activeNovelId, selectedChapterId)
-    queryClient.setQueryData<Chapter>(['studio-chapter', activeNovelId, selectedChapterId], fetchedChapter)
+    const fetchedChapter = await getChapterContent(activeNovelId, targetChapterId)
+    queryClient.setQueryData<Chapter>(['studio-chapter', activeNovelId, targetChapterId], fetchedChapter)
     return buildChapterDraft(fetchedChapter)
   }
 
@@ -1442,31 +2355,31 @@ export default function StudioWorkspace() {
   function buildAgentExecutionPlan(
     promptText: string,
     task: AgentTaskType,
+    availableApplyStrategies?: string[] | null,
     actionPlan?: AgentActionPlan | null,
     toolPolicy?: AgentWorkspaceToolPolicy | null,
   ): { steps: AgentExecutionStep[]; blockedReason?: string } {
+    if (shouldAutoRenameNovel(promptText, task)) {
+      return {
+        steps: [{ kind: 'rename_novel' }],
+      }
+    }
+
+    if (isTitleOnlyChapterRequest(promptText, task)) {
+      return {
+        steps: [{ kind: 'rename_chapter' }],
+      }
+    }
+
     const plannedExecution = mapActionPlanToExecutionSteps(actionPlan, toolPolicy)
-    if (plannedExecution.steps.length > 0 || plannedExecution.blockedReason) {
+    if (actionPlan) {
       return plannedExecution
     }
 
-    const steps: AgentExecutionStep[] = []
-
-    if (shouldAutoRenameNovel(promptText, task)) {
-      steps.push({ kind: 'rename_novel' })
-    }
-
-    if (shouldAutoRenameChapter(promptText, task)) {
-      steps.push({ kind: 'rename_chapter' })
-    }
-
-    if (shouldAutoCreateChapter(promptText)) {
-      steps.push({ kind: 'write_chapter', forceWriteMode: 'create' })
-    } else if (shouldAutoWriteChapter(promptText, task)) {
-      steps.push({ kind: 'write_chapter' })
-    }
-
-    return { steps }
+    return resolveFallbackExecutionPlanFromTask(task, availableApplyStrategies, {
+      hasSelectedPersistedChapter: Boolean(chapterDraft && !chapterDraft.localOnly),
+      hasAnyChapter: chapters.length > 0,
+    })
   }
 
   function mergeAutoApplyResults(results: Array<Extract<AutoApplyAgentResult, { applied: true }>>): AutoApplyAgentResult {
@@ -1490,12 +2403,12 @@ export default function StudioWorkspace() {
     }
   }
 
-  async function renameNovelFromAgent(content: string): Promise<AutoApplyAgentResult> {
+  async function renameNovelFromAgent(content: string, promptText: string): Promise<AutoApplyAgentResult> {
     if (!currentNovel) {
       return { applied: false }
     }
 
-    const nextTitle = extractNovelTitleCandidate(content)
+    const nextTitle = extractExplicitNovelTitleFromPrompt(promptText) ?? extractNovelTitleCandidate(content)
     if (!nextTitle) {
       return { applied: false }
     }
@@ -1507,6 +2420,7 @@ export default function StudioWorkspace() {
       message: `已将作品命名为《${nextTitle}》。`,
       patch: {
         renamedNovel: true,
+        availableApplyStrategies: [],
         actionSummary: `我已经把当前作品命名为《${nextTitle}》。`,
         content: `我已经把当前作品命名为《${nextTitle}》。`,
         rawContent: content,
@@ -1514,18 +2428,40 @@ export default function StudioWorkspace() {
     }
   }
 
-  async function renameChapterFromAgent(content: string): Promise<AutoApplyAgentResult> {
-    const targetChapter = await resolvePersistedAgentChapterTarget({ preferCached: true })
+  async function renameChapterFromAgent(content: string, promptText: string): Promise<AutoApplyAgentResult> {
+    const targetChapter = await resolvePersistedAgentChapterTarget({ preferCached: true, promptText })
 
     if (!targetChapter) {
       return { applied: false }
     }
 
-    const nextTitle = extractChapterTitleCandidate(content, targetChapter.orderIndex || chapters.length + 1)
+    const fallbackOrder = targetChapter.orderIndex || chapters.length + 1
+    const extractedTitle = extractChapterTitleCandidate(content, fallbackOrder)
+    if (!extractedTitle) {
+      return { applied: false }
+    }
+
+    const nextTitle = resolveChapterTitleForWrite(targetChapter.title, extractedTitle ?? '', fallbackOrder)
     if (!nextTitle) {
       return { applied: false }
     }
 
+    if (nextTitle === targetChapter.title.trim()) {
+      return {
+        applied: true,
+        message: `当前章节已是《${nextTitle}》。`,
+        patch: {
+          renamedChapter: true,
+          actionSummary: `我确认当前章节标题已经是《${nextTitle}》。`,
+          content: `我确认当前章节标题已经是《${nextTitle}》。`,
+          rawContent: content,
+          availableApplyStrategies: [],
+          localRollbackSnapshot: null,
+        },
+      }
+    }
+
+    const localRollbackSnapshot = getRollbackSnapshotForChapter(targetChapter.id)
     const savedChapter = await updateChapterDraft(activeNovelId, targetChapter.id, {
       content: targetChapter.content,
       title: nextTitle,
@@ -1546,23 +2482,46 @@ export default function StudioWorkspace() {
         actionSummary: `我已经把当前章节命名为《${nextTitle}》。`,
         content: `我已经把当前章节命名为《${nextTitle}》。`,
         rawContent: content,
+        availableApplyStrategies: [],
+        localRollbackSnapshot: localRollbackSnapshot
+          ? {
+              kind: 'restore_chapter',
+              chapter: localRollbackSnapshot,
+              selectedChapterId: selectedChapterId ?? targetChapter.id,
+            }
+          : null,
       },
     }
   }
 
-  async function createChapterFromAgent(content: string): Promise<AutoApplyAgentResult> {
-    const parsed = extractChapterDraftFromContent(content, chapters.length + 1)
-    if (!parsed?.content.trim()) {
+  async function createChapterFromAgent(content: string, promptText: string): Promise<AutoApplyAgentResult> {
+    const requestedOrder = resolveRequestedChapterOrder(promptText, chapters.length)
+    const preparedDraft = prepareWritableChapterDraft(content, requestedOrder)
+    if (!preparedDraft?.content.trim()) {
       return { applied: false }
     }
 
     const localDraftId = chapterDraft?.localOnly ? chapterDraft.id : null
+    const previousChapterSnapshot =
+      chapterDraft && !chapterDraft.localOnly ? buildRollbackSnapshotFromDraft(chapterDraft) : null
     const savedChapter = await createChapterDraft(activeNovelId, {
-      title: parsed.title.trim() || `第 ${chapters.length + 1} 章`,
+      title: resolveChapterTitleForWrite('', preparedDraft.title, requestedOrder),
       summary: chapterDraft?.summary.trim() || undefined,
-      content: parsed.content,
+      content: preparedDraft.content,
       status: chapterDraft?.status ?? 'draft',
       visibility: chapterDraft?.visibility ?? 'private',
+    })
+    const nextDraft = buildChapterDraft(savedChapter)
+    const review = buildPendingChapterReview({
+      before: null,
+      after: nextDraft,
+      rollbackSnapshot: {
+        kind: 'remove_created_chapter',
+        chapter: buildRollbackSnapshotFromChapter(savedChapter),
+        previousSelectedChapterId: selectedChapterId,
+        previousChapter: previousChapterSnapshot,
+      },
+      description: buildChapterReviewDescription('create', savedChapter.title),
     })
 
     syncSavedChapterState(savedChapter, {
@@ -1571,14 +2530,18 @@ export default function StudioWorkspace() {
       chapterCountDelta: localDraftId ? 0 : 1,
       wordCountDelta: savedChapter.wordCount,
     })
+    setPendingChapterReview(review)
     return {
       applied: true,
       message: `已创建新章节《${savedChapter.title}》并写入正文。`,
       patch: {
         replacedChapterContent: true,
+        availableApplyStrategies: [],
         actionSummary: `我已经新建章节《${savedChapter.title}》，并把正文写进去了。`,
         content: `我已经新建章节《${savedChapter.title}》，并把正文写进去了。`,
         rawContent: content,
+        localRollbackSnapshot: review.rollbackSnapshot,
+        pendingChapterReview: review,
       },
     }
   }
@@ -1599,16 +2562,30 @@ export default function StudioWorkspace() {
     const forceWriteMode = options?.forceWriteMode
 
     if (forceWriteMode === 'create') {
-      return createChapterFromAgent(content)
+      return createChapterFromAgent(content, promptText)
     }
 
-    if ((!chapterDraft || chapterDraft.localOnly) && shouldAutoCreateChapter(promptText)) {
-      return createChapterFromAgent(content)
+    if ((!chapterDraft || chapterDraft.localOnly) && (task === 'draft-chapter' || task === 'continue-chapter')) {
+      return createChapterFromAgent(content, promptText)
     }
 
-    const targetChapter = await resolvePersistedAgentChapterTarget({ preferCached: true })
+    const targetChapter = await resolvePersistedAgentChapterTarget({ preferCached: true, promptText })
     if (!targetChapter) {
-      return createChapterFromAgent(content)
+      if (task === 'draft-chapter' || task === 'continue-chapter') {
+        return createChapterFromAgent(content, promptText)
+      }
+
+      return { applied: false }
+    }
+
+    const fallbackOrder = targetChapter.orderIndex || chapters.length + 1
+    const preparedDraft = prepareWritableChapterDraft(content, fallbackOrder)
+    if (!preparedDraft) {
+      return { applied: false }
+    }
+
+    if (!preparedDraft.content.trim() && preparedDraft.title.trim()) {
+      return renameChapterFromAgent(content, promptText)
     }
 
     const append =
@@ -1616,29 +2593,64 @@ export default function StudioWorkspace() {
         ? true
         : forceWriteMode === 'replace'
           ? false
-          : shouldAppendToExistingChapter(promptText, task, targetChapter.content)
-    const nextContent = append
-      ? `${targetChapter.content.trim() ? `${targetChapter.content.trim()}\n\n` : ''}${normalizedContent}`.trim()
-      : normalizedContent
+          : task === 'continue-chapter'
+    const preciseReplacement =
+      editorSelection.text.trim() && !append
+        ? replaceSelectionContentPrecisely({
+            currentContent: targetChapter.content,
+            replacement: preparedDraft.content,
+            selection: editorSelection,
+          })
+        : null
+    if (!append && editorSelection.text.trim() && (task === 'rewrite-selection' || task === 'polish-selection') && !preciseReplacement) {
+      return { applied: false, reason: '这次没有定位到选中的正文片段，所以我没有直接覆盖整章。' }
+    }
 
+    const nextContent = preciseReplacement
+      ? preciseReplacement
+      : append
+        ? `${targetChapter.content.trim() ? `${targetChapter.content.trim()}\n\n` : ''}${preparedDraft.content}`.trim()
+        : preparedDraft.content
+    const nextTitle = resolveChapterTitleForWrite(targetChapter.title, preparedDraft.title, fallbackOrder)
+
+    const localRollbackSnapshot = getRollbackSnapshotForChapter(targetChapter.id)
     const savedChapter = await updateChapterDraft(activeNovelId, targetChapter.id, {
       content: nextContent,
-      title: targetChapter.title.trim(),
+      title: nextTitle,
       summary: targetChapter.summary.trim() || undefined,
       status: targetChapter.status,
       visibility: targetChapter.visibility,
     })
+    const nextDraft = buildChapterDraft(savedChapter)
+    const rollbackSnapshot = localRollbackSnapshot
+      ? {
+          kind: 'restore_chapter' as const,
+          chapter: localRollbackSnapshot,
+          selectedChapterId: selectedChapterId ?? targetChapter.id,
+        }
+      : null
+    const review =
+      rollbackSnapshot
+        ? buildPendingChapterReview({
+            before: cloneChapterDraftState(targetChapter),
+            after: nextDraft,
+            rollbackSnapshot,
+            description: buildChapterReviewDescription(append ? 'append' : 'replace', savedChapter.title),
+          })
+        : null
 
     syncSavedChapterState(savedChapter, {
       message: append ? 'Agent 已把最新内容追加到当前章节。' : 'Agent 已把最新内容写入当前章节。',
       wordCountDelta: savedChapter.wordCount - targetChapter.content.length,
     })
+    setPendingChapterReview(review)
     return {
       applied: true,
       message: append ? '已把最新内容追加到当前章节。' : '已把最新内容写入当前章节。',
       patch: {
         replacedChapterContent: append ? undefined : true,
         appendedToChapter: append ? true : undefined,
+        availableApplyStrategies: [],
         actionSummary: append
           ? `我已经把最新生成的内容追加到《${savedChapter.title}》里。`
           : `我已经把最新生成的正文写入《${savedChapter.title}》。`,
@@ -1646,6 +2658,8 @@ export default function StudioWorkspace() {
           ? `我已经把最新生成的内容追加到《${savedChapter.title}》里。`
           : `我已经把最新生成的正文写入《${savedChapter.title}》。`,
         rawContent: content,
+        localRollbackSnapshot: rollbackSnapshot,
+        pendingChapterReview: review,
       },
     }
   }
@@ -1654,10 +2668,17 @@ export default function StudioWorkspace() {
     promptText: string,
     task: AgentTaskType,
     content: string,
+    availableApplyStrategies?: string[] | null,
     actionPlan?: AgentActionPlan | null,
     toolPolicy?: AgentWorkspaceToolPolicy | null,
   ): Promise<AutoApplyAgentResult> {
-    const executionPlan = buildAgentExecutionPlan(promptText, task, actionPlan, toolPolicy)
+    const executionPlan = buildAgentExecutionPlan(
+      promptText,
+      task,
+      availableApplyStrategies,
+      actionPlan,
+      toolPolicy,
+    )
     if (executionPlan.blockedReason) {
       return { applied: false, reason: executionPlan.blockedReason }
     }
@@ -1670,11 +2691,24 @@ export default function StudioWorkspace() {
     const appliedResults: Array<Extract<AutoApplyAgentResult, { applied: true }>> = []
 
     for (const step of plannedSteps) {
+      appendAgentRunStatus(
+        step.kind === 'rename_novel'
+          ? '正在同步作品命名。'
+          : step.kind === 'rename_chapter'
+            ? '正在同步章节标题。'
+            : step.forceWriteMode === 'create'
+              ? `正在创建第 ${resolveRequestedChapterOrder(promptText, chapters.length)} 章并写入正文。`
+              : step.forceWriteMode === 'append'
+                ? '正在把新内容追加到目标章节。'
+                : '正在把正文写入目标章节。',
+        'workspace.apply.started',
+      )
+
       const result =
         step.kind === 'rename_novel'
-          ? await renameNovelFromAgent(content)
+          ? await renameNovelFromAgent(content, promptText)
           : step.kind === 'rename_chapter'
-            ? await renameChapterFromAgent(content)
+            ? await renameChapterFromAgent(content, promptText)
             : await writeAgentContentIntoChapter(content, task, promptText, {
                 forceWriteMode: step.forceWriteMode,
               })
@@ -1952,9 +2986,26 @@ export default function StudioWorkspace() {
     }
   }
 
+  function promptConfirmPendingChapterReview(actionLabel: string) {
+    setWorkspaceDialog({
+      title: '请先确认当前正文改动',
+      description: `当前章节还有一处待确认的正文变更，请先选择“保留”或“撤销”，再继续${actionLabel}。`,
+      confirmLabel: '我知道了',
+      cancelLabel: '关闭',
+      onConfirm: () => undefined,
+    })
+  }
+
   const persistChapter = useCallback(
     async (reason: 'manual' | 'auto' | 'apply') => {
       if (!chapterDraft) {
+        return
+      }
+
+      if (pendingChapterReview) {
+        if (reason !== 'auto') {
+          promptConfirmPendingChapterReview('保存当前章节')
+        }
         return
       }
 
@@ -2038,7 +3089,7 @@ export default function StudioWorkspace() {
         setChapterSaveMessage(error instanceof Error ? error.message : '章节保存失败，请稍后重试。')
       }
     },
-    [activeNovelId, chapterDraft, syncStudioPayload],
+    [activeNovelId, chapterDraft, pendingChapterReview, syncStudioPayload],
   )
 
   useEffect(() => {
@@ -2159,6 +3210,11 @@ export default function StudioWorkspace() {
   })
 
   function guardUnsavedChanges(callback: () => void) {
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('切换章节')
+      return
+    }
+
     if (chapterDirty) {
       setWorkspaceDialog({
         title: '切换章节前确认',
@@ -2176,6 +3232,11 @@ export default function StudioWorkspace() {
   }
 
   function handleSelectChapter(nextChapterId: string) {
+    if (pendingChapterReview && nextChapterId !== selectedChapterId) {
+      promptConfirmPendingChapterReview('切换章节')
+      return
+    }
+
     if (nextChapterId === selectedChapterId) {
       setEditorChapterSettingsOpen(false)
       setMobileView('editor')
@@ -2202,6 +3263,11 @@ export default function StudioWorkspace() {
   }
 
   async function handleCreateLocalChapter() {
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('新建章节')
+      return
+    }
+
     if (createChapterLockRef.current) {
       return
     }
@@ -2268,6 +3334,11 @@ export default function StudioWorkspace() {
   }
 
   function handleRequestCreateChapter() {
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('新建章节')
+      return
+    }
+
     setWorkspaceDialog({
       title: '确认新建章节',
       description: '将会创建一个新的章节草稿。确定现在新建章节吗？',
@@ -2381,6 +3452,11 @@ export default function StudioWorkspace() {
       return
     }
 
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('删除章节')
+      return
+    }
+
     const deletingChapter = chapterDraft
     const currentIndex = chapters.findIndex((chapter) => chapter.id === deletingChapter.id)
     const remainingChapters = chapters.filter((chapter) => chapter.id !== deletingChapter.id)
@@ -2430,6 +3506,214 @@ export default function StudioWorkspace() {
             }
           : current,
       )
+    }
+  }
+
+  function getRollbackSnapshotForChapter(chapterId: string): AgentLocalRollbackChapterSnapshot | null {
+    if (chapterDraft && chapterDraft.id === chapterId) {
+      return buildRollbackSnapshotFromDraft(chapterDraft)
+    }
+
+    const cachedChapter = queryClient.getQueryData<Chapter>(['studio-chapter', activeNovelId, chapterId])
+    return cachedChapter ? buildRollbackSnapshotFromChapter(cachedChapter) : null
+  }
+
+  function syncLocalRollbackSnapshot(snapshot?: AgentLocalRollbackSnapshot | null) {
+    if (!snapshot) {
+      return
+    }
+
+    if (snapshot.kind === 'restore_chapter') {
+      const restoredDraft: ChapterDraftState = {
+        id: snapshot.chapter.id,
+        title: snapshot.chapter.title,
+        summary: snapshot.chapter.summary,
+        content: snapshot.chapter.content,
+        status: snapshot.chapter.status,
+        visibility: snapshot.chapter.visibility,
+        orderIndex:
+          chapters.find((chapter) => chapter.id === snapshot.chapter.id)?.orderIndex ??
+          chapterDraft?.orderIndex ??
+          1,
+        localOnly: false,
+      }
+
+      setSelectedChapterId(snapshot.selectedChapterId ?? snapshot.chapter.id)
+      setChapterDraft(restoredDraft)
+      setChapterDirty(false)
+      setChapterSaveState('saved')
+      setChapterLastSavedAt(snapshot.chapter.updatedAt)
+      setChapterSaveMessage('已回退到本轮对话开始前的正文状态。')
+      setChapters((current) =>
+        current.map((chapter) =>
+          chapter.id === snapshot.chapter.id
+            ? {
+                ...chapter,
+                title: snapshot.chapter.title,
+                summary: snapshot.chapter.summary || null,
+                wordCount: snapshot.chapter.wordCount,
+                status: snapshot.chapter.status,
+                visibility: snapshot.chapter.visibility,
+              }
+            : chapter,
+        ),
+      )
+      queryClient.setQueryData<Chapter>(['studio-chapter', activeNovelId, snapshot.chapter.id], (current) =>
+        current
+          ? {
+              ...current,
+              title: snapshot.chapter.title,
+              summary: snapshot.chapter.summary || null,
+              content: snapshot.chapter.content,
+              wordCount: snapshot.chapter.wordCount,
+              status: snapshot.chapter.status,
+              visibility: snapshot.chapter.visibility,
+              updatedAt: snapshot.chapter.updatedAt ?? current.updatedAt,
+            }
+          : current,
+      )
+      return
+    }
+
+    const previousChapter = snapshot.previousChapter
+    const restoredPreviousDraft = previousChapter
+      ? {
+          id: previousChapter.id,
+          title: previousChapter.title,
+          summary: previousChapter.summary,
+          content: previousChapter.content,
+          status: previousChapter.status,
+          visibility: previousChapter.visibility,
+          orderIndex:
+            chapters.find((chapter) => chapter.id === previousChapter.id)?.orderIndex ??
+            chapterDraft?.orderIndex ??
+            1,
+          localOnly: false,
+        }
+      : null
+
+    setChapters((current) => removeChapterItem(current, snapshot.chapter.id))
+    queryClient.removeQueries({
+      queryKey: ['studio-chapter', activeNovelId, snapshot.chapter.id],
+      exact: true,
+    })
+    setCurrentNovel((current) =>
+      current
+        ? {
+            ...current,
+            chapterCount: Math.max(0, current.chapterCount - 1),
+            wordCount: Math.max(0, current.wordCount - snapshot.chapter.wordCount),
+          }
+        : current,
+    )
+    syncStudioPayload((current) =>
+      current
+        ? {
+            ...current,
+            novel: {
+              ...current.novel,
+              chapterCount: Math.max(0, current.novel.chapterCount - 1),
+              wordCount: Math.max(0, current.novel.wordCount - snapshot.chapter.wordCount),
+            },
+            draftChapter:
+              current.draftChapter?.id === snapshot.chapter.id
+                ? previousChapter
+                  ? {
+                      ...current.draftChapter,
+                      id: previousChapter.id,
+                      title: previousChapter.title,
+                      summary: previousChapter.summary || null,
+                      content: previousChapter.content,
+                      wordCount: previousChapter.wordCount,
+                      status: previousChapter.status,
+                      visibility: previousChapter.visibility,
+                    }
+                  : null
+                : current.draftChapter,
+            chapters: current.chapters.filter((chapter) => chapter.id !== snapshot.chapter.id),
+          }
+        : current,
+    )
+
+    if (selectedChapterId === snapshot.chapter.id || chapterDraft?.id === snapshot.chapter.id) {
+      setSelectedChapterId(snapshot.previousSelectedChapterId)
+      setChapterDraft(restoredPreviousDraft)
+      setChapterDirty(false)
+      setChapterSaveState('saved')
+      setChapterLastSavedAt(previousChapter?.updatedAt ?? null)
+      setChapterSaveMessage(previousChapter ? '已回退到本轮对话开始前的章节状态。' : '已回退并移除本轮新建章节。')
+    }
+  }
+
+  function syncLocalRollbackSnapshots(artifacts: AgentArtifact[]) {
+    for (const artifact of [...artifacts].reverse()) {
+      syncLocalRollbackSnapshot(artifact.localRollbackSnapshot)
+    }
+  }
+
+  function handleKeepPendingChapterReview() {
+    if (!pendingChapterReview || pendingChapterReviewBusy) {
+      return
+    }
+
+    const review = pendingChapterReview
+    setPendingChapterReviewBusy(true)
+    try {
+      setPendingChapterReview(null)
+      setChapterSaveState('saved')
+      setChapterSaveMessage('已保留本次正文变更。')
+
+      if (review.artifactId) {
+        updateAgentArtifact(review.artifactId, (current) => ({
+          ...current,
+          pendingChapterReview: null,
+        }))
+      }
+    } finally {
+      setPendingChapterReviewBusy(false)
+    }
+  }
+
+  async function handleRevertPendingChapterReview() {
+    if (!pendingChapterReview || pendingChapterReviewBusy) {
+      return
+    }
+
+    const review = pendingChapterReview
+    setPendingChapterReviewBusy(true)
+    try {
+      if (review.rollbackSnapshot.kind === 'restore_chapter') {
+        const restoredChapter = await updateChapterDraft(activeNovelId, review.rollbackSnapshot.chapter.id, {
+          title: review.rollbackSnapshot.chapter.title,
+          summary: review.rollbackSnapshot.chapter.summary.trim() || undefined,
+          content: review.rollbackSnapshot.chapter.content,
+          status: review.rollbackSnapshot.chapter.status,
+          visibility: review.rollbackSnapshot.chapter.visibility,
+        })
+
+        syncSavedChapterState(restoredChapter, {
+          message: '已撤销本次正文变更。',
+          wordCountDelta: restoredChapter.wordCount - review.after.content.length,
+        })
+      } else {
+        await deleteChapterDraft(activeNovelId, review.after.id)
+        syncLocalRollbackSnapshot(review.rollbackSnapshot)
+      }
+
+      setPendingChapterReview(null)
+      if (review.artifactId) {
+        updateAgentArtifact(review.artifactId, (current) => ({
+          ...current,
+          pendingChapterReview: null,
+          replacedChapterContent: false,
+          appendedToChapter: false,
+        }))
+      }
+    } catch (error) {
+      setChapterSaveState('error')
+      setChapterSaveMessage(error instanceof Error ? error.message : '撤销本次正文变更失败，请稍后重试。')
+    } finally {
+      setPendingChapterReviewBusy(false)
     }
   }
 
@@ -2587,6 +3871,7 @@ export default function StudioWorkspace() {
 
     const rollbackRunId = targetArtifact.runId
     const rollbackTitle = targetArtifact.title || '当前结果'
+    const rollbackArtifacts = agentArtifacts.filter((artifact) => artifact.runId === rollbackRunId)
     setActiveAgentArtifactId(targetArtifact.id)
     setWorkspaceDialog({
       title: '确认回退本轮对话',
@@ -2597,7 +3882,10 @@ export default function StudioWorkspace() {
       onConfirm: async () => {
         const result = await rollbackWritingAgentRun(rollbackRunId)
         removeAgentArtifactsByRunId(rollbackRunId)
+        setPendingChapterReview(null)
+        setPendingChapterReviewBusy(false)
         syncRollbackToWorkspace(result)
+        syncLocalRollbackSnapshots(rollbackArtifacts)
         setAgentRunStatusMode('none')
         setAgentRunStatuses([])
         setAgentRunState({
@@ -2864,6 +4152,11 @@ export default function StudioWorkspace() {
       return
     }
 
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('继续运行 Agent')
+      return
+    }
+
     const resolvedCommand = options?.taskOverride
       ? {
           task: options.taskOverride,
@@ -2966,12 +4259,12 @@ export default function StudioWorkspace() {
               active: true,
               task: resolvedTask,
               title: agentTaskLabelMap[resolvedTask],
-              statusText: status,
+              statusText: status.text,
               activeAgent: current.activeAgent ?? null,
               routeDecision: current.routeDecision ?? resolvedRouteDecision,
               executionMode,
             }))
-            appendAgentRunStatus(status, 'status', artifactId)
+            appendAgentRunStatus(status.text, status.event, artifactId)
           },
           onStatusModeChange: (mode) => {
             setAgentRunStatusMode(mode)
@@ -3024,6 +4317,8 @@ export default function StudioWorkspace() {
               handoff: artifact.handoff ?? result.handoff ?? null,
               activeAgent: artifact.activeAgent ?? result.activeAgent ?? null,
               routeDecision: artifact.routeDecision ?? result.routeDecision ?? resolvedRouteDecision,
+              ruleBundle: artifact.ruleBundle ?? result.ruleBundle ?? null,
+              storyMemoryDigest: artifact.storyMemoryDigest ?? result.storyMemoryDigest ?? null,
               executionMode: artifact.executionMode ?? result.executionMode ?? executionMode,
               toolPolicy: artifact.toolPolicy ?? result.toolPolicy ?? null,
             }))
@@ -3049,6 +4344,8 @@ export default function StudioWorkspace() {
                 handoff: result.handoff ?? null,
                 activeAgent: result.activeAgent ?? null,
                 routeDecision: result.routeDecision ?? resolvedRouteDecision,
+                ruleBundle: result.ruleBundle ?? null,
+                storyMemoryDigest: result.storyMemoryDigest ?? null,
                 executionMode: result.executionMode ?? executionMode,
                 toolPolicy: result.toolPolicy ?? null,
               },
@@ -3080,6 +4377,7 @@ export default function StudioWorkspace() {
             submittedPromptText,
             result.resolvedTask,
             primaryArtifact.rawContent ?? primaryArtifact.content,
+            primaryArtifact.availableApplyStrategies ?? result.availableApplyStrategies ?? [],
             primaryArtifact.actionPlan ?? result.actionPlan ?? null,
             primaryArtifact.toolPolicy ?? result.toolPolicy ?? null,
           )
@@ -3096,10 +4394,15 @@ export default function StudioWorkspace() {
               rawContent: artifact.rawContent ?? primaryArtifact.rawContent ?? primaryArtifact.content,
               status: 'ready',
             }))
+            appendAgentRunStatus(
+              autoApplyResult.message,
+              'workspace.apply.completed',
+              primaryArtifact.id,
+            )
           }
 
           if (autoApplySkippedReason) {
-            appendAgentRunStatus(autoApplySkippedReason, 'workspace.apply.skipped')
+            appendAgentRunStatus(autoApplySkippedReason, 'workspace.apply.skipped', primaryArtifact?.id)
           }
         } catch (autoApplyError) {
           const message =
@@ -3107,7 +4410,7 @@ export default function StudioWorkspace() {
               ? autoApplyError.message
               : '结果已生成，但自动写入作品时失败。'
 
-          appendAgentRunStatus(message, 'workspace.apply.failed')
+          appendAgentRunStatus(message, 'workspace.apply.failed', primaryArtifact?.id)
         }
       }
 
@@ -3342,6 +4645,11 @@ export default function StudioWorkspace() {
     artifactId: string,
     strategy: 'replaceChapterContent' | 'appendChapterContent' | 'saveChapterSummary' | 'setNovelCoverPrompt',
   ) {
+    if (pendingChapterReview) {
+      promptConfirmPendingChapterReview('继续应用新的结果')
+      return 'not_available' as const
+    }
+
     const artifact = agentArtifacts.find((item) => item.id === artifactId)
     const persistedSelectedChapterId =
       selectedChapterId && !selectedChapterId.startsWith('local-') ? selectedChapterId : null
@@ -3382,6 +4690,10 @@ export default function StudioWorkspace() {
       })
 
       const artifactBody = artifact.rawContent ?? artifact.content
+      const targetChapter =
+        isChapterContentApplyStrategy(strategy)
+          ? await resolvePersistedAgentChapterTarget({ preferCached: true })
+          : null
 
       if (strategy === 'setNovelCoverPrompt') {
         setCoverForm((current) => (current ? { ...current, prompt: artifactBody } : current))
@@ -3409,13 +4721,41 @@ export default function StudioWorkspace() {
         return 'applied' as const
       }
 
+      const review =
+        targetChapter && isChapterContentApplyStrategy(strategy)
+          ? buildPendingChapterReview({
+              before: cloneChapterDraftState(targetChapter),
+              after: {
+                ...cloneChapterDraftState(targetChapter),
+                content:
+                  strategy === 'appendChapterContent'
+                    ? `${targetChapter.content.trim() ? `${targetChapter.content.trim()}\n\n` : ''}${artifactBody}`.trim()
+                    : artifactBody,
+                localOnly: false,
+              },
+              rollbackSnapshot: {
+                kind: 'restore_chapter',
+                chapter: buildRollbackSnapshotFromDraft(targetChapter),
+                selectedChapterId: selectedChapterId ?? targetChapter.id,
+              },
+              description: buildChapterReviewDescription(
+                strategy === 'appendChapterContent' ? 'append' : 'replace',
+                targetChapter.title || `第 ${targetChapter.orderIndex} 章`,
+              ),
+              artifactId,
+              runId: artifact.runId ?? null,
+            })
+          : null
+
       syncChapterDraftAfterApply(strategy, artifact)
+      setPendingChapterReview(review)
       updateAgentArtifact(artifactId, (current) => ({
         ...current,
         savedAsPlan: strategy === 'saveChapterSummary' ? true : current.savedAsPlan,
         replacedChapterContent:
           strategy === 'replaceChapterContent' ? true : current.replacedChapterContent,
         appendedToChapter: strategy === 'appendChapterContent' ? true : current.appendedToChapter,
+        pendingChapterReview: review,
       }))
       return 'applied' as const
     } catch (error) {
@@ -3661,71 +5001,126 @@ export default function StudioWorkspace() {
       <div className="space-y-4 md:flex md:h-full md:flex-col md:overflow-hidden md:space-y-4">
         <div className="space-y-3 md:hidden">
           <Surface as="section" padding="md" className="space-y-4">
-            <div className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <WorkspaceNovelSwitcher
+                currentNovelId={currentNovel.id}
+                currentNovelTitle={novelTitle}
+                novels={novelOptions}
+                busy={createNovelMutation.isPending}
+                onSelectNovel={handleSelectWorkspaceNovel}
+                onCreateNovel={handleCreateWorkspaceNovel}
+              />
+              <div className="shrink-0 rounded-full border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                {saveDisplayMessage}
+              </div>
+            </div>
+
+            <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <WorkspaceNovelSwitcher
-                  currentNovelId={currentNovel.id}
-                  currentNovelTitle={novelTitle}
-                  novels={novelOptions}
-                  busy={createNovelMutation.isPending}
-                  onSelectNovel={handleSelectWorkspaceNovel}
-                  onCreateNovel={handleCreateWorkspaceNovel}
-                />
                 <Tag tone="accent">创作中心</Tag>
                 <Tag>{novelStatusLabelMap[novelForm.status]}</Tag>
                 <Tag>{chapterStatusLabel}</Tag>
               </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="text-sm text-[var(--text-secondary)]">{novelTitle}</p>
-                  {novelTitleMissing ? (
-                    <button
-                      type="button"
-                      onClick={() => setMobileView('meta')}
-                      className="inline-flex h-9 items-center rounded-full bg-[#101114] px-4 text-sm font-medium text-white transition hover:bg-[#17191f]"
-                    >
-                      去命名作品
-                    </button>
-                  ) : null}
-                </div>
-                <h1 className="truncate text-xl font-semibold tracking-tight text-[var(--text-primary)]">
-                  {chapterTitle}
-                </h1>
+              <div className="space-y-1">
+                <p className="text-sm text-[var(--text-secondary)]">{novelTitle}</p>
+                <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">{chapterTitle}</h1>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMobileView('editor')}
+                  className={cn(
+                    'rounded-[18px] border px-4 py-3 text-left transition-colors',
+                    mobileView === 'editor'
+                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  <p className="text-sm font-medium">继续写作</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">正文优先，继续当前章节。</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileView('assistant')}
+                  className={cn(
+                    'rounded-[18px] border px-4 py-3 text-left transition-colors',
+                    mobileView === 'assistant'
+                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  <p className="text-sm font-medium">打开 Agent</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">继续提问、规划或执行。</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileView('chapters')}
+                  className={cn(
+                    'rounded-[18px] border px-4 py-3 text-left transition-colors',
+                    mobileView === 'chapters'
+                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  <p className="text-sm font-medium">查看章节</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{chapterCountLabel}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileView('meta')}
+                  className={cn(
+                    'rounded-[18px] border px-4 py-3 text-left transition-colors',
+                    mobileView === 'meta'
+                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  <p className="text-sm font-medium">{novelTitleMissing ? '去命名作品' : '作品设置'}</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">补作品信息、状态和可见范围。</p>
+                </button>
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
+
+            <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" onClick={handleEnterImmersive}>
                 <WandSparkles className="h-4 w-4" />
                 沉浸创作
               </Button>
-              <div className="rounded-full border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]">
-                {saveDisplayMessage}
-              </div>
+              <Button size="sm" variant="ghost" onClick={() => setMobileView('cover')}>
+                <Upload className="h-4 w-4" />
+                封面
+              </Button>
+              <Button size="sm" variant="ghost" onClick={handleRequestCreateChapter}>
+                <FileText className="h-4 w-4" />
+                新建章节
+              </Button>
             </div>
           </Surface>
 
-          <div className="sticky top-0 z-10 -mx-1 grid grid-cols-5 gap-2 bg-[var(--surface-base)] px-1 py-2">
-            {[
-              ['editor', '写作'],
-              ['chapters', '章节'],
-              ['assistant', 'Agent'],
-              ['cover', '封面'],
-              ['meta', '作品'],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setMobileView(key as MobileView)}
-                className={cn(
-                  'rounded-[16px] border px-3 py-3 text-sm transition-colors',
-                  mobileView === key
-                    ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
-                    : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
-                )}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="sticky top-0 z-10 -mx-1 overflow-x-auto bg-[var(--surface-base)] px-1 py-2">
+            <div className="inline-flex min-w-full gap-2">
+              {[
+                ['editor', '写作'],
+                ['chapters', '章节'],
+                ['assistant', 'Agent'],
+                ['cover', '封面'],
+                ['meta', '作品'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setMobileView(key as MobileView)}
+                  className={cn(
+                    'whitespace-nowrap rounded-full border px-4 py-2.5 text-sm transition-colors',
+                    mobileView === key
+                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {mobileView === 'editor' ? (
@@ -3746,6 +5141,10 @@ export default function StudioWorkspace() {
               onStatusChange={handleEditorStatusChange}
               onChange={handleChapterDraftChange}
               onRetrySave={handleRetrySave}
+              pendingChapterReview={pendingChapterReview}
+              pendingChapterReviewBusy={pendingChapterReviewBusy}
+              onKeepPendingReview={handleKeepPendingChapterReview}
+              onRevertPendingReview={() => void handleRevertPendingChapterReview()}
             />
           ) : null}
 
@@ -3861,6 +5260,10 @@ export default function StudioWorkspace() {
                   onStatusChange={handleEditorStatusChange}
                   onChange={handleChapterDraftChange}
                   onRetrySave={handleRetrySave}
+                  pendingChapterReview={pendingChapterReview}
+                  pendingChapterReviewBusy={pendingChapterReviewBusy}
+                  onKeepPendingReview={handleKeepPendingChapterReview}
+                  onRevertPendingReview={() => void handleRevertPendingChapterReview()}
                 />
               </div>
 
@@ -3912,10 +5315,14 @@ export default function StudioWorkspace() {
                   onStatusChange={handleEditorStatusChange}
                   onChange={handleChapterDraftChange}
                   onRetrySave={handleRetrySave}
+                  pendingChapterReview={pendingChapterReview}
+                  pendingChapterReviewBusy={pendingChapterReviewBusy}
+                  onKeepPendingReview={handleKeepPendingChapterReview}
+                  onRevertPendingReview={() => void handleRevertPendingChapterReview()}
                 />
               </div>
 
-              <div className="min-h-0 bg-[#f7f3ec] px-4 py-4">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f7f3ec] px-4 py-4">
                 {renderWritingAgent(undefined, false)}
               </div>
             </div>
@@ -3962,6 +5369,10 @@ export default function StudioWorkspace() {
           onDeleteChapter={() => void handleDeleteChapter()}
           onChange={handleChapterDraftChange}
           onSelectionChange={setEditorSelection}
+          pendingChapterReview={pendingChapterReview}
+          pendingChapterReviewBusy={pendingChapterReviewBusy}
+          onKeepPendingReview={handleKeepPendingChapterReview}
+          onRevertPendingReview={() => void handleRevertPendingChapterReview()}
           agentPanel={renderWritingAgent(undefined, false)}
           switchingNovel={createNovelMutation.isPending}
         />

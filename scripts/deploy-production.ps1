@@ -72,6 +72,96 @@ function Invoke-RetryCommand {
   throw "Command failed after $MaxAttempts attempts: $FilePath $($ArgumentList -join ' ')"
 }
 
+function Get-SshArgumentList {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$KeyPath
+  )
+
+  return @(
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=10",
+    "-o", "ConnectionAttempts=1",
+    "-i", $KeyPath
+  )
+}
+
+function Wait-ForSshReady {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$KeyPath,
+    [Parameter(Mandatory = $true)]
+    [string]$UserName,
+    [Parameter(Mandatory = $true)]
+    [string]$HostName
+  )
+
+  $sshArgs = Get-SshArgumentList -KeyPath $KeyPath
+  Invoke-RetryCommand -FilePath "ssh.exe" -ArgumentList @(
+    $sshArgs +
+    @(
+      "${UserName}@${HostName}",
+      "pwd"
+    )
+  ) -MaxAttempts 8 -DelaySeconds 3
+}
+
+function Upload-ArchiveToRemote {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ArchivePath,
+    [Parameter(Mandatory = $true)]
+    [string]$RemoteArchivePath,
+    [Parameter(Mandatory = $true)]
+    [string]$KeyPath,
+    [Parameter(Mandatory = $true)]
+    [string]$UserName,
+    [Parameter(Mandatory = $true)]
+    [string]$HostName,
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot
+  )
+
+  $sshArgs = Get-SshArgumentList -KeyPath $KeyPath
+
+  try {
+    Invoke-RetryCommand -FilePath "scp.exe" -ArgumentList @(
+      $sshArgs +
+      @(
+        $ArchivePath,
+        "${UserName}@${HostName}:${RemoteArchivePath}"
+      )
+    ) -MaxAttempts 3 -DelaySeconds 3
+    return
+  }
+  catch {
+    Write-Host "scp upload failed, falling back to sftp..." -ForegroundColor Yellow
+  }
+
+  $batchFilePath = Join-Path $ProjectRoot ".deploy-production.sftp-batch.txt"
+
+  try {
+    @(
+      "put `"$ArchivePath`" $RemoteArchivePath",
+      "bye"
+    ) | Set-Content -Path $batchFilePath -Encoding ascii
+
+    Invoke-RetryCommand -FilePath "sftp.exe" -ArgumentList @(
+      $sshArgs +
+      @(
+        "-b", $batchFilePath,
+        "${UserName}@${HostName}"
+      )
+    ) -MaxAttempts 3 -DelaySeconds 3
+  }
+  finally {
+    if (Test-Path $batchFilePath) {
+      Remove-Item $batchFilePath -Force
+    }
+  }
+}
+
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ArchivePath = Join-Path $ProjectRoot ".deploy-production.tar.gz"
 
@@ -125,12 +215,17 @@ try {
   )
   Invoke-CheckedCommand -FilePath "tar.exe" -ArgumentList $TarArgs -WorkingDirectory $ProjectRoot
 
+  Write-Step "Waiting for SSH to become ready"
+  Wait-ForSshReady -KeyPath $KeyPath -UserName $UserName -HostName $HostName
+
   Write-Step "Uploading archive"
-  Invoke-CheckedCommand -FilePath "scp.exe" -ArgumentList @(
-    "-i", $KeyPath,
-    $ArchivePath,
-    "${UserName}@${HostName}:${RemoteArchivePath}"
-  )
+  Upload-ArchiveToRemote `
+    -ArchivePath $ArchivePath `
+    -RemoteArchivePath $RemoteArchivePath `
+    -KeyPath $KeyPath `
+    -UserName $UserName `
+    -HostName $HostName `
+    -ProjectRoot $ProjectRoot
 
   Write-Step "Deploying on remote server"
   $RemoteCommand = @"
@@ -142,17 +237,22 @@ cd $RemoteCurrentPath
 bash deploy/deploy-production.sh
 rm -f $RemoteArchivePath
 "@
-  Invoke-CheckedCommand -FilePath "ssh.exe" -ArgumentList @(
-    "-i", $KeyPath,
-    "${UserName}@${HostName}",
-    $RemoteCommand
-  )
+  $sshArgs = Get-SshArgumentList -KeyPath $KeyPath
+  Invoke-RetryCommand -FilePath "ssh.exe" -ArgumentList @(
+    $sshArgs +
+    @(
+      "${UserName}@${HostName}",
+      $RemoteCommand
+    )
+  ) -MaxAttempts 3 -DelaySeconds 3
 
   Write-Step "Checking API health"
   Invoke-RetryCommand -FilePath "ssh.exe" -ArgumentList @(
-    "-i", $KeyPath,
-    "${UserName}@${HostName}",
-    "curl -fsS http://127.0.0.1:3001/api/health"
+    $sshArgs +
+    @(
+      "${UserName}@${HostName}",
+      "curl -fsS http://127.0.0.1:3001/api/health"
+    )
   ) -MaxAttempts 10 -DelaySeconds 2
 
   Write-Step "Checking public site"

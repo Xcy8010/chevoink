@@ -6,6 +6,8 @@ import type {
   AgentExecutionAgent,
   AgentExecutionMode,
   AgentRouteDecision,
+  AgentRuleBundle,
+  AgentStoryMemoryDigest,
   AgentWorkspaceToolPolicy,
   ChapterStatus,
   GenerateOutlineRequest,
@@ -119,8 +121,12 @@ export type AgentArtifact = {
   handoff?: AgentActionHandoff | null
   activeAgent?: AgentExecutionAgent | null
   routeDecision?: AgentRouteDecision | null
+  ruleBundle?: AgentRuleBundle | null
+  storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
+  localRollbackSnapshot?: AgentLocalRollbackSnapshot | null
+  pendingChapterReview?: ChapterPendingReview | null
 }
 
 export type AgentRunState = {
@@ -148,6 +154,42 @@ export type AgentMemoryEntry = {
   title: string
   content: string
   importance: number
+  createdAt: string
+}
+
+export type AgentLocalRollbackChapterSnapshot = {
+  id: string
+  title: string
+  summary: string
+  content: string
+  status: ChapterStatus
+  visibility: Visibility
+  wordCount: number
+  updatedAt: string | null
+}
+
+export type AgentLocalRollbackSnapshot =
+  | {
+      kind: 'restore_chapter'
+      chapter: AgentLocalRollbackChapterSnapshot
+      selectedChapterId: string | null
+    }
+  | {
+      kind: 'remove_created_chapter'
+      chapter: AgentLocalRollbackChapterSnapshot
+      previousSelectedChapterId: string | null
+      previousChapter?: AgentLocalRollbackChapterSnapshot | null
+    }
+
+export type ChapterPendingReview = {
+  id: string
+  chapterId: string
+  artifactId?: string | null
+  runId?: string | null
+  before: ChapterDraftState | null
+  after: ChapterDraftState
+  rollbackSnapshot: AgentLocalRollbackSnapshot
+  description: string
   createdAt: string
 }
 

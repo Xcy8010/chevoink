@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   Copy,
   FilePlus2,
   Hash,
@@ -86,6 +88,13 @@ type ArtifactSummary = {
   changed: string[]
 }
 
+type LiveStepItem = {
+  id: string
+  label: string
+  text: string
+  state: 'done' | 'active' | 'success' | 'error'
+}
+
 type WorkspaceActionId =
   | 'save_novel'
   | 'publish_novel'
@@ -103,47 +112,6 @@ type WorkspaceActionSuggestion = {
 }
 
 const AGENT_INPUT_GUIDE = "您正在与Agent对话，输入“#”获得更多能力，如“#计划”，“#封面”。"
-
-const agentExecutionModeLabelMap = {
-  plan: '规划模式',
-  build: '执行模式',
-  review: '审阅模式',
-} as const
-
-const toolPermissionLabelMap = {
-  allow: '可直接执行',
-  ask: '需要确认',
-} as const
-
-const agentRoleLabelMap = {
-  primary: '主控',
-  specialist: '专职',
-} as const
-
-function summarizeArtifactToolPolicy(toolPolicy?: AgentArtifact['toolPolicy'] | null) {
-  if (!toolPolicy?.tools?.length) {
-    return null
-  }
-
-  const allow = toolPolicy.tools.filter((tool) => tool.permission === 'allow')
-  const ask = toolPolicy.tools.filter((tool) => tool.permission === 'ask')
-  const denyCount = toolPolicy.tools.filter((tool) => tool.permission === 'deny').length
-
-  return {
-    mode: toolPolicy.mode,
-    allow,
-    ask,
-    denyCount,
-  }
-}
-
-function summarizeRouteDecision(routeDecision?: AgentArtifact['routeDecision'] | AgentRunState['routeDecision'] | null) {
-  if (!routeDecision) {
-    return null
-  }
-
-  return routeDecision.summary
-}
 
 const agentAbilityItems: AgentAbilityItem[] = [
   {
@@ -279,6 +247,144 @@ function renderPromptHighlight(prompt: string) {
   })
 }
 
+function normalizeRunStatuses(statuses: AgentRunStatusItem[]) {
+  const normalized = statuses
+    .map((status) => ({
+      id: status.id,
+      event: status.event,
+      text: status.text.trim(),
+    }))
+    .filter((status) => Boolean(status.text))
+
+  const shouldHideGenericStatuses = normalized.some((status) =>
+    [
+      'task.decomposed',
+      'task.thinking',
+      'task.step',
+      'workspace.apply.started',
+      'workspace.apply.completed',
+      'workspace.apply.failed',
+      'workspace.apply.skipped',
+    ].includes(status.event),
+  )
+  const filtered = shouldHideGenericStatuses
+    ? normalized.filter(
+        (status) =>
+          ![
+            'run.started',
+            'context.ready',
+            'model.started',
+            'artifact.created',
+            'memory.updated',
+            'run.completed',
+            'request.read',
+            'agent.selected',
+            'route.decided',
+            'specialist.started',
+          ].includes(status.event),
+      )
+    : normalized
+
+  const deduped: Array<{ id: string; event: string; text: string }> = []
+  for (const status of filtered.length > 0 ? filtered : normalized) {
+    if (deduped[deduped.length - 1]?.text === status.text) {
+      continue
+    }
+    deduped.push(status)
+  }
+
+  return deduped
+}
+
+function resolveStepLabel(status: Pick<AgentRunStatusItem, 'event' | 'text'>) {
+  if (
+    status.event === 'request.read' ||
+    status.event === 'task.decomposed' ||
+    status.event === 'task.thinking' ||
+    status.event === 'task.step' ||
+    status.event === 'agent.selected' ||
+    status.event === 'route.decided' ||
+    status.event === 'specialist.started'
+  ) {
+    return '思考'
+  }
+
+  if (status.event.startsWith('workspace.apply')) {
+    return '改动'
+  }
+
+  if (status.event === 'run.failed') {
+    return '失败'
+  }
+
+  if (/(?:思考|分析|判断|检索|梳理|规划)/.test(status.text)) {
+    return '思考'
+  }
+
+  if (/(?:写入|同步|创建|命名|修改|替换|追加|保存|执行)/.test(status.text)) {
+    return '处理'
+  }
+
+  if (/(?:完成|已生成|总结|汇总)/.test(status.text)) {
+    return '总结'
+  }
+
+  return '进度'
+}
+
+function buildLiveStepItems(statuses: AgentRunStatusItem[], fallbackStatusText: string, isActive: boolean): LiveStepItem[] {
+  const deduped = normalizeRunStatuses(statuses)
+
+  if (deduped.length === 0 && fallbackStatusText.trim()) {
+    return [
+      {
+        id: 'fallback-status',
+        label: '进度',
+        text: fallbackStatusText.trim(),
+        state: isActive ? 'active' : 'done',
+      },
+    ]
+  }
+
+  return deduped.map((item, index) => ({
+    id: item.id,
+    label: resolveStepLabel(item),
+    text: item.text,
+    state:
+      item.event === 'run.failed'
+        ? 'error'
+        : item.event === 'workspace.apply.completed'
+          ? 'success'
+          : index === deduped.length - 1
+            ? isActive
+              ? 'active'
+              : 'done'
+            : 'done',
+  }))
+}
+
+function buildExecutionSummary(artifact: AgentArtifact, summary: ArtifactSummary) {
+  if (artifact.actionSummary?.trim()) {
+    return artifact.actionSummary.trim()
+  }
+
+  const segments: string[] = []
+
+  if (summary.added.length > 0) {
+    segments.push(`新增了${summary.added.join('、')}`)
+  }
+
+  if (summary.changed.length > 0) {
+    segments.push(`完成了${summary.changed.join('、')}`)
+  }
+
+  if (segments.length === 0) {
+    return ''
+  }
+
+  return `本次${segments.join('，')}。`
+}
+
 function findAbilityTokenRange(prompt: string, caretPosition: number): { start: number; end: number; token: string } | null {
   const safeCaret = Math.max(0, Math.min(caretPosition, prompt.length))
   const matches = Array.from(prompt.matchAll(/#[^\s#]+/g))
@@ -336,7 +442,12 @@ function insertHashCommand(prompt: string): string {
 }
 
 function buildArtifactSummary(artifact: AgentArtifact): ArtifactSummary {
-  const added = [agentArtifactLabelMap[artifact.type]]
+  const added =
+    artifact.renamedNovel && !artifact.replacedChapterContent && !artifact.appendedToChapter
+      ? ['作品命名结果']
+      : artifact.renamedChapter && !artifact.replacedChapterContent && !artifact.appendedToChapter
+      ? ['章节标题结果']
+      : [agentArtifactLabelMap[artifact.type]]
   const changed: string[] = []
 
   if ((artifact.memoryEntries?.length ?? 0) > 0) {
@@ -445,7 +556,6 @@ function resolveWorkspaceActionSuggestions(
 }
 
 export default function WritingAgentPanel({
-  currentChapterTitle,
   activeTab,
   activeTask,
   prompt,
@@ -483,11 +593,10 @@ export default function WritingAgentPanel({
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [caretPosition, setCaretPosition] = useState(prompt.length)
+  const [collapsedProcessArtifacts, setCollapsedProcessArtifacts] = useState<Record<string, boolean>>({})
+  const canSubmitPrompt = prompt.trim().length > 0
   const activeArtifact =
     artifacts.find((artifact) => artifact.id === activeArtifactId) ?? artifacts[0] ?? null
-  const currentExecutionMode = activeArtifact?.executionMode ?? runState.executionMode ?? null
-  const currentActiveAgent = activeArtifact?.activeAgent ?? runState.activeAgent ?? null
-  const currentRouteDecision = activeArtifact?.routeDecision ?? runState.routeDecision ?? null
   const canApplyReplaceChapter = Boolean(
     activeArtifact?.availableApplyStrategies?.includes('replaceChapterContent') && canReplaceChapter,
   )
@@ -500,7 +609,6 @@ export default function WritingAgentPanel({
   const canApplyCover = Boolean(
     activeArtifact?.availableApplyStrategies?.includes('setNovelCoverPrompt') && canApplyCoverPrompt,
   )
-  const currentRouteSummary = summarizeRouteDecision(currentRouteDecision)
   const needsSavedChapterBeforeApply = Boolean(
     activeArtifact &&
       activeArtifact.type !== 'cover_prompt' &&
@@ -546,7 +654,6 @@ export default function WritingAgentPanel({
       ),
     [artifacts],
   )
-
   useEffect(() => {
     if (!scrollContainerRef.current) {
       return
@@ -559,7 +666,7 @@ export default function WritingAgentPanel({
         behavior: 'smooth',
       })
     })
-  }, [activeArtifact?.content, activeArtifact?.id, artifacts.length, runState.active])
+  }, [activeArtifact?.content, activeArtifact?.id, artifacts.length, runState.active, runStatuses.length])
 
   function syncCaretPosition() {
     const nextPosition = textareaRef.current?.selectionStart ?? prompt.length
@@ -654,28 +761,9 @@ export default function WritingAgentPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
-          <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">写作 Agent</p>
-          <p className="truncate text-sm text-[var(--text-secondary)]">{currentChapterTitle || '当前未绑定章节'}</p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {currentActiveAgent ? (
-            <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-              {agentRoleLabelMap[currentActiveAgent.role]} Agent · {currentActiveAgent.title}
-            </span>
-          ) : null}
-          {currentExecutionMode ? (
-            <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-              {agentExecutionModeLabelMap[currentExecutionMode]}
-            </span>
-          ) : null}
+          <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">Chevoink Agent</p>
         </div>
       </div>
-      {currentRouteSummary ? (
-        <div className="mb-3 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3">
-          <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">任务路由</p>
-          <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{currentRouteSummary}</p>
-        </div>
-      ) : null}
       <div
         ref={scrollContainerRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 py-1"
@@ -692,12 +780,33 @@ export default function WritingAgentPanel({
               ...artifact,
               memoryEntries: artifact.memoryEntries ?? (isActiveArtifact ? memoryEntries : []),
             })
-            const showProductionSummary =
-              !isStreamingArtifact &&
-              !artifact.actionSummary &&
-              (summary.added.length > 0 || summary.changed.length > 0)
-            const toolPolicySummary = summarizeArtifactToolPolicy(artifact.toolPolicy)
-            const routeSummary = summarizeRouteDecision(artifact.routeDecision)
+            const processItems = buildLiveStepItems(
+              artifactStatuses,
+              isStreamingArtifact ? runState.statusText || '正在整理当前请求...' : '',
+              isStreamingArtifact,
+            )
+            const processCollapsed = isStreamingArtifact ? false : (collapsedProcessArtifacts[artifact.id] ?? false)
+            const visibleProcessItems = processCollapsed ? [] : processItems
+            const canToggleProcess = !isStreamingArtifact && processItems.length > 1
+            const executionSummary = !isStreamingArtifact ? buildExecutionSummary(artifact, summary) : ''
+            const autoAppliedToWorkspace = Boolean(
+              artifact.replacedChapterContent ||
+                artifact.appendedToChapter ||
+                artifact.renamedChapter ||
+                artifact.renamedNovel ||
+                artifact.savedAsPlan ||
+                artifact.appliedToCover,
+            )
+            const showInlineSummary = Boolean(executionSummary)
+            const showInlineContent =
+              !isStreamingArtifact && !autoAppliedToWorkspace && !artifact.actionSummary?.trim() && Boolean(artifact.content.trim())
+            const showApplyActions =
+              isActiveArtifact &&
+              (canApplyReplaceChapter ||
+                canApplyAppendChapter ||
+                canApplyPlan ||
+                canApplyCover ||
+                needsSavedChapterBeforeApply)
             const workspaceActions = artifact.promptText?.trim()
               ? resolveWorkspaceActionSuggestions(artifact.promptText.trim(), novelPublished)
               : []
@@ -752,110 +861,139 @@ export default function WritingAgentPanel({
                   </div>
                 ) : null}
 
-                <div className="min-w-0 space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => onSelectArtifact(artifact.id)}
-                    className={cn(
-                      'w-full rounded-[22px] border px-4 py-3 text-left transition-colors',
-                      isActiveArtifact
-                        ? 'border-[var(--border-subtle)] bg-[var(--surface-muted)]/80'
-                        : 'border-transparent bg-transparent hover:border-[var(--border-subtle)] hover:bg-[var(--surface-muted)]/55',
-                    )}
-                  >
-                    {artifact.executionMode || artifact.activeAgent ? (
-                      <div className="mb-2 flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                        {artifact.activeAgent ? (
-                          <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-2.5 py-1">
-                            {artifact.activeAgent.title}
-                          </span>
-                        ) : null}
-                        {artifact.executionMode ? (
-                          <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-2.5 py-1">
-                            {agentExecutionModeLabelMap[artifact.executionMode]}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <pre className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]">
-                      {artifact.actionSummary || artifact.content || (isStreamingArtifact ? '思考中...' : '')}
-                    </pre>
-
-                    {isStreamingArtifact && artifactStatuses.length > 0 ? (
-                      <div className="mt-3 space-y-1.5">
-                        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                          <span>{runState.statusText || '思考中...'}</span>
-                        </div>
-                        {artifactStatuses.slice(-3).map((status) => (
-                          <div key={status.id} className="text-xs leading-6 text-[var(--text-secondary)]">
-                            {status.text}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </button>
-
-                  {showProductionSummary ? (
-                    <div className="rounded-[18px] bg-[var(--surface-muted)]/72 px-4 py-3">
-                      <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">产物汇总</p>
-                      <div className="mt-2 space-y-1.5 text-sm leading-6 text-[var(--text-secondary)]">
-                        <p>
-                          <span className="text-[var(--text-primary)]">新增：</span>
-                          {summary.added.join('、')}
-                        </p>
-                        {summary.changed.length > 0 ? (
-                          <p>
-                            <span className="text-[var(--text-primary)]">改动：</span>
-                            {summary.changed.join('、')}
+                <div className="min-w-0 space-y-2">
+                  {(processItems.length > 0 || showInlineSummary || showInlineContent) && (
+                    <div className="space-y-2.5">
+                      {processItems.length > 0 ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-medium tracking-[0.08em] text-[var(--text-secondary)]">
+                            处理过程
                           </p>
-                        ) : null}
-                      </div>
-
-                      {isActiveArtifact &&
-                      (canApplyReplaceChapter ||
-                        canApplyAppendChapter ||
-                        canApplyPlan ||
-                        canApplyCover ||
-                        needsSavedChapterBeforeApply) ? (
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          {canApplyReplaceChapter ? (
-                            <Button
-                              onClick={() => onReplaceChapterContent(artifact.id)}
-                              variant="secondary"
-                              size="sm"
+                          {canToggleProcess ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCollapsedProcessArtifacts((current) => ({
+                                  ...current,
+                                  [artifact.id]: !processCollapsed,
+                                }))
+                              }
+                              className="inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                             >
-                              覆盖正文
-                            </Button>
-                          ) : null}
-                          {canApplyAppendChapter ? (
-                            <Button onClick={() => onAppendToChapter(artifact.id)} variant="ghost" size="sm">
-                              追加到末尾
-                            </Button>
-                          ) : null}
-                          {artifact.type !== 'cover_prompt' && canApplyPlan ? (
-                            <Button onClick={() => onSavePlan(artifact.id)} variant="ghost" size="sm">
-                              <WandSparkles className="h-4 w-4" />
-                              存为计划
-                            </Button>
-                          ) : null}
-                          {artifact.type === 'cover_prompt' && canApplyCover ? (
-                            <Button onClick={() => onApplyCoverPrompt(artifact.id)} variant="ghost" size="sm">
-                              <Sparkles className="h-4 w-4" />
-                              写入封面
-                            </Button>
-                          ) : null}
-                          {needsSavedChapterBeforeApply ? (
-                            <span className="text-xs text-[var(--text-secondary)]">请先保存章节，再同步结果。</span>
+                              {processCollapsed ? '展开' : '收起'}
+                              {processCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+                            </button>
                           ) : null}
                         </div>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        onClick={() => onSelectArtifact(artifact.id)}
+                        className="w-full border-none bg-transparent px-0 py-0 text-left"
+                      >
+                        <div className="space-y-2.5">
+                          {processCollapsed ? (
+                            <div className="flex items-start gap-3">
+                              <span className="mt-1.5 h-2 w-2 rounded-full bg-[var(--border-strong)]" />
+                              <div className="min-w-0 space-y-0.5">
+                                <p className="text-[11px] font-medium tracking-[0.08em] text-[var(--text-secondary)]">
+                                  处理过程
+                                </p>
+                                <p className="text-sm leading-6 text-[var(--text-secondary)]">
+                                  已收起本轮 {processItems.length} 条过程，点击“展开”查看完整过程。
+                                </p>
+                              </div>
+                            </div>
+                          ) : visibleProcessItems.length > 0 ? (
+                            <div className="space-y-2.5">
+                            {isStreamingArtifact ? (
+                              <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                                <span>{runState.statusText || '正在处理当前请求...'}</span>
+                              </div>
+                            ) : null}
+                            {visibleProcessItems.map((step) => (
+                              <div key={step.id} className="flex items-start gap-3">
+                                <span
+                                  className={cn(
+                                    'mt-1.5 h-2 w-2 rounded-full',
+                                    step.state === 'active'
+                                      ? 'bg-[var(--text-primary)] animate-pulse'
+                                      : step.state === 'error'
+                                          ? 'bg-[#dc2626]'
+                                          : 'bg-[var(--border-strong)]',
+                                  )}
+                                />
+                                <div className="min-w-0 space-y-0.5">
+                                  <p className="text-[11px] font-medium tracking-[0.08em] text-[var(--text-secondary)]">
+                                    {step.label}
+                                  </p>
+                                  <p
+                                    className={cn(
+                                      'text-sm leading-6',
+                                      step.state === 'error'
+                                        ? 'text-[#b91c1c]'
+                                        : step.state === 'active'
+                                          ? 'text-[var(--text-primary)]'
+                                          : 'text-[var(--text-secondary)]',
+                                    )}
+                                  >
+                                    {step.text}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          ) : null}
+
+                          {showInlineSummary ? (
+                            <p className="text-sm leading-7 text-[var(--text-primary)]">{executionSummary}</p>
+                          ) : null}
+
+                          {showInlineContent ? (
+                            <pre className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]">
+                              {artifact.content}
+                            </pre>
+                          ) : null}
+                        </div>
+                      </button>
+                    </div>
+                  )}
+
+                  {showApplyActions ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {canApplyReplaceChapter ? (
+                        <Button onClick={() => onReplaceChapterContent(artifact.id)} variant="secondary" size="sm">
+                          覆盖正文
+                        </Button>
+                      ) : null}
+                      {canApplyAppendChapter ? (
+                        <Button onClick={() => onAppendToChapter(artifact.id)} variant="ghost" size="sm">
+                          追加到末尾
+                        </Button>
+                      ) : null}
+                      {artifact.type !== 'cover_prompt' && canApplyPlan ? (
+                        <Button onClick={() => onSavePlan(artifact.id)} variant="ghost" size="sm">
+                          <WandSparkles className="h-4 w-4" />
+                          存为计划
+                        </Button>
+                      ) : null}
+                      {artifact.type === 'cover_prompt' && canApplyCover ? (
+                        <Button onClick={() => onApplyCoverPrompt(artifact.id)} variant="ghost" size="sm">
+                          <Sparkles className="h-4 w-4" />
+                          写入封面
+                        </Button>
+                      ) : null}
+                      {needsSavedChapterBeforeApply ? (
+                        <span className="text-xs text-[var(--text-secondary)]">请先保存章节，再同步结果。</span>
                       ) : null}
                     </div>
                   ) : null}
 
                   {!isStreamingArtifact && artifact.handoff?.targetMode === 'build' ? (
                     <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3">
-                      <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">模式交接</p>
+                      <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">继续执行</p>
                       <div className="mt-2 space-y-2">
                         <p className="text-sm font-medium text-[var(--text-primary)]">{artifact.handoff.title}</p>
                         <p className="text-sm leading-6 text-[var(--text-secondary)]">{artifact.handoff.summary}</p>
@@ -868,59 +1006,6 @@ export default function WritingAgentPanel({
                           {artifact.handoff.confirmLabel}
                         </Button>
                       </div>
-                    </div>
-                  ) : null}
-
-                  {!isStreamingArtifact && routeSummary ? (
-                    <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3">
-                      <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">任务路由</p>
-                      <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{routeSummary}</p>
-                    </div>
-                  ) : null}
-
-                  {!isStreamingArtifact && toolPolicySummary ? (
-                    <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">当前模式工具</p>
-                        <span className="text-xs text-[var(--text-secondary)]">
-                          {agentExecutionModeLabelMap[toolPolicySummary.mode]}
-                        </span>
-                      </div>
-                      {toolPolicySummary.allow.length > 0 ? (
-                        <div className="mt-3">
-                          <p className="text-xs text-[var(--text-secondary)]">{toolPermissionLabelMap.allow}</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {toolPolicySummary.allow.map((tool) => (
-                              <span
-                                key={`${artifact.id}-${tool.toolName}-allow`}
-                                className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-muted)]/65 px-3 py-1 text-xs text-[var(--text-secondary)]"
-                              >
-                                {tool.title}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {toolPolicySummary.ask.length > 0 ? (
-                        <div className="mt-3">
-                          <p className="text-xs text-[var(--text-secondary)]">{toolPermissionLabelMap.ask}</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {toolPolicySummary.ask.map((tool) => (
-                              <span
-                                key={`${artifact.id}-${tool.toolName}-ask`}
-                                className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-1 text-xs text-[var(--text-primary)]"
-                              >
-                                {tool.title}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {toolPolicySummary.denyCount > 0 ? (
-                        <p className="mt-3 text-xs leading-6 text-[var(--text-secondary)]">
-                          另有 {toolPolicySummary.denyCount} 项工具在当前模式下不可用。
-                        </p>
-                      ) : null}
                     </div>
                   ) : null}
 
@@ -1098,11 +1183,14 @@ export default function WritingAgentPanel({
             <button
               type="button"
               onClick={runState.active ? onStop : onRun}
+              disabled={!runState.active && !canSubmitPrompt}
               className={cn(
-                'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-default)]',
+                'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-default)] disabled:cursor-not-allowed',
                 runState.active
                   ? 'bg-[var(--surface-contrast)] text-[var(--text-contrast)] hover:bg-[var(--surface-contrast-hover)]'
-                  : 'bg-[#22c55e] text-white hover:bg-[#16a34a]',
+                  : canSubmitPrompt
+                    ? 'bg-[#22c55e] text-white hover:bg-[#16a34a]'
+                    : 'bg-[#166534] text-white/75',
               )}
               aria-label={runState.active ? '暂停当前任务' : '发送当前任务'}
               title={runState.active ? '暂停当前任务' : '发送当前任务'}

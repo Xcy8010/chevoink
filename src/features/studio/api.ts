@@ -8,6 +8,8 @@ import type {
   AgentExecutionAgent,
   AgentExecutionMode,
   AgentRouteDecision,
+  AgentRuleBundle,
+  AgentStoryMemoryDigest,
   AgentWorkspaceToolPolicy,
   AgentRunStreamPayload,
   ApiResponse,
@@ -82,6 +84,8 @@ export type WritingAgentResultArtifact = {
   handoff?: AgentActionHandoff | null
   activeAgent?: AgentExecutionAgent | null
   routeDecision?: AgentRouteDecision | null
+  ruleBundle?: AgentRuleBundle | null
+  storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
 }
@@ -103,8 +107,16 @@ export type WritingAgentResult = {
   handoff?: AgentActionHandoff | null
   activeAgent?: AgentExecutionAgent | null
   routeDecision?: AgentRouteDecision | null
+  ruleBundle?: AgentRuleBundle | null
+  storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
+}
+
+type LiveAgentStatus = {
+  text: string
+  event: string
+  createdAt?: string
 }
 
 export type ApplyWritingAgentArtifactRequest = {
@@ -392,6 +404,14 @@ function mapBackendArtifactToWritingArtifact(
     artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
       ? ((artifact.metadata as Record<string, unknown>).routeDecision as AgentRouteDecision | null | undefined) ?? null
       : null
+  const ruleBundle =
+    artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+      ? ((artifact.metadata as Record<string, unknown>).ruleBundle as AgentRuleBundle | null | undefined) ?? null
+      : null
+  const storyMemoryDigest =
+    artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+      ? ((artifact.metadata as Record<string, unknown>).storyMemoryDigest as AgentStoryMemoryDigest | null | undefined) ?? null
+      : null
   const executionMode =
     artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
       ? ((artifact.metadata as Record<string, unknown>).executionMode as AgentExecutionMode | null | undefined) ?? null
@@ -415,6 +435,8 @@ function mapBackendArtifactToWritingArtifact(
     handoff,
     activeAgent,
     routeDecision,
+    ruleBundle,
+    storyMemoryDigest,
     executionMode,
     toolPolicy,
   }
@@ -436,6 +458,8 @@ function buildAgentResult(
     handoff?: AgentActionHandoff | null
     activeAgent?: AgentExecutionAgent | null
     routeDecision?: AgentRouteDecision | null
+    ruleBundle?: AgentRuleBundle | null
+    storyMemoryDigest?: AgentStoryMemoryDigest | null
     executionMode?: AgentExecutionMode | null
     toolPolicy?: AgentWorkspaceToolPolicy | null
   },
@@ -493,6 +517,16 @@ function buildAgentResult(
       (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
         ? ((artifact.metadata as Record<string, unknown>).routeDecision as AgentRouteDecision | null | undefined) ?? null
         : null),
+    ruleBundle:
+      extras?.ruleBundle ??
+      (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? ((artifact.metadata as Record<string, unknown>).ruleBundle as AgentRuleBundle | null | undefined) ?? null
+        : null),
+    storyMemoryDigest:
+      extras?.storyMemoryDigest ??
+      (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? ((artifact.metadata as Record<string, unknown>).storyMemoryDigest as AgentStoryMemoryDigest | null | undefined) ?? null
+        : null),
     executionMode:
       extras?.executionMode ??
       (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
@@ -523,6 +557,14 @@ function describeAgentRunEvent(event: string, data: Record<string, unknown>): st
 
   if (event === 'agent.selected') {
     return '已选定处理方式，正在组织工作区上下文。'
+  }
+
+  if (event === 'route.decided') {
+    return 'Chevoink Agent 已完成任务分流。'
+  }
+
+  if (event === 'specialist.started') {
+    return '专职 Agent 已接手当前任务。'
   }
 
   if (event === 'context.ready') {
@@ -833,7 +875,7 @@ async function readAgentRunStream(
 async function readAgentEventStream(
   response: Response,
   action: AgentTaskType,
-  onStatus?: (status: string) => void,
+  onStatus?: (status: LiveAgentStatus) => void,
   onChunk?: (chunk: string) => void,
 ): Promise<WritingAgentResult> {
   const reader = response.body?.getReader()
@@ -862,6 +904,7 @@ async function readAgentEventStream(
 
     for (const block of blocks) {
       const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
+      const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() ?? ''
       const dataLines = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim())
 
       if (!dataLines.length) {
@@ -896,13 +939,23 @@ async function readAgentEventStream(
         }
 
         if (typeof payload.message === 'string' && payload.message.trim()) {
+          const normalizedEvent = eventType === 'status' ? eventName || eventType || 'status' : eventType || eventName || 'status'
+          const createdAt =
+            typeof payload.createdAt === 'string' && payload.createdAt.trim()
+              ? payload.createdAt
+              : new Date().toISOString()
+
           liveStatuses.push({
             id: `live-status-${liveStatuses.length + 1}`,
-            event: eventType || 'status',
+            event: normalizedEvent,
             text: payload.message,
-            createdAt: new Date().toISOString(),
+            createdAt,
           })
-          onStatus?.(payload.message)
+          onStatus?.({
+            text: payload.message,
+            event: normalizedEvent,
+            createdAt,
+          })
         }
 
         if (delta) {
@@ -974,7 +1027,7 @@ function buildAgentActionBody(request: WritingAgentRequest): ExecuteWorkspaceAge
 
 async function tryRunAgentAction(
   request: WritingAgentRequest,
-  onStatus?: (status: string) => void,
+  onStatus?: (status: LiveAgentStatus) => void,
   onChunk?: (chunk: string) => void,
   onStatusModeChange?: (mode: AgentRunStatusMode) => void,
   signal?: AbortSignal,
@@ -1024,6 +1077,7 @@ async function tryRunAgentAction(
     const contentType = response.headers.get('content-type') ?? ''
 
     if (contentType.includes('text/event-stream')) {
+      onStatusModeChange?.('live')
       return readAgentEventStream(response, request.action, onStatus, onChunk)
     }
 
@@ -1074,7 +1128,14 @@ async function tryRunAgentAction(
     const streamResult =
       runId && payload.stream
         ? await readAgentRunStream(payload.stream, runId, {
-            onStatus,
+            onStatus: onStatus
+              ? (statusText) => {
+                  onStatus({
+                    text: statusText,
+                    event: 'status',
+                  })
+                }
+              : undefined,
             onStatusModeChange,
           }, controller.signal)
         : {
@@ -1131,6 +1192,18 @@ async function tryRunAgentAction(
         (finalArtifact?.metadata && typeof finalArtifact.metadata === 'object' && !Array.isArray(finalArtifact.metadata)
           ? ((finalArtifact.metadata as Record<string, unknown>).routeDecision as AgentRouteDecision | null | undefined) ?? null
           : null),
+      ruleBundle:
+        payload.ruleBundle ??
+        fallbackArtifacts[0]?.ruleBundle ??
+        (finalArtifact?.metadata && typeof finalArtifact.metadata === 'object' && !Array.isArray(finalArtifact.metadata)
+          ? ((finalArtifact.metadata as Record<string, unknown>).ruleBundle as AgentRuleBundle | null | undefined) ?? null
+          : null),
+      storyMemoryDigest:
+        payload.storyMemoryDigest ??
+        fallbackArtifacts[0]?.storyMemoryDigest ??
+        (finalArtifact?.metadata && typeof finalArtifact.metadata === 'object' && !Array.isArray(finalArtifact.metadata)
+          ? ((finalArtifact.metadata as Record<string, unknown>).storyMemoryDigest as AgentStoryMemoryDigest | null | undefined) ?? null
+          : null),
       actionPlan:
         payload.actionPlan ??
         fallbackArtifacts[0]?.actionPlan ??
@@ -1159,7 +1232,7 @@ async function tryRunAgentAction(
 export async function runWritingAgentAction(
   request: WritingAgentRequest,
   handlers?: {
-    onStatus?: (status: string) => void
+    onStatus?: (status: LiveAgentStatus) => void
     onChunk?: (chunk: string) => void
     onStatusModeChange?: (mode: AgentRunStatusMode) => void
     signal?: AbortSignal

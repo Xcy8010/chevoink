@@ -348,6 +348,8 @@ export type AgentActionResultPayload = AgentRunResultPayload & {
   artifactType: AgentArtifact['artifactType'] | null
   activeAgent?: import('./models.js').AgentExecutionAgent | null
   routeDecision?: import('./models.js').AgentRouteDecision | null
+  ruleBundle?: import('./models.js').AgentRuleBundle | null
+  storyMemoryDigest?: import('./models.js').AgentStoryMemoryDigest | null
   executionMode?: import('./models.js').AgentExecutionMode | null
   actionPlan?: import('./models.js').AgentActionPlan | null
   handoff?: import('./models.js').AgentActionHandoff | null

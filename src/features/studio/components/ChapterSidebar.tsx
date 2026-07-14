@@ -5,6 +5,21 @@ import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { StudioPayload } from '../../../../shared/contracts/index.js'
 
+function formatChapterTreeLabel(chapter: StudioPayload['chapters'][number]) {
+  const normalizedTitle = chapter.title.trim()
+
+  if (!normalizedTitle) {
+    return `第 ${chapter.orderIndex} 章`
+  }
+
+  const prefixedPattern = new RegExp(`^第\\s*${chapter.orderIndex}\\s*章(?:\\s*[：:.·\\-]\\s*.*)?$`)
+  if (prefixedPattern.test(normalizedTitle)) {
+    return normalizedTitle
+  }
+
+  return `第 ${chapter.orderIndex} 章 · ${normalizedTitle}`
+}
+
 type ChapterSidebarProps = {
   chapters: StudioPayload['chapters']
   selectedChapterId: string | null
@@ -96,7 +111,7 @@ export default function ChapterSidebar({
                     >
                       <FileText className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
                       <span className="truncate">
-                        第 {chapter.orderIndex} 章 · {chapter.title}
+                        {formatChapterTreeLabel(chapter)}
                       </span>
                     </button>
                   ))}

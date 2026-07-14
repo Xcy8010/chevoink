@@ -9,6 +9,9 @@ import type {
   AgentExecutionAgent,
   AgentExecutionMode,
   AgentRouteDecision,
+  AgentRouteStatusEvent,
+  AgentRuleBundle,
+  AgentStoryMemoryDigest,
   AgentWorkspaceToolName,
   AgentWorkspaceToolPolicy,
   AgentRun,
@@ -87,6 +90,14 @@ type PromptBackedRunConfig = {
   systemPrompt?: string
   memoryType?: ProjectMemoryEntry['memoryType']
   artifactMetadata?: Record<string, unknown>
+  onProgress?: (event: {
+    stage: string
+    type?: 'status' | 'result' | 'done'
+    message: string
+    runId?: string | null
+    createdAt?: string
+    data?: Record<string, unknown>
+  }) => void
 }
 
 function toIso(value: Date | string | null | undefined): string | null {
@@ -112,6 +123,91 @@ function clipText(value: string | null | undefined, maxLength: number): string {
 
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`
 }
+
+function emitRunProgress(
+  reporter: PromptBackedRunConfig['onProgress'],
+  event: {
+    stage: string
+    message: string
+    type?: 'status' | 'result' | 'done'
+    runId?: string | null
+    data?: Record<string, unknown>
+  },
+) {
+  if (!reporter) {
+    return
+  }
+
+  reporter({
+    ...event,
+    type: event.type ?? 'status',
+    createdAt: new Date().toISOString(),
+  })
+}
+
+function resolveActionPlanStepReasoning(step: AgentActionPlan['steps'][number]) {
+  const reasoning = step.payload?.reasoning
+  return typeof reasoning === 'string' && reasoning.trim() ? reasoning.trim() : ''
+}
+
+function resolveActionPlanThinking(actionPlan: AgentActionPlan | null) {
+  if (!Array.isArray(actionPlan?.thinking)) {
+    return []
+  }
+
+  return actionPlan.thinking
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+}
+
+function describeWorkspacePlanForProgress(
+  actionPlan: AgentActionPlan | null,
+): Array<{ stage: 'task.step' | 'task.thinking'; message: string }> {
+  if (!actionPlan?.steps.length) {
+    const thinkingItems = resolveActionPlanThinking(actionPlan)
+    if (thinkingItems.length > 0) {
+      return thinkingItems.map((message) => ({
+        stage: 'task.thinking',
+        message,
+      }))
+    }
+
+    return [
+      {
+        stage: 'task.step',
+        message: '已判断本次请求暂不需要直接改动作品内容，先整理结果回复。',
+      },
+    ]
+  }
+
+  const leadingThinking = resolveActionPlanThinking(actionPlan).map((message) => ({
+    stage: 'task.thinking' as const,
+    message,
+  }))
+
+  return [
+    ...leadingThinking,
+    ...actionPlan.steps.flatMap((step) => {
+      const messages: Array<{ stage: 'task.step' | 'task.thinking'; message: string }> = []
+      const reasoning = resolveActionPlanStepReasoning(step)
+
+      if (reasoning) {
+        messages.push({
+          stage: 'task.thinking',
+          message: reasoning,
+        })
+      }
+
+      messages.push({
+        stage: 'task.step',
+        message: typeof step.title === 'string' && step.title.trim() ? step.title.trim() : '按顺序执行一项工作台操作。',
+      })
+
+      return messages
+    }),
+  ]
+}
+
 
 function asMetadataRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -152,6 +248,48 @@ function asAgentWorkspaceToolPolicy(value: unknown): AgentWorkspaceToolPolicy | 
   }
 
   return policy as unknown as AgentWorkspaceToolPolicy
+}
+
+function formatWorkspaceToolPolicy(toolPolicy: AgentWorkspaceToolPolicy): string {
+  if (!toolPolicy.tools.length) {
+    return '暂无可用工作台工具。'
+  }
+
+  return toolPolicy.tools
+    .map((tool) => `- ${tool.toolName}｜${tool.title}｜权限=${tool.permission}｜${tool.description}`)
+    .join('\n')
+}
+
+function extractWorkspacePlanEnvelope(content: string): { cleanContent: string; rawPlan: AgentActionPlan | null } {
+  const match = content.match(/^\s*<workspace_plan>([\s\S]*?)<\/workspace_plan>\s*/i)
+  if (!match) {
+    return {
+      cleanContent: content.trim(),
+      rawPlan: null,
+    }
+  }
+
+  const rawJson = match[1]?.trim()
+  const cleanContent = content.slice(match[0].length).trim()
+
+  if (!rawJson) {
+    return {
+      cleanContent,
+      rawPlan: null,
+    }
+  }
+
+  try {
+    return {
+      cleanContent,
+      rawPlan: asAgentActionPlan(JSON.parse(rawJson)),
+    }
+  } catch {
+    return {
+      cleanContent,
+      rawPlan: null,
+    }
+  }
 }
 
 function asAgentExecutionAgent(value: unknown): AgentExecutionAgent | null {
@@ -262,12 +400,163 @@ function asAgentRouteDecision(value: unknown): AgentRouteDecision | null {
     task: candidate.task,
     intentLabel: candidate.intentLabel,
     summary: candidate.summary,
+    factors: Array.isArray(candidate.factors)
+      ? candidate.factors.filter((item): item is string => typeof item === 'string')
+      : [],
   }
 }
 
-function buildWorkspaceRouteDecision(config: ReturnType<typeof resolveWorkspaceIntentConfig>): AgentRouteDecision {
+function asAgentRuleBundle(value: unknown): AgentRuleBundle | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.rules)) {
+    return null
+  }
+
+  const rules = candidate.rules.filter((rule): rule is string => typeof rule === 'string')
+  return {
+    summary: candidate.summary,
+    rules,
+  }
+}
+
+function asAgentStoryMemoryDigest(value: unknown): AgentStoryMemoryDigest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.items)) {
+    return null
+  }
+
+  const items = candidate.items.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return []
+    }
+
+    const entry = item as Record<string, unknown>
+    if (
+      typeof entry.title !== 'string' ||
+      typeof entry.memoryType !== 'string' ||
+      typeof entry.excerpt !== 'string'
+    ) {
+      return []
+    }
+
+    return [
+      {
+        title: entry.title,
+        memoryType: entry.memoryType as ProjectMemoryEntry['memoryType'],
+        excerpt: entry.excerpt,
+      },
+    ]
+  })
+
+  return {
+    summary: candidate.summary,
+    items,
+  }
+}
+
+function resolveDynamicWorkspaceAgentRouting(options: {
+  intent: WorkspaceAgentIntent
+  config: ReturnType<typeof resolveWorkspaceIntentConfig>
+  input: ExecuteWorkspaceAgentInput
+  ruleBundle: AgentRuleBundle
+  storyMemoryDigest: AgentStoryMemoryDigest
+}): {
+  agentType: AgentRun['agentType']
+  signals: string[]
+} {
+  const { intent, config, input, ruleBundle, storyMemoryDigest } = options
+
+  if (config.task === 'generate-novel-title') {
+    return {
+      agentType: 'storyPlanner',
+      signals: ['任务语义：当前请求更接近命名与前置规划。'],
+    }
+  }
+
+  if (intent !== 'workspaceAgent' || config.agentType !== 'writingOrchestrator') {
+    return {
+      agentType: config.agentType,
+      signals: [],
+    }
+  }
+
+  const normalizedPrompt = input.prompt.replace(/\s+/g, '').toLowerCase()
+  const memoryTypes = new Set(storyMemoryDigest.items.map((item) => item.memoryType))
+
+  if (
+    containsAny(normalizedPrompt, ['设定', '世界观', '人物卡', '人物关系', '背景资料', '时间线', '梳理设定', '补充背景'])
+  ) {
+    return {
+      agentType: 'loreLibrarian',
+      signals: ['任务语义：当前请求更接近设定检索与背景补全。'],
+    }
+  }
+
+  if (
+    containsAny(normalizedPrompt, ['润色', '改写', '重写', '优化表达', '顺一顺', '收紧', '精修', '文风']) ||
+    (ruleBundle.rules.some((rule) => rule.includes('文风')) && containsAny(normalizedPrompt, ['表达', '语气', '句子']))
+  ) {
+    return {
+      agentType: 'styleEditor',
+      signals: ['任务语义：当前请求更接近局部改写与文风优化。'],
+    }
+  }
+
+  if (
+    containsAny(normalizedPrompt, ['规划', '大纲', '结构', '拆解', '提纲', '思路', '起名', '命名', '书名', '章节名'])
+  ) {
+    return {
+      agentType: 'storyPlanner',
+      signals: ['任务语义：当前请求更接近规划、命名或结构设计。'],
+    }
+  }
+
+  if (
+    containsAny(normalizedPrompt, ['一致性', '连贯', '矛盾', '逻辑', '审阅']) ||
+    (memoryTypes.has('continuityRule') && containsAny(normalizedPrompt, ['检查', '看看', '对照']))
+  ) {
+    return {
+      agentType: 'continuityEditor',
+      signals: ['任务语义：当前请求更接近连续性审阅。'],
+    }
+  }
+
+  return {
+    agentType: 'draftWriter',
+    signals:
+      memoryTypes.has('stylePreference') || memoryTypes.has('chapterSummary')
+        ? ['上下文信号：已有章节摘要或文风偏好，可直接交由正文写作 Agent 承接。']
+        : ['任务语义：当前请求更接近正文写作与内容生成。'],
+  }
+}
+
+function buildWorkspaceRouteDecision(options: {
+  config: ReturnType<typeof resolveWorkspaceIntentConfig>
+  targetAgentType: AgentRun['agentType']
+  decisionSignals: string[]
+  ruleBundle: AgentRuleBundle
+  storyMemoryDigest: AgentStoryMemoryDigest
+}): AgentRouteDecision {
+  const { config, targetAgentType, decisionSignals, ruleBundle, storyMemoryDigest } = options
   const sourceAgent = buildExecutionAgent('writingOrchestrator')
-  const targetAgent = buildExecutionAgent(config.agentType)
+  const targetAgent = buildExecutionAgent(targetAgentType)
+  const factors = [
+    ...decisionSignals,
+    ruleBundle.rules[0] ? `规则依据：${clipText(ruleBundle.rules[0], 52)}` : '',
+    ruleBundle.rules[1] ? `规则补充：${clipText(ruleBundle.rules[1], 52)}` : '',
+    storyMemoryDigest.items[0]
+      ? `记忆参考：${storyMemoryDigest.items[0].title}（${storyMemoryDigest.items[0].memoryType}）`
+      : '',
+  ].filter(Boolean)
+  const reasonText = factors.length > 0 ? `依据：${factors.join('；')}。` : ''
 
   return {
     sourceAgent,
@@ -276,9 +565,76 @@ function buildWorkspaceRouteDecision(config: ReturnType<typeof resolveWorkspaceI
     intentLabel: config.title,
     summary:
       targetAgent.agentType === sourceAgent.agentType
-        ? `${sourceAgent.title} 判断当前任务适合继续由自己直接处理。`
-        : `${sourceAgent.title} 判断当前任务更适合交给 ${targetAgent.title} 处理。`,
+        ? `${sourceAgent.title} 判断当前任务适合继续由自己直接处理。${reasonText}`
+        : `${sourceAgent.title} 判断当前任务更适合交给 ${targetAgent.title} 处理。${reasonText}`,
+    factors,
   }
+}
+
+function buildRouteStatusEvents(
+  runId: string,
+  createdAt: string,
+  routeDecision: AgentRouteDecision | null,
+): Array<{
+  id: string
+  stage: AgentRouteStatusEvent
+  type: 'status'
+  runId: string
+  createdAt: string
+  replay: true
+  mode: 'replay'
+  message: string
+  data: Record<string, unknown>
+}> {
+  if (!routeDecision) {
+    return []
+  }
+
+  const baseData = {
+    sourceAgent: routeDecision.sourceAgent,
+    targetAgent: routeDecision.targetAgent,
+    task: routeDecision.task,
+    intentLabel: routeDecision.intentLabel,
+  }
+
+  return [
+    {
+      id: `${runId}-agent-selected`,
+      stage: 'agent.selected',
+      type: 'status',
+      runId,
+      createdAt,
+      replay: true,
+      mode: 'replay',
+      message: `${routeDecision.sourceAgent.title} 已接收当前任务，正在判断最合适的处理代理。`,
+      data: baseData,
+    },
+    {
+      id: `${runId}-route-decided`,
+      stage: 'route.decided',
+      type: 'status',
+      runId,
+      createdAt,
+      replay: true,
+      mode: 'replay',
+      message: routeDecision.summary,
+      data: baseData,
+    },
+    {
+      id: `${runId}-specialist-started`,
+      stage: 'specialist.started',
+      type: 'status',
+      runId,
+      createdAt,
+      replay: true,
+      mode: 'replay',
+      message:
+        routeDecision.targetAgent.agentType === routeDecision.sourceAgent.agentType
+          ? `${routeDecision.targetAgent.title} 已开始处理当前任务。`
+          : `${routeDecision.targetAgent.title} 已接手当前任务，开始执行。`,
+      data: baseData,
+    },
+  ]
 }
 
 function resolveBuildActionHintFromPlan(actionPlan: AgentActionPlan): ExecuteWorkspaceAgentRequest['actionHint'] {
@@ -312,9 +668,11 @@ function buildPlanToBuildHandoff(
 
 function buildActionPlanStep(
   executionMode: AgentExecutionMode,
+  agentType: AgentRun['agentType'],
   step: {
     id: string
     toolName: AgentWorkspaceToolName
+    title?: string
     target: AgentActionPlan['steps'][number]['target']
     payload: AgentActionPlan['steps'][number]['payload']
   },
@@ -325,7 +683,7 @@ function buildActionPlanStep(
     return null
   }
 
-  const permission = resolveWorkspaceToolPermission(executionMode, step.toolName)
+  const permission = resolveWorkspaceToolPermission(executionMode, agentType, step.toolName)
   if (permission === 'deny') {
     return null
   }
@@ -333,11 +691,117 @@ function buildActionPlanStep(
   return {
     id: step.id,
     toolName: step.toolName,
-    title: definition.title,
+    title: typeof step.title === 'string' && step.title.trim() ? step.title.trim() : definition.title,
     requiresConfirm: permission === 'ask',
     target: step.target,
     payload: step.payload,
   }
+}
+
+function sanitizeModelActionPlan(options: {
+  rawPlan: AgentActionPlan | null
+  executionMode: AgentExecutionMode
+  agentType: AgentRun['agentType']
+  novelId: string
+  chapterId?: string | null
+}): AgentActionPlan | null {
+  if (!options.rawPlan) {
+    return null
+  }
+
+  const sanitizedSteps: AgentActionPlan['steps'] = []
+  const sanitizedThinking = Array.isArray(options.rawPlan.thinking)
+    ? options.rawPlan.thinking
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 6)
+    : []
+
+  for (const rawStep of options.rawPlan.steps) {
+    const normalizedTarget = {
+      scope:
+        rawStep.target?.scope === 'workspace' || rawStep.target?.scope === 'novel' || rawStep.target?.scope === 'chapter'
+          ? rawStep.target.scope
+          : 'chapter',
+      novelId:
+        typeof rawStep.target?.novelId === 'string' && rawStep.target.novelId.trim()
+          ? rawStep.target.novelId
+          : options.novelId,
+      chapterId:
+        typeof rawStep.target?.chapterId === 'string' && rawStep.target.chapterId.trim()
+          ? rawStep.target.chapterId
+          : options.chapterId ?? null,
+    }
+
+    const step = buildActionPlanStep(options.executionMode, options.agentType, {
+      id: typeof rawStep.id === 'string' && rawStep.id.trim() ? rawStep.id : `step_${sanitizedSteps.length + 1}`,
+      toolName: rawStep.toolName,
+      title: typeof rawStep.title === 'string' ? rawStep.title : undefined,
+      target: normalizedTarget,
+      payload:
+        rawStep.payload && typeof rawStep.payload === 'object' && !Array.isArray(rawStep.payload)
+          ? rawStep.payload
+          : { source: 'artifact' },
+    })
+
+    if (step) {
+      sanitizedSteps.push(step)
+    }
+  }
+
+  if (sanitizedSteps.length === 0) {
+    return {
+      mode: options.rawPlan.mode,
+      summary: options.rawPlan.summary,
+      thinking: sanitizedThinking,
+      steps: [],
+    }
+  }
+
+  return {
+    mode: options.rawPlan.mode,
+    summary: options.rawPlan.summary,
+    thinking: sanitizedThinking,
+    steps: sanitizedSteps,
+  }
+}
+
+function buildWorkspaceBuiltinProtocol(options: {
+  intent: WorkspaceAgentIntent
+  title: string
+  responseRule: string
+  toolPolicy?: AgentWorkspaceToolPolicy | null
+}): string[] {
+  const protocol = [
+    '[统一内置执行协议]',
+    '你必须先读取内置执行协议，再读取用户提示；用户提示永远代表“当前需求或任务”，不是让你复述的原文。',
+    '你需要先判断用户请求里包含几个独立任务；如果超过一个任务，必须拆成有先后顺序的子任务，再逐个处理。',
+    '每个子任务都要先判断是否需要调用工作台接口；如果需要，只能从当前提供的工具清单中选择最匹配的一个或多个工具。',
+    '如果请求只是咨询、闲聊、解释、命名建议或纯内容输出，不要伪造接口调用，也不要把会执行的动作说成已经执行。',
+    '如果请求涉及写作工作台操作，比如新建章节、覆盖正文、追加正文、改名、发布、下架、删除、打开设置或写入封面提示词，请先做任务拆解，再映射到对应工具。',
+    '当用户一次性提出多个动作时，要先在内部确认依赖顺序，例如“先新建章节，再写正文”“先改名，再续写”“先规划，再执行”。',
+    `当前任务主题：${options.title}。`,
+    `当前输出要求：${options.responseRule}`,
+  ]
+
+  if (options.intent === 'workspaceAgent') {
+    protocol.push('当前处于自由调度场景，你要优先理解真实意图，再决定是否需要调用工具，而不是直接开始写正文。')
+  }
+
+  if (options.toolPolicy) {
+    protocol.push(
+      '在输出任何用户可见内容之前，你必须先完成内部任务分析，并按下列协议输出结构化执行清单。',
+      '先输出一段 <workspace_plan>...</workspace_plan>，其中内容必须是合法 JSON，结构必须满足 {"mode":"plan|execute|review","summary":"...","steps":[...]}。',
+      'steps 里的每一项都必须包含 id、toolName、title、target、payload；只能使用下面工具清单中 permission 不为 deny 的 toolName。',
+      '如果某一步会改动作品内容，payload 里必须补一条 reasoning，说明为什么要先做这一步，以及要处理哪一段或哪一类内容。',
+      '如果当前请求不需要调用任何工作台接口，请输出 steps: []。如果某个动作需要用户确认，请照常写进 steps，系统会根据权限自动标记确认态。',
+      '紧跟在 </workspace_plan> 之后，再输出真正给用户看的中文结果；不要在用户可见内容里重复 JSON、接口名或协议说明。',
+      '[当前可用工作台工具]',
+      formatWorkspaceToolPolicy(options.toolPolicy),
+    )
+  }
+
+  return protocol
 }
 
 function hydrateHandoffSource(
@@ -719,6 +1183,159 @@ function buildDefaultSystemPrompt(title: string): string {
   ].join('\n')
 }
 
+function buildProjectMemoryEntryDrafts(
+  config: Pick<PromptBackedRunConfig, 'agentType' | 'artifactType' | 'title' | 'memoryType'>,
+  content: string,
+): Array<{
+  memoryType: ProjectMemoryEntry['memoryType']
+  title: string
+  content: string
+  importance: number
+}> {
+  const normalizedContent = content.trim()
+  if (!normalizedContent) {
+    return []
+  }
+
+  const drafts: Array<{
+    memoryType: ProjectMemoryEntry['memoryType']
+    title: string
+    content: string
+    importance: number
+  }> = []
+
+  if (config.memoryType) {
+    drafts.push({
+      memoryType: config.memoryType,
+      title: config.title,
+      content: normalizedContent,
+      importance: 60,
+    })
+  }
+
+  const compactContent = clipText(normalizedContent, 240)
+  if (!compactContent) {
+    return drafts
+  }
+
+  const compactDraft =
+    config.agentType === 'storyPlanner' || config.artifactType === 'chapterPlan'
+      ? {
+          memoryType: 'chapterSummary' as const,
+          title: `${config.title} 摘要`,
+          content: compactContent,
+          importance: 72,
+        }
+      : config.agentType === 'draftWriter' ||
+          config.artifactType === 'chapterDraft' ||
+          config.artifactType === 'chapterContinuation'
+        ? {
+            memoryType: 'chapterSummary' as const,
+            title: `${config.title} 摘要`,
+            content: compactContent,
+            importance: 58,
+          }
+        : config.agentType === 'continuityEditor' || config.artifactType === 'continuityReview'
+          ? {
+              memoryType: 'continuityRule' as const,
+              title: `${config.title} 规则摘要`,
+              content: compactContent,
+              importance: 78,
+            }
+          : config.agentType === 'styleEditor'
+            ? {
+                memoryType: 'stylePreference' as const,
+                title: `${config.title} 风格要点`,
+                content: compactContent,
+                importance: 74,
+              }
+            : config.agentType === 'loreLibrarian'
+              ? {
+                  memoryType: 'worldbuilding' as const,
+                  title: `${config.title} 设定摘要`,
+                  content: compactContent,
+                  importance: 76,
+                }
+              : config.agentType === 'coverPromptAgent' || config.artifactType === 'coverPrompt'
+                ? {
+                    memoryType: 'stylePreference' as const,
+                    title: `${config.title} 视觉风格`,
+                    content: compactContent,
+                    importance: 70,
+                  }
+                : null
+
+  if (compactDraft) {
+    drafts.push(compactDraft)
+  }
+
+  return drafts.filter(
+    (draft, index, items) =>
+      items.findIndex(
+        (candidate) =>
+          candidate.memoryType === draft.memoryType &&
+          candidate.title === draft.title &&
+          candidate.content === draft.content,
+      ) === index,
+  )
+}
+
+async function persistProjectMemoryEntries(options: {
+  runId: string
+  novelId: string
+  sourceChapterId: string | null
+  drafts: Array<{
+    memoryType: ProjectMemoryEntry['memoryType']
+    title: string
+    content: string
+    importance: number
+  }>
+}): Promise<ProjectMemoryEntry[]> {
+  const { runId, novelId, sourceChapterId, drafts } = options
+  if (drafts.length === 0) {
+    return []
+  }
+
+  const entries = await Promise.all(
+    drafts.map(async (draft) => {
+      const existingEntry = await prisma.projectMemoryEntry.findFirst({
+        where: {
+          novelId,
+          sourceChapterId,
+          memoryType: draft.memoryType,
+          title: draft.title,
+        },
+        orderBy: { updatedAt: 'desc' },
+      })
+
+      if (existingEntry) {
+        return prisma.projectMemoryEntry.update({
+          where: { id: existingEntry.id },
+          data: {
+            runId,
+            content: draft.content,
+            importance: Math.max(existingEntry.importance ?? 0, draft.importance),
+          },
+        })
+      }
+
+      return prisma.projectMemoryEntry.create({
+        data: {
+          runId,
+          novelId,
+          sourceChapterId,
+          memoryType: draft.memoryType,
+          title: draft.title,
+          content: draft.content,
+          importance: draft.importance,
+        },
+      })
+    }),
+  )
+
+  return entries.map(toProjectMemoryEntry)
+}
+
 async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<AgentActionResponse['data']> {
   const run = await prisma.agentRun.create({
     data: {
@@ -736,7 +1353,23 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
   })
 
   try {
-    const content = await generateTextCompletion(
+    emitRunProgress(config.onProgress, {
+      stage: 'run.started',
+      message: '已接收当前任务，正在整理本次请求。',
+      runId: run.id,
+    })
+    emitRunProgress(config.onProgress, {
+      stage: 'context.ready',
+      message: '上下文已准备完成，开始组织生成内容。',
+      runId: run.id,
+    })
+    emitRunProgress(config.onProgress, {
+      stage: 'model.started',
+      message: '正在生成本次结果，请稍候。',
+      runId: run.id,
+    })
+
+    const rawContent = await generateTextCompletion(
       config.systemPrompt ?? buildDefaultSystemPrompt(config.title),
       config.prompt,
       {
@@ -752,6 +1385,37 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
       },
     )
 
+    const initialActionPlan = asAgentActionPlan(config.artifactMetadata?.actionPlan)
+    const metadataToolPolicy = asAgentWorkspaceToolPolicy(config.artifactMetadata?.toolPolicy)
+    const metadataExecutionMode =
+      config.artifactMetadata?.executionMode === 'plan' ||
+      config.artifactMetadata?.executionMode === 'build' ||
+      config.artifactMetadata?.executionMode === 'review'
+        ? config.artifactMetadata.executionMode
+        : null
+    const extractedPlan = extractWorkspacePlanEnvelope(rawContent)
+    const sanitizedModelPlan =
+      metadataToolPolicy && metadataExecutionMode
+        ? sanitizeModelActionPlan({
+            rawPlan: extractedPlan.rawPlan,
+            executionMode: metadataExecutionMode,
+            agentType: config.agentType,
+            novelId: config.novelId,
+            chapterId: config.chapterId ?? null,
+          })
+        : null
+    const content = extractedPlan.cleanContent || rawContent.trim()
+    const artifactMetadata = {
+      ...(config.artifactMetadata ?? {}),
+      actionPlan: sanitizedModelPlan ?? initialActionPlan ?? null,
+    }
+
+    emitRunProgress(config.onProgress, {
+      stage: 'artifact.created',
+      message: '初稿已生成，正在整理结果结构。',
+      runId: run.id,
+    })
+
     const artifact = await prisma.agentArtifact.create({
       data: {
         runId: run.id,
@@ -759,27 +1423,30 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
         title: config.title,
         summary: config.inputSummary,
         content,
-        metadata: {
-          action: config.action,
-          ...(config.artifactMetadata ?? {}),
-        },
+        metadata:
+          ({ action: config.action, ...artifactMetadata } satisfies Record<string, unknown>) as unknown as Prisma.InputJsonValue,
       },
     })
 
     const memoryEntries: ProjectMemoryEntry[] = []
-    if (config.memoryType) {
-      const entry = await prisma.projectMemoryEntry.create({
-        data: {
+    const memoryDrafts = buildProjectMemoryEntryDrafts(config, content)
+    if (memoryDrafts.length > 0) {
+      memoryEntries.push(
+        ...(await persistProjectMemoryEntries({
           runId: run.id,
           novelId: config.novelId,
           sourceChapterId: config.chapterId ?? null,
-          memoryType: config.memoryType,
-          title: config.title,
-          content,
-          importance: 60,
-        },
+          drafts: memoryDrafts,
+        })),
+      )
+    }
+
+    if (memoryEntries.length > 0) {
+      emitRunProgress(config.onProgress, {
+        stage: 'memory.updated',
+        message: '本轮关键信息已同步，正在完成收尾。',
+        runId: run.id,
       })
-      memoryEntries.push(toProjectMemoryEntry(entry))
     }
 
     const completedRun = await prisma.agentRun.update({
@@ -823,10 +1490,24 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
       artifactPayload.metadata && typeof artifactPayload.metadata === 'object'
         ? asAgentRouteDecision((artifactPayload.metadata as Record<string, unknown>).routeDecision)
         : null
+    const ruleBundle =
+      artifactPayload.metadata && typeof artifactPayload.metadata === 'object'
+        ? asAgentRuleBundle((artifactPayload.metadata as Record<string, unknown>).ruleBundle)
+        : null
+    const storyMemoryDigest =
+      artifactPayload.metadata && typeof artifactPayload.metadata === 'object'
+        ? asAgentStoryMemoryDigest((artifactPayload.metadata as Record<string, unknown>).storyMemoryDigest)
+        : null
     const toolPolicy =
       artifactPayload.metadata && typeof artifactPayload.metadata === 'object'
         ? asAgentWorkspaceToolPolicy((artifactPayload.metadata as Record<string, unknown>).toolPolicy)
         : null
+
+    emitRunProgress(config.onProgress, {
+      stage: 'run.completed',
+      message: '结果已经准备好，马上返回当前对话。',
+      runId: run.id,
+    })
 
     return {
       run: toAgentRun(completedRun),
@@ -839,6 +1520,8 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
       artifactType: artifactPayload.artifactType,
       activeAgent,
       routeDecision,
+      ruleBundle,
+      storyMemoryDigest,
       executionMode,
       actionPlan,
       handoff,
@@ -853,6 +1536,11 @@ async function executePromptBackedRun(config: PromptBackedRunConfig): Promise<Ag
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Agent 执行失败。'
+    emitRunProgress(config.onProgress, {
+      stage: 'run.failed',
+      message,
+      runId: run.id,
+    })
     await prisma.agentRun.update({
       where: { id: run.id },
       data: {
@@ -1124,90 +1812,18 @@ function shouldPlanWriteChapter(prompt: string, intent: WorkspaceAgentIntent) {
   )
 }
 
-function buildWorkspaceActionPlan(input: ExecuteWorkspaceAgentInput, intent: WorkspaceAgentIntent): AgentActionPlan | null {
-  const prompt = input.prompt.trim().toLowerCase()
-  const steps: AgentActionPlan['steps'] = []
-  const hasChapterTarget = Boolean(input.chapterId)
-
-  if (shouldPlanRenameNovel(prompt, intent)) {
-    steps.push({
-      id: 'rename_novel',
-      toolName: 'novel.rename',
-      title: '命名当前作品',
-      requiresConfirm: false,
-      target: {
-        scope: 'novel',
-        novelId: input.novelId,
-      },
-      payload: {
-        source: 'artifact',
-      },
-    })
-  }
-
-  if (shouldPlanRenameChapter(prompt, intent) && hasChapterTarget) {
-    steps.push({
-      id: 'rename_chapter',
-      toolName: 'chapter.rename',
-      title: '命名当前章节',
-      requiresConfirm: false,
-      target: {
-        scope: 'chapter',
-        novelId: input.novelId,
-        chapterId: input.chapterId ?? null,
-      },
-      payload: {
-        source: 'artifact',
-      },
-    })
-  }
-
-  if (shouldPlanWriteChapter(prompt, intent)) {
-    const createChapter = shouldPlanCreateChapter(prompt, intent, hasChapterTarget)
-    const appendChapter = !createChapter && shouldPlanAppendChapter(prompt, intent)
-
-    steps.push({
-      id: createChapter ? 'create_chapter' : appendChapter ? 'append_chapter' : 'write_chapter',
-      toolName: createChapter ? 'chapter.create' : appendChapter ? 'chapter.append' : 'chapter.write',
-      title: createChapter ? '新建章节并写入正文' : appendChapter ? '追加当前章节正文' : '写入当前章节正文',
-      requiresConfirm: false,
-      target: {
-        scope: createChapter ? 'novel' : 'chapter',
-        novelId: input.novelId,
-        chapterId: createChapter ? null : input.chapterId ?? null,
-      },
-      payload: {
-        source: 'artifact',
-        writeMode: createChapter ? 'create' : appendChapter ? 'append' : 'replace',
-      },
-    })
-  }
-
-  if (steps.length === 0) {
-    return null
-  }
-
-  const mode: AgentActionPlan['mode'] =
-    intent === 'planChapter' ? 'plan' : intent === 'reviewContinuity' || intent === 'readStoryContext' ? 'review' : 'execute'
-
-  return {
-    mode,
-    summary: `计划执行 ${steps.length} 个动作：${steps.map((step) => step.title).join('、')}。`,
-    steps,
-  }
-}
-
 function buildWorkspaceActionPlanFromRegistry(
   input: ExecuteWorkspaceAgentInput,
   intent: WorkspaceAgentIntent,
   executionMode: AgentExecutionMode,
+  agentType: AgentRun['agentType'],
 ): AgentActionPlan | null {
   const prompt = input.prompt.trim().toLowerCase()
   const steps: AgentActionPlan['steps'] = []
   const hasChapterTarget = Boolean(input.chapterId)
 
   if (shouldPlanRenameNovel(prompt, intent)) {
-    const step = buildActionPlanStep(executionMode, {
+    const step = buildActionPlanStep(executionMode, agentType, {
       id: 'rename_novel',
       toolName: 'novel.rename',
       target: {
@@ -1225,7 +1841,7 @@ function buildWorkspaceActionPlanFromRegistry(
   }
 
   if (shouldPlanRenameChapter(prompt, intent) && hasChapterTarget) {
-    const step = buildActionPlanStep(executionMode, {
+    const step = buildActionPlanStep(executionMode, agentType, {
       id: 'rename_chapter',
       toolName: 'chapter.rename',
       target: {
@@ -1246,7 +1862,7 @@ function buildWorkspaceActionPlanFromRegistry(
   if (shouldPlanWriteChapter(prompt, intent)) {
     const createChapter = shouldPlanCreateChapter(prompt, intent, hasChapterTarget)
     const appendChapter = !createChapter && shouldPlanAppendChapter(prompt, intent)
-    const step = buildActionPlanStep(executionMode, {
+    const step = buildActionPlanStep(executionMode, agentType, {
       id: createChapter ? 'create_chapter' : appendChapter ? 'append_chapter' : 'write_chapter',
       toolName: createChapter ? 'chapter.create' : appendChapter ? 'chapter.append' : 'chapter.write',
       target: {
@@ -1274,6 +1890,49 @@ function buildWorkspaceActionPlanFromRegistry(
     summary: `计划执行 ${steps.length} 个动作：${steps.map((step) => step.title).join('、')}。`,
     steps,
   }
+}
+
+async function buildDynamicWorkspaceActionPlan(options: {
+  userId: string
+  input: ExecuteWorkspaceAgentInput
+  executionMode: AgentExecutionMode
+  agentType: AgentRun['agentType']
+  toolPolicy: AgentWorkspaceToolPolicy
+  prompt: string
+}) {
+  const planningSystemPrompt = [
+    '你是小说创作工作台里的任务规划 Agent。',
+    '你只负责把当前请求拆成可执行步骤，不直接输出正文。',
+    '你需要先给出 2 到 4 条真实的内部思考，写进 thinking 数组；每条都要具体说明你看到了什么问题、为什么这样拆，不要写泛化空话。',
+    '你必须根据当前请求自行判断需要几步，每一步的标题都要贴近用户语言，不要使用泛化空话。',
+    '如果某一步会真正改动工作台，请把原因写进 payload.reasoning，说明为什么要先做这一步。',
+    '如果用户是局部改写、润色、补某一段或处理选中文本，要优先使用最小改动原则，不要默认覆盖整章。',
+    '如果当前章节标题为空，且本次任务是新写章节或补完整章，请把“补齐章节标题”纳入计划，再处理正文。',
+    '只输出一段 <workspace_plan>...</workspace_plan>，不要输出任何额外说明。',
+    'JSON 结构必须满足 {"mode":"plan|execute|review","summary":"...","thinking":["..."],"steps":[...]}。',
+    'steps 里的每一项都必须包含 id、toolName、title、target、payload。',
+    'toolName 只能从下方可用工具里选择；如果不需要任何工作台动作，就输出 steps: []。',
+    '[当前可用工作台工具]',
+    formatWorkspaceToolPolicy(options.toolPolicy),
+  ].join('\n')
+
+  const rawPlanText = await generateTextCompletion(planningSystemPrompt, options.prompt, {
+    userId: options.userId,
+    action: 'agent:workspace_plan_preview',
+    novelId: options.input.novelId,
+    chapterId: options.input.chapterId ?? null,
+    targetType: 'agentRun',
+    temperature: 0.2,
+  })
+
+  const extractedPlan = extractWorkspacePlanEnvelope(rawPlanText)
+  return sanitizeModelActionPlan({
+    rawPlan: extractedPlan.rawPlan,
+    executionMode: options.executionMode,
+    agentType: options.agentType,
+    novelId: options.input.novelId,
+    chapterId: options.input.chapterId ?? null,
+  })
 }
 
 function resolveWorkspaceIntentConfig(intent: WorkspaceAgentIntent): {
@@ -1404,15 +2063,46 @@ function resolveWorkspaceIntentConfig(intent: WorkspaceAgentIntent): {
   }
 }
 
-function buildWorkspaceSystemPrompt(intent: WorkspaceAgentIntent, title: string): string {
+function buildWorkspaceSystemPrompt(
+  intent: WorkspaceAgentIntent,
+  title: string,
+  agentType: AgentRun['agentType'],
+  toolPolicy?: AgentWorkspaceToolPolicy | null,
+): string {
+  const responseRule = buildWorkspaceResponseRule(intent)
   const common = [
     '你是小说创作工作台里的高级 Agent。',
-    '你既能写正文，也能起书名、起章节名、梳理目录、读取章节片段、审阅一致性、生成封面提示词。',
     '请只输出对用户有用的最终结果，不要解释你的系统设定，不要暴露开发信息。',
     '如果上下文不足，请基于已给出的内容作出最稳妥的结果，并明确哪些地方是基于现有上下文的建议，而不是编造事实。',
     '除非用户明确要求解释，否则不要说“我已经帮你创建”“我已经替你命名”“我已经写入正文”这类执行完成话术；请直接输出将被写入的标题、章节名或正文内容本身。',
+    '如果用户要的是章节标题、章节命名、书名或作品名，你只能输出最终标题本身，或使用“章节标题：xxx”的单行格式；绝对不要输出说明、理由、补充建议、引用正文、代码块或任何会被误写入编辑器的句子。',
+    '只有在用户明确要求撰写、续写、扩写、补写正文时，才允许输出正文段落；命名类请求绝不能混入正文内容。',
+    '如果当前任务是新写一章、补完整章，或当前章节标题为空，你输出的正文必须默认采用“章节标题 + 空一行 + 正文”的结构。',
+    '如果当前任务是改写、润色、修补某一段或处理选中文本，你只能输出需要替换的那一段最终文本，不要把整章重新输出。',
     '如果用户要求保存作品、发布、下架、删除、打开设置或新建章节，请把它表述成“待确认执行的操作建议”，不要伪装成已经执行完成。',
+    ...buildWorkspaceBuiltinProtocol({
+      intent,
+      title,
+      responseRule,
+      toolPolicy,
+    }),
   ]
+
+  if (agentType === 'storyPlanner') {
+    common.push('你当前是剧情规划 Agent，只负责命名、结构设计、提纲拆解和前置规划，不直接展开成长篇正文。')
+  } else if (agentType === 'draftWriter') {
+    common.push('你当前是正文写作 Agent，只负责输出可直接落回编辑器的正文内容，不承担作品发布、删除或封面设置。')
+  } else if (agentType === 'continuityEditor') {
+    common.push('你当前是连续性审阅 Agent，只负责指出设定冲突、人物动机和时间线问题，不直接改写正文。')
+  } else if (agentType === 'styleEditor') {
+    common.push('你当前是文风编辑 Agent，只负责局部改写、润色和表达优化，不负责新建章节或发布作品。')
+  } else if (agentType === 'loreLibrarian') {
+    common.push('你当前是设定检索 Agent，只负责梳理设定、背景资料、人物关系和时间线，不直接生成封面提示词或整章正文。')
+  } else if (agentType === 'coverPromptAgent') {
+    common.push('你当前是封面提示词 Agent，只负责整理封面视觉描述和生图提示词，不介入章节写作接口。')
+  } else {
+    common.push('你当前是主控 Agent，负责理解意图、组织上下文，并把任务交给最合适的专职 Agent。')
+  }
 
   if (intent === 'generateNovelTitle') {
     common.push('当前任务是“起书名”。请优先给出 6 到 10 个可用书名，每个书名后附一句定位说明。')
@@ -1512,6 +2202,131 @@ function formatRecentRuns(runs: AgentRun[]): string {
     .join('\n')
 }
 
+function buildWorkspaceRuleBundle(options: {
+  intent: WorkspaceAgentIntent
+  novelSummary: string
+  genre?: string
+  protagonist?: string
+  tone?: string
+  stylePreference?: string
+  chapterSummary?: string
+  handoffSummary?: string | null
+}): AgentRuleBundle {
+  const rules = [
+    options.novelSummary.trim() ? `所有输出都要围绕当前作品简介展开：${clipText(options.novelSummary.trim(), 120)}` : '',
+    options.genre?.trim() ? `保持题材一致：${options.genre.trim()}` : '',
+    options.protagonist?.trim() ? `不要偏离当前主角设定：${clipText(options.protagonist.trim(), 80)}` : '',
+    options.tone?.trim() ? `维持当前语气与情绪基调：${clipText(options.tone.trim(), 80)}` : '',
+    options.stylePreference?.trim() ? `遵守当前文风偏好：${clipText(options.stylePreference.trim(), 80)}` : '',
+    options.chapterSummary?.trim() ? `承接当前章节摘要：${clipText(options.chapterSummary.trim(), 100)}` : '',
+    options.handoffSummary?.trim() ? `优先延续刚确认的计划与交接内容：${clipText(options.handoffSummary.trim(), 100)}` : '',
+    options.intent === 'planChapter'
+      ? '当前任务先给可执行计划，不直接展开成长篇正文。'
+      : options.intent === 'reviewContinuity'
+        ? '当前任务优先指出设定冲突、人物动机和时间线问题，不直接改写正文。'
+        : options.intent === 'generateCoverPrompt'
+          ? '当前任务只整理封面画面与提示词，不扩写正文剧情。'
+          : '如需写正文，请输出可直接落回编辑器的中文内容。',
+  ].filter(Boolean)
+
+  return {
+    summary: `本次已注入 ${rules.length} 条作品级规则。`,
+    rules,
+  }
+}
+
+function buildStoryMemoryDigest(memoryEntries: ProjectMemoryEntry[]): AgentStoryMemoryDigest {
+  const items = memoryEntries.slice(0, 5).map((entry) => ({
+    title: entry.title,
+    memoryType: entry.memoryType,
+    excerpt: clipText(entry.content, 90),
+  }))
+
+  return {
+    summary:
+      items.length > 0
+        ? `本次参考了 ${items.length} 条长期记忆。`
+        : '当前还没有可复用的长期记忆摘要。',
+    items,
+  }
+}
+
+function selectAgentScopedMemoryEntries(
+  agentType: AgentRun['agentType'],
+  memoryEntries: ProjectMemoryEntry[],
+): ProjectMemoryEntry[] {
+  const preferredTypes: Array<ProjectMemoryEntry['memoryType']> =
+    agentType === 'storyPlanner'
+      ? ['novelSummary', 'chapterSummary', 'worldbuilding', 'characterCard', 'foreshadowing', 'timelineEvent']
+      : agentType === 'draftWriter'
+        ? ['chapterSummary', 'stylePreference', 'foreshadowing', 'timelineEvent', 'characterCard', 'novelSummary']
+        : agentType === 'continuityEditor'
+          ? ['continuityRule', 'timelineEvent', 'foreshadowing', 'characterCard', 'worldbuilding', 'chapterSummary']
+          : agentType === 'styleEditor'
+            ? ['stylePreference', 'chapterSummary', 'novelSummary', 'characterCard']
+            : agentType === 'loreLibrarian'
+              ? ['worldbuilding', 'characterCard', 'timelineEvent', 'foreshadowing', 'novelSummary']
+              : agentType === 'coverPromptAgent'
+                ? ['novelSummary', 'worldbuilding', 'characterCard', 'stylePreference']
+                : ['novelSummary', 'chapterSummary', 'stylePreference', 'worldbuilding', 'characterCard']
+
+  const preferredEntries = preferredTypes.flatMap((memoryType) =>
+    memoryEntries.filter((entry) => entry.memoryType === memoryType),
+  )
+  const fallbackEntries = memoryEntries.filter((entry) => !preferredEntries.some((selected) => selected.id === entry.id))
+
+  return [...preferredEntries, ...fallbackEntries].slice(0, 5)
+}
+
+function buildAgentScopedMemoryPrompt(
+  agentType: AgentRun['agentType'],
+  memoryEntries: ProjectMemoryEntry[],
+  storyMemoryDigest: AgentStoryMemoryDigest,
+): string {
+  const agentLabel =
+    agentType === 'storyPlanner'
+      ? '剧情规划 Agent'
+      : agentType === 'draftWriter'
+        ? '正文写作 Agent'
+        : agentType === 'continuityEditor'
+          ? '连续性审阅 Agent'
+          : agentType === 'styleEditor'
+            ? '文风编辑 Agent'
+            : agentType === 'loreLibrarian'
+              ? '设定检索 Agent'
+              : agentType === 'coverPromptAgent'
+                ? '封面提示词 Agent'
+                : '主控 Agent'
+
+  return [
+    '[当前专职 Agent 重点记忆]',
+    `${agentLabel} 当前优先参考以下记忆：`,
+    storyMemoryDigest.summary,
+    formatStoryMemoryDigest(storyMemoryDigest),
+    '',
+    '[当前专职 Agent 重点长期记忆]',
+    formatMemoryContext(memoryEntries),
+  ].join('\n')
+}
+
+function formatRuleBundle(ruleBundle: AgentRuleBundle): string {
+  if (ruleBundle.rules.length === 0) {
+    return '暂无额外规则。'
+  }
+
+  return ruleBundle.rules.map((rule) => `- ${rule}`).join('\n')
+}
+
+function formatStoryMemoryDigest(storyMemoryDigest: AgentStoryMemoryDigest): string {
+  if (storyMemoryDigest.items.length === 0) {
+    return '暂无可引用的长期记忆摘要。'
+  }
+
+  return storyMemoryDigest.items
+    .map((item) => `- ${item.title}（${item.memoryType}）：${item.excerpt}`)
+    .join('\n')
+}
+
 async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgentInput, intent: WorkspaceAgentIntent) {
   const novel = await ensureOwnedNovel(userId, input.novelId)
   const chapter =
@@ -1596,8 +2411,23 @@ async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgent
             : item.content,
       })),
   )
+  const ruleBundle = buildWorkspaceRuleBundle({
+    intent,
+    novelSummary: input.novelSummary?.trim() || novel.summary || '',
+    genre: input.genre?.trim(),
+    protagonist: input.protagonist?.trim(),
+    tone: input.tone?.trim(),
+    stylePreference: input.stylePreference?.trim(),
+    chapterSummary: currentChapterSummary,
+    handoffSummary: handoffArtifact?.summary ?? clipText(handoffArtifact?.content, 160),
+  })
+  const storyMemoryDigest = buildStoryMemoryDigest(memoryEntries)
 
   const prompt = [
+    '[任务读取说明]',
+    '请先遵守系统中的统一内置执行协议，再把下面的用户原始输入视为本次要完成的需求描述。',
+    '如果用户输入里包含多个动作，请先拆分成子任务再决定执行顺序。',
+    '',
     `当前意图：${resolveWorkspaceIntentConfig(intent).title}`,
     `输出规则：${buildWorkspaceResponseRule(intent)}`,
     '',
@@ -1621,6 +2451,14 @@ async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgent
     '',
     '[可引用正文片段]',
     relevantSnippets,
+    '',
+    '[作品规则包]',
+    ruleBundle.summary,
+    formatRuleBundle(ruleBundle),
+    '',
+    '[故事记忆摘要]',
+    storyMemoryDigest.summary,
+    formatStoryMemoryDigest(storyMemoryDigest),
     '',
     '[长期记忆]',
     formatMemoryContext(memoryEntries),
@@ -1649,7 +2487,7 @@ async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgent
     handoffArtifact && input.handoff?.sourceMode === 'plan' && input.handoff?.targetMode === 'build'
       ? ''
       : '',
-    '[用户指令]',
+    '[用户原始需求]',
     input.prompt.trim(),
   ]
     .filter(Boolean)
@@ -1658,6 +2496,9 @@ async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgent
   return {
     summary: clipText(input.prompt, 120) || resolveWorkspaceIntentConfig(intent).title,
     prompt,
+    ruleBundle,
+    storyMemoryDigest,
+    memoryEntries,
   }
 }
 
@@ -1692,16 +2533,78 @@ export async function executeAgentActionData(
 export async function executeWorkspaceAgentData(
   userId: string,
   input: ExecuteWorkspaceAgentInput,
+  options?: {
+    onProgress?: PromptBackedRunConfig['onProgress']
+  },
 ): Promise<AgentActionResponse['data']> {
   const session = await ensureSessionForAction(userId, input.novelId, input.sessionId)
   const intent = inferWorkspaceIntent(input)
   const config = resolveWorkspaceIntentConfig(intent)
   const executionMode = toExecutionMode(config.mode)
-  const toolPolicy = buildWorkspaceToolPolicy(executionMode)
-  const routeDecision = buildWorkspaceRouteDecision(config)
   const builtPrompt = await buildWorkspacePrompt(userId, input, intent)
-  const actionPlan = buildWorkspaceActionPlanFromRegistry(input, intent, executionMode)
+  const routing = resolveDynamicWorkspaceAgentRouting({
+    intent,
+    config,
+    input,
+    ruleBundle: builtPrompt.ruleBundle,
+    storyMemoryDigest: builtPrompt.storyMemoryDigest,
+  })
+  const routeDecision = buildWorkspaceRouteDecision({
+    config,
+    targetAgentType: routing.agentType,
+    decisionSignals: routing.signals,
+    ruleBundle: builtPrompt.ruleBundle,
+    storyMemoryDigest: buildStoryMemoryDigest(selectAgentScopedMemoryEntries(routing.agentType, builtPrompt.memoryEntries)),
+  })
+  const scopedMemoryEntries = selectAgentScopedMemoryEntries(routing.agentType, builtPrompt.memoryEntries)
+  const scopedStoryMemoryDigest = buildStoryMemoryDigest(scopedMemoryEntries)
+  const scopedPrompt = [builtPrompt.prompt, '', buildAgentScopedMemoryPrompt(routing.agentType, scopedMemoryEntries, scopedStoryMemoryDigest)].join(
+    '\n',
+  )
+  const toolPolicy = buildWorkspaceToolPolicy(executionMode, routing.agentType)
+
+  const fallbackActionPlan = buildWorkspaceActionPlanFromRegistry(input, intent, executionMode, routing.agentType)
+  let actionPlan = fallbackActionPlan
+
+  try {
+    const plannedActionPlan = await buildDynamicWorkspaceActionPlan({
+      userId,
+      input,
+      executionMode,
+      agentType: routing.agentType,
+      toolPolicy,
+      prompt: scopedPrompt,
+    })
+
+    if (plannedActionPlan) {
+      actionPlan = plannedActionPlan
+    }
+  } catch {
+    actionPlan = fallbackActionPlan
+  }
+
   const handoff = config.mode === 'plan' ? buildPlanToBuildHandoff(actionPlan) : null
+
+  const progressPlan = describeWorkspacePlanForProgress(actionPlan)
+  emitRunProgress(options?.onProgress, {
+    stage: 'task.decomposed',
+    message:
+      actionPlan?.summary?.trim() ||
+      (progressPlan.length > 1 ? `已拆出 ${progressPlan.length} 个处理步骤，准备依次完成。` : '已确认本轮只需要完成一个核心步骤。'),
+    data: {
+      intent,
+      stepCount: actionPlan?.steps.length ?? progressPlan.length,
+      targetAgentType: routing.agentType,
+    },
+  })
+
+  for (const item of progressPlan) {
+    emitRunProgress(options?.onProgress, {
+      stage: item.stage,
+      message: item.message,
+      data: { intent },
+    })
+  }
 
   return executePromptBackedRun({
     userId,
@@ -1710,25 +2613,28 @@ export async function executeWorkspaceAgentData(
     chapterId: input.chapterId ?? null,
     action: config.action,
     mode: config.mode,
-    agentType: config.agentType,
+    agentType: routing.agentType,
     artifactType: config.artifactType,
     title: config.title,
     inputSummary: builtPrompt.summary,
-    prompt: builtPrompt.prompt,
-    systemPrompt: buildWorkspaceSystemPrompt(intent, config.title),
+    prompt: scopedPrompt,
+    systemPrompt: buildWorkspaceSystemPrompt(intent, config.title, routing.agentType, toolPolicy),
     memoryType: config.memoryType,
     artifactMetadata: {
       workspaceTask: config.task,
       intentLabel: config.title,
       availableApplyStrategies: config.applyStrategies,
       actionHint: input.actionHint ?? null,
-      activeAgent: buildExecutionAgent(config.agentType),
+      activeAgent: buildExecutionAgent(routing.agentType),
       routeDecision,
+      ruleBundle: builtPrompt.ruleBundle,
+      storyMemoryDigest: scopedStoryMemoryDigest,
       executionMode,
       toolPolicy,
       actionPlan,
       handoff,
     },
+    onProgress: options?.onProgress,
   })
 }
 
@@ -1747,6 +2653,8 @@ function buildAgentRunResultPayload(
   const activeAgent =
     asAgentExecutionAgent(firstArtifact?.metadata?.activeAgent) ?? buildExecutionAgent(run.agentType)
   const routeDecision = asAgentRouteDecision(firstArtifact?.metadata?.routeDecision)
+  const ruleBundle = asAgentRuleBundle(firstArtifact?.metadata?.ruleBundle)
+  const storyMemoryDigest = asAgentStoryMemoryDigest(firstArtifact?.metadata?.storyMemoryDigest)
   const actionPlan = asAgentActionPlan(firstArtifact?.metadata?.actionPlan)
   const toolPolicy = asAgentWorkspaceToolPolicy(firstArtifact?.metadata?.toolPolicy)
   const handoff = hydrateHandoffSource(
@@ -1766,6 +2674,8 @@ function buildAgentRunResultPayload(
     artifactType: firstArtifact?.artifactType ?? null,
     activeAgent,
     routeDecision,
+    ruleBundle,
+    storyMemoryDigest,
     executionMode,
     actionPlan,
     handoff,
@@ -1901,6 +2811,12 @@ export async function listAgentArtifactsData(userId: string, runId: string) {
 
 export async function streamAgentRunData(userId: string, runId: string) {
   const data = await getAgentRunData(userId, runId)
+  const routeStatusEvents = buildRouteStatusEvents(
+    data.run.id,
+    data.run.createdAt,
+    data.routeDecision ?? null,
+  )
+
   return [
     {
       stage: 'run.snapshot',
@@ -1912,6 +2828,7 @@ export async function streamAgentRunData(userId: string, runId: string) {
       replay: true,
       mode: 'replay',
     },
+    ...routeStatusEvents,
     {
       stage: 'run.result',
       type: 'result',
