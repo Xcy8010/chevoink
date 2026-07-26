@@ -89,6 +89,20 @@ const workspaceToolRegistry: WorkspaceToolRecord[] = [
     permissions: { plan: 'ask', build: 'allow', review: 'deny' },
   },
   {
+    toolName: 'cover.generate',
+    title: '生成封面候选',
+    description: '根据当前封面提示词调用生图能力生成候选封面。',
+    agents: ['writingOrchestrator', 'coverPromptAgent'],
+    permissions: { plan: 'ask', build: 'allow', review: 'deny' },
+  },
+  {
+    toolName: 'cover.apply',
+    title: '设为当前封面',
+    description: '把最新生成或指定的候选封面设为当前作品封面。',
+    agents: ['writingOrchestrator', 'coverPromptAgent'],
+    permissions: { plan: 'ask', build: 'allow', review: 'deny' },
+  },
+  {
     toolName: 'workspace.open_meta',
     title: '打开作品设置',
     description: '展开作品设置面板或弹窗。',

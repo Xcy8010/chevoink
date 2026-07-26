@@ -1,3 +1,5 @@
+import { fetch as undiciFetch, Agent as UndiciAgent } from 'undici'
+
 import { prisma, DataAccessError } from './prisma.js'
 import { env } from '../config/env.js'
 import type {
@@ -29,6 +31,12 @@ function ensureImageProviderConfigured() {
     throw new DataAccessError(503, 'AI_IMAGE_PROVIDER_UNAVAILABLE', '图片模型尚未配置。')
   }
 }
+
+/** 生图专用连接池：头/体超时都放宽到 aiImageTimeoutMs，避免慢响应被默认 5 分钟限制中断 */
+const imageFetchAgent = new UndiciAgent({
+  headersTimeout: env.aiImageTimeoutMs,
+  bodyTimeout: env.aiImageTimeoutMs,
+})
 
 async function recordUsage(input: {
   userId: string
@@ -74,6 +82,269 @@ async function parseJsonResponse(response: Response) {
   } catch {
     throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型返回了无法解析的内容。')
   }
+}
+
+// ---------------------------------------------------------------------------
+// 原生工具调用通道（Agent Loop 专用，OpenAI 兼容 tools + stream）
+// ---------------------------------------------------------------------------
+
+export type ChatMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string | null; reasoning?: string; toolCalls?: ToolCallRequest[] }
+  | { role: 'tool'; toolCallId: string; content: string }
+
+export type ToolCallRequest = {
+  id: string
+  name: string
+  arguments: string
+}
+
+export type OpenAIToolDefinition = {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
+}
+
+export type ChatTokenUsage = {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
+export type ChatStreamChunk =
+  | { type: 'text-delta'; delta: string }
+  | { type: 'reasoning-delta'; delta: string }
+  | { type: 'tool-call-start'; id: string; name: string }
+  | { type: 'tool-call-arguments-delta'; id: string; delta: string }
+
+export type ChatCompletionResult = {
+  content: string
+  reasoning: string
+  toolCalls: ToolCallRequest[]
+  finishReason: 'stop' | 'tool_calls' | 'length'
+  usage: ChatTokenUsage
+}
+
+type ChatWithToolsParams = {
+  messages: ChatMessage[]
+  tools: OpenAIToolDefinition[]
+  model?: string
+  temperature?: number
+  onChunk?: (chunk: ChatStreamChunk) => void
+  signal?: AbortSignal
+  usageLog: {
+    userId: string
+    action: string
+    novelId?: string | null
+    chapterId?: string | null
+    targetType?: string
+    targetId?: string | null
+  }
+}
+
+function toProviderMessages(messages: ChatMessage[]) {
+  return messages.map((message) => {
+    if (message.role === 'tool') {
+      return { role: 'tool', tool_call_id: message.toolCallId, content: message.content }
+    }
+
+    if (message.role === 'assistant') {
+      const payload: Record<string, unknown> = {
+        role: 'assistant',
+        content: message.content ?? '',
+      }
+
+      if (message.toolCalls?.length) {
+        payload.tool_calls = message.toolCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.arguments },
+        }))
+      }
+
+      return payload
+    }
+
+    return { role: message.role, content: message.content }
+  })
+}
+
+/**
+ * 多轮 Agent Loop 的底层通道：流式解析 text / reasoning_content / tool_calls 增量，
+ * 支持 AbortSignal 真实中断上游请求，每次调用都落 AiUsageLog。
+ */
+export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCompletionResult> {
+  ensureTextProviderConfigured()
+
+  const startedAt = Date.now()
+  const model = params.model ?? env.aiTextModel
+  const endpoint = `${env.aiTextBaseUrl.replace(/\/$/, '')}/chat/completions`
+
+  const body: Record<string, unknown> = {
+    model,
+    temperature: params.temperature ?? 0.6,
+    stream: true,
+    stream_options: { include_usage: true },
+    messages: toProviderMessages(params.messages),
+  }
+
+  if (params.tools.length > 0) {
+    body.tools = params.tools
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.aiTextApiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: params.signal,
+  })
+
+  if (!response.ok || !response.body) {
+    const payload = await parseJsonResponse(response)
+    throw new DataAccessError(
+      502,
+      'AI_PROVIDER_ERROR',
+      typeof payload.error?.message === 'string' ? payload.error.message : '模型服务暂时不可用。',
+    )
+  }
+
+  let content = ''
+  let reasoning = ''
+  let finishReason: ChatCompletionResult['finishReason'] = 'stop'
+  const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>()
+
+  const decoder = new TextDecoder()
+  const reader = response.body.getReader()
+  let buffer = ''
+
+  const handleDelta = (parsed: Record<string, any>) => {
+    if (parsed.usage) {
+      usage.promptTokens = parsed.usage.prompt_tokens ?? usage.promptTokens
+      usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
+      usage.totalTokens = parsed.usage.total_tokens ?? usage.totalTokens
+    }
+
+    const choice = parsed.choices?.[0]
+    if (!choice) {
+      return
+    }
+
+    if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'length' || choice.finish_reason === 'stop') {
+      finishReason = choice.finish_reason
+    }
+
+    const delta = choice.delta ?? {}
+
+    if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
+      reasoning += delta.reasoning_content
+      params.onChunk?.({ type: 'reasoning-delta', delta: delta.reasoning_content })
+    }
+
+    if (typeof delta.content === 'string' && delta.content) {
+      content += delta.content
+      params.onChunk?.({ type: 'text-delta', delta: delta.content })
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const item of delta.tool_calls) {
+        const index = typeof item.index === 'number' ? item.index : 0
+        let entry = toolCallsByIndex.get(index)
+
+        if (!entry) {
+          entry = { id: '', name: '', arguments: '' }
+          toolCallsByIndex.set(index, entry)
+        }
+
+        if (typeof item.id === 'string' && item.id) {
+          entry.id = item.id
+        }
+
+        if (typeof item.function?.name === 'string' && item.function.name) {
+          entry.name += item.function.name
+          params.onChunk?.({ type: 'tool-call-start', id: entry.id, name: entry.name })
+        }
+
+        if (typeof item.function?.arguments === 'string' && item.function.arguments) {
+          entry.arguments += item.function.arguments
+          params.onChunk?.({ type: 'tool-call-arguments-delta', id: entry.id, delta: item.function.arguments })
+        }
+      }
+    }
+  }
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const rawEvent = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+
+        for (const line of rawEvent.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) {
+            continue
+          }
+
+          const data = trimmed.slice(5).trim()
+          if (!data || data === '[DONE]') {
+            continue
+          }
+
+          try {
+            handleDelta(JSON.parse(data))
+          } catch {
+            // 单帧解析失败不中断流
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const toolCalls: ToolCallRequest[] = [...toolCallsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, entry], index) => ({
+      id: entry.id || `call_${index}`,
+      name: entry.name,
+      arguments: entry.arguments || '{}',
+    }))
+    .filter((call) => call.name)
+
+  if (toolCalls.length > 0) {
+    finishReason = 'tool_calls'
+  }
+
+  await recordUsage({
+    userId: params.usageLog.userId,
+    providerType: 'text',
+    action: params.usageLog.action,
+    modelName: model,
+    novelId: params.usageLog.novelId ?? null,
+    chapterId: params.usageLog.chapterId ?? null,
+    targetType: params.usageLog.targetType ?? 'agentRun',
+    targetId: params.usageLog.targetId ?? null,
+    requestTokens: usage.promptTokens || null,
+    responseTokens: usage.completionTokens || null,
+    durationMs: Date.now() - startedAt,
+  })
+
+  return { content, reasoning, toolCalls, finishReason, usage }
 }
 
 export async function generateTextCompletion(
@@ -143,7 +414,8 @@ async function generateImageUrls(
   ensureImageProviderConfigured()
 
   const startedAt = Date.now()
-  const response = await fetch(env.aiImageBaseUrl, {
+  // Node 内置 fetch 默认 5 分钟头超时，第三方生图服务经常超过，这里用 undici 显式放宽到 aiImageTimeoutMs
+  const response = await undiciFetch(env.aiImageBaseUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -155,9 +427,10 @@ async function generateImageUrls(
       size,
       n: count,
     }),
+    dispatcher: imageFetchAgent,
   })
 
-  const payload = await parseJsonResponse(response)
+  const payload = await parseJsonResponse(response as unknown as Response)
   if (!response.ok) {
     throw new DataAccessError(
       502,
@@ -276,6 +549,7 @@ export async function generateCoverPromptData(userId: string, input: GenerateCov
     `题材：${input.genre}`,
     input.protagonist ? `主角：${input.protagonist}` : '',
     input.stylePreference ? `风格：${input.stylePreference}` : '',
+    '画面必须适配竖版书籍封面构图，保持稳定的 3:4 书封比例。',
     '请输出一段主提示词，并附带 4 到 8 个视觉关键词。',
   ]
     .filter(Boolean)

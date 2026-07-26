@@ -2,6 +2,8 @@ import { PropsWithChildren, useEffect } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
+import { DeviceProvider } from '@/components/layout/DeviceProvider'
+import { ToastProvider } from '@/components/ui/Toast'
 import { useShellStore } from '@/store/useShellStore'
 import type { UserMePayload } from '../../shared/contracts'
 
@@ -34,7 +36,13 @@ export default function AppProviders({ children }: PropsWithChildren) {
       setSessionChecking()
 
       try {
-        const payload = await requestJson<UserMePayload>('/api/users/me')
+        // 经 react-query 缓存拉取：与页面级 ['community','me'] 查询共享同一请求/缓存，避免首屏重复请求 /api/users/me
+        const payload = await queryClient.fetchQuery({
+          queryKey: ['community', 'me'],
+          queryFn: () => requestJson<UserMePayload>('/api/users/me'),
+          staleTime: 30_000,
+          retry: false,
+        })
 
         if (!disposed) {
           if (!payload.user) {
@@ -69,5 +77,11 @@ export default function AppProviders({ children }: PropsWithChildren) {
     }
   }, [setGuest, setSessionChecking, setSessionUnavailable, syncSessionUser])
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  return (
+    <QueryClientProvider client={queryClient}>
+      <DeviceProvider>
+        <ToastProvider>{children}</ToastProvider>
+      </DeviceProvider>
+    </QueryClientProvider>
+  )
 }

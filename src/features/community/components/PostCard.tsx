@@ -1,76 +1,207 @@
-import { Heart, MessageSquareMore, MoveRight, Star } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Heart, MessageSquareMore, Share2, Star } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 
-import type { Post } from '../../../../shared/contracts/index.js'
+import { useToast } from '@/components/ui/Toast'
+import { setPostBookmark, setPostLike } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import NovelReferenceCard from '@/features/community/components/NovelReferenceCard'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
+import { cn } from '@/lib/utils'
+import type { Post } from '../../../../shared/contracts/index.js'
 
 type PostCardProps = {
   post: Post
   compact?: boolean
+  /** 详情页模式：去掉卡片外壳与跳转行为，正文不截断，作为页面主内容平铺展示 */
+  flat?: boolean
 }
 
-export default function PostCard({ post, compact = false }: PostCardProps) {
+const TRUNCATE_THRESHOLD = 180
+
+/** 帖子卡片（方案 8.3.3）：人格化头部 + 5 行截断 + 互动栏动效 */
+export default function PostCard({ post, compact = false, flat = false }: PostCardProps) {
+  const navigate = useNavigate()
+  const toast = useToast()
+  const [expanded, setExpanded] = useState(false)
+  const [liked, setLiked] = useState(Boolean(post.likedByViewer))
+  const [favorited, setFavorited] = useState(Boolean(post.bookmarkedByViewer))
+
+  // 服务端 viewer 状态刷新后同步本地状态
+  useEffect(() => {
+    setLiked(Boolean(post.likedByViewer))
+  }, [post.likedByViewer])
+  useEffect(() => {
+    setFavorited(Boolean(post.bookmarkedByViewer))
+  }, [post.bookmarkedByViewer])
+
+  const fullContent = compact ? post.excerpt : post.content
+  const shouldTruncate = !flat && !expanded && fullContent.length > TRUNCATE_THRESHOLD
+  // 以服务端计数为基线，叠加本地乐观增量
+  const likeCount = Math.max(0, post.likeCount + Number(liked) - Number(Boolean(post.likedByViewer)))
+  const favoriteCount = Math.max(0, post.favoriteCount + Number(favorited) - Number(Boolean(post.bookmarkedByViewer)))
+
+  const openDetail = () => navigate(`/post/${post.id}`)
+
+  const handleToggleLike = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    const next = !liked
+    setLiked(next)
+    setPostLike(post.id, next).catch((error) => {
+      setLiked(!next)
+      toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
+    })
+  }
+
+  const handleToggleBookmark = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    const next = !favorited
+    setFavorited(next)
+    setPostBookmark(post.id, next).catch((error) => {
+      setFavorited(!next)
+      toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
+    })
+  }
+
+  const handleShare = async (event: React.MouseEvent) => {
+    event.stopPropagation()
+    const url = `${window.location.origin}/post/${post.id}`
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('链接已复制，去分享给朋友吧')
+    } catch {
+      toast.error('复制失败，请手动复制地址栏链接')
+    }
+  }
+
+  const actionButtonClass = (active: boolean) =>
+    cn(
+      'press-feedback inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-pill)] px-2.5 text-xs transition-colors',
+      active ? 'text-[var(--color-brand)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
+    )
+
   return (
-    <article className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-950/86">
-      <div className="flex items-start gap-3">
-        <Link to={`/author/${post.author.id}`} aria-label={`查看 ${post.author.nickname} 的主页`}>
+    <article
+      onClick={flat ? undefined : openDetail}
+      className={cn(
+        flat
+          ? ''
+          : 'hover-lift cursor-pointer rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)] sm:p-5',
+      )}
+    >
+      {/* 人格化头部 */}
+      <div className="flex items-center gap-3">
+        <Link
+          to={`/author/${post.author.id}`}
+          aria-label={`查看 ${post.author.nickname} 的主页`}
+          onClick={(event) => event.stopPropagation()}
+        >
           <Avatar name={post.author.nickname} src={post.author.avatarUrl} size="md" />
         </Link>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <Link
-              to={`/author/${post.author.id}`}
-              className="font-medium text-slate-900 transition hover:text-slate-700 dark:text-slate-100 dark:hover:text-white"
-            >
-              {post.author.nickname}
-            </Link>
-            <span>{formatRelativeTime(post.createdAt)}</span>
-            {post.topic ? (
-              <span className="rounded-full border border-slate-200 px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:text-slate-300">
-                {post.topic.name}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-3 text-sm leading-7 text-slate-700 dark:text-slate-200">
-            {compact ? post.excerpt : post.content}
-          </p>
+          <Link
+            to={`/author/${post.author.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="block truncate text-sm font-medium text-[var(--text-primary)] transition-colors hover:text-[var(--color-brand)]"
+          >
+            {post.author.nickname}
+          </Link>
+          <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{formatRelativeTime(post.createdAt)}</p>
         </div>
+        {post.topic ? (
+          <span className="shrink-0 rounded-[var(--radius-pill)] bg-[var(--color-brand-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-brand)]">
+            {post.topic.name}
+          </span>
+        ) : null}
+      </div>
+
+      {/* 正文：默认 5 行截断 */}
+      <div className="mt-3">
+        <p
+          className={cn(
+            'whitespace-pre-wrap text-[var(--text-primary)]',
+            flat ? 'text-[15px] leading-8' : 'text-sm leading-7',
+            shouldTruncate ? 'line-clamp-5' : '',
+          )}
+        >
+          {fullContent}
+        </p>
+        {!flat && fullContent.length > TRUNCATE_THRESHOLD ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              setExpanded((value) => !value)
+            }}
+            className="press-feedback mt-1 text-sm font-medium text-[var(--color-brand)]"
+          >
+            {expanded ? '收起' : '展开全部'}
+          </button>
+        ) : null}
       </div>
 
       {post.imageUrls[0] ? (
         <img
           src={post.imageUrls[0]}
           alt={post.excerpt}
-          className="mt-4 aspect-[16/9] w-full rounded-[22px] border border-slate-200 object-cover dark:border-slate-800"
+          className="mt-3 aspect-[16/9] w-full rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
         />
       ) : null}
 
-      {post.relatedNovel ? <div className="mt-4"><NovelReferenceCard novel={post.relatedNovel} /></div> : null}
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-          <span className="inline-flex items-center gap-1">
-            <Heart className="h-3.5 w-3.5" />
-            {formatCompactCount(post.likeCount)}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <MessageSquareMore className="h-3.5 w-3.5" />
-            {formatCompactCount(post.commentCount)}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Star className="h-3.5 w-3.5" />
-            {formatCompactCount(post.favoriteCount)}
-          </span>
+      {post.relatedNovel ? (
+        <div className="mt-3" onClick={(event) => event.stopPropagation()}>
+          <NovelReferenceCard novel={post.relatedNovel} />
         </div>
-        <Link
-          to={`/post/${post.id}`}
-          className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-slate-50"
-        >
-          查看讨论
-          <MoveRight className="h-4 w-4" />
-        </Link>
+      ) : null}
+
+      {/* 互动栏 */}
+      <div className="mt-3 flex items-center justify-between border-t border-[var(--border-subtle)] pt-2">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="点赞"
+            onClick={handleToggleLike}
+            className={actionButtonClass(liked)}
+          >
+            <Heart
+              className={cn(
+                'h-4 w-4 transition-transform [transition-duration:var(--duration-fast)]',
+                liked ? 'scale-125 fill-[var(--color-brand)]' : '',
+              )}
+            />
+            {formatCompactCount(likeCount)}
+          </button>
+          <button
+            type="button"
+            aria-label="评论"
+            onClick={(event) => {
+              event.stopPropagation()
+              openDetail()
+            }}
+            className={actionButtonClass(false)}
+          >
+            <MessageSquareMore className="h-4 w-4" />
+            {formatCompactCount(post.commentCount)}
+          </button>
+          <button
+            type="button"
+            aria-label="收藏"
+            onClick={handleToggleBookmark}
+            className={actionButtonClass(favorited)}
+          >
+            <Star
+              className={cn(
+                'h-4 w-4 transition-transform [transition-duration:var(--duration-fast)]',
+                favorited ? 'scale-125 fill-[var(--color-brand)]' : '',
+              )}
+            />
+            {formatCompactCount(favoriteCount)}
+          </button>
+        </div>
+        <button type="button" aria-label="分享" onClick={handleShare} className={actionButtonClass(false)}>
+          <Share2 className="h-4 w-4" />
+          分享
+        </button>
       </div>
     </article>
   )

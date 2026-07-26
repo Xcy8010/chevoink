@@ -7,6 +7,7 @@ import type {
   AgentArtifactApplyStrategy,
   AgentExecutionAgent,
   AgentExecutionMode,
+  AgentExecutionStepResult,
   AgentRouteDecision,
   AgentRuleBundle,
   AgentStoryMemoryDigest,
@@ -17,6 +18,8 @@ import type {
   CreateChapterRequest,
   CreateNovelRequest,
   CreateNovelResponse,
+  CreateAgentSessionResponse,
+  DeleteAgentSessionResponse,
   DeleteAgentRunResponse,
   DeleteNovelResponse,
   DeleteChapterResponse,
@@ -25,16 +28,21 @@ import type {
   GenerateCoverImageResponse,
   GenerateCoverPromptRequest,
   GenerateCoverPromptResponse,
-  GetMeResponse,
   GetChapterResponse,
   GetReaderResponse,
   ListAgentSessionHistoryResponse,
   ListAgentSessionsResponse,
   Novel,
   ProjectMemoryEntry,
+  PublishNovelRequest,
+  PublishNovelResponse,
   RollbackAgentRunResponse,
   StudioPayload,
+  UploadNovelCoverRequest,
+  UploadNovelCoverResponse,
   UpdateChapterRequest,
+  UpdateAgentSessionRequest,
+  UpdateAgentSessionResponse,
   UpdateNovelRequest,
 } from '../../../shared/contracts/index.js'
 import type {
@@ -88,6 +96,7 @@ export type WritingAgentResultArtifact = {
   storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
+  stepResults?: AgentExecutionStepResult[] | null
 }
 
 export type WritingAgentResult = {
@@ -111,6 +120,7 @@ export type WritingAgentResult = {
   storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
+  stepResults?: AgentExecutionStepResult[] | null
 }
 
 type LiveAgentStatus = {
@@ -163,7 +173,8 @@ function normalizeResponseError(status: number, message?: string): string {
 async function requestData<T>(path: string, options?: RequestDataOptions): Promise<T> {
   const controller = new AbortController()
   const timeoutMs = options?.timeoutMs ?? 30000
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  const timeoutId =
+    timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null
 
   try {
     const response = await fetch(buildApiUrl(path), {
@@ -173,7 +184,7 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
         'Content-Type': 'application/json',
         ...(options?.headers ?? {}),
       },
-      signal: controller.signal,
+      ...(timeoutMs > 0 ? { signal: controller.signal } : {}),
     })
 
     const rawText = await response.text()
@@ -207,7 +218,9 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
   } catch (error) {
     throw new Error(normalizeFetchError(error))
   } finally {
-    window.clearTimeout(timeoutId)
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId)
+    }
   }
 }
 
@@ -420,6 +433,10 @@ function mapBackendArtifactToWritingArtifact(
     artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
       ? ((artifact.metadata as Record<string, unknown>).toolPolicy as AgentWorkspaceToolPolicy | null | undefined) ?? null
       : null
+  const stepResults =
+    artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+      ? ((artifact.metadata as Record<string, unknown>).stepResults as AgentExecutionStepResult[] | null | undefined) ?? null
+      : null
 
   return {
     id: artifact.id,
@@ -439,6 +456,7 @@ function mapBackendArtifactToWritingArtifact(
     storyMemoryDigest,
     executionMode,
     toolPolicy,
+    stepResults,
   }
 }
 
@@ -462,6 +480,7 @@ function buildAgentResult(
     storyMemoryDigest?: AgentStoryMemoryDigest | null
     executionMode?: AgentExecutionMode | null
     toolPolicy?: AgentWorkspaceToolPolicy | null
+    stepResults?: AgentExecutionStepResult[] | null
   },
 ): WritingAgentResult {
   const resolvedTask = deriveTaskFromArtifact(artifact, action)
@@ -477,7 +496,7 @@ function buildAgentResult(
 
   const fallbackTitle =
     resolvedTask === 'plan-chapter'
-      ? '章节计划'
+      ? '创作计划'
       : resolvedTask === 'review-continuity'
         ? '连续性审阅'
         : resolvedTask === 'generate-cover-prompt'
@@ -546,6 +565,11 @@ function buildAgentResult(
       extras?.toolPolicy ??
       (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
         ? ((artifact.metadata as Record<string, unknown>).toolPolicy as AgentWorkspaceToolPolicy | null | undefined) ?? null
+        : null),
+    stepResults:
+      extras?.stepResults ??
+      (artifact?.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? ((artifact.metadata as Record<string, unknown>).stepResults as AgentExecutionStepResult[] | null | undefined) ?? null
         : null),
   }
 }
@@ -1288,6 +1312,41 @@ export async function listWritingAgentSessions(novelId: string): Promise<ListAge
   return data.items
 }
 
+export async function createWritingAgentSession(
+  novelId: string,
+  title?: string,
+): Promise<CreateAgentSessionResponse['data']['session']> {
+  const data = await requestData<CreateAgentSessionResponse['data']>('/api/agent/sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      novelId,
+      title,
+    }),
+  })
+
+  return data.session
+}
+
+export async function updateWritingAgentSession(
+  sessionId: string,
+  payload: UpdateAgentSessionRequest,
+): Promise<UpdateAgentSessionResponse['data']['session']> {
+  const data = await requestData<UpdateAgentSessionResponse['data']>(`/api/agent/sessions/${sessionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+
+  return data.session
+}
+
+export async function deleteWritingAgentSession(
+  sessionId: string,
+): Promise<DeleteAgentSessionResponse['data']> {
+  return requestData<DeleteAgentSessionResponse['data']>(`/api/agent/sessions/${sessionId}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function getWritingAgentSessionHistory(
   sessionId: string,
 ): Promise<ListAgentSessionHistoryResponse['data']['items']> {
@@ -1297,13 +1356,48 @@ export async function getWritingAgentSessionHistory(
   return data.items
 }
 
-export async function getMyStudioNovels(): Promise<Novel[]> {
-  const data = await requestData<GetMeResponse['data']>('/api/users/me')
-  return Array.isArray(data.authoredNovels) ? data.authoredNovels : []
+export type NovelPlanFileItem = {
+  id: string
+  runId: string
+  title: string
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 计划文件夹：作品维度拉取已存入云端的创作计划（跨会话聚合） */
+export async function listNovelPlanFiles(novelId: string): Promise<NovelPlanFileItem[]> {
+  const data = await requestData<{ items: NovelPlanFileItem[] }>(
+    `/api/agent/plans?novelId=${encodeURIComponent(novelId)}`,
+  )
+  return data.items
+}
+
+/** 计划文件夹：同步改名/改正文，saved=false 从云端文件夹移除 */
+export async function updateNovelPlanFile(
+  artifactId: string,
+  patch: { title?: string; content?: string; saved?: boolean },
+): Promise<NovelPlanFileItem> {
+  const data = await requestData<{ item: NovelPlanFileItem }>(`/api/agent/plans/${artifactId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+  return data.item
 }
 
 export function getStudioPayload(novelId: string): Promise<StudioPayload> {
   return requestData<StudioPayload>(`/api/novels/${novelId}/studio`)
+}
+
+/** 发布作品：同时批量发布选中章节并设置可见范围 */
+export async function publishNovelWorkspace(
+  novelId: string,
+  payload: PublishNovelRequest,
+): Promise<PublishNovelResponse['data']> {
+  return requestData<PublishNovelResponse['data']>(`/api/novels/${novelId}/publish`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function createNovelWorkspace(payload: CreateNovelRequest): Promise<Novel> {
@@ -1333,6 +1427,16 @@ export async function updateNovelMeta(
   })
 
   return data.novel
+}
+
+export async function uploadNovelCover(
+  novelId: string,
+  payload: UploadNovelCoverRequest,
+): Promise<UploadNovelCoverResponse['data']> {
+  return requestData<UploadNovelCoverResponse['data']>(`/api/novels/${novelId}/cover`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function deleteNovelWorkspace(novelId: string): Promise<void> {
@@ -1391,6 +1495,6 @@ export function generateCoverImages(
   return requestData<GenerateCoverImageResponse['data']>('/api/ai/cover-image', {
     method: 'POST',
     body: JSON.stringify(request),
-    timeoutMs: 120000,
+    timeoutMs: 0,
   })
 }

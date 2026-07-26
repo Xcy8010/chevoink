@@ -6,6 +6,7 @@ import type {
   GenerateCoverPromptRequest,
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
+import { FIXED_NOVEL_COVER_SIZE } from '../../shared/contracts/index.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import {
   chapterAssistData,
@@ -109,14 +110,14 @@ router.post('/cover-image', async (req: Request, res: Response): Promise<void> =
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.prompt?.trim() || !body.size || !body.count) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供提示词、尺寸和张数。'))
+    if (!body.prompt?.trim() || !body.count) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供提示词和生成张数。'))
       return
     }
 
     const payload = await generateCoverImageData(userId, {
       prompt: body.prompt.trim(),
-      size: body.size,
+      size: FIXED_NOVEL_COVER_SIZE,
       count: body.count,
       novelId: body.novelId ?? null,
       negativePrompt: body.negativePrompt ?? null,

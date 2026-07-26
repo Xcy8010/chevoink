@@ -68,6 +68,13 @@ export const env = {
     950000,
   ),
   aiTextTimeoutMs: parsePositiveNumber(process.env.AI_TEXT_TIMEOUT_MS, 180000),
+  // Agent Loop 引擎：loop = 新内核；legacy = 旧链路；Vercel serverless 不支持长循环，强制 legacy
+  agentEngine: process.env.VERCEL ? 'legacy' : (process.env.AGENT_ENGINE ?? 'loop'),
+  agentModel: process.env.AI_AGENT_MODEL ?? process.env.AI_TEXT_MODEL ?? 'deepseek-chat',
+  agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 12),
+  agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 120000),
+  agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),
+  agentUserMaxConcurrent: parsePositiveNumber(process.env.AGENT_USER_MAX_CONCURRENT, 2),
   aiImageProvider: process.env.AI_IMAGE_PROVIDER ?? 'openai-compatible',
   aiImageBaseUrl:
     process.env.AI_IMAGE_BASE_URL ?? 'https://your-image-provider.example.com/v1/images/generations',
@@ -76,7 +83,8 @@ export const env = {
   aiImageModel: process.env.AI_IMAGE_MODEL ?? 'gpt-image-2',
   aiImageDefaultSize: process.env.AI_IMAGE_DEFAULT_SIZE ?? '1024x1536',
   aiImageDefaultCount: parsePositiveNumber(process.env.AI_IMAGE_DEFAULT_COUNT, 1),
-  aiImageTimeoutMs: parsePositiveNumber(process.env.AI_IMAGE_TIMEOUT_MS, 300000),
+  // 第三方生图服务响应很慢，默认放宽到 15 分钟（Node fetch 默认 5 分钟头超时不够用）
+  aiImageTimeoutMs: parsePositiveNumber(process.env.AI_IMAGE_TIMEOUT_MS, 900000),
   aiProviderMode:
     isConfigured(process.env.AI_TEXT_API_KEY) && isConfigured(process.env.AI_IMAGE_API_KEY)
       ? 'provider'

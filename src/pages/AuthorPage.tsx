@@ -6,10 +6,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import AppState from '@/components/ui/AppState'
 import Button from '@/components/ui/Button'
 import SectionCard from '@/components/ui/SectionCard'
+import { AuthorSkeleton, PostListSkeleton, Skeleton } from '@/components/ui/Skeleton'
 import { getDirectConversationByUserId, getMe, getUser, listConversations, listNovels, listPosts } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import PostCard from '@/features/community/components/PostCard'
 import { formatRelativeTime } from '@/features/community/utils'
+import { getDisplayTitle } from '@/features/discover/api'
 
 export default function AuthorPage() {
   const navigate = useNavigate()
@@ -27,18 +29,22 @@ export default function AuthorPage() {
   })
 
   const novelsQuery = useQuery({
-    queryKey: ['community', 'novels'],
-    queryFn: () => listNovels(20),
+    queryKey: ['community', 'novels', 'author', authorId],
+    queryFn: () => listNovels(20, { authorId, publishedOnly: true }),
+    enabled: Boolean(authorId),
   })
 
   const postsQuery = useQuery({
-    queryKey: ['community', 'posts'],
-    queryFn: () => listPosts(30),
+    queryKey: ['community', 'posts', 'author', authorId],
+    queryFn: () => listPosts(10, { authorId }),
+    enabled: Boolean(authorId),
   })
 
   const conversationsQuery = useQuery({
     queryKey: ['community', 'conversations'],
     queryFn: () => listConversations(30),
+    // 未登录时不请求会话列表，避免无意义的接口开销
+    enabled: Boolean(meQuery.data?.user),
   })
 
   const authorNovels = useMemo(() => {
@@ -80,19 +86,14 @@ export default function AuthorPage() {
     )
   }
 
-  if (authorQuery.isLoading || novelsQuery.isLoading || postsQuery.isLoading) {
+  if (authorQuery.isLoading) {
     return (
       <SectionCard
         eyebrow="作者主页"
         title="先展示作者气质、代表作和最近互动，再把读者送进作品与私聊"
         description="作者页不做后台式资料陈列，而是把首屏做成可信的创作者介绍，桌面端并置作品和动态，手机端优先关注与开读。"
       >
-        <AppState
-          tone="loading"
-          title="作者主页正在打开"
-          description="稍等一下，这位作者的作品和动态很快就会出现。"
-          className="min-h-[420px]"
-        />
+        <AuthorSkeleton />
       </SectionCard>
     )
   }
@@ -126,25 +127,25 @@ export default function AuthorPage() {
     >
       <div className="space-y-6">
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_320px]">
-          <div className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-950/86">
+          <div className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)] sm:p-5">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-start gap-4">
                 <Avatar name={author.nickname} src={author.avatarUrl} size="lg" />
                 <div className="space-y-3">
                   <div>
-                    <h3 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
+                    <h3 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
                       {author.nickname}
                     </h3>
-                    <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300">
+                    <p className="mt-2 max-w-2xl text-sm leading-7 text-[var(--text-secondary)]">
                       {author.bio || '这位作者还没有留下简介。'}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                  <div className="flex flex-wrap gap-2 text-xs text-[var(--text-tertiary)]">
+                    <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-3 py-1">
                       <MapPin className="h-3.5 w-3.5" />
                       {author.isAuthor ? '作者身份已开启' : '读者身份'}
                     </span>
-                    <span className="rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                    <span className="rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-3 py-1">
                       {author.createdAt ? `${formatRelativeTime(author.createdAt)} 加入` : '最近加入'}
                     </span>
                   </div>
@@ -174,29 +175,29 @@ export default function AuthorPage() {
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-[22px] border border-slate-200/80 bg-slate-50/80 px-4 py-4 dark:border-slate-800 dark:bg-slate-900/70">
-                <p className="text-xs text-slate-500 dark:text-slate-400">粉丝</p>
-                <p className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{author.followerCount}</p>
+              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
+                <p className="text-xs text-[var(--text-tertiary)]">粉丝</p>
+                <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{author.followerCount}</p>
               </div>
-              <div className="rounded-[22px] border border-slate-200/80 bg-slate-50/80 px-4 py-4 dark:border-slate-800 dark:bg-slate-900/70">
-                <p className="text-xs text-slate-500 dark:text-slate-400">已发布作品</p>
-                <p className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{authorNovels.length}</p>
+              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
+                <p className="text-xs text-[var(--text-tertiary)]">已发布作品</p>
+                <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{authorNovels.length}</p>
               </div>
-              <div className="rounded-[22px] border border-slate-200/80 bg-slate-50/80 px-4 py-4 dark:border-slate-800 dark:bg-slate-900/70">
-                <p className="text-xs text-slate-500 dark:text-slate-400">最近活跃</p>
-                <p className="mt-2 text-sm leading-7 text-slate-700 dark:text-slate-200">
+              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
+                <p className="text-xs text-[var(--text-tertiary)]">最近活跃</p>
+                <p className="mt-2 text-sm leading-7 text-[var(--text-primary)]">
                   {latestActivityTime ? formatRelativeTime(latestActivityTime) : '最近还没有公开动态'}
                 </p>
               </div>
             </div>
           </div>
 
-          <aside className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 dark:border-slate-800 dark:bg-slate-950/86">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-              <MessageSquareMore className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+          <aside className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)]">
+            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+              <MessageSquareMore className="h-4 w-4 text-[var(--text-tertiary)]" />
               作者近况
             </div>
-            <div className="mt-4 space-y-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
+            <div className="mt-4 space-y-3 text-sm leading-7 text-[var(--text-secondary)]">
               <p>公开作品 {authorNovels.length} 部，公开讨论 {authorPosts.length} 条。</p>
               <p>{latestActivityTime ? `最近一次公开更新在 ${formatRelativeTime(latestActivityTime)}。` : '最近还没有公开更新。'}</p>
             </div>
@@ -205,25 +206,30 @@ export default function AuthorPage() {
 
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-              <BookOpen className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+              <BookOpen className="h-4 w-4 text-[var(--text-tertiary)]" />
               代表作品
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              {authorNovels.length > 0 ? (
+              {novelsQuery.isLoading ? (
+                <>
+                  <Skeleton className="aspect-[4/5] w-full rounded-[var(--radius-xl)]" />
+                  <Skeleton className="aspect-[4/5] w-full rounded-[var(--radius-xl)]" />
+                </>
+              ) : authorNovels.length > 0 ? (
                 authorNovels.map((novel) => (
                 <Link
                   key={novel.id}
                   to={`/novel/${novel.id}`}
-                  className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 transition hover:border-slate-300 dark:border-slate-800 dark:bg-slate-950/86 dark:hover:border-slate-700"
+                  className="hover-lift rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)] transition-colors hover:border-[var(--border-strong)]"
                 >
                   <img
                     src={novel.coverUrl ?? ''}
-                    alt={novel.title}
-                    className="aspect-[4/5] w-full rounded-[22px] border border-slate-200 object-cover dark:border-slate-800"
+                    alt={getDisplayTitle(novel)}
+                    className="aspect-[4/5] w-full rounded-[var(--radius-lg)] border border-[var(--border-subtle)] object-cover"
                   />
-                  <h3 className="mt-4 text-lg font-semibold text-slate-950 dark:text-slate-50">{novel.title}</h3>
-                  <p className="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">{novel.summary}</p>
+                  <h3 className="mt-4 text-lg font-semibold text-[var(--text-primary)]">{getDisplayTitle(novel)}</h3>
+                  <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{novel.summary}</p>
                 </Link>
                 ))
               ) : (
@@ -238,11 +244,13 @@ export default function AuthorPage() {
           </div>
 
           <aside className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-              <MessageSquareMore className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+              <MessageSquareMore className="h-4 w-4 text-[var(--text-tertiary)]" />
               最近讨论
             </div>
-            {authorPosts.length > 0 ? (
+            {postsQuery.isLoading ? (
+              <PostListSkeleton count={2} />
+            ) : authorPosts.length > 0 ? (
               authorPosts.map((post) => <PostCard key={post.id} post={post} compact />)
             ) : (
               <AppState

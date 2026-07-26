@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from 'express'
 
 import type { CreateCommentRequest } from '../../shared/contracts/index.js'
-import { requireSessionUserId } from '../lib/auth-session.js'
-import { createCommentData, listCommentsData } from '../lib/data-access.js'
+import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
+import { createCommentData, listCommentsData, setCommentLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -25,7 +25,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
-    const payload = await listCommentsData(targetType, targetId, page, pageSize)
+    const payload = await listCommentsData(targetType, targetId, page, pageSize, getSessionUserId(req))
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -59,5 +59,26 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     sendRouteError(res, requestId, error)
   }
 })
+
+async function handleCommentLike(req: Request, res: Response, liked: boolean): Promise<void> {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await setCommentLikeData(userId, req.params.commentId, liked)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'COMMENT_NOT_FOUND', '未找到评论。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+}
+
+router.post('/:commentId/like', (req, res) => handleCommentLike(req, res, true))
+router.delete('/:commentId/like', (req, res) => handleCommentLike(req, res, false))
 
 export default router

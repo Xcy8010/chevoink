@@ -15,7 +15,7 @@ export default function NovelReferenceCard({ novel, className }: NovelReferenceC
     <Link
       to={`/novel/${novel.id}`}
       className={[
-        'flex items-center gap-3 rounded-[20px] border border-slate-200/80 bg-slate-50/80 p-3 transition hover:border-slate-300 hover:bg-white dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-slate-700 dark:hover:bg-slate-950',
+        'flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-3 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-default)]',
         className,
       ]
         .filter(Boolean)
@@ -24,16 +24,16 @@ export default function NovelReferenceCard({ novel, className }: NovelReferenceC
       <img
         src={novel.coverUrl ?? ''}
         alt={novel.title}
-        className="h-16 w-12 rounded-[14px] border border-slate-200 object-cover dark:border-slate-800"
+        className="h-16 w-12 rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
       />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
           <BookOpen className="h-3.5 w-3.5" />
           关联作品
         </div>
-        <p className="mt-1 line-clamp-1 text-sm font-medium text-slate-950 dark:text-slate-50">{novel.title}</p>
+        <p className="mt-1 line-clamp-1 text-sm font-medium text-[var(--text-primary)]">{novel.title}</p>
       </div>
-      <ChevronRight className="h-4 w-4 text-slate-400" />
+      <ChevronRight className="h-4 w-4 text-[var(--text-tertiary)]" />
     </Link>
   )
 }

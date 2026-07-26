@@ -4,12 +4,14 @@ import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 
-import { type ChapterDraftState, type ChapterPendingReview, type SaveState } from '../types'
+import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingReview, type SaveState, type WorkspaceDocumentView } from '../types'
 import ChapterChangeReview from './ChapterChangeReview'
+import PlanChangeReview from './PlanChangeReview'
 import { SaveStatusPill } from './StudioControls'
 
 type EditorCanvasProps = {
   chapterDraft: ChapterDraftState | null
+  workspaceDocument?: WorkspaceDocumentView | null
   chapterLoading: boolean
   chapterErrorMessage: string | null
   chapterSaveState: SaveState
@@ -24,16 +26,23 @@ type EditorCanvasProps = {
   onOpenChapterSettings: () => void
   onStatusChange: (nextStatus: ChapterStatus) => void
   onChange: (next: ChapterDraftState) => void
+  onWorkspaceDocumentChange?: (next: { title: string; content: string }) => void
   onRetrySave?: () => void
+  onEditorBlur?: () => void
   pendingChapterReview?: ChapterPendingReview | null
   pendingChapterReviewBusy?: boolean
   onKeepPendingReview?: () => void
   onRevertPendingReview?: () => void
+  pendingPlanReview?: PlanPendingReview | null
+  pendingPlanReviewBusy?: boolean
+  onKeepPendingPlanReview?: () => void
+  onRevertPendingPlanReview?: () => void
   embedded?: boolean
 }
 
 export default function EditorCanvas({
   chapterDraft,
+  workspaceDocument = null,
   chapterLoading,
   chapterErrorMessage,
   chapterSaveState,
@@ -48,16 +57,87 @@ export default function EditorCanvas({
   onOpenChapterSettings,
   onStatusChange: _onStatusChange,
   onChange,
+  onWorkspaceDocumentChange,
   onRetrySave,
+  onEditorBlur,
   pendingChapterReview = null,
   pendingChapterReviewBusy = false,
   onKeepPendingReview,
   onRevertPendingReview,
+  pendingPlanReview = null,
+  pendingPlanReviewBusy = false,
+  onKeepPendingPlanReview,
+  onRevertPendingPlanReview,
   embedded = false,
 }: EditorCanvasProps) {
   const sectionClassName = embedded
     ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-default)]'
     : 'flex h-full min-h-0 flex-col overflow-hidden pb-2'
+
+  if (workspaceDocument) {
+    return (
+      <Surface as="section" padding="md" className={embedded ? `${sectionClassName} border-0 px-5 py-5 shadow-none xl:px-6` : sectionClassName}>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-4">
+          <div className="space-y-1">
+            <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+              {workspaceDocument.editableTitle ? null : workspaceDocument.title}
+            </p>
+            {workspaceDocument.editableTitle ? (
+              <input
+                value={workspaceDocument.title}
+                onChange={(event) =>
+                  onWorkspaceDocumentChange?.({
+                    title: event.target.value,
+                    content: workspaceDocument.content,
+                  })
+                }
+                className="w-full border-0 bg-transparent text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)] outline-none"
+                placeholder={workspaceDocument.kind === 'plan' ? '给这份创作计划命名' : '目录'}
+              />
+            ) : null}
+            <p className="text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
+          </div>
+          <Button onClick={onCreateChapter} variant="ghost" size="sm">
+            <FilePenLine className="h-4 w-4" />
+            新建章节
+          </Button>
+        </div>
+
+        <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
+          {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
+            <PlanChangeReview
+              review={pendingPlanReview}
+              busy={pendingPlanReviewBusy}
+              onKeep={onKeepPendingPlanReview ?? (() => undefined)}
+              onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+              className="min-h-0 flex-1"
+            />
+          ) : (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
+            {workspaceDocument.editableContent ? (
+              <textarea
+                value={workspaceDocument.content}
+                onChange={(event) =>
+                  onWorkspaceDocumentChange?.({
+                    title: workspaceDocument.title,
+                    content: event.target.value,
+                  })
+                }
+                rows={20}
+                className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
+                placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+              />
+            ) : (
+              <div className="whitespace-pre-wrap break-words text-sm leading-8 text-[var(--text-primary)]">
+                {workspaceDocument.content}
+              </div>
+            )}
+          </div>
+          )}
+        </div>
+      </Surface>
+    )
+  }
 
   if (chapterLoading && !chapterDraft) {
     return (
@@ -130,7 +210,12 @@ export default function EditorCanvas({
           compact
         />
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={onOpenChapterSettings} variant="ghost" size="sm">
+          <Button
+            onClick={onOpenChapterSettings}
+            variant="primary"
+            size="sm"
+            className="bg-zinc-900 text-white hover:bg-zinc-800"
+          >
             <Settings2 className="h-4 w-4" />
             章节设置
           </Button>
@@ -160,7 +245,7 @@ export default function EditorCanvas({
             className="min-h-0 flex-1"
           />
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
             <div className="border-b border-[var(--border-subtle)] pb-4">
               <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                 {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
@@ -175,9 +260,12 @@ export default function EditorCanvas({
               onSelect={(event) => emitSelection(event.currentTarget)}
               onClick={(event) => emitSelection(event.currentTarget)}
               onKeyUp={(event) => emitSelection(event.currentTarget)}
-              onBlur={(event) => emitSelection(event.currentTarget)}
+              onBlur={(event) => {
+                emitSelection(event.currentTarget)
+                onEditorBlur?.()
+              }}
               rows={20}
-              className="mt-4 min-h-[30rem] w-full flex-1 resize-y overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
+              className="mt-4 min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
               placeholder="继续写这一章的正文。"
             />
           </div>

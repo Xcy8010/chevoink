@@ -17,6 +17,7 @@ dist-ssr
 *.local
 .dbg
 .trae
+.qoder
 cookies.txt
 .tmp-ai-cookie.txt
 *.tgz

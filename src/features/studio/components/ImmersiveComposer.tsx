@@ -1,54 +1,39 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import {
-  Archive,
   ArrowLeft,
-  Clock3,
-  ChevronDown,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   FilePlus2,
   FileText as FileTextIcon,
-  FolderTree,
-  Globe2,
-  Lock,
+  ImagePlus,
   Save,
   Settings2,
-  Trash2,
   Upload,
-  Users,
-  X,
 } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import TextInput from '@/components/ui/TextInput'
 import { cn } from '@/lib/utils'
 import type { ChapterStatus, Novel, StudioPayload, Visibility } from '../../../../shared/contracts/index.js'
 import type {
   ChapterDraftState,
   ChapterPendingReview,
   EditorSelectionState,
+  PlanPendingReview,
   SaveState,
+  WorkspaceDocumentView,
+  WorkspacePlanFile,
 } from '../types'
+import ChapterSidebar from './ChapterSidebar'
 import ChapterChangeReview from './ChapterChangeReview'
+import PlanChangeReview from './PlanChangeReview'
+import ChapterSettingsPanel from './ChapterSettingsPanel'
 import ConfirmDialog from './ConfirmDialog'
-import { ActionCommandButton, InputLabel, SaveStatusPill } from './StudioControls'
+import { SaveStatusPill } from './StudioControls'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
-
-function formatChapterTreeLabel(chapter: StudioPayload['chapters'][number]) {
-  const normalizedTitle = chapter.title.trim()
-
-  if (!normalizedTitle) {
-    return `第 ${chapter.orderIndex} 章`
-  }
-
-  const prefixedPattern = new RegExp(`^第\\s*${chapter.orderIndex}\\s*章(?:\\s*[：:.·\\-]\\s*.*)?$`)
-  if (prefixedPattern.test(normalizedTitle)) {
-    return normalizedTitle
-  }
-
-  return `第 ${chapter.orderIndex} 章 · ${normalizedTitle}`
-}
+import { PanelResizeHandle, useStudioPanelWidths } from '../panel-resize'
 
 type ImmersiveComposerProps = {
   currentNovelId: string
@@ -57,7 +42,15 @@ type ImmersiveComposerProps = {
   novelOptions: Novel[]
   chapterDraft: ChapterDraftState | null
   chapters: StudioPayload['chapters']
+  savedPlans: WorkspacePlanFile[]
   selectedChapterId: string | null
+  selectedTreeItemId: string | null
+  catalogPreview: {
+    title: string
+    content: string
+    description: string
+  }
+  workspaceDocument?: WorkspaceDocumentView | null
   saveState: SaveState
   saveMessage: string
   wordCountLabel: string
@@ -67,17 +60,38 @@ type ImmersiveComposerProps = {
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
   onEditNovelTitle?: () => void
+  detailPreviewHref?: string
+  previewHref?: string
   onSelectChapter: (chapterId: string) => void
+  onSelectPlan: (planId: string) => void
+  onDeletePlan: (planId: string) => void
+  onSelectCatalog: () => void
   onCreateChapter: () => void
   onDeleteChapter: () => void | Promise<void>
   onChange: (next: ChapterDraftState) => void
+  onWorkspaceDocumentChange?: (next: { title: string; content: string }) => void
   onSelectionChange?: (next: EditorSelectionState) => void
   pendingChapterReview?: ChapterPendingReview | null
   pendingChapterReviewBusy?: boolean
   onKeepPendingReview?: () => void
   onRevertPendingReview?: () => void
+  pendingPlanReview?: PlanPendingReview | null
+  pendingPlanReviewBusy?: boolean
+  onKeepPendingPlanReview?: () => void
+  onRevertPendingPlanReview?: () => void
+  onOpenCover?: () => void
+  onOpenMeta?: () => void
+  onPublishNovel?: () => void
+  novelPublished?: boolean
+  novelSaving?: boolean
   agentPanel: ReactNode
+  taskSidebar?: ReactNode
+  coverPanel?: ReactNode
+  showCoverPanel?: boolean
+  metaPanel?: ReactNode
+  showMetaPanel?: boolean
   switchingNovel?: boolean
+  novelsLoading?: boolean
 }
 
 export default function ImmersiveComposer({
@@ -87,7 +101,11 @@ export default function ImmersiveComposer({
   novelOptions,
   chapterDraft,
   chapters,
+  savedPlans,
   selectedChapterId,
+  selectedTreeItemId,
+  catalogPreview,
+  workspaceDocument = null,
   saveState,
   saveMessage,
   wordCountLabel,
@@ -97,24 +115,45 @@ export default function ImmersiveComposer({
   onSelectNovel,
   onCreateNovel,
   onEditNovelTitle,
+  detailPreviewHref,
+  previewHref,
   onSelectChapter,
+  onSelectPlan,
+  onDeletePlan,
+  onSelectCatalog,
   onCreateChapter,
   onDeleteChapter,
   onChange,
+  onWorkspaceDocumentChange,
   onSelectionChange,
   pendingChapterReview = null,
   pendingChapterReviewBusy = false,
   onKeepPendingReview,
   onRevertPendingReview,
+  pendingPlanReview = null,
+  pendingPlanReviewBusy = false,
+  onKeepPendingPlanReview,
+  onRevertPendingPlanReview,
+  onOpenCover,
+  onOpenMeta,
+  onPublishNovel,
+  novelPublished = false,
+  novelSaving = false,
   agentPanel,
+  taskSidebar,
+  coverPanel,
+  showCoverPanel = false,
+  metaPanel,
+  showMetaPanel = false,
   switchingNovel = false,
+  novelsLoading = false,
 }: ImmersiveComposerProps) {
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1280px)').matches : false,
   )
-  const [mobilePanel, setMobilePanel] = useState<'agent' | 'editor' | 'chapters'>('editor')
-  const [novelExpanded, setNovelExpanded] = useState(true)
-  const [chapterFolderExpanded, setChapterFolderExpanded] = useState(true)
+  const { panelWidths, beginPanelResize } = useStudioPanelWidths()
+  // 手机端默认直接展示 Agent 对话区，保持沉浸简洁
+  const [mobilePanel, setMobilePanel] = useState<'agent' | 'editor' | 'chapters' | 'cover' | 'meta'>('agent')
   const [showChapterSettings, setShowChapterSettings] = useState(false)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -146,6 +185,19 @@ export default function ImmersiveComposer({
       setMobilePanel('agent')
     }
   }, [chapterDraft, mobilePanel])
+
+  // 外部（发布引导、Agent 指令等）打开作品设置/封面面板时，手机端联动切到对应标签页
+  useEffect(() => {
+    if (isDesktop) {
+      return
+    }
+    if (showMetaPanel && metaPanel) {
+      setMobilePanel('meta')
+    } else if (showCoverPanel && coverPanel) {
+      setMobilePanel('cover')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktop, showMetaPanel, showCoverPanel])
 
   async function handleConfirmDialog() {
     if (!confirmDialog) {
@@ -282,20 +334,17 @@ export default function ImmersiveComposer({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[90] isolate overflow-hidden bg-[#f5f1ea] text-[var(--text-primary)]">
-      <div className="mx-auto flex h-full max-w-[140rem] flex-col px-4 py-4 md:px-6 md:py-5">
-        <div
-          className={cn(
-            'border-b border-[var(--border-subtle)] pb-4',
-            isDesktop ? 'flex flex-wrap items-center justify-between gap-3' : 'space-y-3',
-          )}
-        >
-          <div className="min-w-0 space-y-3">
+    <div className="fixed inset-0 z-[90] isolate overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
+      <div className="mx-auto flex h-full max-w-[140rem] flex-col px-3 pb-3 pt-[calc(env(safe-area-inset-top)+10px)] md:px-6 md:py-5">
+        {isDesktop ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
+            <div className="min-w-0 space-y-3">
             <WorkspaceNovelSwitcher
               currentNovelId={currentNovelId}
               currentNovelTitle={novelTitle}
               novels={novelOptions}
               busy={switchingNovel}
+              loading={novelsLoading}
               onSelectNovel={onSelectNovel}
               onCreateNovel={onCreateNovel}
             />
@@ -306,19 +355,57 @@ export default function ImmersiveComposer({
                   <button
                     type="button"
                     onClick={onEditNovelTitle}
-                    className="inline-flex h-9 items-center rounded-full bg-[#101114] px-4 text-sm font-medium text-white transition hover:bg-[#17191f]"
+                    className="inline-flex h-9 items-center rounded-full bg-[var(--surface-contrast)] px-4 text-sm font-medium text-[var(--text-contrast)] transition hover:bg-[var(--surface-contrast-hover)]"
                   >
                     去命名作品
                   </button>
                 ) : null}
               </div>
               <h2 className="truncate text-lg font-semibold tracking-tight text-[var(--text-primary)] md:text-xl">
-                {chapterDraft?.title || '继续写作'}
+                {workspaceDocument?.title || chapterDraft?.title || '继续写作'}
               </h2>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <SaveStatusPill state={saveState} message={saveMessage} onRetry={onRetrySave} />
+            {detailPreviewHref ? (
+              <Link
+                to={detailPreviewHref}
+                title="查看作品页"
+                aria-label="查看作品页"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--border-subtle)] text-[var(--text-primary)] transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-muted)]"
+              >
+                <FileTextIcon className="h-4 w-4" />
+              </Link>
+            ) : null}
+            {onOpenCover ? (
+              <Button
+                variant={showCoverPanel ? 'secondary' : 'ghost'}
+                onClick={onOpenCover}
+                title="封面设计"
+                aria-label="封面设计"
+                className="h-10 w-10 border border-[var(--border-subtle)] px-0"
+              >
+                <ImagePlus className="h-4 w-4" />
+              </Button>
+            ) : null}
+            {onOpenMeta ? (
+              <Button
+                variant={showMetaPanel ? 'secondary' : 'ghost'}
+                onClick={onOpenMeta}
+                title="作品设置"
+                aria-label="作品设置"
+                className="h-10 w-10 border border-[var(--border-subtle)] px-0"
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+            ) : null}
+            {onPublishNovel ? (
+              <Button variant="secondary" onClick={onPublishNovel} disabled={novelSaving}>
+                <Upload className="h-4 w-4" />
+                {novelPublished ? '更新发布' : '发布'}
+              </Button>
+            ) : null}
             <Button
               variant="secondary"
               onClick={onSave}
@@ -332,67 +419,38 @@ export default function ImmersiveComposer({
               退出沉浸
             </Button>
           </div>
-        </div>
-
-        {!isDesktop ? (
-          <div className="mt-4 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">当前创作上下文</p>
-                <p className="mt-2 truncate text-base font-semibold text-[var(--text-primary)]">
-                  {chapterDraft?.title || '当前还没有选中章节'}
-                </p>
-                <p className="mt-1 text-sm text-[var(--text-secondary)]">{wordCountLabel}</p>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowChapterSettings(true)}
-                disabled={!chapterDraft}
-              >
-                <Settings2 className="h-4 w-4" />
-                设置
-              </Button>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="ghost" size="sm" onClick={onCreateChapter}>
-                <FilePlus2 className="h-4 w-4" />
-                新建章节
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => previousChapter && onSelectChapter(previousChapter.id)}
-                disabled={!previousChapter}
-              >
-                <ChevronLeft className="h-4 w-4" />
-                上一章
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => nextChapter && onSelectChapter(nextChapter.id)}
-                disabled={!nextChapter}
-              >
-                下一章
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] pb-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              退出沉浸
+            </button>
+            <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
+              {workspaceDocument?.title || chapterDraft?.title || novelTitle}
+            </p>
+            <SaveStatusPill compact state={saveState} message={saveMessage} onRetry={onRetrySave} />
+          </div>
+        )}
 
         {!isDesktop ? (
-          <div className="sticky top-0 z-10 -mx-1 overflow-x-auto bg-[#f5f1ea] px-1 py-4">
+          <div className="sticky top-0 z-10 -mx-1 shrink-0 overflow-x-auto bg-[var(--app-bg)] px-1 py-3">
             <div className="inline-flex min-w-full gap-2">
               {[
                 ['editor', '写作'],
-                ['chapters', '章节'],
+                ['chapters', '作品'],
                 ['agent', 'Agent'],
+                ...(coverPanel ? [['cover', '封面']] : []),
+                ...(metaPanel ? [['meta', '设置']] : []),
               ].map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setMobilePanel(key as 'agent' | 'editor' | 'chapters')}
+                  onClick={() => setMobilePanel(key as 'agent' | 'editor' | 'chapters' | 'cover' | 'meta')}
                   className={cn(
                     'whitespace-nowrap rounded-full border px-4 py-2.5 text-sm font-medium transition',
                     mobilePanel === key
@@ -409,21 +467,110 @@ export default function ImmersiveComposer({
 
         <div
           className={cn(
-            'min-h-0 flex-1 pt-4',
-            isDesktop ? 'overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] xl:grid xl:grid-cols-[320px_minmax(0,1fr)_280px]' : '',
+            'flex min-h-0 flex-1 flex-col pt-4',
+            isDesktop &&
+              'overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] xl:grid',
           )}
+          style={
+            isDesktop
+              ? {
+                  // 与创作中心共享的三区拖拽宽度（章节树 / 内容 / Agent）
+                  gridTemplateColumns:
+                    showCoverPanel || showMetaPanel || taskSidebar
+                      ? `${panelWidths.tree}px minmax(0,1fr) ${panelWidths.agent}px auto`
+                      : `${panelWidths.tree}px minmax(0,1fr) ${panelWidths.agent}px`,
+                  // 锁定唯一一行为容器高度，保证各列内部（尤其 Agent 消息流）自行滚动
+                  gridTemplateRows: 'minmax(0, 1fr)',
+                }
+              : undefined
+          }
         >
-          {(isDesktop || mobilePanel === 'agent') ? (
-            <div className={cn('min-h-0', isDesktop && 'border-r border-[var(--border-subtle)] bg-[#f7f3ec] px-4 py-4')}>
-              <div className={cn('flex h-full min-h-0 flex-col overflow-hidden', !isDesktop && 'rounded-[28px] border border-[var(--border-subtle)] bg-[#f7f3ec] p-4 shadow-[var(--shadow-soft)]')}>
-                {agentPanel}
-              </div>
+          {isDesktop ? (
+            <div className={cn('flex h-full min-h-0 flex-col', isDesktop && 'relative border-r border-[var(--border-subtle)] bg-[var(--surface-default)] p-4')}>
+              <ChapterSidebar
+                embedded
+                chapters={chapters}
+                savedPlans={savedPlans}
+                selectedChapterId={selectedChapterId}
+                selectedTreeItemId={selectedTreeItemId}
+                catalogPreview={catalogPreview}
+                novelWordCountLabel={wordCountLabel}
+                chapterCountLabel={`共 ${chapters.length} 章`}
+                novelTitle={novelTitle}
+                activeCoverLabel=""
+                onSelectChapter={onSelectChapter}
+                onSelectPlan={onSelectPlan}
+                onDeletePlan={onDeletePlan}
+                onSelectCatalog={onSelectCatalog}
+                onCreateChapter={onCreateChapter}
+              />
+              <PanelResizeHandle
+                panel="tree"
+                side="right"
+                label="拖拽调整章节树宽度"
+                onBegin={beginPanelResize}
+              />
             </div>
           ) : null}
 
           {(isDesktop || mobilePanel === 'editor') ? (
             <div className={cn('flex h-full min-h-0 flex-col', isDesktop && 'border-r border-[var(--border-subtle)] px-5 py-5 xl:px-6')}>
-              {chapterDraft ? (
+              {workspaceDocument ? (
+                <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4">
+                  {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
+                    <PlanChangeReview
+                      review={pendingPlanReview}
+                      busy={pendingPlanReviewBusy}
+                      onKeep={onKeepPendingPlanReview ?? (() => undefined)}
+                      onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+                      className="min-h-0 flex-1"
+                    />
+                  ) : (
+                  <div className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-6 py-6 md:px-8 md:py-8">
+                    <div className="border-b border-[var(--border-subtle)] pb-5">
+                      {workspaceDocument.editableTitle ? (
+                        <input
+                          value={workspaceDocument.title}
+                          onChange={(event) =>
+                            onWorkspaceDocumentChange?.({
+                              title: event.target.value,
+                              content: workspaceDocument.content,
+                            })
+                          }
+                          className="w-full border-0 bg-transparent text-[1.18rem] font-semibold tracking-[0.01em] text-[var(--text-primary)] outline-none"
+                          placeholder={workspaceDocument.kind === 'plan' ? '给这份创作计划命名' : '目录'}
+                        />
+                      ) : (
+                        <p className="text-[1.18rem] font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                          {workspaceDocument.title}
+                        </p>
+                      )}
+                      <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                        {workspaceDocument.description}
+                      </p>
+                    </div>
+                    {workspaceDocument.editableContent ? (
+                      <textarea
+                        value={workspaceDocument.content}
+                        onChange={(event) =>
+                          onWorkspaceDocumentChange?.({
+                            title: workspaceDocument.title,
+                            content: event.target.value,
+                          })
+                        }
+                        rows={24}
+                        className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-base leading-9 text-[var(--text-primary)] outline-none md:text-[1.04rem]"
+                        placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+                      />
+                    ) : (
+                      <div className="mt-5 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-base leading-9 text-[var(--text-primary)] md:text-[1.04rem]">
+                        {workspaceDocument.content}
+                      </div>
+                    )}
+                  </div>
+                  )}
+                </div>
+              ) : chapterDraft ? (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
                     <SaveStatusPill state={saveState} message={saveMessage} onRetry={onRetrySave} />
@@ -433,9 +580,10 @@ export default function ImmersiveComposer({
                         新建章节
                       </Button>
                       <Button
-                        variant="ghost"
+                        variant="primary"
                         size="sm"
                         onClick={() => setShowChapterSettings((current) => !current)}
+                        className="bg-zinc-900 text-white hover:bg-zinc-800"
                       >
                         <Settings2 className="h-4 w-4" />
                         章节设置
@@ -521,201 +669,81 @@ export default function ImmersiveComposer({
             </div>
           ) : null}
 
-          {(isDesktop || mobilePanel === 'chapters') ? (
-            <aside className={cn('min-h-0 overflow-hidden', isDesktop ? 'bg-[#f7f3ec] p-4' : 'rounded-[28px] border border-[var(--border-subtle)] bg-[#f7f3ec] p-4 shadow-[var(--shadow-soft)]')}>
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
-                <div>
-                  <p className="text-sm font-semibold text-[var(--text-primary)]">章节树</p>
-                  <span className="text-xs text-[var(--text-tertiary)]">共 {chapters.length} 章</span>
-                </div>
-                <Button onClick={onCreateChapter} variant="ghost" size="sm">
-                  <FilePlus2 className="h-4 w-4" />
-                  新建章节
-                </Button>
+          {(isDesktop || mobilePanel === 'agent') ? (
+            <div className={cn('flex min-h-0 flex-1 flex-col', isDesktop && 'relative border-r border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4')}>
+              {isDesktop ? (
+                <PanelResizeHandle
+                  panel="agent"
+                  side="left"
+                  label="拖拽调整 Agent 对话区宽度"
+                  onBegin={beginPanelResize}
+                />
+              ) : null}
+              <div className={cn('flex min-h-0 flex-1 flex-col overflow-hidden', !isDesktop && 'rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-soft)]')}>
+                {agentPanel}
               </div>
-              <div className="mt-3 min-h-0 overflow-y-auto overscroll-contain pr-1">
-                <div className="space-y-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setNovelExpanded((current) => !current)}
-                    className="flex w-full items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
-                  >
-                    {novelExpanded ? (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                    )}
-                    <FolderTree className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                    <span className="truncate">当前作品</span>
-                  </button>
+            </div>
+          ) : null}
 
-                  {novelExpanded ? (
-                    <div className="ml-4 border-l border-[var(--border-subtle)] pl-2">
-                      <button
-                        type="button"
-                        onClick={() => setChapterFolderExpanded((current) => !current)}
-                        className="flex w-full items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
-                      >
-                        {chapterFolderExpanded ? (
-                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                        )}
-                        <span className="truncate">全部章节</span>
-                      </button>
+          {isDesktop && showCoverPanel && coverPanel ? (
+            <div className="min-h-0 overflow-hidden">{coverPanel}</div>
+          ) : isDesktop && showMetaPanel && metaPanel ? (
+            <div className="min-h-0 overflow-hidden">{metaPanel}</div>
+          ) : isDesktop && taskSidebar ? (
+            <div className="min-h-0 overflow-hidden">{taskSidebar}</div>
+          ) : null}
 
-                      {chapterFolderExpanded ? (
-                        <div className="ml-4 border-l border-[var(--border-subtle)] pl-2">
-                          {chapters.map((chapter) => (
-                            <button
-                              key={chapter.id}
-                              type="button"
-                              onClick={() => onSelectChapter(chapter.id)}
-                              className={cn(
-                                'flex w-full items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm transition',
-                                selectedChapterId === chapter.id
-                                  ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]'
-                                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
-                              )}
-                            >
-                              <FileTextIcon className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
-                              <span className="truncate">
-                                {formatChapterTreeLabel(chapter)}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
+          {!isDesktop && mobilePanel === 'chapters' ? (
+            <aside className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-soft)]">
+              {previewHref ? (
+                <Link
+                  to={previewHref}
+                  className="mb-3 inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  预览阅读
+                </Link>
+              ) : null}
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <ChapterSidebar
+                  chapters={chapters}
+                  savedPlans={savedPlans}
+                  selectedChapterId={selectedChapterId}
+                  selectedTreeItemId={selectedTreeItemId}
+                  catalogPreview={catalogPreview}
+                  novelWordCountLabel={wordCountLabel}
+                  chapterCountLabel={`共 ${chapters.length} 章`}
+                  novelTitle={novelTitle}
+                  activeCoverLabel=""
+                  onSelectChapter={onSelectChapter}
+                  onSelectPlan={onSelectPlan}
+                  onDeletePlan={onDeletePlan}
+                  onSelectCatalog={onSelectCatalog}
+                  onCreateChapter={onCreateChapter}
+                />
               </div>
             </aside>
+          ) : null}
+
+          {!isDesktop && mobilePanel === 'cover' && coverPanel ? (
+            <div className="min-h-0 overflow-hidden">{coverPanel}</div>
+          ) : null}
+
+          {!isDesktop && mobilePanel === 'meta' && metaPanel ? (
+            <div className="min-h-0 overflow-hidden">{metaPanel}</div>
           ) : null}
         </div>
       </div>
       {chapterDraft && showChapterSettings ? (
-        <div
-          className="fixed inset-0 z-[110] bg-[rgba(15,23,42,0.18)]"
-          onClick={() => setShowChapterSettings(false)}
-        >
-          <div
-            className="absolute inset-y-4 right-4 w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_24px_64px_rgba(15,23,42,0.18)]"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex h-full min-h-0 flex-col p-5">
-              <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
-                <div>
-                  <h3 className="text-base font-semibold text-[var(--text-primary)]">章节设置</h3>
-                  <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                    调整当前章节状态、可见范围和摘要。
-                  </p>
-                </div>
-                <Button
-                  onClick={() => setShowChapterSettings(false)}
-                  variant="ghost"
-                  size="sm"
-                  className="h-9 w-9 px-0"
-                  aria-label="关闭章节设置"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <div className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-                <label className="space-y-2">
-                  <InputLabel label="章节标题" />
-                  <TextInput
-                    value={chapterDraft.title}
-                    onChange={(event) => onChange({ ...chapterDraft, title: event.target.value })}
-                    placeholder="例如：第三十七章 失控回环"
-                  />
-                </label>
-
-                <div className="space-y-4">
-                  <label className="space-y-2">
-                    <InputLabel label="状态操作" hint="直接点击动作按钮，确认后立即执行。" />
-                    <div className="flex flex-wrap gap-2">
-                      <ActionCommandButton
-                        icon={<FileTextIcon className="h-4 w-4" />}
-                        label="状态设置为草稿"
-                        onClick={() => requestStatusAction('draft')}
-                        disabled={chapterDraft.status === 'draft'}
-                      />
-                      <ActionCommandButton
-                        icon={<Upload className="h-4 w-4" />}
-                        label="立即上架"
-                        onClick={() => requestStatusAction('published')}
-                        disabled={chapterDraft.status === 'published'}
-                      />
-                      <ActionCommandButton
-                        icon={<Clock3 className="h-4 w-4" />}
-                        label="状态设置为定时"
-                        onClick={() => requestStatusAction('scheduled')}
-                        disabled={chapterDraft.status === 'scheduled'}
-                      />
-                      <ActionCommandButton
-                        icon={<Archive className="h-4 w-4" />}
-                        label="立即下架"
-                        onClick={() => requestStatusAction('archived')}
-                        disabled={chapterDraft.status === 'archived'}
-                        tone="danger"
-                      />
-                    </div>
-                  </label>
-                  <label className="space-y-2">
-                    <InputLabel label="可见范围操作" hint="直接执行可见范围变更，不需要再手动挑选。" />
-                    <div className="flex flex-wrap gap-2">
-                      <ActionCommandButton
-                        icon={<Lock className="h-4 w-4" />}
-                        label="可见范围设置为个人"
-                        onClick={() => requestVisibilityAction('private')}
-                        disabled={chapterDraft.visibility === 'private'}
-                      />
-                      <ActionCommandButton
-                        icon={<Users className="h-4 w-4" />}
-                        label="可见范围设置为关注可见"
-                        onClick={() => requestVisibilityAction('followers')}
-                        disabled={chapterDraft.visibility === 'followers'}
-                      />
-                      <ActionCommandButton
-                        icon={<Globe2 className="h-4 w-4" />}
-                        label="可见范围设置为公开"
-                        onClick={() => requestVisibilityAction('public')}
-                        disabled={chapterDraft.visibility === 'public'}
-                      />
-                    </div>
-                  </label>
-                </div>
-
-                <label className="space-y-2">
-                  <InputLabel label="章节摘要" />
-                  <textarea
-                    value={chapterDraft.summary}
-                    onChange={(event) => onChange({ ...chapterDraft, summary: event.target.value })}
-                    rows={5}
-                    className="min-h-[9rem] w-full resize-y overflow-y-auto rounded-[20px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-4 py-3 text-sm leading-7 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[var(--focus-ring)]"
-                    placeholder="补充这一章的目标、节奏或推进重点。"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-4">
-                <Button
-                  onClick={handleDeleteRequest}
-                  variant="ghost"
-                  className="text-[rgb(153,27,27)] hover:bg-[rgba(127,29,29,0.08)] hover:text-[rgb(127,29,29)]"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除章节
-                </Button>
-                <Button onClick={() => setShowChapterSettings(false)} variant="secondary">
-                  完成
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ChapterSettingsPanel
+          chapterDraft={chapterDraft}
+          onChange={onChange}
+          onRequestStatusAction={requestStatusAction}
+          onRequestVisibilityAction={requestVisibilityAction}
+          onRequestDelete={handleDeleteRequest}
+          onClose={() => setShowChapterSettings(false)}
+          overlayClassName="z-[110]"
+        />
       ) : null}
       <ConfirmDialog
         open={Boolean(confirmDialog)}

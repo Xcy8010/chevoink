@@ -6,6 +6,10 @@ export type AiImageSize =
   | '1024x1536'
   | '1536x1024'
 
+export const FIXED_NOVEL_COVER_SIZE: AiImageSize = '768x1024'
+export const FIXED_NOVEL_COVER_WIDTH = 768
+export const FIXED_NOVEL_COVER_HEIGHT = 1024
+
 export type AiProviderMode = 'mock' | 'provider' | 'fallback' | 'hybrid' | string
 export type AiProviderType = 'text' | 'image'
 export type UserRole = 'user' | 'author' | 'admin'
@@ -19,7 +23,14 @@ export type CoverSourceType = 'upload' | 'ai_generated'
 export type ContentAuditStatus = 'pending' | 'approved' | 'rejected'
 export type AgentSessionStatus = 'active' | 'archived'
 export type AgentRunMode = 'plan' | 'act' | 'review'
-export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_approval'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 export type AgentType =
   | 'writingOrchestrator'
   | 'storyPlanner'
@@ -47,6 +58,8 @@ export type AgentWorkspaceToolName =
   | 'novel.archive'
   | 'novel.delete'
   | 'cover.prompt.set'
+  | 'cover.generate'
+  | 'cover.apply'
   | 'workspace.open_meta'
   | 'workspace.open_cover'
 export type AgentArtifactType =
@@ -164,6 +177,11 @@ export interface NovelCard {
   wordCount: number
   chapterCount: number
   lastPublishedAt: string | null
+  publishedAt?: string | null
+  viewCount?: number
+  likeCount?: number
+  favoriteCount?: number
+  commentCount?: number
   updatedAt: string
   author: {
     id: EntityId
@@ -216,6 +234,8 @@ export interface Comment {
   likeCount: number
   replyCount: number
   auditStatus: ContentAuditStatus
+  /** 当前登录用户是否已点赞（未登录时缺省 false） */
+  likedByViewer?: boolean
   author: {
     id: EntityId
     nickname: string
@@ -238,6 +258,9 @@ export interface Post {
   commentCount: number
   favoriteCount: number
   auditStatus: ContentAuditStatus
+  /** 当前登录用户是否已点赞/收藏（未登录时缺省 false） */
+  likedByViewer?: boolean
+  bookmarkedByViewer?: boolean
   author: {
     id: EntityId
     nickname: string
@@ -387,6 +410,12 @@ export interface HomePagePayload {
   continueReading: NovelCard[]
   recommendedNovels: NovelCard[]
   latestUpdatedNovels: NovelCard[]
+  /** 服务端计算的热度榜（互动加权 + 时间衰减） */
+  rankingHot?: NovelCard[]
+  /** 服务端计算的新书榜（按首发时间） */
+  rankingNew?: NovelCard[]
+  /** 服务端计算的完结榜（已完结作品按累计热度） */
+  rankingFinished?: NovelCard[]
   hotTopics: TopicSummary[]
   hotPosts: Post[]
   [key: string]: unknown
@@ -397,6 +426,33 @@ export interface NovelDetailPayload {
   chapters: ChapterListItem[]
   topComments: Comment[]
   relatedNovels: NovelCard[]
+  [key: string]: unknown
+}
+
+/** 全局搜索联想项：书名 / 作者 / 帖子 */
+export interface SearchSuggestItem {
+  type: 'novel' | 'author' | 'post'
+  id: EntityId
+  text: string
+  subText?: string | null
+  imageUrl?: string | null
+}
+
+export interface SearchSuggestPayload {
+  items: SearchSuggestItem[]
+  [key: string]: unknown
+}
+
+/** 全局搜索结果：按类型分组 */
+export interface SearchResultPayload {
+  novels: NovelCard[]
+  authors: UserSummary[]
+  posts: Post[]
+  [key: string]: unknown
+}
+
+export interface HotSearchPayload {
+  keywords: string[]
   [key: string]: unknown
 }
 
@@ -492,6 +548,20 @@ export interface AgentActionPlan {
   summary: string
   thinking?: string[]
   steps: AgentActionPlanStep[]
+}
+
+export type AgentExecutionStepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped'
+
+export interface AgentExecutionStepResult {
+  stepId: string
+  toolName: AgentWorkspaceToolName
+  title: string
+  status: AgentExecutionStepStatus
+  target: AgentActionPlanStep['target']
+  resultSummary?: string | null
+  errorMessage?: string | null
+  startedAt?: string | null
+  finishedAt?: string | null
 }
 
 export type AgentExecutionMode = 'plan' | 'build' | 'review'

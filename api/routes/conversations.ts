@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express'
 
 import type { SendMessageRequest } from '../../shared/contracts/index.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
-import { listConversationsData, listMessagesData, sendMessageData } from '../lib/data-access.js'
+import { listConversationsData, listMessagesData, markConversationReadData, sendMessageData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -66,6 +66,18 @@ router.post('/:conversationId/messages', async (req: Request, res: Response): Pr
     }
 
     res.status(201).json(buildSuccess(requestId, { message }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:conversationId/read', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await markConversationReadData(userId, req.params.conversationId)
+    res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

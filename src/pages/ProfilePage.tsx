@@ -1,15 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
-import { Clock3, Settings } from 'lucide-react'
+import { BookOpen, Bookmark, FileText, PenLine } from 'lucide-react'
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import AppState from '@/components/ui/AppState'
+import { ProfileSkeleton } from '@/components/ui/Skeleton'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { getMe, listNovels, listPosts } from '@/features/community/api'
+import { getMe, listPosts } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
-import { formatRelativeTime } from '@/features/community/utils'
+import { getCoverUrl, getNovelDetailPayload } from '@/features/discover/api'
+import { getAllReadingProgress } from '@/features/home/reading-progress'
+import { getLocalShelf, updateShelfCover } from '@/features/home/local-shelf'
+import CreationPanel from '@/features/profile/components/CreationPanel'
+import ProfileHeader from '@/features/profile/components/ProfileHeader'
+import ShelfPanel, { type ShelfBook } from '@/features/profile/components/ShelfPanel'
 import { useShellStore } from '@/store/useShellStore'
 import type { UpdateMyAvatarRequest, UpdateMyProfileRequest, User } from '../../shared/contracts'
 
@@ -25,17 +31,20 @@ type ProfileRouteState = {
   showPostRegisterPrompt?: boolean
 }
 
-const BOOTSTRAP_NOVEL_TITLE = '我的第一部作品'
+// 新建默认名已改为「未命名作品」；保留旧名识别，兼容存量引导作品
+const BOOTSTRAP_NOVEL_TITLES = new Set(['未命名作品', '我的第一部作品'])
 const BOOTSTRAP_NOVEL_SUMMARY = '先创建一部作品，再继续完善简介、章节和封面。'
 
 function isBootstrapNovel(novel: {
   title: string
+  displayTitle: string | null
   summary: string
   chapterCount: number
   wordCount: number
 }) {
   return (
-    novel.title === BOOTSTRAP_NOVEL_TITLE &&
+    BOOTSTRAP_NOVEL_TITLES.has(novel.title) &&
+    !novel.displayTitle?.trim() &&
     novel.summary === BOOTSTRAP_NOVEL_SUMMARY &&
     novel.chapterCount === 0 &&
     novel.wordCount === 0
@@ -76,11 +85,6 @@ export default function ProfilePage() {
     queryFn: getMe,
   })
 
-  const novelsQuery = useQuery({
-    queryKey: ['community', 'novels'],
-    queryFn: () => listNovels(40),
-  })
-
   const postsQuery = useQuery({
     queryKey: ['community', 'posts'],
     queryFn: () => listPosts(40),
@@ -99,12 +103,8 @@ export default function ProfilePage() {
   }, [currentUser])
 
   const authoredNovels = useMemo(() => {
-    if (!currentUser) {
-      return []
-    }
-
-    return (novelsQuery.data?.items ?? []).filter((novel) => novel.author.id === currentUser.id)
-  }, [currentUser, novelsQuery.data?.items])
+    return mePayload?.authoredNovels ?? []
+  }, [mePayload?.authoredNovels])
 
   const visibleAuthoredNovels = useMemo(
     () => authoredNovels.filter((novel) => !isBootstrapNovel(novel)),
@@ -124,18 +124,107 @@ export default function ProfilePage() {
     return (postsQuery.data?.items ?? []).filter((post) => post.author.id === currentUser.id)
   }, [currentUser, postsQuery.data?.items])
 
-  const shelfItems = mePayload?.shelf ?? []
   const draftItems = useMemo(
     () => (mePayload?.drafts ?? []).filter((draft) => !hiddenBootstrapNovelIds.has(draft.novelId)),
     [hiddenBootstrapNovelIds, mePayload?.drafts],
   )
-  const recentCoverUrl =
-    currentUser?.profileCoverUrl ??
-    mePayload?.recentCoverAsset?.imageUrl ??
-    visibleAuthoredNovels[0]?.coverUrl ??
-    null
 
-  const readingCount = shelfItems.length
+  /** 本地阅读进度与书架（页面渲染时读取，me 数据刷新后重读） */
+  const progressMap = useMemo(
+    () => getAllReadingProgress(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meQuery.dataUpdatedAt],
+  )
+  const localShelf = useMemo(
+    () => getLocalShelf(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meQuery.dataUpdatedAt],
+  )
+
+  /** 合并服务端书架 + 本地书架 + 仅有阅读进度的作品 */
+  const mergedShelf = useMemo<ShelfBook[]>(() => {
+    const seen = new Set<string>()
+    const items: ShelfBook[] = []
+
+    for (const item of mePayload?.shelf ?? []) {
+      const novelId = item.novelId ?? null
+      if (novelId) {
+        seen.add(novelId)
+      }
+      items.push({
+        key: item.id,
+        novelId,
+        title: item.title,
+        coverUrl: getCoverUrl(item.coverUrl),
+        summary: item.summary ?? '',
+      })
+    }
+
+    for (const entry of localShelf) {
+      if (seen.has(entry.novelId)) {
+        continue
+      }
+      seen.add(entry.novelId)
+      items.push({
+        key: `local-${entry.novelId}`,
+        novelId: entry.novelId,
+        title: entry.title,
+        coverUrl: getCoverUrl(entry.coverUrl),
+        summary: '',
+      })
+    }
+
+    for (const entry of Object.values(progressMap)) {
+      if (seen.has(entry.novelId)) {
+        continue
+      }
+      seen.add(entry.novelId)
+      items.push({
+        key: `progress-${entry.novelId}`,
+        novelId: entry.novelId,
+        title: entry.novelTitle,
+        coverUrl: null,
+        summary: '正在阅读中',
+      })
+    }
+
+    return items
+  }, [localShelf, mePayload?.shelf, progressMap])
+
+  /** 缺封面条目回源补拉：收藏/阅读时作品还没封面，之后生成了封面也能显示出来 */
+  const missingCoverIds = useMemo(
+    () => mergedShelf.filter((item) => item.novelId && !item.coverUrl).map((item) => item.novelId as string),
+    [mergedShelf],
+  )
+  const coverBackfillQuery = useQuery({
+    queryKey: ['profile', 'shelf-cover-backfill', missingCoverIds],
+    enabled: missingCoverIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const results = await Promise.allSettled(missingCoverIds.map((id) => getNovelDetailPayload(id)))
+      const covers: Record<string, string> = {}
+      results.forEach((result, index) => {
+        if (result.status !== 'fulfilled') return
+        const cover = getCoverUrl(result.value.novel.coverUrl)
+        if (!cover) return
+        covers[missingCoverIds[index]] = cover
+        // 同步回写本地书架，下次进页无需再补拉
+        updateShelfCover(missingCoverIds[index], cover)
+      })
+      return covers
+    },
+  })
+  const shelfItems = useMemo<ShelfBook[]>(() => {
+    const covers = coverBackfillQuery.data ?? {}
+    return mergedShelf.map((item) =>
+      item.coverUrl || !item.novelId || !covers[item.novelId] ? item : { ...item, coverUrl: covers[item.novelId] },
+    )
+  }, [coverBackfillQuery.data, mergedShelf])
+
+  // 个人封面只使用用户自己设置的封面，不再兜底展示作品封面（避免误显示）
+  const recentCoverUrl = currentUser?.profileCoverUrl ?? null
+
+  const readingCount = mergedShelf.length
   const likesCount = useMemo(
     () => authoredPosts.reduce((total, post) => total + post.favoriteCount + post.likeCount, 0),
     [authoredPosts],
@@ -273,15 +362,8 @@ export default function ProfilePage() {
     }
   }
 
-  if (meQuery.isLoading || novelsQuery.isLoading || postsQuery.isLoading) {
-    return (
-      <AppState
-        tone="loading"
-        title="个人中心正在整理"
-        description="稍等一下，你的书架、创作和最近互动很快就会出现。"
-        className="min-h-[420px]"
-      />
-    )
+  if (meQuery.isLoading || postsQuery.isLoading) {
+    return <ProfileSkeleton />
   }
 
   if (meQuery.isError || !currentUser) {
@@ -296,91 +378,48 @@ export default function ProfilePage() {
     )
   }
 
-  const profileCoverStyle = recentCoverUrl
-    ? {
-        backgroundImage: `linear-gradient(180deg, rgba(15, 23, 42, 0.06), rgba(15, 23, 42, 0.72)), url(${recentCoverUrl})`,
-      }
-    : undefined
+  const statsCards = [
+    { icon: BookOpen, label: '在读', value: Object.keys(progressMap).length, unit: '本' },
+    { icon: Bookmark, label: '书架', value: readingCount, unit: '本' },
+    { icon: PenLine, label: '创作', value: visibleAuthoredNovels.length, unit: '部' },
+    { icon: FileText, label: '草稿', value: draftItems.length, unit: '篇' },
+  ]
 
   return (
     <>
       <div className="space-y-5 md:space-y-6">
-        <section className="overflow-hidden rounded-[32px] border border-slate-200/80 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-950">
-          <div
-            className="relative min-h-[320px] px-5 pb-5 pt-6 text-white sm:min-h-[360px] sm:px-6 sm:pb-6"
-            style={
-              profileCoverStyle ?? {
-                backgroundImage:
-                  'linear-gradient(135deg, rgba(49,46,129,1) 0%, rgba(17,24,39,1) 55%, rgba(30,41,59,1) 100%)',
-              }
-            }
-          >
-            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/30 to-transparent" />
-            <div className="relative flex min-h-[280px] flex-col justify-between gap-6">
-              <div className="flex items-start justify-between gap-4">
-                <button
-                  type="button"
-                  onClick={() => navigate('/settings')}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur transition hover:bg-white/16"
-                >
-                  <Settings className="h-4 w-4" />
-                  设置封面
-                </button>
-                <Button variant="secondary" onClick={openEditDialog}>
-                  编辑资料
-                </Button>
-              </div>
+        <ProfileHeader
+          user={currentUser}
+          coverUrl={recentCoverUrl}
+          readingCount={readingCount}
+          likesCount={likesCount}
+          onEditProfile={openEditDialog}
+          onGoSettings={() => navigate('/settings')}
+        />
 
-              <div className="space-y-5">
-                <div className="flex items-end gap-4">
-                  <Avatar
-                    name={currentUser.nickname}
-                    src={currentUser.avatarUrl}
-                    size="lg"
-                    className="h-20 w-20 border border-white/15 bg-white/10 sm:h-24 sm:w-24"
-                  />
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <h2 className="text-[1.9rem] font-semibold tracking-tight sm:text-[2.2rem]">
-                        {currentUser.nickname}
-                      </h2>
-                      <span className="rounded-full bg-white/12 px-3 py-1 text-xs text-white/82 backdrop-blur">
-                        {currentUser.isAuthor ? '创作者身份' : '读者身份'}
-                      </span>
-                    </div>
-                    <p className="max-w-2xl text-sm leading-7 text-white/82">
-                      {currentUser.bio || '先把简介补完整，让其他人更容易认识你，也更容易记住你正在读和正在写什么。'}
-                    </p>
-                    <p className="text-sm text-white/68">
-                      阅读 {readingCount} 本 · 粉丝 {currentUser.followerCount} · 获赞 {likesCount}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 rounded-[28px] bg-white/10 p-3 backdrop-blur md:max-w-[560px]">
-                  <div className="rounded-[20px] bg-white/10 px-4 py-3">
-                    <p className="text-xs text-white/68">阅读</p>
-                    <p className="mt-2 text-2xl font-semibold">{readingCount}</p>
-                  </div>
-                  <div className="rounded-[20px] bg-white/10 px-4 py-3">
-                    <p className="text-xs text-white/68">粉丝</p>
-                    <p className="mt-2 text-2xl font-semibold">{currentUser.followerCount}</p>
-                  </div>
-                  <div className="rounded-[20px] bg-white/10 px-4 py-3">
-                    <p className="text-xs text-white/68">获赞</p>
-                    <p className="mt-2 text-2xl font-semibold">{likesCount}</p>
-                  </div>
-                </div>
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {statsCards.map((card) => (
+            <div
+              key={card.label}
+              className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4 shadow-[var(--shadow-card)]"
+            >
+              <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+                <card.icon className="h-4 w-4 text-[var(--color-brand)]" />
+                {card.label}
               </div>
+              <p className="mt-2 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">
+                {card.value}
+                <span className="ml-1 text-xs font-normal text-[var(--text-tertiary)]">{card.unit}</span>
+              </p>
             </div>
-          </div>
+          ))}
         </section>
 
-        <section className="rounded-[32px] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-950 sm:px-6 sm:py-5">
+        <section className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4 shadow-[var(--shadow-card)] sm:px-6 sm:py-5">
           <div className="flex flex-wrap gap-2">
             {panels.map((panel) => {
               const count =
-                panel.id === 'shelf' ? shelfItems.length : panel.id === 'creation' ? visibleAuthoredNovels.length + draftItems.length : 0
+                panel.id === 'shelf' ? mergedShelf.length : panel.id === 'creation' ? visibleAuthoredNovels.length : 0
 
               return (
                 <button
@@ -388,14 +427,14 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => setActivePanel(panel.id)}
                   className={[
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition',
+                    'press-feedback inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-4 py-2 text-sm font-medium transition-colors',
                     activePanel === panel.id
-                      ? 'border-slate-950 bg-slate-950 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-950'
-                      : 'border-slate-200 text-slate-700 hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-slate-50',
+                      ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
+                      : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
                   ].join(' ')}
                 >
                   {panel.label}
-                  <span className="text-xs opacity-72">{count}</span>
+                  <span className="text-xs opacity-75">{count}</span>
                 </button>
               )
             })}
@@ -403,123 +442,24 @@ export default function ProfilePage() {
 
           {activePanel === 'shelf' ? (
             <div className="mt-5">
-              {shelfItems.length > 0 ? (
-                <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {shelfItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => item.novelId && navigate(`/novel/${item.novelId}`)}
-                      className="text-left"
-                    >
-                      <div className="overflow-hidden rounded-[22px] bg-slate-50 p-2 transition hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800">
-                        {item.coverUrl ? (
-                          <img
-                            src={item.coverUrl}
-                            alt={item.title}
-                            className="aspect-[3/4] w-full rounded-[16px] object-cover"
-                          />
-                        ) : (
-                          <div className="aspect-[3/4] rounded-[16px] bg-slate-200 dark:bg-slate-800" />
-                        )}
-                        <div className="px-1 pb-1 pt-3">
-                          <p className="line-clamp-2 text-sm font-medium leading-6 text-slate-950 dark:text-slate-50">
-                            {item.title}
-                          </p>
-                          <p className="mt-2 line-clamp-2 text-xs leading-6 text-slate-500 dark:text-slate-400">
-                            {item.summary || '继续回到正文阅读。'}
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <AppState
-                  tone="empty"
-                  title="你的书架还是空的"
-                  description="先去发现页找一本感兴趣的书，之后这里会自动出现你的阅读记录。"
-                  primaryAction={{ label: '去发现', onClick: () => navigate('/discover') }}
-                  className="min-h-[280px]"
-                />
-              )}
+              <ShelfPanel
+                items={shelfItems}
+                progressMap={progressMap}
+                onOpenNovel={(novelId) => navigate(`/novel/${novelId}`)}
+                onDiscover={() => navigate('/discover')}
+              />
             </div>
           ) : null}
 
           {activePanel === 'creation' ? (
-            <div className="mt-5 space-y-5">
-              {draftItems.length > 0 ? (
-                <div className="rounded-[26px] bg-slate-50 p-4 dark:bg-slate-900">
-                  <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-                    <Clock3 className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                    最近草稿
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {draftItems.slice(0, 3).map((draft) => (
-                      <button
-                        key={draft.id}
-                        type="button"
-                        onClick={() => navigate(`/studio/novel/${draft.novelId}`)}
-                        className="flex w-full items-center justify-between rounded-[18px] bg-white px-4 py-3 text-left transition hover:bg-slate-100 dark:bg-slate-950 dark:hover:bg-slate-800"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-slate-950 dark:text-slate-50">
-                            {draft.title}
-                          </span>
-                          <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">
-                            {draft.summary}
-                          </span>
-                        </span>
-                        <span className="ml-4 shrink-0 text-xs text-slate-500 dark:text-slate-400">
-                          {formatRelativeTime(draft.updatedAt)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {visibleAuthoredNovels.length > 0 ? (
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-4">
-                  {visibleAuthoredNovels.map((novel) => (
-                    <article key={novel.id} className="rounded-[24px] bg-slate-50 p-3 dark:bg-slate-900">
-                      {novel.coverUrl ? (
-                        <img
-                          src={novel.coverUrl}
-                          alt={novel.title}
-                          className="aspect-[3/4] w-full rounded-[18px] object-cover"
-                        />
-                      ) : (
-                        <div className="aspect-[3/4] rounded-[18px] bg-slate-200 dark:bg-slate-800" />
-                      )}
-                      <div className="px-1 pb-1 pt-3">
-                        <p className="line-clamp-2 text-sm font-medium leading-6 text-slate-950 dark:text-slate-50">
-                          {novel.title}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {novel.chapterCount} 章 · {novel.wordCount} 字
-                        </p>
-                        <div className="mt-3 flex gap-2">
-                          <Button variant="secondary" size="sm" onClick={() => navigate(`/novel/${novel.id}`)}>
-                            查看
-                          </Button>
-                          <Button variant="primary" size="sm" onClick={() => navigate(`/studio/novel/${novel.id}`)}>
-                            继续写
-                          </Button>
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <AppState
-                  tone="empty"
-                  title="你还没有创作内容"
-                  description="从创作中心开始第一部作品，这里会同步展示你的作品和草稿。"
-                  primaryAction={{ label: '开始创作', onClick: () => navigate('/studio') }}
-                  className="min-h-[280px]"
-                />
-              )}
+            <div className="mt-5">
+              <CreationPanel
+                drafts={draftItems}
+                novels={visibleAuthoredNovels}
+                onOpenStudio={() => navigate('/studio')}
+                onOpenNovelStudio={(novelId) => navigate(`/studio/novel/${novelId}`)}
+                onOpenNovel={(novelId) => navigate(`/novel/${novelId}`)}
+              />
             </div>
           ) : null}
 
@@ -538,11 +478,11 @@ export default function ProfilePage() {
       </div>
 
       {editDialogVisible ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px] dark:bg-black/60">
-          <div className="w-full max-w-[560px] rounded-[28px] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-[560px] rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
             <div className="space-y-2">
-              <h3 className="text-xl font-semibold text-slate-950 dark:text-slate-50">编辑资料</h3>
-              <p className="text-sm leading-7 text-slate-600 dark:text-slate-300">
+              <h3 className="text-xl font-semibold text-[var(--text-primary)]">编辑资料</h3>
+              <p className="text-sm leading-7 text-[var(--text-secondary)]">
                 在这里修改头像、昵称和简介。封面仍然可以去设置页继续维护。
               </p>
             </div>
@@ -556,18 +496,18 @@ export default function ProfilePage() {
                 onChange={handleAvatarChange}
               />
 
-              <div className="rounded-[24px] bg-slate-50 p-4 dark:bg-slate-900">
+              <div className="rounded-[var(--radius-lg)] bg-[var(--surface-muted)] p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-4">
                     <Avatar
                       name={currentUser.nickname}
                       src={currentUser.avatarUrl}
                       size="lg"
-                      className="h-20 w-20 sm:h-24 sm:w-24"
+                      className="h-20 w-20"
                     />
                     <div className="space-y-1">
-                      <p className="text-sm font-medium text-slate-950 dark:text-slate-50">头像</p>
-                      <p className="text-xs leading-6 text-slate-500 dark:text-slate-400">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">头像</p>
+                      <p className="text-xs leading-6 text-[var(--text-tertiary)]">
                         支持 PNG、JPG、WebP，大小不超过 2MB。
                       </p>
                     </div>
@@ -592,19 +532,19 @@ export default function ProfilePage() {
               </div>
 
               {avatarError ? (
-                <p className="rounded-[18px] bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                <p className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                   {avatarError}
                 </p>
               ) : null}
 
               {profileError ? (
-                <p className="rounded-[18px] bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                <p className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                   {profileError}
                 </p>
               ) : null}
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-950 dark:text-slate-50" htmlFor="profile-edit-nickname">
+                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="profile-edit-nickname">
                   昵称
                 </label>
                 <TextInput
@@ -618,7 +558,7 @@ export default function ProfilePage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-950 dark:text-slate-50" htmlFor="profile-edit-bio">
+                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="profile-edit-bio">
                   个人简介
                 </label>
                 <textarea
@@ -627,7 +567,7 @@ export default function ProfilePage() {
                   onChange={(event) => setBioDraft(event.target.value)}
                   placeholder="简单介绍一下你自己"
                   rows={4}
-                  className="w-full resize-none rounded-[24px] border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-950 outline-none transition focus:border-slate-300 focus:ring-2 focus:ring-slate-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-50 dark:focus:border-slate-700 dark:focus:ring-slate-800"
+                  className="w-full resize-none rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3 text-sm leading-7 text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--color-brand)]"
                 />
               </div>
 
@@ -648,11 +588,11 @@ export default function ProfilePage() {
       ) : null}
 
       {postRegisterPromptVisible ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px] dark:bg-black/60">
-          <div className="w-full max-w-[420px] rounded-[28px] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-[420px] rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
             <div className="space-y-2">
-              <h3 className="text-xl font-semibold text-slate-950 dark:text-slate-50">注册成功</h3>
-              <p className="text-sm leading-7 text-slate-600 dark:text-slate-300">
+              <h3 className="text-xl font-semibold text-[var(--text-primary)]">注册成功</h3>
+              <p className="text-sm leading-7 text-[var(--text-secondary)]">
                 你已经登录成功。现在可以去完善个人信息，也可以先继续看看你的个人中心。
               </p>
             </div>

@@ -1,10 +1,13 @@
-import { Archive, Globe2, Lock, Save, Upload, Users, FileText } from 'lucide-react'
+import { ChevronDown, Save, Upload } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
+import { joinTags, parseTagsText } from '@/lib/novel-tags'
 
 import type { NovelFormState } from '../types'
-import { ActionCommandButton, InputLabel, ToolShell } from './StudioControls'
+import { InputLabel, SelectControl, ToolShell } from './StudioControls'
+import TagPicker from './TagPicker'
 
 type MetaPanelProps = {
   novelForm: NovelFormState
@@ -16,6 +19,8 @@ type MetaPanelProps = {
   onChange: (next: NovelFormState) => void
   onRequestVisibilityAction: (nextVisibility: NovelFormState['visibility']) => void
   onRequestStatusAction: (nextStatus: NovelFormState['status']) => void
+  detailPreviewHref?: string
+  onOpenCover?: () => void
   onSave: () => void
   onClose: () => void
 }
@@ -30,6 +35,8 @@ export default function MetaPanel({
   onChange,
   onRequestVisibilityAction,
   onRequestStatusAction,
+  detailPreviewHref,
+  onOpenCover,
   onSave,
   onClose,
 }: MetaPanelProps) {
@@ -61,15 +68,6 @@ export default function MetaPanel({
           </label>
 
           <label className="space-y-2">
-            <InputLabel label="展示标题" hint="用于详情页展示，可留空。" />
-            <TextInput
-              value={novelForm.displayTitle}
-              onChange={(event) => onChange({ ...novelForm, displayTitle: event.target.value })}
-              placeholder="更适合展示的标题"
-            />
-          </label>
-
-          <label className="space-y-2">
             <InputLabel label="作品简介" />
             <textarea
               value={novelForm.summary}
@@ -80,65 +78,90 @@ export default function MetaPanel({
             />
           </label>
 
-          <label className="space-y-2">
-            <InputLabel label="标签" />
-            <TextInput
-              value={novelForm.tagsText}
-              onChange={(event) => onChange({ ...novelForm, tagsText: event.target.value })}
-              placeholder="太空歌剧 / 群像 / 悬疑"
+          <div className="space-y-2">
+            <InputLabel label="标签" hint="从统一标签库中选择，读者会按标签在分类和搜索中找到作品。" />
+            <TagPicker
+              value={parseTagsText(novelForm.tagsText)}
+              onChange={(tags) => onChange({ ...novelForm, tagsText: joinTags(tags) })}
             />
-          </label>
+          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <InputLabel label="可见范围操作" hint="点击动作按钮，确认后会自动保存。" />
-              <div className="flex flex-wrap gap-2">
-                <ActionCommandButton
-                  icon={<Lock className="h-4 w-4" />}
-                  label="可见范围设置为个人"
-                  onClick={() => onRequestVisibilityAction('private')}
-                  disabled={saving || novelForm.visibility === 'private'}
-                />
-                <ActionCommandButton
-                  icon={<Users className="h-4 w-4" />}
-                  label="可见范围设置为关注可见"
-                  onClick={() => onRequestVisibilityAction('followers')}
-                  disabled={saving || novelForm.visibility === 'followers'}
-                />
-                <ActionCommandButton
-                  icon={<Globe2 className="h-4 w-4" />}
-                  label="可见范围设置为公开"
-                  onClick={() => onRequestVisibilityAction('public')}
-                  disabled={saving || novelForm.visibility === 'public'}
-                />
-              </div>
-            </div>
+            <label className="space-y-2">
+              <InputLabel label="可见范围" hint="切换后确认即自动保存。" />
+              <SelectControl
+                value={novelForm.visibility}
+                disabled={saving}
+                onChange={(event) => {
+                  const next = event.target.value as NovelFormState['visibility']
+                  if (next !== novelForm.visibility) {
+                    onRequestVisibilityAction(next)
+                  }
+                }}
+              >
+                <option value="private">仅自己可见</option>
+                <option value="followers">关注者可见</option>
+                <option value="public">公开可见</option>
+              </SelectControl>
+            </label>
 
-            <div className="space-y-2">
-              <InputLabel label="发布状态操作" hint="点一次执行一次，确认后自动保存。" />
-              <div className="flex flex-wrap gap-2">
-                <ActionCommandButton
-                  icon={<FileText className="h-4 w-4" />}
-                  label="状态设置为草稿"
-                  onClick={() => onRequestStatusAction('draft')}
-                  disabled={saving || novelForm.status === 'draft'}
-                />
-                <ActionCommandButton
-                  icon={<Upload className="h-4 w-4" />}
-                  label="立即上架"
-                  onClick={() => onRequestStatusAction('published')}
-                  disabled={saving || novelForm.status === 'published'}
-                />
-                <ActionCommandButton
-                  icon={<Archive className="h-4 w-4" />}
-                  label="立即下架"
-                  onClick={() => onRequestStatusAction('archived')}
-                  disabled={saving || novelForm.status === 'archived'}
-                  tone="danger"
-                />
-              </div>
-            </div>
+            <label className="space-y-2">
+              <InputLabel label="发布状态" hint="切换后确认即自动保存。" />
+              <SelectControl
+                value={novelForm.status}
+                disabled={saving}
+                onChange={(event) => {
+                  const next = event.target.value as NovelFormState['status']
+                  if (next !== novelForm.status) {
+                    onRequestStatusAction(next)
+                  }
+                }}
+              >
+                <option value="draft">草稿</option>
+                <option value="published">上架中</option>
+                <option value="archived">已下架</option>
+              </SelectControl>
+            </label>
           </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-secondary)]">
+            <span>简介、标签和封面会同步到读者看到的作品页。</span>
+            {detailPreviewHref ? (
+              <Link
+                to={detailPreviewHref}
+                className="font-medium text-[var(--text-primary)] underline underline-offset-4 transition hover:opacity-75"
+              >
+                查看作品页
+              </Link>
+            ) : null}
+            {onOpenCover ? (
+              <button
+                type="button"
+                onClick={onOpenCover}
+                className="inline-flex items-center gap-1 font-medium text-[var(--text-primary)] underline underline-offset-4 transition hover:opacity-75"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                去设置封面
+              </button>
+            ) : null}
+          </div>
+
+          <details className="group rounded-[18px] border border-[var(--border-subtle)]">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-[var(--text-secondary)] transition hover:text-[var(--text-primary)] [&::-webkit-details-marker]:hidden">
+              高级设置
+              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="px-4 pb-4">
+              <label className="space-y-2">
+                <InputLabel label="展示标题" hint="用于详情页展示，可留空。" />
+                <TextInput
+                  value={novelForm.displayTitle}
+                  onChange={(event) => onChange({ ...novelForm, displayTitle: event.target.value })}
+                  placeholder="更适合展示的标题"
+                />
+              </label>
+            </div>
+          </details>
         </div>
 
         <div className="mt-auto space-y-3 border-t border-[var(--border-subtle)] pt-4">

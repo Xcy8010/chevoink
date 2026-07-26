@@ -13,6 +13,7 @@ import homeRoutes from './routes/home.js'
 import metaRoutes from './routes/meta.js'
 import novelsRoutes from './routes/novels.js'
 import postsRoutes from './routes/posts.js'
+import searchRoutes from './routes/search.js'
 import topicsRoutes from './routes/topics.js'
 import usersRoutes from './routes/users.js'
 import { env } from './config/env.js'
@@ -39,6 +40,7 @@ app.use('/api/home', homeRoutes)
 app.use('/api/meta', metaRoutes)
 app.use('/api/novels', novelsRoutes)
 app.use('/api/posts', postsRoutes)
+app.use('/api/search', searchRoutes)
 app.use('/api/topics', topicsRoutes)
 app.use('/api/users', usersRoutes)
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BookOpen, ChevronDown, Plus } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { NovelOptionSkeleton } from '@/components/ui/Skeleton'
 import type { Novel } from '../../../../shared/contracts/index.js'
 
 type WorkspaceNovelSwitcherProps = {
@@ -9,6 +10,7 @@ type WorkspaceNovelSwitcherProps = {
   currentNovelTitle: string
   novels: Novel[]
   busy?: boolean
+  loading?: boolean
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
 }
@@ -22,6 +24,7 @@ export default function WorkspaceNovelSwitcher({
   currentNovelTitle,
   novels,
   busy = false,
+  loading = false,
   onSelectNovel,
   onCreateNovel,
 }: WorkspaceNovelSwitcherProps) {
@@ -83,7 +86,10 @@ export default function WorkspaceNovelSwitcher({
           </button>
 
           <div className="mt-2 max-h-[18rem] space-y-1 overflow-y-auto">
-            {novels.map((novel) => {
+            {loading && novels.length === 0 ? (
+              <NovelOptionSkeleton />
+            ) : (
+              novels.map((novel) => {
               const isActive = novel.id === currentNovelId
               const title = getNovelDisplayTitle(novel)
               return (
@@ -110,7 +116,8 @@ export default function WorkspaceNovelSwitcher({
                   </span>
                 </button>
               )
-            })}
+              })
+            )}
           </div>
         </div>
       ) : null}

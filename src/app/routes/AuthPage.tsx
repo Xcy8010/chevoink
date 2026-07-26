@@ -416,6 +416,10 @@ export default function AuthPage({ mode }: AuthPageProps) {
             <Button type="button" variant="secondary" onClick={() => navigate('/')}>
               返回首页
             </Button>
+            {/* 未登录也能调整基础设置（全屏与主题颜色） */}
+            <Button type="button" variant="ghost" onClick={() => navigate('/settings')}>
+              前往设置
+            </Button>
           </div>
         </form>
 

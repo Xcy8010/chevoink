@@ -8,6 +8,8 @@ type AuthStatus = 'checking' | 'guest' | 'authenticated' | 'unavailable'
 
 type ShellState = {
   theme: ThemeMode
+  /** 全站沉浸全屏开关（设置页可关），持久化保存 */
+  fullscreenEnabled: boolean
   quickCreateOpen: boolean
   authStatus: AuthStatus
   sessionUser: User | null
@@ -16,6 +18,7 @@ type ShellState = {
   unreadNotificationCount: number
   setTheme: (theme: ThemeMode) => void
   toggleTheme: () => void
+  setFullscreenEnabled: (enabled: boolean) => void
   openQuickCreate: () => void
   closeQuickCreate: () => void
   setSessionChecking: () => void
@@ -38,6 +41,7 @@ export const useShellStore = create<ShellState>()(
   persist(
     (set, get) => ({
       theme: 'light',
+      fullscreenEnabled: true,
       quickCreateOpen: false,
       authStatus: 'checking',
       sessionUser: null,
@@ -49,6 +53,7 @@ export const useShellStore = create<ShellState>()(
         set({
           theme: get().theme === 'light' ? 'dark' : 'light',
         }),
+      setFullscreenEnabled: (enabled) => set({ fullscreenEnabled: enabled }),
       openQuickCreate: () => set({ quickCreateOpen: true }),
       closeQuickCreate: () => set({ quickCreateOpen: false }),
       setSessionChecking: () =>
@@ -92,10 +97,13 @@ export const useShellStore = create<ShellState>()(
       name: 'chevoink-shell',
       partialize: (state) => ({
         theme: state.theme,
+        fullscreenEnabled: state.fullscreenEnabled,
       }),
       merge: (persistedState, currentState) => ({
         ...currentState,
         theme: (persistedState as Partial<ShellState>)?.theme ?? currentState.theme,
+        fullscreenEnabled:
+          (persistedState as Partial<ShellState>)?.fullscreenEnabled ?? currentState.fullscreenEnabled,
       }),
     },
   ),

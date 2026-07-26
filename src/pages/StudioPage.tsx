@@ -1,19 +1,22 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
+import { StudioSkeleton } from '@/components/ui/Skeleton'
 import { getMe } from '@/features/community/api'
 import { createNovelWorkspace } from '@/features/studio/api'
 import StudioWorkspace from '@/features/studio/StudioWorkspace'
+import type { Novel, UserMePayload } from '../../shared/contracts/index.js'
 
-const INITIAL_NOVEL_TITLE = '我的第一部作品'
+const INITIAL_NOVEL_TITLE = '未命名作品'
 const INITIAL_NOVEL_SUMMARY = '先创建一部作品，再继续完善简介、章节和封面。'
 const STUDIO_LAST_NOVEL_STORAGE_KEY = 'studio-last-novel-id'
 
 export default function StudioPage() {
   const { novelId } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const meQuery = useQuery({
     queryKey: ['community', 'me'],
@@ -33,6 +36,18 @@ export default function StudioPage() {
       }),
     onSuccess: (novel) => {
       window.localStorage.setItem(STUDIO_LAST_NOVEL_STORAGE_KEY, novel.id)
+      queryClient.setQueryData<UserMePayload>(['community', 'me'], (current) => {
+        if (!current) {
+          return current
+        }
+
+        const currentAuthoredNovels = Array.isArray(current.authoredNovels) ? current.authoredNovels : []
+        return {
+          ...current,
+          authoredNovels: [novel as Novel, ...currentAuthoredNovels.filter((item) => item.id !== novel.id)],
+        }
+      })
+      void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
       navigate(`/studio/novel/${novel.id}`, { replace: true })
     },
   })
@@ -148,14 +163,5 @@ export default function StudioPage() {
     )
   }
 
-  return (
-    <AppState
-      tone="loading"
-      title="正在打开创作中心"
-      description={
-        createNovelMutation.isPending ? '正在为你创建新的作品。' : '正在整理你上次退出的作品和最近创作记录。'
-      }
-      className="min-h-[360px]"
-    />
-  )
+  return <StudioSkeleton />
 }

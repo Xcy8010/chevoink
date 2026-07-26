@@ -31,7 +31,8 @@ rm -rf "$WEB_ROOT"/*
 cp -R dist/. "$WEB_ROOT"/
 
 if [[ -f "deploy/nginx.chevoink.conf" ]]; then
-  if [[ ! -f /etc/nginx/sites-available/chevoink.conf || "${CHEVOINK_REFRESH_NGINX:-0}" == "1" ]]; then
+  # 配置文件不存在或内容有变更时自动刷新，无需手动设置 CHEVOINK_REFRESH_NGINX
+  if [[ ! -f /etc/nginx/sites-available/chevoink.conf ]] || ! cmp -s deploy/nginx.chevoink.conf /etc/nginx/sites-available/chevoink.conf || [[ "${CHEVOINK_REFRESH_NGINX:-0}" == "1" ]]; then
     sudo cp deploy/nginx.chevoink.conf /etc/nginx/sites-available/chevoink.conf
     sudo ln -sfn /etc/nginx/sites-available/chevoink.conf /etc/nginx/sites-enabled/chevoink.conf
     sudo rm -f /etc/nginx/sites-enabled/default

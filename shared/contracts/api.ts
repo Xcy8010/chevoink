@@ -81,7 +81,7 @@ export type AuthSessionPayload = {
   tokens: AuthTokenPair
 }
 
-export type SmsAuthPurpose = 'login' | 'register' | 'auth'
+export type SmsAuthPurpose = 'login' | 'register' | 'auth' | 'reset_password'
 
 export type SmsAccountStatus = 'existing' | 'new'
 
@@ -145,7 +145,17 @@ export type UpdateMyCoverResponse = ApiSuccess<{
 
 export type UpdateMyPasswordRequest = {
   password: string
+  /** 已设置密码的账号修改密码：需提供旧密码或手机验证码二选一 */
+  oldPassword?: string
+  code?: string
 }
+
+export type SendPasswordResetCodeResponse = ApiSuccess<{
+  ok: true
+  expireInSeconds: number
+  cooldownSeconds: number
+  provider: 'tencentcloud'
+}>
 
 export type UpdateMyPasswordResponse = ApiSuccess<{
   user: User
@@ -184,9 +194,26 @@ export type UpdateNovelRequest = Omit<Partial<CreateNovelRequest>, 'status'> & {
 
 export type CreateNovelResponse = ApiSuccess<{ novel: Novel }>
 export type UpdateNovelResponse = ApiSuccess<{ novel: Novel }>
+export type UploadNovelCoverRequest = {
+  coverDataUrl: string
+}
+export type UploadNovelCoverResponse = ApiSuccess<{
+  novel: Novel
+  asset: CoverAsset
+}>
 export type DeleteNovelResponse = ApiSuccess<{
   deleted: true
   novelId: string
+}>
+
+export type PublishNovelRequest = {
+  chapterIds: string[]
+  visibility?: Visibility
+}
+
+export type PublishNovelResponse = ApiSuccess<{
+  novel: Novel
+  publishedChapterIds: string[]
 }>
 
 export type CreateChapterRequest = {
@@ -238,6 +265,15 @@ export type CreatePostRequest = {
 
 export type CreatePostResponse = ApiSuccess<{ post: Post }>
 
+/** 帖子点赞：POST/DELETE /api/posts/:postId/like */
+export type SetPostLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>
+
+/** 帖子收藏：POST/DELETE /api/posts/:postId/bookmark */
+export type SetPostBookmarkResponse = ApiSuccess<{ bookmarked: boolean; favoriteCount: number }>
+
+/** 评论点赞：POST/DELETE /api/comments/:commentId/like */
+export type SetCommentLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>
+
 export type ListConversationsResponse = ApiSuccess<{
   items: Conversation[]
   pagination: Pagination
@@ -256,6 +292,9 @@ export type SendMessageRequest = {
 }
 
 export type SendMessageResponse = ApiSuccess<{ message: Message }>
+
+/** 会话已读：POST /api/conversations/:conversationId/read */
+export type MarkConversationReadResponse = ApiSuccess<{ conversationId: string; lastReadAt: string }>
 
 export type GetAuthorPageResponse = ApiSuccess<AuthorPagePayload>
 
@@ -303,6 +342,7 @@ export type GenerateCoverImageRequest = {
   prompt: string
   size: AiImageSize
   count: number
+  novelId?: string | null
 }
 
 export type GenerateCoverImageResponse = ApiSuccess<{
@@ -321,6 +361,19 @@ export type CreateAgentSessionRequest = {
 
 export type CreateAgentSessionResponse = ApiSuccess<{
   session: AgentSession
+}>
+
+export type UpdateAgentSessionRequest = {
+  title: string
+}
+
+export type UpdateAgentSessionResponse = ApiSuccess<{
+  session: AgentSession
+}>
+
+export type DeleteAgentSessionResponse = ApiSuccess<{
+  sessionId: string
+  deleted: true
 }>
 
 export type CreateAgentRunRequest = {
@@ -352,6 +405,7 @@ export type AgentActionResultPayload = AgentRunResultPayload & {
   storyMemoryDigest?: import('./models.js').AgentStoryMemoryDigest | null
   executionMode?: import('./models.js').AgentExecutionMode | null
   actionPlan?: import('./models.js').AgentActionPlan | null
+  stepResults?: import('./models.js').AgentExecutionStepResult[] | null
   handoff?: import('./models.js').AgentActionHandoff | null
   toolPolicy?: import('./models.js').AgentWorkspaceToolPolicy | null
   stream?: {
@@ -544,6 +598,7 @@ export const apiEndpointCatalog: ApiEndpointDefinition[] = [
   { method: 'GET', path: '/api/novels', summary: '小说列表与筛选结果' },
   { method: 'POST', path: '/api/novels', summary: '新建小说' },
   { method: 'PATCH', path: '/api/novels/:novelId', summary: '更新小说元信息' },
+  { method: 'PATCH', path: '/api/novels/:novelId/cover', summary: '上传并设置作品封面' },
   { method: 'GET', path: '/api/novels/:novelId/detail', summary: '小说详情页数据' },
   { method: 'GET', path: '/api/novels/:novelId/studio', summary: '创作工作台聚合数据' },
   { method: 'GET', path: '/api/novels/:novelId/reader/:chapterId', summary: '阅读页数据' },
@@ -567,6 +622,8 @@ export const apiEndpointCatalog: ApiEndpointDefinition[] = [
   { method: 'POST', path: '/api/ai/cover-image', summary: 'AI 封面生成' },
   { method: 'GET', path: '/api/agent/sessions', summary: '按小说获取 Agent 会话列表' },
   { method: 'POST', path: '/api/agent/sessions', summary: '创建小说 Agent 会话' },
+  { method: 'PATCH', path: '/api/agent/sessions/:sessionId', summary: '更新 Agent 会话标题' },
+  { method: 'DELETE', path: '/api/agent/sessions/:sessionId', summary: '删除 Agent 会话' },
   { method: 'POST', path: '/api/agent/runs', summary: '创建并执行一次 Agent 任务' },
   { method: 'GET', path: '/api/agent/runs/:runId', summary: '获取 Agent 执行详情' },
   { method: 'GET', path: '/api/agent/runs/:runId/stream', summary: '以 SSE 获取 Agent 执行流' },

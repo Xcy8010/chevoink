@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from 'express'
 
 import type { CreatePostRequest } from '../../shared/contracts/index.js'
-import { requireSessionUserId } from '../lib/auth-session.js'
-import { createPostData, getPostDetailData, listPostsData } from '../lib/data-access.js'
+import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
+import { createPostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -13,9 +13,10 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const page = parsePositiveInt(req.query.page, 1)
   const pageSize = parsePositiveInt(req.query.pageSize, 10)
   const topicId = typeof req.query.topicId === 'string' ? req.query.topicId : undefined
+  const authorId = typeof req.query.authorId === 'string' ? req.query.authorId : undefined
 
   try {
-    const payload = await listPostsData(page, pageSize, topicId)
+    const payload = await listPostsData(page, pageSize, topicId, getSessionUserId(req), authorId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -26,7 +27,7 @@ router.get('/:postId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
   try {
-    const payload = await getPostDetailData(req.params.postId)
+    const payload = await getPostDetailData(req.params.postId, getSessionUserId(req))
     if (!payload) {
       res.status(404).json(buildError(requestId, 'POST_NOT_FOUND', '未找到动态。'))
       return
@@ -61,5 +62,46 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     sendRouteError(res, requestId, error)
   }
 })
+
+async function handlePostLike(req: Request, res: Response, liked: boolean): Promise<void> {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await setPostLikeData(userId, req.params.postId, liked)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'POST_NOT_FOUND', '未找到动态。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+}
+
+async function handlePostBookmark(req: Request, res: Response, bookmarked: boolean): Promise<void> {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await setPostBookmarkData(userId, req.params.postId, bookmarked)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'POST_NOT_FOUND', '未找到动态。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+}
+
+router.post('/:postId/like', (req, res) => handlePostLike(req, res, true))
+router.delete('/:postId/like', (req, res) => handlePostLike(req, res, false))
+router.post('/:postId/bookmark', (req, res) => handlePostBookmark(req, res, true))
+router.delete('/:postId/bookmark', (req, res) => handlePostBookmark(req, res, false))
 
 export default router

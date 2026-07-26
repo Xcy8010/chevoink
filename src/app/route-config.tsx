@@ -13,7 +13,9 @@ import MessagesPage from '@/pages/MessagesPage'
 import NovelDetailPage from '@/pages/NovelDetailPage'
 import PostDetailPage from '@/pages/PostDetailPage'
 import ProfilePage from '@/pages/ProfilePage'
+import RankingsPage from '@/pages/RankingsPage'
 import ReaderPage from '@/pages/ReaderPage'
+import SearchPage from '@/pages/SearchPage'
 import StudioPage from '@/pages/StudioPage'
 
 export type AppRouteDefinition = {
@@ -36,6 +38,18 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '按题材、节奏和口味找到下一本想读的书',
     description: '从分类、榜单和书单里快速缩小范围，把更多时间留给正文。',
     element: <DiscoverPage />,
+  },
+  {
+    path: '/rankings',
+    title: '完整榜单：看看大家都在读什么',
+    description: '热读、人气、新书、更新、长篇、完结六大榜单，再加玄幻、科幻等分类榜，按排名挑下一本想读的书。',
+    element: <RankingsPage />,
+  },
+  {
+    path: '/search',
+    title: '搜索作品、作者与讨论',
+    description: '输入关键词，在全站范围内找到想读的书、想关注的作者和感兴趣的讨论。',
+    element: <SearchPage />,
   },
   {
     path: '/novel/:novelId',

@@ -6,7 +6,7 @@ import { env } from '../config/env.js'
 import { prisma, DataAccessError } from './prisma.js'
 import { normalizePhoneNumber } from './phone.js'
 
-type SmsAuthPurpose = 'login' | 'register'
+type SmsAuthPurpose = 'login' | 'register' | 'reset_password'
 
 const SmsClient = sms.v20210111.Client
 
@@ -49,6 +49,10 @@ function buildSmsClient() {
 }
 
 function verificationSceneText(purpose: SmsAuthPurpose): string {
+  if (purpose === 'reset_password') {
+    return '重置密码'
+  }
+
   return purpose === 'register' ? '注册' : '登录'
 }
 

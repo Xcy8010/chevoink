@@ -5,6 +5,7 @@ import type {
   AgentArtifactApplyStrategy,
   AgentExecutionAgent,
   AgentExecutionMode,
+  AgentExecutionStepResult,
   AgentRouteDecision,
   AgentRuleBundle,
   AgentStoryMemoryDigest,
@@ -111,11 +112,13 @@ export type AgentArtifact = {
   backendArtifactId?: string | null
   availableApplyStrategies?: AgentArtifactApplyStrategy[]
   savedAsPlan?: boolean
+  catalogUpdated?: boolean
   appliedToCover?: boolean
   replacedChapterContent?: boolean
   appendedToChapter?: boolean
   renamedNovel?: boolean
   renamedChapter?: boolean
+  coverPreviewAssetIds?: string[]
   actionSummary?: string
   actionPlan?: AgentActionPlan | null
   handoff?: AgentActionHandoff | null
@@ -125,6 +128,7 @@ export type AgentArtifact = {
   storyMemoryDigest?: AgentStoryMemoryDigest | null
   executionMode?: AgentExecutionMode | null
   toolPolicy?: AgentWorkspaceToolPolicy | null
+  stepResults?: AgentExecutionStepResult[] | null
   localRollbackSnapshot?: AgentLocalRollbackSnapshot | null
   pendingChapterReview?: ChapterPendingReview | null
 }
@@ -193,6 +197,22 @@ export type ChapterPendingReview = {
   createdAt: string
 }
 
+/** Agent plan_save 更新既有计划后的待审查态：✓保留 / ✕回写更新前的标题与内容 */
+export type PlanPendingReview = {
+  id: string
+  /** 云端 AgentArtifact id，撤销时据此 PATCH 回写 */
+  backendArtifactId: string
+  title: string
+  beforeTitle: string
+  before: string
+  after: string
+  description: string
+  /** 新建计划（空基线）：撤销时直接从计划夹移除而非回写空内容 */
+  isCreate?: boolean
+  runId?: string | null
+  createdAt: string
+}
+
 export type EditorSelectionState = {
   start: number
   end: number
@@ -209,6 +229,26 @@ export type CoverFormState = {
   negativePrompt: string
   size: AiImageSize
   count: number
+}
+
+export type WorkspacePlanFile = {
+  id: string
+  title: string
+  content: string
+  createdAt: string
+  artifactId: string
+  /** 云端 AgentArtifact id：用于本地/服务端计划去重与同步 */
+  backendArtifactId?: string | null
+}
+
+export type WorkspaceDocumentView = {
+  kind: 'catalog' | 'plan'
+  id: string
+  title: string
+  content: string
+  description: string
+  editableTitle?: boolean
+  editableContent?: boolean
 }
 
 export const visibilityLabelMap: Record<Visibility, string> = {
@@ -278,7 +318,7 @@ export const agentTaskLabelMap: Record<AgentTaskType, string> = {
   'generate-novel-title': '书名提案',
   'generate-chapter-titles': '章节名提案',
   'read-story-context': '上下文检索',
-  'plan-chapter': '章节计划',
+  'plan-chapter': '创作计划',
   'draft-chapter': '起草正文',
   'continue-chapter': '续写本章',
   'rewrite-selection': '改写选中',
@@ -288,7 +328,7 @@ export const agentTaskLabelMap: Record<AgentTaskType, string> = {
 }
 
 export const agentArtifactLabelMap: Record<AgentArtifactType, string> = {
-  chapter_plan: '章节计划',
+  chapter_plan: '创作计划',
   draft_text: '正文结果',
   review_report: '审阅结果',
   cover_prompt: '封面提示词',

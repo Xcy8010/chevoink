@@ -12,13 +12,16 @@ import { removeManagedProfileCover, storeProfileCoverDataUrl } from '../lib/prof
 import {
   getMePayloadData,
   getUserByIdData,
+  getUserCredentialData,
   updateMyAvatarData,
   updateMyPasswordData,
   updateMyProfileCoverData,
   updateMyProfileData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
+import { hasConfiguredPassword, verifyPassword } from '../lib/password.js'
 import { sendRouteError } from '../lib/route-error.js'
+import { sendAuthSmsCode, verifyAuthSmsCode } from '../lib/sms-service.js'
 
 const router = Router()
 
@@ -128,6 +131,29 @@ router.patch('/me/cover', async (req: Request, res: Response): Promise<void> => 
   }
 })
 
+router.post('/me/password/sms-code', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const credential = await getUserCredentialData(userId)
+
+    if (!credential.phone) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '当前账号未绑定手机号，无法通过验证码重置密码。'))
+      return
+    }
+
+    const payload = await sendAuthSmsCode({
+      phone: credential.phone,
+      purpose: 'reset_password',
+    })
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.patch('/me/password', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
   const body = (req.body ?? {}) as Partial<UpdateMyPasswordRequest>
@@ -143,6 +169,32 @@ router.patch('/me/password', async (req: Request, res: Response): Promise<void> 
     if (body.password.trim().length < 6) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '登录密码至少需要 6 位。'))
       return
+    }
+
+    const credential = await getUserCredentialData(userId)
+
+    // 已设置过密码的账号，修改前需验证旧密码或手机验证码二选一
+    if (hasConfiguredPassword(credential.passwordHash)) {
+      if (body.code?.trim()) {
+        if (!credential.phone) {
+          res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '当前账号未绑定手机号，无法通过验证码重置密码。'))
+          return
+        }
+
+        await verifyAuthSmsCode({
+          phone: credential.phone,
+          purpose: 'reset_password',
+          code: body.code.trim(),
+        })
+      } else if (body.oldPassword?.trim()) {
+        if (!credential.passwordHash || !verifyPassword(body.oldPassword.trim(), credential.passwordHash)) {
+          res.status(400).json(buildError(requestId, 'AUTH_INVALID_CREDENTIALS', '当前密码不正确。'))
+          return
+        }
+      } else {
+        res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入当前密码或手机验证码。'))
+        return
+      }
     }
 
     const user = await updateMyPasswordData(userId, body.password)

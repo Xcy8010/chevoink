@@ -23,6 +23,9 @@ type RequestDataOptions = RequestInit & {
 type ListNovelOptions = {
   page?: number
   pageSize?: number
+  publishedOnly?: boolean
+  /** 按标签筛选（精确匹配作品标签） */
+  tag?: string
 }
 
 type ListCommentsOptions = {
@@ -49,6 +52,7 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
 
   try {
     const response = await fetch(buildApiUrl(path), {
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(options?.headers ?? {}),
@@ -91,8 +95,10 @@ export function getHomePayload(): Promise<GetHomeResponse['data']> {
 export function listNovels(options?: ListNovelOptions): Promise<ListNovelsResponse['data']> {
   const page = options?.page ?? 1
   const pageSize = options?.pageSize ?? 12
+  const statusQuery = options?.publishedOnly ? '&status=published' : ''
+  const tagQuery = options?.tag ? `&tag=${encodeURIComponent(options.tag)}` : ''
 
-  return requestData<ListNovelsResponse['data']>(`/api/novels?page=${page}&pageSize=${pageSize}`)
+  return requestData<ListNovelsResponse['data']>(`/api/novels?page=${page}&pageSize=${pageSize}${statusQuery}${tagQuery}`)
 }
 
 export function getNovelDetailPayload(novelId: string): Promise<GetNovelDetailResponse['data']> {
@@ -103,7 +109,7 @@ export function getReaderPayload(
   novelId: string,
   chapterId: string,
 ): Promise<GetReaderResponse['data']> {
-  return requestData<GetReaderResponse['data']>(`/api/novels/${novelId}/chapters/${chapterId}`)
+  return requestData<GetReaderResponse['data']>(`/api/novels/${novelId}/reader/${chapterId}`)
 }
 
 export function listCommentsByTarget(

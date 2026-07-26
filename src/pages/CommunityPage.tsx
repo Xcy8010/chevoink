@@ -1,314 +1,287 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Compass, Flame, PenSquare, Sparkles } from 'lucide-react'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BarChart3, Flame } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 
+import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
-import Button from '@/components/ui/Button'
-import SectionCard from '@/components/ui/SectionCard'
-import { createPost, listNovels, listPosts } from '@/features/community/api'
+import { PostListSkeleton } from '@/components/ui/Skeleton'
+import { useToast } from '@/components/ui/Toast'
+import { createPost, listPosts, listTopics } from '@/features/community/api'
 import PostCard from '@/features/community/components/PostCard'
-import { communityPrompts } from '@/features/community/constants'
+import PostComposer from '@/features/community/components/PostComposer'
+import TopicChannelBar, { type CommunityTopic } from '@/features/community/components/TopicChannelBar'
 import { formatRelativeTime } from '@/features/community/utils'
+import { cn } from '@/lib/utils'
 
 const feedModes = [
   { id: 'recommended', label: '推荐' },
   { id: 'latest', label: '最新' },
-]
+] as const
 
+/**
+ * 社区页（方案 2.5.4 / 8.2）：
+ * - 手机：横滑话题频道 + 发帖入口 + 单列帖子流，发帖为全屏编辑页
+ * - 平板：左侧话题列表 200px + 双列帖子流
+ * - 电脑：左话题 + 中单列(max 640px) + 右热门话题/社区数据三栏
+ */
 export default function CommunityPage() {
+  const { isMobile, isTablet, isDesktop } = useDevice()
   const queryClient = useQueryClient()
+  const toast = useToast()
   const [activeTopicId, setActiveTopicId] = useState('all')
-  const [activeFeedMode, setActiveFeedMode] = useState('recommended')
-  const [composerText, setComposerText] = useState(communityPrompts[0])
+  const [activeFeedMode, setActiveFeedMode] = useState<(typeof feedModes)[number]['id']>('recommended')
 
-  const postsQuery = useQuery({
-    queryKey: ['community', 'posts'],
-    queryFn: () => listPosts(30),
+  // 话题筛选走后端 topicId 过滤 + hasMore 翻页（方案 6.2）
+  const postsQuery = useInfiniteQuery({
+    queryKey: ['community', 'posts', activeTopicId],
+    queryFn: ({ pageParam }) =>
+      listPosts(30, {
+        page: pageParam,
+        topicId: activeTopicId === 'all' ? undefined : activeTopicId,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, allPages) => (lastPage.pagination.hasMore ? allPages.length + 1 : undefined),
   })
 
-  const novelsQuery = useQuery({
-    queryKey: ['community', 'novels'],
-    queryFn: () => listNovels(12),
+  const topicsQuery = useQuery({
+    queryKey: ['community', 'topics'],
+    queryFn: listTopics,
   })
 
   const createPostMutation = useMutation({
     mutationFn: createPost,
     onSuccess: async () => {
-      setComposerText('')
+      toast.success('发布成功，你的讨论已上线')
       await queryClient.invalidateQueries({ queryKey: ['community', 'posts'] })
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : '发布失败，请稍后再试')
     },
   })
 
-  const rawPosts = postsQuery.data?.items ?? []
-  const rawNovels = novelsQuery.data?.items ?? []
+  const rawPosts = useMemo(() => postsQuery.data?.pages.flatMap((page) => page.items) ?? [], [postsQuery.data])
+  const totalPosts = postsQuery.data?.pages[0]?.pagination.total ?? rawPosts.length
 
-  const topics = useMemo(() => {
-    const topicMap = new Map<string, { id: string; name: string; slug: string; postCount: number }>()
-
-    for (const post of rawPosts) {
-      if (!post.topic) {
-        continue
-      }
-
-      const existing = topicMap.get(post.topic.id)
-      if (existing) {
-        existing.postCount += 1
-        continue
-      }
-
-      topicMap.set(post.topic.id, {
-        ...post.topic,
-        postCount: 1,
-      })
-    }
+  const topics = useMemo<CommunityTopic[]>(() => {
+    const items = topicsQuery.data?.items ?? []
+    const totalCount = items.reduce((sum, topic) => sum + topic.postCount, 0)
 
     return [
-      { id: 'all', name: '全部话题', slug: 'all', postCount: rawPosts.length },
-      ...Array.from(topicMap.values()),
+      { id: 'all', name: '全部', slug: 'all', postCount: Math.max(totalCount, totalPosts) },
+      ...items.map((topic) => ({ id: topic.id, name: topic.name, slug: topic.slug, postCount: topic.postCount })),
     ]
-  }, [rawPosts])
+  }, [topicsQuery.data, totalPosts])
 
-  const insights = useMemo(
-    () => [
-      { id: 'insight-1', label: '讨论总数', value: `${postsQuery.data?.pagination.total ?? 0}`, description: '当前社区里可浏览的公开讨论' },
-      {
-        id: 'insight-2',
-        label: '关联作品',
-        value: `${rawPosts.filter((post) => post.relatedNovel).length}`,
-        description: '直接连接到作品详情的讨论',
-      },
-      {
-        id: 'insight-3',
-        label: '最近活跃',
-        value: rawPosts[0]?.createdAt ? formatRelativeTime(rawPosts[0].createdAt) : '刚刚',
-        description: '最新一条讨论进入社区的时间',
-      },
-    ],
-    [postsQuery.data?.pagination.total, rawPosts],
+  const hotTopics = useMemo(
+    () => topics.filter((topic) => topic.id !== 'all').sort((a, b) => b.postCount - a.postCount).slice(0, 5),
+    [topics],
   )
 
   const posts = useMemo(() => {
-    const filteredItems =
-      activeTopicId === 'all' ? rawPosts : rawPosts.filter((item) => item.topic?.id === activeTopicId)
-
     if (activeFeedMode === 'latest') {
-      return [...filteredItems].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      return [...rawPosts].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     }
 
-    return [...filteredItems].sort(
+    return [...rawPosts].sort(
       (a, b) =>
         b.commentCount + b.likeCount + b.favoriteCount - (a.commentCount + a.likeCount + a.favoriteCount),
     )
-  }, [activeFeedMode, activeTopicId, rawPosts])
+  }, [activeFeedMode, rawPosts])
 
-  const spotlightNovel = useMemo(() => {
-    const relatedNovelId = rawPosts.find((post) => post.relatedNovel)?.relatedNovel?.id
-    return rawNovels.find((novel) => novel.id === relatedNovelId) ?? rawNovels[0] ?? null
-  }, [rawNovels, rawPosts])
+  const communityStats = useMemo(
+    () => [
+      { id: 'total', label: '讨论总数', value: `${totalPosts}` },
+      { id: 'linked', label: '关联作品', value: `${rawPosts.filter((post) => post.relatedNovel).length}` },
+      {
+        id: 'recent',
+        label: '最近活跃',
+        value: rawPosts[0]?.createdAt ? formatRelativeTime(rawPosts[0].createdAt) : '刚刚',
+      },
+    ],
+    [totalPosts, rawPosts],
+  )
 
-  const handleCreatePost = () => {
-    const content = composerText.trim()
-    if (!content) {
-      return
-    }
-
-    createPostMutation.mutate({ content })
+  if (postsQuery.isLoading) {
+    return <PostListSkeleton />
   }
 
-  const isLoading = postsQuery.isLoading || novelsQuery.isLoading
-  const isError = postsQuery.isError || novelsQuery.isError
-  const errorMessage =
-    (postsQuery.error instanceof Error && postsQuery.error.message) ||
-    (novelsQuery.error instanceof Error && novelsQuery.error.message) ||
-    '社区内容暂时没有加载出来。'
+  if (postsQuery.isError) {
+    return (
+      <AppState
+        tone="error"
+        title="社区内容暂时没有打开"
+        description={postsQuery.error instanceof Error ? postsQuery.error.message : '社区内容暂时没有加载出来。'}
+        primaryAction={{ label: '重新加载', onClick: () => void postsQuery.refetch() }}
+        className="min-h-[360px]"
+      />
+    )
+  }
 
-  return (
-    <SectionCard
-      eyebrow="社区广场"
-      title="像现代内容社区一样承接追更、拆解和作者互动"
-      description="手机端保持单列刷流，平板开始分出话题和热度区，桌面端让信息流、话题趋势和作品讨论同时并行。"
-    >
-      <div className="space-y-6">
-        {isLoading ? (
-          <AppState
-            tone="loading"
-            title="社区内容正在整理中"
-            description="稍等一下，最新讨论很快就会出现。"
-            className="min-h-[360px]"
-          />
-        ) : null}
+  const sortTabs = (
+    <div className="inline-flex rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1">
+      {feedModes.map((mode) => (
+        <button
+          key={mode.id}
+          type="button"
+          onClick={() => setActiveFeedMode(mode.id)}
+          className={cn(
+            'press-feedback rounded-[var(--radius-pill)] px-4 py-1.5 text-sm transition-colors',
+            activeFeedMode === mode.id
+              ? 'bg-[var(--color-brand)] font-medium text-white'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          )}
+        >
+          {mode.label}
+        </button>
+      ))}
+    </div>
+  )
 
-        {isError ? (
-          <AppState
-            tone="error"
-            title="社区内容暂时没有打开"
-            description={errorMessage}
-            primaryAction={{ label: '重新加载', onClick: () => void postsQuery.refetch() }}
-            className="min-h-[360px]"
-          />
-        ) : null}
+  const loadMoreButton = postsQuery.hasNextPage ? (
+    <div className="flex justify-center pt-1">
+      <button
+        type="button"
+        disabled={postsQuery.isFetchingNextPage}
+        onClick={() => void postsQuery.fetchNextPage()}
+        className="press-feedback rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-6 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-60"
+      >
+        {postsQuery.isFetchingNextPage ? '正在加载…' : '加载更多讨论'}
+      </button>
+    </div>
+  ) : null
 
-        {!isLoading && !isError ? (
-          <>
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_340px]">
-          <div className="space-y-4 rounded-[28px] border border-slate-200/80 bg-white/88 p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-950/86">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-                  <Compass className="h-3.5 w-3.5" />
-                  社区在读现场
-                </div>
-                <h3 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
-                  讨论先围绕内容本身，再把读者自然送去详情、作者页和私聊
-                </h3>
-                <p className="max-w-3xl text-sm leading-7 text-slate-600 dark:text-slate-300">
-                  这里不做老论坛楼层感，而是让话题、作品和作者在同一条浏览路径里轻量连接，适合快速刷流，也适合认真翻评论。
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {feedModes.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => setActiveFeedMode(mode.id)}
-                    className={[
-                      'rounded-full border px-4 py-2 text-sm font-medium transition',
-                      activeFeedMode === mode.id
-                        ? 'border-slate-950 bg-slate-950 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-950'
-                        : 'border-slate-200 text-slate-700 hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-slate-50',
-                    ].join(' ')}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+  const postFeed = (twoColumns = false) =>
+    posts.length > 0 ? (
+      <>
+        <div className={cn(twoColumns ? 'grid grid-cols-2 items-start gap-4' : 'space-y-4')}>
+          {posts.map((post) => (
+            <PostCard key={post.id} post={post} />
+          ))}
+        </div>
+        {loadMoreButton}
+      </>
+    ) : (
+      <AppState
+        tone="empty"
+        title="这个话题下还没有新的讨论"
+        description="先看看其他话题，或者直接发出你的第一条想法。"
+        className="min-h-[260px]"
+      />
+    )
 
-            <div className="rounded-[24px] border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-                <PenSquare className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                发起一条新讨论
-              </div>
-              <textarea
-                value={composerText}
-                onChange={(event) => setComposerText(event.target.value)}
-                rows={4}
-                placeholder="把你的观察、追更感受或写作心得发出来。"
-                className="mt-4 w-full rounded-[22px] border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-700 outline-none transition focus:border-slate-300 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:focus:border-slate-600"
-              />
-              <div className="mt-3 flex flex-wrap gap-2">
-                {communityPrompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => setComposerText(prompt)}
-                    className="rounded-full border border-slate-200 px-3 py-1.5 text-xs text-slate-600 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-slate-50"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
-                <Button
-                  variant="primary"
-                  onClick={handleCreatePost}
-                  disabled={!composerText.trim() || createPostMutation.isPending}
-                >
-                  {createPostMutation.isPending ? '发布中' : '发布讨论'}
-                </Button>
-              </div>
-            </div>
+  const composer = (
+    <PostComposer
+      topics={topics}
+      isSubmitting={createPostMutation.isPending}
+      onSubmit={(payload) => createPostMutation.mutate(payload)}
+    />
+  )
+
+  // 手机端：横滑频道 + 发帖入口 + 单列流
+  if (isMobile) {
+    return (
+      <div className="space-y-4">
+        <TopicChannelBar topics={topics} activeTopicId={activeTopicId} onChange={setActiveTopicId} variant="rail" />
+        {composer}
+        <div className="flex items-center justify-between">
+          {sortTabs}
+          <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
+        </div>
+        {postFeed()}
+      </div>
+    )
+  }
+
+  // 平板端：左话题 200px + 右双列帖子流
+  if (isTablet) {
+    return (
+      <div className="grid grid-cols-[200px_minmax(0,1fr)] gap-5">
+        <aside className="sticky top-24 self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
+          <p className="px-3 pb-2 pt-2 text-xs font-medium text-[var(--text-tertiary)]">话题频道</p>
+          <TopicChannelBar topics={topics} activeTopicId={activeTopicId} onChange={setActiveTopicId} variant="sidebar" />
+        </aside>
+        <div className="space-y-4">
+          {composer}
+          <div className="flex items-center justify-between">
+            {sortTabs}
+            <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
           </div>
+          {postFeed(true)}
+        </div>
+      </div>
+    )
+  }
 
-          <aside className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-            {insights.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-[24px] border border-slate-200/80 bg-white/88 p-4 dark:border-slate-800 dark:bg-slate-950/86"
-              >
-                <p className="text-xs text-slate-500 dark:text-slate-400">{item.label}</p>
-                <p className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{item.value}</p>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{item.description}</p>
-              </div>
-            ))}
-          </aside>
-        </section>
+  // 电脑端：左话题 + 中单列(640px) + 右推荐面板
+  return (
+    <div className="grid grid-cols-[200px_minmax(0,1fr)_300px] gap-6">
+      <aside className="sticky top-24 self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
+        <p className="px-3 pb-2 pt-2 text-xs font-medium text-[var(--text-tertiary)]">话题频道</p>
+        <TopicChannelBar topics={topics} activeTopicId={activeTopicId} onChange={setActiveTopicId} variant="sidebar" />
+      </aside>
 
-        <section className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)_320px]">
-          <aside className="space-y-3">
-            {topics.map((topic) => (
-              <button
-                key={topic.id}
-                type="button"
-                onClick={() => setActiveTopicId(topic.id)}
-                className={[
-                  'flex w-full items-center justify-between rounded-[22px] border px-4 py-3 text-left transition',
-                  activeTopicId === topic.id
-                    ? 'border-slate-950 bg-slate-950 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-950'
-                    : 'border-slate-200 bg-white/88 text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-950/86 dark:text-slate-200 dark:hover:border-slate-700',
-                ].join(' ')}
-              >
-                <span>
-                  <span className="block text-sm font-medium">{topic.name}</span>
-                  <span className="mt-1 block text-xs opacity-70">{topic.postCount} 条讨论</span>
-                </span>
-              </button>
-            ))}
-          </aside>
+      <div className="mx-auto w-full max-w-[640px] space-y-4">
+        {composer}
+        <div className="flex items-center justify-between">
+          {sortTabs}
+          <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
+        </div>
+        {postFeed()}
+      </div>
 
-          <div className="space-y-4">
-            {posts.length > 0 ? (
-              posts.map((post) => <PostCard key={post.id} post={post} />)
+      <aside className="sticky top-24 space-y-4 self-start">
+        <section className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)]">
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+            <Flame className="h-4 w-4 text-[var(--color-brand)]" />
+            热门话题 Top 5
+          </div>
+          <div className="mt-3 space-y-1">
+            {hotTopics.length > 0 ? (
+              hotTopics.map((topic, index) => (
+                <button
+                  key={topic.id}
+                  type="button"
+                  onClick={() => setActiveTopicId(topic.id)}
+                  className={cn(
+                    'press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2.5 py-2 text-left text-sm transition-colors',
+                    activeTopicId === topic.id
+                      ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'w-4 text-center text-xs font-semibold',
+                      index < 3 ? 'text-[var(--color-brand)]' : 'text-[var(--text-tertiary)]',
+                    )}
+                  >
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 line-clamp-1">{topic.name}</span>
+                  <span className="text-xs text-[var(--text-tertiary)]">{topic.postCount}</span>
+                </button>
+              ))
             ) : (
-              <AppState
-                tone="empty"
-                title="这个话题下还没有新的讨论"
-                description="先看看其他话题，或者直接发出你的第一条想法。"
-                className="min-h-[260px]"
-              />
+              <p className="px-2 py-3 text-xs text-[var(--text-tertiary)]">话题正在聚集中。</p>
             )}
           </div>
-
-          <aside className="space-y-4">
-            {spotlightNovel ? (
-              <div className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 dark:border-slate-800 dark:bg-slate-950/86">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-                  <Flame className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                  关联作品热议
-                </div>
-                <div className="mt-4 space-y-3">
-                  <Link
-                    to={`/novel/${spotlightNovel.id}`}
-                    className="block rounded-[22px] border border-slate-200/80 bg-slate-50/80 p-3 transition hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-slate-700"
-                  >
-                    <img
-                      src={spotlightNovel.coverUrl ?? ''}
-                      alt={spotlightNovel.title}
-                      className="aspect-[16/10] w-full rounded-[18px] border border-slate-200 object-cover dark:border-slate-800"
-                    />
-                    <p className="mt-3 text-sm font-medium text-slate-950 dark:text-slate-50">{spotlightNovel.title}</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{spotlightNovel.summary}</p>
-                  </Link>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="rounded-[28px] border border-slate-200/80 bg-white/88 p-4 dark:border-slate-800 dark:bg-slate-950/86">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-950 dark:text-slate-50">
-                <Sparkles className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                社区节奏
-              </div>
-              <div className="mt-4 space-y-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
-                <p>先看热议作品，再顺手进入帖子详情和评论区，浏览路径会更自然。</p>
-                <p>适合追更、拆解章节节奏，也适合围绕作者和作品形成持续互动。</p>
-              </div>
-            </div>
-          </aside>
         </section>
-          </>
-        ) : null}
-      </div>
-    </SectionCard>
+
+        <section className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)]">
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+            <BarChart3 className="h-4 w-4 text-[var(--color-brand)]" />
+            社区数据
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {communityStats.map((item) => (
+              <div key={item.id} className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-2 py-3 text-center">
+                <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{item.value}</p>
+                <p className="mt-1 text-[11px] text-[var(--text-tertiary)]">{item.label}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </aside>
+    </div>
   )
 }

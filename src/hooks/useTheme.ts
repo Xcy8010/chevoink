@@ -15,6 +15,12 @@ export function useTheme() {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
     localStorage.setItem('theme', theme);
+    // 同步浏览器状态栏/地址栏颜色为当前主题背景色，避免顶部露出深色系统条
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      const appBg = getComputedStyle(document.documentElement).getPropertyValue('--app-bg').trim();
+      if (appBg) meta.setAttribute('content', appBg);
+    }
   }, [theme]);
 
   const toggleTheme = () => {

@@ -7,13 +7,18 @@ import type {
   CreatePostResponse,
   GetMeResponse,
   GetPostDetailResponse,
+  GetTopicsResponse,
   ListCommentsResponse,
   ListConversationsResponse,
   ListMessagesResponse,
   ListNovelsResponse,
   ListPostsResponse,
+  MarkConversationReadResponse,
   SendMessageRequest,
   SendMessageResponse,
+  SetCommentLikeResponse,
+  SetPostBookmarkResponse,
+  SetPostLikeResponse,
   User,
 } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
@@ -85,12 +90,63 @@ export async function getUser(userId: string): Promise<User> {
   return data.user
 }
 
-export function listNovels(pageSize = 20) {
-  return requestData<ListNovelsResponse['data']>(`/api/novels?page=1&pageSize=${pageSize}`)
+export function listNovels(pageSize = 20, options?: { authorId?: string; publishedOnly?: boolean }) {
+  const search = new URLSearchParams({ page: '1', pageSize: `${pageSize}` })
+
+  if (options?.authorId) {
+    search.set('authorId', options.authorId)
+  }
+
+  if (options?.publishedOnly) {
+    search.set('status', 'published')
+  }
+
+  return requestData<ListNovelsResponse['data']>(`/api/novels?${search.toString()}`)
 }
 
-export function listPosts(pageSize = 20) {
-  return requestData<ListPostsResponse['data']>(`/api/posts?page=1&pageSize=${pageSize}`)
+export function listPosts(pageSize = 20, options?: { page?: number; topicId?: string; authorId?: string }) {
+  const search = new URLSearchParams({
+    page: `${options?.page ?? 1}`,
+    pageSize: `${pageSize}`,
+  })
+
+  if (options?.topicId) {
+    search.set('topicId', options.topicId)
+  }
+
+  if (options?.authorId) {
+    search.set('authorId', options.authorId)
+  }
+
+  return requestData<ListPostsResponse['data']>(`/api/posts?${search.toString()}`)
+}
+
+export function listTopics() {
+  return requestData<GetTopicsResponse['data']>('/api/topics')
+}
+
+export function setPostLike(postId: string, liked: boolean) {
+  return requestData<SetPostLikeResponse['data']>(`/api/posts/${postId}/like`, {
+    method: liked ? 'POST' : 'DELETE',
+  })
+}
+
+export function setPostBookmark(postId: string, bookmarked: boolean) {
+  return requestData<SetPostBookmarkResponse['data']>(`/api/posts/${postId}/bookmark`, {
+    method: bookmarked ? 'POST' : 'DELETE',
+  })
+}
+
+export function setCommentLike(commentId: string, liked: boolean) {
+  return requestData<SetCommentLikeResponse['data']>(`/api/comments/${commentId}/like`, {
+    method: liked ? 'POST' : 'DELETE',
+  })
+}
+
+export function markConversationRead(conversationId: string) {
+  return requestData<MarkConversationReadResponse['data']>(`/api/conversations/${conversationId}/read`, {
+    method: 'POST',
+  })
 }
 
 export function createPost(payload: CreatePostRequest) {

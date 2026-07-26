@@ -29,9 +29,11 @@ import type {
   ProjectMemoryEntry,
   ReviewContinuityRequest,
   RewriteSelectionRequest,
+  UpdateAgentSessionRequest,
 } from '../../shared/contracts/index.js'
 import { prisma, DataAccessError } from './prisma.js'
 import { generateTextCompletion } from './ai-service.js'
+import { isDefaultSessionTitle } from './agent/session-title.js'
 import {
   buildWorkspaceToolPolicy,
   getWorkspaceToolDefinition,
@@ -491,6 +493,13 @@ function resolveDynamicWorkspaceAgentRouting(options: {
   const normalizedPrompt = input.prompt.replace(/\s+/g, '').toLowerCase()
   const memoryTypes = new Set(storyMemoryDigest.items.map((item) => item.memoryType))
 
+  if (hasMultipleWorkspaceGoals(normalizedPrompt)) {
+    return {
+      agentType: 'writingOrchestrator',
+      signals: ['任务语义：当前请求包含多个作品级动作，需要主控 Agent 串行拆解并执行。'],
+    }
+  }
+
   if (
     containsAny(normalizedPrompt, ['设定', '世界观', '人物卡', '人物关系', '背景资料', '时间线', '梳理设定', '补充背景'])
   ) {
@@ -772,14 +781,25 @@ function buildWorkspaceBuiltinProtocol(options: {
   responseRule: string
   toolPolicy?: AgentWorkspaceToolPolicy | null
 }): string[] {
+  const workspaceSemanticGuide = [
+    '[工作区语义包]',
+    '作品是全局根对象，章节、计划文件、封面、作品元信息都从属于当前作品。',
+    '章节树里的“计划”文档属于创作资料，不等于目标章节；当前打开计划文档时，仍然要以全局工作区判断用户要操作的是作品、章节还是计划。',
+    '当用户要求“写第一章”“写第二章”“帮我写首章”这类正文写作时，优先判断是否需要创建真实章节实体，而不是只输出正文。',
+    '如果工具能修改工作台状态，就优先走工具；正文输出只能作为写入素材，不能替代章节创建、命名、追加、元信息更新这类动作本身。',
+    '执行成功的标准不是“回答看起来像完成了”，而是工作区状态真的发生了对应变化。',
+  ]
   const protocol = [
     '[统一内置执行协议]',
     '你必须先读取内置执行协议，再读取用户提示；用户提示永远代表“当前需求或任务”，不是让你复述的原文。',
     '你需要先判断用户请求里包含几个独立任务；如果超过一个任务，必须拆成有先后顺序的子任务，再逐个处理。',
     '每个子任务都要先判断是否需要调用工作台接口；如果需要，只能从当前提供的工具清单中选择最匹配的一个或多个工具。',
+    '你必须基于整个创作工作区来判断目标，而不是被当前打开的计划文档、目录文档或某个非章节视图绑死；当前选中内容只能作为参考，不是唯一目标。',
     '如果请求只是咨询、闲聊、解释、命名建议或纯内容输出，不要伪造接口调用，也不要把会执行的动作说成已经执行。',
     '如果请求涉及写作工作台操作，比如新建章节、覆盖正文、追加正文、改名、发布、下架、删除、打开设置或写入封面提示词，请先做任务拆解，再映射到对应工具。',
     '当用户一次性提出多个动作时，要先在内部确认依赖顺序，例如“先新建章节，再写正文”“先改名，再续写”“先规划，再执行”。',
+    '如果任务是“新写一章”或“当前没有目标章节时开始写正文”，必须默认拆成“先创建空白章节 -> 再补标题 -> 再写正文”三步，而不是只输出一整段正文文本。',
+    ...workspaceSemanticGuide,
     `当前任务主题：${options.title}。`,
     `当前输出要求：${options.responseRule}`,
   ]
@@ -1070,8 +1090,11 @@ export async function listAgentSessionsData(userId: string, novelId?: string) {
     orderBy: [{ updatedAt: 'desc' }],
   })
 
+  // 空且未命名的会话不进入列表：只有产生过对话（lastRunAt）或已被命名的会话才保留展示
+  const visible = items.filter((session) => session.lastRunAt || !isDefaultSessionTitle(session.title))
+
   return {
-    items: items.map(toAgentSession),
+    items: visible.map(toAgentSession),
   }
 }
 
@@ -1089,6 +1112,69 @@ export async function createAgentSessionData(userId: string, input: CreateAgentS
 
   return {
     session: toAgentSession(session),
+  }
+}
+
+export async function updateAgentSessionData(
+  userId: string,
+  sessionId: string,
+  input: UpdateAgentSessionRequest,
+) {
+  const session = await ensureOwnedSession(userId, sessionId)
+  const nextTitle = input.title?.trim()
+
+  if (!nextTitle) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '请提供会话标题。')
+  }
+
+  const updatedSession = await prisma.agentSession.update({
+    where: { id: session.id },
+    data: {
+      title: nextTitle.slice(0, 160),
+    },
+  })
+
+  return {
+    session: toAgentSession(updatedSession),
+  }
+}
+
+export async function deleteAgentSessionData(userId: string, sessionId: string) {
+  const session = await ensureOwnedSession(userId, sessionId)
+
+  await prisma.$transaction(async (tx) => {
+    const runs = await tx.agentRun.findMany({
+      where: { sessionId: session.id },
+      select: { id: true },
+    })
+    const runIds = runs.map((run) => run.id)
+
+    if (runIds.length > 0) {
+      await tx.projectMemoryEntry.deleteMany({
+        where: {
+          runId: { in: runIds },
+        },
+      })
+
+      await tx.agentArtifact.deleteMany({
+        where: {
+          runId: { in: runIds },
+        },
+      })
+
+      await tx.agentRun.deleteMany({
+        where: { sessionId: session.id },
+      })
+    }
+
+    await tx.agentSession.delete({
+      where: { id: session.id },
+    })
+  })
+
+  return {
+    sessionId: session.id,
+    deleted: true as const,
   }
 }
 
@@ -1125,7 +1211,7 @@ function resolveActionConfig(kind: AgentActionKind): {
         mode: 'plan',
         agentType: 'storyPlanner',
         artifactType: 'chapterPlan',
-        title: '章节计划',
+        title: '创作计划',
         memoryType: 'chapterSummary',
       }
     case 'draftChapter':
@@ -1594,7 +1680,7 @@ async function buildActionPrompt(userId: string, input: AgentActionInput) {
     case 'planChapter':
       return {
         summary: input.prompt,
-        prompt: `${baseContext}\n\n任务：围绕当前章节生成清晰可执行的写作计划。\n补充要求：${input.prompt}`,
+        prompt: `${baseContext}\n\n任务：根据用户要求生成清晰可执行的创作计划；如果用户明确提到作品题材、世界观、人设、主线或开篇方向，就优先输出作品级计划；如果用户明确提到当前章节或某一章，再输出章节级计划。\n补充要求：${input.prompt}`,
       }
     case 'draftChapter':
       return {
@@ -1609,12 +1695,12 @@ async function buildActionPrompt(userId: string, input: AgentActionInput) {
     case 'rewriteSelection':
       return {
         summary: input.instruction,
-        prompt: `${baseContext}\n\n选中文本：${input.selectedText}\n任务：根据要求改写上面的选中文本。\n改写要求：${input.instruction}`,
+        prompt: `${baseContext}\n\n选中文本：${input.selectedText}\n任务：根据要求改写上面的选中文本，只做必要修改并尽量保留未改部分，不要把当前章节整章推倒重写。\n改写要求：${input.instruction}`,
       }
     case 'polishSelection':
       return {
         summary: input.prompt ?? input.instruction ?? '润色选中文本',
-        prompt: `${baseContext}\n\n选中文本：${input.selectedText}\n任务：润色上面的选中文本，在不改变剧情含义的前提下提升表达质量。\n润色要求：${input.prompt ?? input.instruction ?? '语言更凝练、更顺滑、更有画面感。'}`,
+        prompt: `${baseContext}\n\n选中文本：${input.selectedText}\n任务：润色上面的选中文本，在不改变剧情含义的前提下提升表达质量，只做必要修改并尽量保留未改部分。\n润色要求：${input.prompt ?? input.instruction ?? '语言更凝练、更顺滑、更有画面感。'}`,
       }
     case 'reviewContinuity':
       return {
@@ -1631,6 +1717,156 @@ async function buildActionPrompt(userId: string, input: AgentActionInput) {
 
 function containsAny(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword))
+}
+
+function hasNovelMetaIntent(prompt: string) {
+  const normalized = prompt.replace(/\s+/g, '').toLowerCase()
+  return containsAny(normalized, [
+    '作品介绍',
+    '作品简介',
+    '作品内容介绍',
+    '内容介绍',
+    '简介',
+    '介绍页',
+    '副标题',
+    '标签',
+    '作品信息',
+  ])
+}
+
+function hasMultipleWorkspaceGoals(prompt: string) {
+  const normalized = prompt.replace(/\s+/g, '').toLowerCase()
+  const goalFlags = [
+    containsAny(normalized, ['封面', '提示词', 'cover']),
+    hasNovelMetaIntent(normalized),
+    containsAny(normalized, ['书名', '作品名', '小说名', '命名', '改名']),
+    containsAny(normalized, ['章节', '正文', '续写', '写正文', '新建章节']),
+  ].filter(Boolean)
+
+  return goalFlags.length > 1 || /并且|并|同时|再|然后/u.test(normalized)
+}
+
+function hasRequestedChapterOrder(prompt: string) {
+  return /第[0-9零一二三四五六七八九十百两]+章/u.test(prompt)
+}
+
+function isTitleOnlyChapterPrompt(prompt: string) {
+  return (
+    containsAny(prompt, [
+      '标题',
+      '题目',
+      '章节标题',
+      '章节名称',
+      '章节名',
+      '章名',
+      '加标题',
+      '起标题',
+      '命名',
+      '改名',
+    ]) &&
+    !containsAny(prompt, ['正文', '内容', '续写', '扩写', '补写', '补全', '展开', '写一段', '写点', '写进去', '写入'])
+  )
+}
+
+function hasChapterBodyWritingIntent(prompt: string) {
+  if (isTitleOnlyChapterPrompt(prompt)) {
+    return false
+  }
+
+  if (
+    containsAny(prompt, [
+      '帮我写',
+      '给我写',
+      '直接写',
+      '写一下',
+      '写点',
+      '写一段',
+      '写一章',
+      '写章节',
+      '写正文',
+      '生成正文',
+      '填充正文',
+    ])
+  ) {
+    return true
+  }
+
+  return (
+    containsAny(prompt, ['写', '起草', '生成', '续写', '扩写', '补写', '补全', '展开', '正文', '内容']) &&
+    (hasRequestedChapterOrder(prompt) || containsAny(prompt, ['章节', '这章', '这一章', '本章', '下一章', '下章', '首章', '开篇']))
+  )
+}
+
+function hasSelectionRewriteIntent(prompt: string) {
+  return containsAny(prompt, [
+    '改写',
+    '重写',
+    'rewrite',
+    '换一种写法',
+    '改成',
+    '改一下',
+    '改一改',
+    '修改',
+    '调整',
+  ])
+}
+
+function hasSelectionPolishIntent(prompt: string) {
+  return containsAny(prompt, [
+    '润色',
+    'polish',
+    '优化表达',
+    '更顺',
+    '更流畅',
+    '收紧',
+    '提炼',
+    '细化描写',
+    '丰富描写',
+    '更细致',
+    '更有画面感',
+  ])
+}
+
+function shouldUseChapterContentAsImplicitSelection(prompt: string) {
+  const mentionsEditAction =
+    hasSelectionRewriteIntent(prompt) ||
+    hasSelectionPolishIntent(prompt) ||
+    containsAny(prompt, ['补充', '补足', '增强', '丰富', '细化', '优化'])
+  const mentionsExistingChapter = containsAny(prompt, [
+    '这章',
+    '这一章',
+    '本章',
+    '第一章',
+    '第二章',
+    '第三章',
+    '章节',
+    '正文',
+    '开头',
+  ])
+  const mentionsPartialScope = containsAny(prompt, [
+    '部分',
+    '片段',
+    '段落',
+    '一段',
+    '某段',
+    '这段',
+    '局部',
+    '描写',
+    '细节',
+    '句子',
+    '表达',
+    '措辞',
+  ])
+  const disallowFullRewrite = containsAny(prompt, [
+    '不要全部重写',
+    '不需要全部重写',
+    '不要整章重写',
+    '不是全部重写',
+    '不用全部重写',
+    '不要全改',
+  ])
+
+  return mentionsEditAction && (mentionsExistingChapter || mentionsPartialScope || disallowFullRewrite)
 }
 
 function mapActionHintToIntent(actionHint?: string): WorkspaceAgentIntent | null {
@@ -1663,13 +1899,25 @@ function mapActionHintToIntent(actionHint?: string): WorkspaceAgentIntent | null
 }
 
 function inferWorkspaceIntent(input: ExecuteWorkspaceAgentInput): WorkspaceAgentIntent {
+  const prompt = input.prompt.trim().toLowerCase()
+  const promptHasMultipleGoals = hasMultipleWorkspaceGoals(prompt)
+  const promptHasNovelMetaIntent = hasNovelMetaIntent(prompt)
   const hintedIntent = mapActionHintToIntent(input.actionHint)
   if (hintedIntent && hintedIntent !== 'workspaceAgent') {
+    if (hintedIntent === 'generateCoverPrompt' && (promptHasMultipleGoals || promptHasNovelMetaIntent)) {
+      return 'workspaceAgent'
+    }
     return hintedIntent
   }
 
-  const prompt = input.prompt.trim().toLowerCase()
   const hasSelectedText = Boolean(input.selectedText?.trim())
+  const hasEditableSelection =
+    hasSelectedText ||
+    (Boolean(input.chapterContent?.trim()) && shouldUseChapterContentAsImplicitSelection(prompt))
+
+  if (promptHasMultipleGoals) {
+    return 'workspaceAgent'
+  }
 
   if (
     containsAny(prompt, ['书名', '作品名', '小说名']) &&
@@ -1704,6 +1952,14 @@ function inferWorkspaceIntent(input: ExecuteWorkspaceAgentInput): WorkspaceAgent
     return 'reviewContinuity'
   }
 
+  if (hasEditableSelection && hasSelectionPolishIntent(prompt)) {
+    return 'polishSelection'
+  }
+
+  if (hasEditableSelection && hasSelectionRewriteIntent(prompt)) {
+    return 'rewriteSelection'
+  }
+
   if (containsAny(prompt, ['计划', '章纲', '大纲', '规划', '拆解', '结构'])) {
     return 'planChapter'
   }
@@ -1714,6 +1970,10 @@ function inferWorkspaceIntent(input: ExecuteWorkspaceAgentInput): WorkspaceAgent
 
   if (containsAny(prompt, ['续写', '接着写', '继续写', '往下写', '后续'])) {
     return 'continueChapter'
+  }
+
+  if (hasChapterBodyWritingIntent(prompt)) {
+    return 'draftChapter'
   }
 
   if (
@@ -1738,20 +1998,6 @@ function inferWorkspaceIntent(input: ExecuteWorkspaceAgentInput): WorkspaceAgent
     ])
   ) {
     return 'draftChapter'
-  }
-
-  if (
-    hasSelectedText &&
-    containsAny(prompt, ['润色', 'polish', '优化表达', '更顺', '更流畅', '收紧', '提炼'])
-  ) {
-    return 'polishSelection'
-  }
-
-  if (
-    hasSelectedText &&
-    containsAny(prompt, ['改写', '重写', 'rewrite', '换一种写法', '改成'])
-  ) {
-    return 'rewriteSelection'
   }
 
   return hintedIntent ?? 'draftChapter'
@@ -1775,6 +2021,7 @@ function shouldPlanRenameChapter(prompt: string, intent: WorkspaceAgentIntent) {
 function shouldPlanCreateChapter(prompt: string, intent: WorkspaceAgentIntent, hasChapterTarget: boolean) {
   return (
     containsAny(prompt, ['创建章节', '新建章节', '新增章节', '加一章', '开一章']) ||
+    (!hasChapterTarget && hasChapterBodyWritingIntent(prompt)) ||
     (!hasChapterTarget && (intent === 'draftChapter' || intent === 'continueChapter'))
   )
 }
@@ -1790,6 +2037,9 @@ function shouldPlanWriteChapter(prompt: string, intent: WorkspaceAgentIntent) {
   return (
     intent === 'draftChapter' ||
     intent === 'continueChapter' ||
+    intent === 'rewriteSelection' ||
+    intent === 'polishSelection' ||
+    hasChapterBodyWritingIntent(prompt) ||
     containsAny(prompt, [
       '写一下',
       '写点',
@@ -1812,6 +2062,72 @@ function shouldPlanWriteChapter(prompt: string, intent: WorkspaceAgentIntent) {
   )
 }
 
+function buildChapterCreationSteps(
+  input: ExecuteWorkspaceAgentInput,
+  executionMode: AgentExecutionMode,
+  agentType: AgentRun['agentType'],
+) {
+  const steps: NonNullable<AgentActionPlan['steps']> = []
+
+  const createStep = buildActionPlanStep(executionMode, agentType, {
+    id: 'create_chapter',
+    toolName: 'chapter.create',
+    target: {
+      scope: 'novel',
+      novelId: input.novelId,
+      chapterId: null,
+    },
+    payload: {
+      source: 'artifact',
+      writeMode: 'create',
+      reasoning: '先创建章节实体，让章节树和编辑区先出现真实目标，再继续命名和写正文。',
+    },
+  })
+
+  if (createStep) {
+    steps.push(createStep)
+  }
+
+  const renameStep = buildActionPlanStep(executionMode, agentType, {
+    id: 'rename_chapter',
+    toolName: 'chapter.rename',
+    target: {
+      scope: 'chapter',
+      novelId: input.novelId,
+      chapterId: input.chapterId ?? null,
+    },
+    payload: {
+      source: 'artifact',
+      reasoning: '新章创建后要先补齐章节标题，避免正文先落库导致章节树仍是占位标题。',
+    },
+  })
+
+  if (renameStep) {
+    steps.push(renameStep)
+  }
+
+  const writeStep = buildActionPlanStep(executionMode, agentType, {
+    id: 'write_chapter',
+    toolName: 'chapter.write',
+    target: {
+      scope: 'chapter',
+      novelId: input.novelId,
+      chapterId: input.chapterId ?? null,
+    },
+    payload: {
+      source: 'artifact',
+      writeMode: 'replace',
+      reasoning: '章节实体和标题准备好后，再把正文写入目标章节，保证工作台状态与输出一致。',
+    },
+  })
+
+  if (writeStep) {
+    steps.push(writeStep)
+  }
+
+  return steps
+}
+
 function buildWorkspaceActionPlanFromRegistry(
   input: ExecuteWorkspaceAgentInput,
   intent: WorkspaceAgentIntent,
@@ -1821,6 +2137,8 @@ function buildWorkspaceActionPlanFromRegistry(
   const prompt = input.prompt.trim().toLowerCase()
   const steps: AgentActionPlan['steps'] = []
   const hasChapterTarget = Boolean(input.chapterId)
+  const wantsCover = containsAny(prompt, ['封面', '提示词', 'cover'])
+  const wantsNovelMeta = hasNovelMetaIntent(prompt)
 
   if (shouldPlanRenameNovel(prompt, intent)) {
     const step = buildActionPlanStep(executionMode, agentType, {
@@ -1832,6 +2150,7 @@ function buildWorkspaceActionPlanFromRegistry(
       },
       payload: {
         source: 'artifact',
+        title: '',
       },
     })
 
@@ -1861,23 +2180,95 @@ function buildWorkspaceActionPlanFromRegistry(
 
   if (shouldPlanWriteChapter(prompt, intent)) {
     const createChapter = shouldPlanCreateChapter(prompt, intent, hasChapterTarget)
-    const appendChapter = !createChapter && shouldPlanAppendChapter(prompt, intent)
+    if (createChapter) {
+      steps.push(...buildChapterCreationSteps(input, executionMode, agentType))
+    } else {
+      const appendChapter = shouldPlanAppendChapter(prompt, intent)
+      const step = buildActionPlanStep(executionMode, agentType, {
+        id: appendChapter ? 'append_chapter' : 'write_chapter',
+        toolName: appendChapter ? 'chapter.append' : 'chapter.write',
+        target: {
+          scope: 'chapter',
+          novelId: input.novelId,
+          chapterId: input.chapterId ?? null,
+        },
+        payload: {
+          source: 'artifact',
+          writeMode: appendChapter ? 'append' : 'replace',
+        },
+      })
+
+      if (step) {
+        steps.push(step)
+      }
+    }
+  }
+
+  if (wantsNovelMeta) {
     const step = buildActionPlanStep(executionMode, agentType, {
-      id: createChapter ? 'create_chapter' : appendChapter ? 'append_chapter' : 'write_chapter',
-      toolName: createChapter ? 'chapter.create' : appendChapter ? 'chapter.append' : 'chapter.write',
+      id: 'update_novel_meta',
+      toolName: 'novel.update_meta',
       target: {
-        scope: createChapter ? 'novel' : 'chapter',
+        scope: 'novel',
         novelId: input.novelId,
-        chapterId: createChapter ? null : input.chapterId ?? null,
       },
       payload: {
         source: 'artifact',
-        writeMode: createChapter ? 'create' : appendChapter ? 'append' : 'replace',
       },
     })
 
     if (step) {
       steps.push(step)
+    }
+  }
+
+  if (wantsCover) {
+    const promptStep = buildActionPlanStep(executionMode, agentType, {
+      id: 'set_cover_prompt',
+      toolName: 'cover.prompt.set',
+      target: {
+        scope: 'novel',
+        novelId: input.novelId,
+      },
+      payload: {
+        source: 'artifact',
+      },
+    })
+
+    if (promptStep) {
+      steps.push(promptStep)
+    }
+
+    const generateStep = buildActionPlanStep(executionMode, agentType, {
+      id: 'generate_cover',
+      toolName: 'cover.generate',
+      target: {
+        scope: 'novel',
+        novelId: input.novelId,
+      },
+      payload: {
+        count: 1,
+      },
+    })
+
+    if (generateStep) {
+      steps.push(generateStep)
+    }
+
+    const applyStep = buildActionPlanStep(executionMode, agentType, {
+      id: 'apply_cover',
+      toolName: 'cover.apply',
+      target: {
+        scope: 'novel',
+        novelId: input.novelId,
+      },
+      payload: {
+        source: 'latest_generated',
+      },
+    })
+
+    if (applyStep) {
+      steps.push(applyStep)
     }
   }
 
@@ -1903,9 +2294,16 @@ async function buildDynamicWorkspaceActionPlan(options: {
   const planningSystemPrompt = [
     '你是小说创作工作台里的任务规划 Agent。',
     '你只负责把当前请求拆成可执行步骤，不直接输出正文。',
+    '你必须理解工作区语义：作品是根对象；计划文档是创作资料；章节写作必须以真实章节实体为目标；当前打开的计划或目录视图不能把目标锁死。',
     '你需要先给出 2 到 4 条真实的内部思考，写进 thinking 数组；每条都要具体说明你看到了什么问题、为什么这样拆，不要写泛化空话。',
     '你必须根据当前请求自行判断需要几步，每一步的标题都要贴近用户语言，不要使用泛化空话。',
+    '如果用户一句话里明确提出了两个或以上动作，steps 至少要覆盖每个动作，不允许只保留其中一个。',
+    '如果用户要新写一章，且当前没有明确章节实体，steps 必须至少包含 chapter.create、chapter.rename、chapter.write 三步，顺序不能颠倒。',
     '如果某一步会真正改动工作台，请把原因写进 payload.reasoning，说明为什么要先做这一步。',
+    '如果步骤是 novel.rename，payload 必须直接带上最终书名 title，不要只写 source。',
+    '如果步骤是 novel.update_meta，payload 必须直接带上最终要写入的 title、displayTitle、summary、tags、visibility、status 中的相关字段，而不是只写 source。',
+    '如果步骤是 cover.prompt.set，payload 必须直接带上 coverPrompt 或 prompt 的最终文本。',
+    '如果步骤是 cover.generate，payload 可以补 count；如果步骤是 cover.apply，payload 可以用 source=latest_generated 表示把最新生成的候选图设为当前封面。',
     '如果用户是局部改写、润色、补某一段或处理选中文本，要优先使用最小改动原则，不要默认覆盖整章。',
     '如果当前章节标题为空，且本次任务是新写章节或补完整章，请把“补齐章节标题”纳入计划，再处理正文。',
     '只输出一段 <workspace_plan>...</workspace_plan>，不要输出任何额外说明。',
@@ -1982,7 +2380,7 @@ function resolveWorkspaceIntentConfig(intent: WorkspaceAgentIntent): {
         mode: 'plan',
         agentType: 'storyPlanner',
         artifactType: 'chapterPlan',
-        title: '章节计划',
+        title: '创作计划',
         task: 'plan-chapter',
         memoryType: 'chapterSummary',
         applyStrategies: ['saveChapterSummary'],
@@ -2074,6 +2472,8 @@ function buildWorkspaceSystemPrompt(
     '你是小说创作工作台里的高级 Agent。',
     '请只输出对用户有用的最终结果，不要解释你的系统设定，不要暴露开发信息。',
     '如果上下文不足，请基于已给出的内容作出最稳妥的结果，并明确哪些地方是基于现有上下文的建议，而不是编造事实。',
+    '你必须牢记：计划文档、目录文档和正文章节是不同对象；当前打开哪个文档不等于用户只能操作哪个对象。',
+    '如果用户要改工作台状态，请优先通过规划出的工具步骤完成；正文内容只是素材，不是对工作台动作的替代。',
     '除非用户明确要求解释，否则不要说“我已经帮你创建”“我已经替你命名”“我已经写入正文”这类执行完成话术；请直接输出将被写入的标题、章节名或正文内容本身。',
     '如果用户要的是章节标题、章节命名、书名或作品名，你只能输出最终标题本身，或使用“章节标题：xxx”的单行格式；绝对不要输出说明、理由、补充建议、引用正文、代码块或任何会被误写入编辑器的句子。',
     '只有在用户明确要求撰写、续写、扩写、补写正文时，才允许输出正文段落；命名类请求绝不能混入正文内容。',
@@ -2132,7 +2532,7 @@ function buildWorkspaceResponseRule(intent: WorkspaceAgentIntent): string {
     case 'readStoryContext':
       return '优先回答用户想看的目录、章节名或正文片段；引用片段时只使用已提供内容。'
     case 'planChapter':
-      return '请输出可执行的章节计划，突出冲突推进、情绪节奏和结尾钩子。'
+      return '请输出可执行的创作计划；作品级计划要覆盖定位、世界观、角色关系、主线推进和开篇路径，章节级计划要突出冲突推进、情绪节奏和结尾钩子。'
     case 'continueChapter':
       return '请续写正文，保证承接自然，避免重复前文。'
     case 'rewriteSelection':
@@ -2476,7 +2876,7 @@ async function buildWorkspacePrompt(userId: string, input: ExecuteWorkspaceAgent
       ? `交接说明：${input.handoff.summary || '现在请不要重复规划，直接进入执行。'}`
       : '',
     handoffArtifact && input.handoff?.sourceMode === 'plan' && input.handoff?.targetMode === 'build'
-      ? `涓婁竴杞鍒掓憳瑕侊細${handoffArtifact.summary ?? (clipText(handoffArtifact.content, 160) || '宸茬‘璁や竴浠界珷鑺傝鍒掋€?')}`
+      ? `上一轮计划摘要：${handoffArtifact.summary ?? (clipText(handoffArtifact.content, 160) || '已确认一份章节计划。')}`
       : '',
     handoffArtifact && input.handoff?.sourceMode === 'plan' && input.handoff?.targetMode === 'build'
       ? `上一轮计划全文：\n${handoffArtifact.content}`
@@ -2657,6 +3057,10 @@ function buildAgentRunResultPayload(
   const storyMemoryDigest = asAgentStoryMemoryDigest(firstArtifact?.metadata?.storyMemoryDigest)
   const actionPlan = asAgentActionPlan(firstArtifact?.metadata?.actionPlan)
   const toolPolicy = asAgentWorkspaceToolPolicy(firstArtifact?.metadata?.toolPolicy)
+  const stepResults =
+    firstArtifact?.metadata && typeof firstArtifact.metadata === 'object'
+      ? ((firstArtifact.metadata as Record<string, unknown>).stepResults as AgentActionResponse['data']['stepResults']) ?? null
+      : null
   const handoff = hydrateHandoffSource(
     asAgentActionHandoff(firstArtifact?.metadata?.handoff),
     run.id,
@@ -2678,6 +3082,7 @@ function buildAgentRunResultPayload(
     storyMemoryDigest,
     executionMode,
     actionPlan,
+    stepResults,
     handoff,
     toolPolicy,
     stream: {

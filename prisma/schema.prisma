@@ -80,6 +80,8 @@ enum AgentRunMode {
 enum AgentRunStatus {
   queued
   running
+  awaiting_approval
+  paused
   completed
   failed
   cancelled
@@ -103,6 +105,7 @@ enum AgentActionKind {
   polishSelection
   reviewContinuity
   generateCoverPrompt
+  workspaceAgent
 }
 
 enum AgentArtifactType {
@@ -129,6 +132,7 @@ enum ProjectMemoryType {
 enum SmsVerificationPurpose {
   login
   register
+  reset_password
 }
 
 model User {
@@ -161,6 +165,9 @@ model User {
   agentSessions           AgentSession[]
   agentRuns               AgentRun[]
   smsVerificationCodes    SmsVerificationCode[]
+  postLikes               PostLike[]
+  postBookmarks           PostBookmark[]
+  commentLikes            CommentLike[]
 
   @@map("users")
 }
@@ -275,6 +282,7 @@ model Comment {
   novel       Novel?             @relation(fields: [novelId], references: [id])
   chapter     Chapter?           @relation(fields: [chapterId], references: [id])
   post        Post?              @relation(fields: [postId], references: [id])
+  likes       CommentLike[]
 
   @@index([targetType, targetId])
   @@index([parentId])
@@ -314,11 +322,52 @@ model Post {
   topic         Topic?             @relation(fields: [topicId], references: [id])
   relatedNovel  Novel?             @relation(fields: [relatedNovelId], references: [id])
   comments      Comment[]
+  likes         PostLike[]
+  bookmarks     PostBookmark[]
 
   @@index([userId])
   @@index([topicId])
   @@index([relatedNovelId])
   @@map("posts")
+}
+
+model PostLike {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  postId    String   @map("post_id") @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@map("post_likes")
+}
+
+model PostBookmark {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  postId    String   @map("post_id") @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@map("post_bookmarks")
+}
+
+model CommentLike {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  commentId String   @map("comment_id") @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([commentId, userId])
+  @@index([userId])
+  @@map("comment_likes")
 }
 
 model Conversation {
@@ -443,6 +492,9 @@ model AgentRun {
   inputSummary  String?        @map("input_summary")
   outputSummary String?        @map("output_summary")
   errorMessage  String?        @map("error_message")
+  engine        String         @default("legacy") @db.VarChar(16)
+  currentTurn   Int            @default(0) @map("current_turn")
+  usage         Json?
   startedAt     DateTime?      @map("started_at")
   finishedAt    DateTime?      @map("finished_at")
   createdAt     DateTime       @default(now()) @map("created_at")
@@ -453,6 +505,8 @@ model AgentRun {
   chapter       Chapter?       @relation(fields: [chapterId], references: [id])
   artifacts     AgentArtifact[]
   memoryEntries ProjectMemoryEntry[]
+  messages      AgentMessage[]
+  events        AgentRunEvent[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
@@ -474,6 +528,33 @@ model AgentArtifact {
 
   @@index([runId, createdAt])
   @@map("agent_artifacts")
+}
+
+model AgentMessage {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  runId     String   @map("run_id") @db.VarChar(64)
+  sessionId String   @map("session_id") @db.VarChar(64)
+  role      String   @db.VarChar(16)
+  parts     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  run       AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@index([runId, createdAt])
+  @@map("agent_messages")
+}
+
+model AgentRunEvent {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  runId     String   @map("run_id") @db.VarChar(64)
+  seq       Int
+  type      String   @db.VarChar(48)
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at")
+  run       AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@map("agent_run_events")
 }
 
 model ProjectMemoryEntry {

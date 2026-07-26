@@ -36,6 +36,11 @@ router.post('/sms/send-code', async (req: Request, res: Response): Promise<void>
       return
     }
 
+    if (body.purpose !== 'login' && body.purpose !== 'register' && body.purpose !== 'auth') {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '不支持的验证码用途。'))
+      return
+    }
+
     const phone = normalizePhoneNumber(body.phone)
     verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
     const existingUser = await getUserByPhoneData(phone)
