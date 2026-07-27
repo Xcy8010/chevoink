@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   AgentExecutionMode,
   AgentMessagePart,
+  AgentTodoItem,
   AgentTokenUsage,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
@@ -20,6 +21,7 @@ import {
   waitForApproval,
 } from './permissions.js'
 import { getToolByName, toOpenAITools } from './tools/registry.js'
+import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { autoNameSession } from './session-title.js'
 
@@ -225,7 +227,7 @@ async function handleToolCall(
   try {
     parsedArgs = call.arguments ? JSON.parse(call.arguments) : {}
   } catch {
-    const observation = `工具 ${call.name} 的参数不是合法 JSON，请修正后重试。原始参数：${call.arguments.slice(0, 400)}`
+    const observation = `工具 ${call.name} 的参数不是合法 JSON，本次调用完全没有执行。请立即用完整合法的 JSON 参数重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作（如 ask_user 失败后禁止把问题和选项写进正文）。原始参数：${call.arguments.slice(0, 400)}`
     bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null })
     bus.emit({
       type: 'tool.result',
@@ -274,7 +276,7 @@ async function handleToolCall(
     const issues = validated.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('；')
-    return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。请修正参数后重试。`, 'failed')
+    return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
   }
 
   // 审批：'ask' 且未被会话级"总是允许"覆盖时，挂起等待前端批复
@@ -463,6 +465,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     const expectsPlanSave = params.mode === 'plan' && /(规划|大纲|计划)/.test(params.prompt)
     let planSavePerformed = false
     let planSaveReminders = 0
+    // 长任务防早停：待办清单（todo_write 维护）未全部完成就想收尾时，回填强指令让它接着执行
+    // 续跑时从会话恢复既有清单，新任务从空开始（避免上一个任务的残留待办干扰）
+    let todoItems: AgentTodoItem[] = params.resume ? await loadSessionTodoItems(params.sessionId) : []
+    let todoReminders = 0
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
       role: 'user',
@@ -617,6 +623,20 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           continue
         }
 
+        // 防早停：待办清单还有未完成项就想结束（典型症状：连写六章只写两章就问“要不要继续”），
+        // 回填强指令让它接着执行下一条待办，最多拦截 4 次避免死循环
+        const unfinishedTodos = todoItems.filter((item) => item.status !== 'completed')
+        if (unfinishedTodos.length > 0 && todoReminders < 4) {
+          todoReminders += 1
+          await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+          bus.emit({ type: 'step.finish', turn, usage: result.usage })
+          messages.push({
+            role: 'user',
+            content: `[系统] 待办清单还有 ${unfinishedTodos.length} 项未完成：\n${renderTodoItems(unfinishedTodos)}\n任务尚未结束，严禁现在收尾，也严禁停下来问作者“要不要继续”。请立即继续执行下一条未完成的待办，每完成一条就用 todo_write 更新状态；确实无法完成的项，用 todo_write 标记为 completed 并在最后收尾时向作者说明原因。`,
+          })
+          continue
+        }
+
         await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
         bus.emit({ type: 'step.finish', turn, usage: result.usage })
         await finalizeRun(runId, bus, 'succeeded', usage, turn, lastAssistantText.slice(0, 300))
@@ -630,6 +650,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id }, bus, messageId, runId)
         if (call.name === 'plan_save' && outcome.part.status === 'success') {
           planSavePerformed = true
+        }
+        // 同步待办清单快照：防早停拦截与预算收尾都依赖它判断任务是否真的做完
+        if (call.name === 'todo_write' && outcome.part.status === 'success' && outcome.part.display?.kind === 'todoList') {
+          todoItems = outcome.part.display.items
         }
         parts.push(outcome.part)
         messages.push({ role: 'tool', toolCallId: call.id, content: outcome.observation })
@@ -667,6 +691,20 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           await persistMessage(randomUUID(), runId, params.sessionId, 'assistant', [
             { type: 'text', text: wrapUp.content },
           ])
+        }
+        // 待办未完成时以 failed 收尾：前端据此展示「继续执行」按钮，一键接着跑完剩余待办
+        const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
+        if (todoLeft > 0) {
+          await finalizeRun(
+            runId,
+            bus,
+            'failed',
+            usage,
+            turn,
+            wrapUp.content.slice(0, 300),
+            `本次运行的 token 预算已用尽，待办还剩 ${todoLeft} 项未完成。点击「继续执行」让 Agent 接着跑完。`,
+          )
+          return
         }
         await finalizeRun(runId, bus, 'succeeded', usage, turn, `已达 token 预算上限：${wrapUp.content.slice(0, 300)}`)
         return

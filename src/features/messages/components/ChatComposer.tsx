@@ -27,7 +27,7 @@ export default function ChatComposer({ value, onChange, onSend, isSending }: Cha
   }
 
   return (
-    <div className="flex items-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+12px)] md:pb-3">
+    <div className="flex items-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-3 pb-[calc(var(--safe-bottom)+12px)] md:pb-3">
       <textarea
         ref={textareaRef}
         value={value}

@@ -27,7 +27,7 @@ export default function HomeTabletLayout({
       {data.continueReading.length > 0 ? (
         <ContinueReadingRail novels={data.continueReading} progressMap={data.progressMap} />
       ) : null}
-      <FeaturedNovelList novels={data.featuredNovels} variant="grid" maxItems={8} />
+      <FeaturedNovelList novels={data.featuredNovels} variant="grid" maxItems={4} />
       <RankingBoard
         hot={data.rankingHot}
         fresh={data.rankingNew}

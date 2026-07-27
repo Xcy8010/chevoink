@@ -5,16 +5,28 @@ import type {
   UpdateMyCoverRequest,
   UpdateMyPasswordRequest,
   UpdateMyProfileRequest,
+  UpdatePrivacyRequest,
 } from '../../shared/contracts/index.js'
 import { removeManagedAvatar, storeAvatarDataUrl } from '../lib/avatar-storage.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { removeManagedProfileCover, storeProfileCoverDataUrl } from '../lib/profile-cover-storage.js'
 import {
+  getInteractionBadgesData,
   getMePayloadData,
   getUserByIdData,
   getUserCredentialData,
+  listInteractionsData,
+  listFavoriteNovelsData,
+  listUserFollowersData,
+  listUserFollowingData,
+  listUserLikedPostsData,
+  listUserRepliesData,
+  listReceivedLikesData,
+  markInteractionSeenData,
+  setUserFollowData,
   updateMyAvatarData,
   updateMyPasswordData,
+  updateMyPrivacyData,
   updateMyProfileCoverData,
   updateMyProfileData,
 } from '../lib/data-access.js'
@@ -204,6 +216,189 @@ router.patch('/me/password', async (req: Request, res: Response): Promise<void> 
   }
 })
 
+async function handleUserFollow(req: Request, res: Response, following: boolean): Promise<void> {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await setUserFollowData(userId, req.params.userId, following)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'USER_NOT_FOUND', '未找到用户。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+}
+
+router.post('/:userId/follow', (req, res) => handleUserFollow(req, res, true))
+router.delete('/:userId/follow', (req, res) => handleUserFollow(req, res, false))
+
+router.get('/me/received-likes', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await listReceivedLikesData(userId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/me/favorite-novels', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const items = await listFavoriteNovelsData(userId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/me/interactions', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await listInteractionsData(userId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/me/interaction-badges', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await getInteractionBadgesData(userId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/me/interaction-badges/seen', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const target = (req.body ?? {}).target
+
+  try {
+    const userId = requireSessionUserId(req)
+
+    if (target !== 'interactions' && target !== 'followers') {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '无效的已读标记目标。'))
+      return
+    }
+
+    const payload = await markInteractionSeenData(userId, target)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/me/privacy', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as UpdatePrivacyRequest
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await updateMyPrivacyData(userId, {
+      followers: body.followers,
+      following: body.following,
+      likes: body.likes,
+      favorites: body.favorites,
+      replies: body.replies,
+    })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:userId/followers', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const viewerUserId = getSessionUserId(req)
+    const targetUserId = req.params.userId === 'me' ? viewerUserId : req.params.userId
+
+    if (!targetUserId) {
+      res.status(401).json(buildError(requestId, 'AUTH_REQUIRED', '请先登录后再继续。'))
+      return
+    }
+
+    const payload = await listUserFollowersData(targetUserId, viewerUserId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:userId/following', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const viewerUserId = getSessionUserId(req)
+    const targetUserId = req.params.userId === 'me' ? viewerUserId : req.params.userId
+
+    if (!targetUserId) {
+      res.status(401).json(buildError(requestId, 'AUTH_REQUIRED', '请先登录后再继续。'))
+      return
+    }
+
+    const payload = await listUserFollowingData(targetUserId, viewerUserId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:userId/liked-posts', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const viewerUserId = getSessionUserId(req)
+    const targetUserId = req.params.userId === 'me' ? viewerUserId : req.params.userId
+
+    if (!targetUserId) {
+      res.status(401).json(buildError(requestId, 'AUTH_REQUIRED', '请先登录后再继续。'))
+      return
+    }
+
+    const payload = await listUserLikedPostsData(targetUserId, viewerUserId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:userId/replies', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const viewerUserId = getSessionUserId(req)
+    const targetUserId = req.params.userId === 'me' ? viewerUserId : req.params.userId
+
+    if (!targetUserId) {
+      res.status(401).json(buildError(requestId, 'AUTH_REQUIRED', '请先登录后再继续。'))
+      return
+    }
+
+    const payload = await listUserRepliesData(targetUserId, viewerUserId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.get('/:userId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
@@ -214,7 +409,7 @@ router.get('/:userId', async (req: Request, res: Response): Promise<void> => {
       return
     }
 
-    const user = await getUserByIdData(req.params.userId)
+    const user = await getUserByIdData(req.params.userId, viewerUserId)
     if (!user) {
       res.status(404).json(buildError(requestId, 'USER_NOT_FOUND', '未找到用户。'))
       return

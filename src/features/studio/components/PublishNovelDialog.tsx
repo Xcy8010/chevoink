@@ -44,18 +44,31 @@ export default function PublishNovelDialog({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [visibility, setVisibility] = useState<Visibility>('public')
 
-  // 打开弹窗时默认全选所有章节，且可见范围默认公开
+  // 已发布且公开的章节无需重复发布，不进入可选列表，避免误选后重发一次
+  const publishableChapters = useMemo(
+    () => chapters.filter((chapter) => !(chapter.status === 'published' && chapter.visibility === 'public')),
+    [chapters],
+  )
+
+  // 打开弹窗时默认全选待发布章节，且可见范围默认公开
   useEffect(() => {
     if (open) {
-      setSelectedIds(new Set(chapters.map((chapter) => chapter.id)))
+      setSelectedIds(new Set(publishableChapters.map((chapter) => chapter.id)))
       setVisibility('public')
     }
-  }, [open, chapters])
+  }, [open, publishableChapters])
 
   const allSelected = useMemo(
-    () => chapters.length > 0 && chapters.every((chapter) => selectedIds.has(chapter.id)),
-    [chapters, selectedIds],
+    () => publishableChapters.length > 0 && publishableChapters.every((chapter) => selectedIds.has(chapter.id)),
+    [publishableChapters, selectedIds],
   )
+
+  // 发布后作品必须至少有一个公开章节：要么已有公开已发布章节，要么本次以公开可见范围发布新章节
+  const hasPublicPublishedChapter = useMemo(
+    () => chapters.some((chapter) => chapter.status === 'published' && chapter.visibility === 'public'),
+    [chapters],
+  )
+  const willHavePublicChapter = hasPublicPublishedChapter || (visibility === 'public' && selectedIds.size > 0)
 
   if (!open) {
     return null
@@ -74,7 +87,7 @@ export default function PublishNovelDialog({
   }
 
   function toggleAll() {
-    setSelectedIds(allSelected ? new Set() : new Set(chapters.map((chapter) => chapter.id)))
+    setSelectedIds(allSelected ? new Set() : new Set(publishableChapters.map((chapter) => chapter.id)))
   }
 
   return createPortal(
@@ -127,20 +140,22 @@ export default function PublishNovelDialog({
 
         <div className="mt-4 flex items-center justify-between">
           <p className="text-xs font-medium text-[var(--text-secondary)]">
-            发布章节（已选 {selectedIds.size} / {chapters.length}）
+            发布章节（已选 {selectedIds.size} / {publishableChapters.length}）
           </p>
-          <Button onClick={toggleAll} variant="ghost" size="sm" disabled={chapters.length === 0}>
+          <Button onClick={toggleAll} variant="ghost" size="sm" disabled={publishableChapters.length === 0}>
             {allSelected ? '取消全选' : '全选'}
           </Button>
         </div>
 
         <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto rounded-[16px] border border-[var(--border-subtle)] p-2">
-          {chapters.length === 0 ? (
+          {publishableChapters.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-[var(--text-secondary)]">
-              还没有章节，发布后可随时在章节设置中调整可见范围。
+              {chapters.length > 0
+                ? '所有章节都已公开发布，没有新的章节更新，无法重复发布。'
+                : '还没有章节，先写一章再来发布吧。'}
             </p>
           ) : (
-            chapters.map((chapter) => {
+            publishableChapters.map((chapter) => {
               const checked = selectedIds.has(chapter.id)
               return (
                 <button
@@ -170,17 +185,28 @@ export default function PublishNovelDialog({
           )}
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        <div className="mt-5 flex items-center justify-end gap-3">
+          {!willHavePublicChapter ? (
+            <p className="min-w-0 flex-1 text-xs leading-5 text-[var(--text-secondary)]">
+              至少需要一个公开章节，读者才能看到这部作品。请勾选章节并把可见范围设为公开。
+            </p>
+          ) : null}
           <Button onClick={onCancel} variant="ghost" disabled={busy}>
             取消
           </Button>
           <Button
             onClick={() => onConfirm(Array.from(selectedIds), visibility)}
             variant="primary"
-            disabled={busy}
+            disabled={busy || selectedIds.size === 0 || !willHavePublicChapter}
             className="bg-zinc-900 text-white hover:bg-zinc-800"
           >
-            {busy ? '正在发布...' : selectedIds.size > 0 ? `发布作品与 ${selectedIds.size} 个章节` : '仅发布作品'}
+            {busy
+              ? '正在发布...'
+              : selectedIds.size === 0
+                ? '暂无章节更新，无法发布'
+                : willHavePublicChapter
+                  ? `发布作品与 ${selectedIds.size} 个章节`
+                  : '需要至少一个公开章节'}
           </Button>
         </div>
       </div>

@@ -11,6 +11,19 @@ import type {
 
 /** Agent Loop 新链路 API 客户端（与旧 api.ts 并行，迁移完成后旧链路下线） */
 
+/** 带 HTTP 状态码与业务错误码的请求错误：供调用方区分「会话已不存在」等可自愈场景 */
+export class AgentApiError extends Error {
+  status: number
+  code: string | null
+
+  constructor(message: string, status: number, code: string | null) {
+    super(message)
+    this.name = 'AgentApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
 async function requestData<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(buildApiUrl(path), {
     ...options,
@@ -39,7 +52,8 @@ async function requestData<T>(path: string, options?: RequestInit): Promise<T> {
         : response.status >= 500
           ? '服务暂时不可用，请稍后再试。'
           : '请求失败，请稍后再试。'
-    throw new Error(message)
+    const code = result && typeof result === 'object' && 'error' in result ? result.error.code : null
+    throw new AgentApiError(message, response.status, code)
   }
 
   return result.data

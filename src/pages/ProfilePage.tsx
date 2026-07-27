@@ -7,8 +7,10 @@ import { ApiClientError, requestJson } from '@/app/api-client'
 import AppState from '@/components/ui/AppState'
 import { ProfileSkeleton } from '@/components/ui/Skeleton'
 import Button from '@/components/ui/Button'
+import ImageCropperDialog from '@/components/ui/ImageCropperDialog'
 import TextInput from '@/components/ui/TextInput'
-import { getMe, listPosts } from '@/features/community/api'
+import { useToast } from '@/components/ui/Toast'
+import { getMe, listFavoriteNovels, listPosts } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { getCoverUrl, getNovelDetailPayload } from '@/features/discover/api'
 import { getAllReadingProgress } from '@/features/home/reading-progress'
@@ -16,13 +18,16 @@ import { getLocalShelf, updateShelfCover } from '@/features/home/local-shelf'
 import CreationPanel from '@/features/profile/components/CreationPanel'
 import ProfileHeader from '@/features/profile/components/ProfileHeader'
 import ShelfPanel, { type ShelfBook } from '@/features/profile/components/ShelfPanel'
+import { LikedPostsPanel, RepliesPanel } from '@/features/profile/components/UserContentPanels'
 import { useShellStore } from '@/store/useShellStore'
-import type { UpdateMyAvatarRequest, UpdateMyProfileRequest, User } from '../../shared/contracts'
+import type { UpdateMyAvatarRequest, UpdateMyCoverRequest, UpdateMyProfileRequest, User } from '../../shared/contracts'
 
 const panels = [
   { id: 'shelf', label: '书架' },
   { id: 'creation', label: '创作' },
   { id: 'favorites', label: '收藏' },
+  { id: 'liked', label: '喜欢' },
+  { id: 'replies', label: '已回复' },
 ] as const
 
 type ProfilePanel = (typeof panels)[number]['id']
@@ -54,6 +59,7 @@ function isBootstrapNovel(novel: {
 export default function ProfilePage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const toast = useToast()
   const syncSessionUser = useShellStore((state) => state.syncSessionUser)
   const unreadMessageCount = useShellStore((state) => state.unreadMessageCount)
   const unreadNotificationCount = useShellStore((state) => state.unreadNotificationCount)
@@ -67,7 +73,11 @@ export default function ProfilePage() {
   const [profileError, setProfileError] = useState('')
   const [avatarSubmitting, setAvatarSubmitting] = useState(false)
   const [avatarError, setAvatarError] = useState('')
+  const [coverDraft, setCoverDraft] = useState<string | null>(null)
+  const [coverSubmitting, setCoverSubmitting] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
+  const coverInputRef = useRef<HTMLInputElement | null>(null)
+  const panelsSectionRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const routeState = location.state as ProfileRouteState | null
@@ -89,6 +99,24 @@ export default function ProfilePage() {
     queryKey: ['community', 'posts'],
     queryFn: () => listPosts(40),
   })
+
+  /** 我收藏的作品：只在切到收藏面板时拉取 */
+  const favoriteNovelsQuery = useQuery({
+    queryKey: ['profile', 'favorite-novels'],
+    queryFn: listFavoriteNovels,
+    enabled: activePanel === 'favorites',
+  })
+  const favoriteItems = useMemo<ShelfBook[]>(
+    () =>
+      (favoriteNovelsQuery.data?.items ?? []).map((novel) => ({
+        key: novel.id,
+        novelId: novel.id,
+        title: novel.title,
+        coverUrl: getCoverUrl(novel.coverUrl),
+        summary: novel.summary ?? '',
+      })),
+    [favoriteNovelsQuery.data?.items],
+  )
 
   const currentUser = meQuery.data?.user ?? null
   const mePayload = meQuery.data ?? null
@@ -230,6 +258,22 @@ export default function ProfilePage() {
     [authoredPosts],
   )
 
+  /** 头部数据行点击：阅读→书架列表，关注/粉丝/获赞→对应列表页面 */
+  function handleStatClick(key: 'reading' | 'following' | 'followers' | 'likes') {
+    if (key === 'reading') {
+      setActivePanel('shelf')
+      panelsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    if (key === 'following' || key === 'followers') {
+      navigate(`/me/follows?tab=${key}`)
+      return
+    }
+
+    navigate('/me/likes')
+  }
+
   function closePostRegisterPrompt() {
     setPostRegisterPromptVisible(false)
   }
@@ -328,6 +372,50 @@ export default function ProfilePage() {
     }
   }
 
+  /** 设置封面：选图后先进裁剪弹窗，确认后再上传 */
+  async function handleCoverChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    try {
+      validateImageFile(file, 5, '封面')
+      setCoverDraft(await readImageAsDataUrl(file))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '封面文件无效。')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  async function handleCoverCropConfirm(croppedDataUrl: string) {
+    setCoverSubmitting(true)
+
+    try {
+      const payload = await requestJson<{ user: User }>('/api/users/me/cover', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          coverDataUrl: croppedDataUrl,
+        } satisfies UpdateMyCoverRequest),
+      })
+
+      syncSessionUser({
+        user: payload.user,
+        unreadMessageCount,
+        unreadNotificationCount,
+      })
+      await meQuery.refetch()
+      setCoverDraft(null)
+      toast.success('封面已更新')
+    } catch (error) {
+      toast.error(error instanceof ApiClientError ? error.message : '暂时无法上传封面，请稍后再试。')
+    } finally {
+      setCoverSubmitting(false)
+    }
+  }
+
   async function handleUpdateProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setProfileError('')
@@ -394,32 +482,42 @@ export default function ProfilePage() {
           readingCount={readingCount}
           likesCount={likesCount}
           onEditProfile={openEditDialog}
+          onSetCover={() => coverInputRef.current?.click()}
           onGoSettings={() => navigate('/settings')}
+          onStatClick={handleStatClick}
         />
 
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <input
+          ref={coverInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          onChange={handleCoverChange}
+        />
+
+        {/* 数据总览：去卡片化，一条细线分隔的平铺横条，小屏四项一行摆下不溢出 */}
+        <section className="grid grid-cols-4 divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] py-3">
           {statsCards.map((card) => (
-            <div
-              key={card.label}
-              className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4 shadow-[var(--shadow-card)]"
-            >
-              <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
-                <card.icon className="h-4 w-4 text-[var(--color-brand)]" />
-                {card.label}
-              </div>
-              <p className="mt-2 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">
+            <div key={card.label} className="min-w-0 px-2 text-center sm:px-4 sm:text-left">
+              <p className="truncate text-lg font-semibold tabular-nums text-[var(--text-primary)] sm:text-2xl">
                 {card.value}
-                <span className="ml-1 text-xs font-normal text-[var(--text-tertiary)]">{card.unit}</span>
+                <span className="ml-0.5 text-[10px] font-normal text-[var(--text-tertiary)] sm:ml-1 sm:text-xs">
+                  {card.unit}
+                </span>
+              </p>
+              <p className="mt-0.5 flex items-center justify-center gap-1 text-[11px] text-[var(--text-tertiary)] sm:justify-start sm:text-xs">
+                <card.icon className="hidden h-3.5 w-3.5 text-[var(--color-brand)] sm:block" />
+                {card.label}
               </p>
             </div>
           ))}
         </section>
 
-        <section className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4 shadow-[var(--shadow-card)] sm:px-6 sm:py-5">
+        <section ref={panelsSectionRef} className="scroll-mt-20">
           <div className="flex flex-wrap gap-2">
             {panels.map((panel) => {
               const count =
-                panel.id === 'shelf' ? mergedShelf.length : panel.id === 'creation' ? visibleAuthoredNovels.length : 0
+                panel.id === 'shelf' ? mergedShelf.length : panel.id === 'creation' ? visibleAuthoredNovels.length : null
 
               return (
                 <button
@@ -434,7 +532,7 @@ export default function ProfilePage() {
                   ].join(' ')}
                 >
                   {panel.label}
-                  <span className="text-xs opacity-75">{count}</span>
+                  {count !== null ? <span className="text-xs opacity-75">{count}</span> : null}
                 </button>
               )
             })}
@@ -465,25 +563,48 @@ export default function ProfilePage() {
 
           {activePanel === 'favorites' ? (
             <div className="mt-5">
-              <AppState
-                tone="empty"
-                title="你还没有收藏内容"
-                description="看到喜欢的作品后，把它们收进收藏，这里会慢慢变成你的私人精选。"
-                primaryAction={{ label: '去发现', onClick: () => navigate('/discover') }}
-                className="min-h-[280px]"
-              />
+              {favoriteNovelsQuery.isLoading ? (
+                <AppState tone="loading" title="正在加载收藏" className="min-h-[280px]" />
+              ) : favoriteItems.length > 0 ? (
+                <ShelfPanel
+                  items={favoriteItems}
+                  progressMap={progressMap}
+                  onOpenNovel={(novelId) => navigate(`/novel/${novelId}`)}
+                  onDiscover={() => navigate('/discover')}
+                />
+              ) : (
+                <AppState
+                  tone="empty"
+                  title="你还没有收藏内容"
+                  description="看到喜欢的作品后，把它们收进收藏，这里会慢慢变成你的私人精选。"
+                  primaryAction={{ label: '去发现', onClick: () => navigate('/discover') }}
+                  className="min-h-[280px]"
+                />
+              )}
+            </div>
+          ) : null}
+
+          {activePanel === 'liked' ? (
+            <div className="mt-5">
+              <LikedPostsPanel userId={currentUser.id} isSelf />
+            </div>
+          ) : null}
+
+          {activePanel === 'replies' ? (
+            <div className="mt-5">
+              <RepliesPanel userId={currentUser.id} isSelf />
             </div>
           ) : null}
         </section>
       </div>
 
       {editDialogVisible ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-[560px] rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
+        <div className="fixed inset-x-0 top-0 bottom-[var(--keyboard-inset,0px)] z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
+          <div className="max-h-full w-full max-w-[560px] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
             <div className="space-y-2">
               <h3 className="text-xl font-semibold text-[var(--text-primary)]">编辑资料</h3>
               <p className="text-sm leading-7 text-[var(--text-secondary)]">
-                在这里修改头像、昵称和简介。封面仍然可以去设置页继续维护。
+                在这里修改头像、昵称和简介。封面可以在个人主页直接点击设置。
               </p>
             </div>
 
@@ -572,8 +693,15 @@ export default function ProfilePage() {
               </div>
 
               <div className="flex flex-wrap gap-3 pt-2">
-                <Button type="button" variant="secondary" onClick={() => navigate('/settings')}>
-                  去设置封面
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    closeEditDialog()
+                    coverInputRef.current?.click()
+                  }}
+                >
+                  设置封面
                 </Button>
                 <Button type="button" variant="secondary" onClick={closeEditDialog} disabled={profileSubmitting}>
                   取消
@@ -615,6 +743,15 @@ export default function ProfilePage() {
           </div>
         </div>
       ) : null}
+
+      <ImageCropperDialog
+        open={coverDraft !== null}
+        imageDataUrl={coverDraft}
+        aspect={3}
+        submitting={coverSubmitting}
+        onCancel={() => setCoverDraft(null)}
+        onConfirm={(croppedDataUrl) => void handleCoverCropConfirm(croppedDataUrl)}
+      />
     </>
   )
 }

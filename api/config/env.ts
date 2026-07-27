@@ -71,8 +71,9 @@ export const env = {
   // Agent Loop 引擎：loop = 新内核；legacy = 旧链路；Vercel serverless 不支持长循环，强制 legacy
   agentEngine: process.env.VERCEL ? 'legacy' : (process.env.AGENT_ENGINE ?? 'loop'),
   agentModel: process.env.AI_AGENT_MODEL ?? process.env.AI_TEXT_MODEL ?? 'deepseek-chat',
-  agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 12),
-  agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 120000),
+  // 长任务（如连写六章）需要更多轮次与 token 预算，配合待办机制保证连续执行不早停
+  agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 40),
+  agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 600000),
   agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),
   agentUserMaxConcurrent: parsePositiveNumber(process.env.AGENT_USER_MAX_CONCURRENT, 2),
   aiImageProvider: process.env.AI_IMAGE_PROVIDER ?? 'openai-compatible',
@@ -83,6 +84,12 @@ export const env = {
   aiImageModel: process.env.AI_IMAGE_MODEL ?? 'gpt-image-2',
   aiImageDefaultSize: process.env.AI_IMAGE_DEFAULT_SIZE ?? '1024x1536',
   aiImageDefaultCount: parsePositiveNumber(process.env.AI_IMAGE_DEFAULT_COUNT, 1),
+  // 听书 TTS（方案 17）：edge = 免费 Edge 神经音色；disabled = 全端隐藏听书入口
+  ttsProvider: process.env.TTS_PROVIDER ?? 'edge',
+  ttsDefaultVoice: process.env.TTS_DEFAULT_VOICE ?? 'zh-CN-XiaoxiaoNeural',
+  ttsCacheDir: process.env.TTS_CACHE_DIR ?? '',
+  ttsCacheMaxMb: parsePositiveNumber(process.env.TTS_CACHE_MAX_MB, 2048),
+  ttsTimeoutMs: parsePositiveNumber(process.env.TTS_TIMEOUT_MS, 30000),
   // 第三方生图服务响应很慢，默认放宽到 15 分钟（Node fetch 默认 5 分钟头超时不够用）
   aiImageTimeoutMs: parsePositiveNumber(process.env.AI_IMAGE_TIMEOUT_MS, 900000),
   aiProviderMode:

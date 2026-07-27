@@ -4,6 +4,7 @@ import type { CreatePostRequest } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { createPostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { MAX_POST_IMAGE_COUNT, storePostImageDataUrls } from '../lib/post-image-storage.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
@@ -50,10 +51,22 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       return
     }
 
+    const imageDataUrls = Array.isArray(body.imageDataUrls)
+      ? body.imageDataUrls.filter((item): item is string => typeof item === 'string')
+      : []
+
+    if (imageDataUrls.length > MAX_POST_IMAGE_COUNT) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', `讨论配图最多上传 ${MAX_POST_IMAGE_COUNT} 张。`))
+      return
+    }
+
+    // 配图只信任服务端落盘结果，不直接写入客户端传来的 imageUrls
+    const imageUrls = imageDataUrls.length ? await storePostImageDataUrls(imageDataUrls) : []
+
     const post = await createPostData(userId, {
       content: body.content.trim(),
       topicId: body.topicId,
-      imageUrls: body.imageUrls ?? [],
+      imageUrls,
       relatedNovelId: body.relatedNovelId,
     })
 

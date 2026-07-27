@@ -3,7 +3,6 @@ import {
   Check,
   CircleAlert,
   Copy,
-  FileDiff,
   History,
   LoaderCircle,
   Pencil,
@@ -24,10 +23,10 @@ import type {
   AgentUIMessage,
   EntityId,
 } from '../../../../../shared/contracts/index.js'
-import type { ChapterPendingReview, PlanPendingReview } from '../../types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 
 import {
+  AgentApiError,
   continueAgentLoopRun,
   deleteAgentSession,
   deleteAgentSessionMessage,
@@ -63,18 +62,16 @@ type AgentPanelProps = {
   ensureSession: () => Promise<EntityId>
   /** SSE 事件透传：宿主据此同步章节树/编辑器等工作区状态 */
   onStreamEvent?: (event: AgentStreamEvent) => void
-  /** 待审查的正文变更：非空时在消息流上方展示一键批准/撤销图标条 */
-  pendingReview?: ChapterPendingReview | null
-  pendingReviewBusy?: boolean
-  onApproveReview?: () => void
-  onRejectReview?: () => void
-  /** 待审查的计划修订（plan/14 方案F）：与正文审查条并列展示 */
-  pendingPlanReview?: PlanPendingReview | null
-  pendingPlanReviewBusy?: boolean
-  onApprovePlanReview?: () => void
-  onRejectPlanReview?: () => void
+  /** 待审查变更总数（正文审查 + 计划审查）：驱动工作区变更头部的 ✓/✕ 一键审查按钮 */
+  pendingReviewCount?: number
+  reviewBusy?: boolean
+  /** ✓ 一键采纳全部待审变更 / ✕ 一键撤回（宿主弹自定义确认框） */
+  onApproveAllReviews?: () => void
+  onRejectAllReviews?: () => void
   /** 历史任务对话：点击列表项切换会话 */
   onSelectSession?: (sessionId: EntityId) => void
+  /** 历史列表删除会话成功后回调：宿主同步移除对应任务窗口，避免僵尸 sessionId 写回本地快照 */
+  onSessionDeleted?: (sessionId: EntityId) => void
   /** 新建任务对话：宿主重置 sessionId 为 null（首次发送时懒创建） */
   onNewSession?: () => void
   /** 回退成功后宿主刷新工作区（章节树/编辑器/小说信息） */
@@ -120,15 +117,12 @@ export function AgentPanel({
   selection,
   ensureSession,
   onStreamEvent,
-  pendingReview,
-  pendingReviewBusy,
-  onApproveReview,
-  onRejectReview,
-  pendingPlanReview,
-  pendingPlanReviewBusy,
-  onApprovePlanReview,
-  onRejectPlanReview,
+  pendingReviewCount = 0,
+  reviewBusy = false,
+  onApproveAllReviews,
+  onRejectAllReviews,
   onSelectSession,
+  onSessionDeleted,
   onNewSession,
   onWorkspaceRollback,
   onClose,
@@ -143,6 +137,9 @@ export function AgentPanel({
   const currentTurn = useAgentStore((state) => state.currentTurn)
   const errorMessage = useAgentStore((state) => state.errorMessage)
   const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
+  const activitiesVersion = useAgentStore((state) => state.activitiesVersion)
+  const todos = useAgentStore((state) => state.todos)
+  const todosVersion = useAgentStore((state) => state.todosVersion)
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
@@ -285,12 +282,19 @@ export function AgentPanel({
         useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId)
         connect(result.runId)
       } catch (error) {
+        // 会话已在服务端被删除（如用户删了历史任务后本地快照残留僵尸 sessionId）：
+        // 重置为新对话而不是让用户死循环卡在「会话不存在或无权访问」里
+        if (sessionId && error instanceof AgentApiError && error.status === 404 && error.code === 'NOT_FOUND') {
+          onNewSession?.()
+          setActionError('上个会话已被删除，已为你新建对话，请重新发送。')
+          throw error
+        }
         setActionError(error instanceof Error ? error.message : '启动失败，请稍后再试。')
         // 抛回输入框：发送失败时保留草稿，避免用户输入丢失
         throw error
       }
     },
-    [sessionId, novelId, chapterId, mode, selection, ensureSession, connect],
+    [sessionId, novelId, chapterId, mode, selection, ensureSession, connect, onNewSession],
   )
 
   const handleStop = useCallback(async () => {
@@ -448,6 +452,7 @@ export function AgentPanel({
       if (confirmAction.kind === 'deleteSession') {
         await deleteAgentSession(confirmAction.sessionId)
         setSessions((current) => current.filter((item) => item.id !== confirmAction.sessionId))
+        onSessionDeleted?.(confirmAction.sessionId)
         if (confirmAction.sessionId === sessionId) {
           onNewSession?.()
         }
@@ -470,7 +475,7 @@ export function AgentPanel({
     } finally {
       setConfirmBusy(false)
     }
-  }, [confirmAction, sessionId, onNewSession, onWorkspaceRollback, reloadMessages])
+  }, [confirmAction, sessionId, onSessionDeleted, onNewSession, onWorkspaceRollback, reloadMessages])
 
   const confirmDialogCopy = confirmAction
     ? confirmAction.kind === 'deleteSession'
@@ -776,10 +781,20 @@ export function AgentPanel({
         )}
       </div>
 
-      {/* 工作区变更条 */}
-      {workspaceActivities.length > 0 ? (
+      {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开；待审时头部提供 ✓/✕ 一键审查） */}
+      {workspaceActivities.length > 0 || todos.length > 0 || pendingReviewCount > 0 ? (
         <div className="px-4 pb-2">
-          <AgentActivityBar activities={workspaceActivities} />
+          <AgentActivityBar
+            activities={workspaceActivities}
+            activitiesVersion={activitiesVersion}
+            todos={todos}
+            todosVersion={todosVersion}
+            runActive={active}
+            pendingReviewCount={pendingReviewCount}
+            reviewBusy={reviewBusy}
+            onApproveAllReviews={onApproveAllReviews}
+            onRejectAllReviews={onRejectAllReviews}
+          />
         </div>
       ) : null}
 
@@ -798,74 +813,6 @@ export function AgentPanel({
             aria-label="关闭提示"
           >
             <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
-
-      {/* 待审查变更条：移到输入框正上方，✓ 一键批准 / ✕ 撤销（宿主弹自定义确认框） */}
-      {pendingReview ? (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/80 px-3 py-2">
-          <FileDiff className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-          <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]">
-            {pendingReview.description}
-          </p>
-          <button
-            type="button"
-            onClick={onApproveReview}
-            disabled={pendingReviewBusy}
-            aria-label="批准全部变更"
-            title="批准全部变更"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pendingReviewBusy ? (
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onRejectReview}
-            disabled={pendingReviewBusy}
-            aria-label="撤销变更"
-            title="撤销变更"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-500 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      ) : null}
-
-      {/* 计划修订审查条（plan/14 方案F）：同样贴在输入框上方，✓保留 / ✕回写修订前 */}
-      {pendingPlanReview ? (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/80 px-3 py-2">
-          <FileDiff className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-          <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]">
-            {pendingPlanReview.description}
-          </p>
-          <button
-            type="button"
-            onClick={onApprovePlanReview}
-            disabled={pendingPlanReviewBusy}
-            aria-label="保留计划修订"
-            title="保留计划修订"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pendingPlanReviewBusy ? (
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onRejectPlanReview}
-            disabled={pendingPlanReviewBusy}
-            aria-label="撤销计划修订"
-            title="撤销计划修订"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-500 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <X className="h-4 w-4" />
           </button>
         </div>
       ) : null}

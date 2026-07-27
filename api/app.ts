@@ -27,8 +27,9 @@ app.use(
     credentials: true,
   }),
 )
-app.use(express.json({ limit: '10mb' }))
-app.use(express.urlencoded({ extended: true, limit: '10mb' }))
+// 发帖最多 9 张 base64 配图，预留到 40mb
+app.use(express.json({ limit: '40mb' }))
+app.use(express.urlencoded({ extended: true, limit: '40mb' }))
 app.use('/api/uploads', express.static(getUploadsStaticDirectory(), { fallthrough: false }))
 
 app.use('/api/agent', agentRoutes)

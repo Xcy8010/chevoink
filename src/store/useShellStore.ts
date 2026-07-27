@@ -8,8 +8,10 @@ type AuthStatus = 'checking' | 'guest' | 'authenticated' | 'unavailable'
 
 type ShellState = {
   theme: ThemeMode
-  /** 全站沉浸全屏开关（设置页可关），持久化保存 */
+  /** 全站沉浸全屏开关（设置页可关），持久化保存；默认关闭，由首次进入弹窗询问 */
   fullscreenEnabled: boolean
+  /** 是否已回答过「首次进入是否开启全屏」弹窗，持久化保存 */
+  fullscreenPromptSeen: boolean
   quickCreateOpen: boolean
   authStatus: AuthStatus
   sessionUser: User | null
@@ -19,6 +21,8 @@ type ShellState = {
   setTheme: (theme: ThemeMode) => void
   toggleTheme: () => void
   setFullscreenEnabled: (enabled: boolean) => void
+  /** 首次进入弹窗中的选择：记录偏好并标记弹窗已回答 */
+  chooseFullscreen: (enabled: boolean) => void
   openQuickCreate: () => void
   closeQuickCreate: () => void
   setSessionChecking: () => void
@@ -41,7 +45,8 @@ export const useShellStore = create<ShellState>()(
   persist(
     (set, get) => ({
       theme: 'light',
-      fullscreenEnabled: true,
+      fullscreenEnabled: false,
+      fullscreenPromptSeen: false,
       quickCreateOpen: false,
       authStatus: 'checking',
       sessionUser: null,
@@ -54,6 +59,7 @@ export const useShellStore = create<ShellState>()(
           theme: get().theme === 'light' ? 'dark' : 'light',
         }),
       setFullscreenEnabled: (enabled) => set({ fullscreenEnabled: enabled }),
+      chooseFullscreen: (enabled) => set({ fullscreenEnabled: enabled, fullscreenPromptSeen: true }),
       openQuickCreate: () => set({ quickCreateOpen: true }),
       closeQuickCreate: () => set({ quickCreateOpen: false }),
       setSessionChecking: () =>
@@ -98,13 +104,19 @@ export const useShellStore = create<ShellState>()(
       partialize: (state) => ({
         theme: state.theme,
         fullscreenEnabled: state.fullscreenEnabled,
+        fullscreenPromptSeen: state.fullscreenPromptSeen,
       }),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        theme: (persistedState as Partial<ShellState>)?.theme ?? currentState.theme,
-        fullscreenEnabled:
-          (persistedState as Partial<ShellState>)?.fullscreenEnabled ?? currentState.fullscreenEnabled,
-      }),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<ShellState> | undefined
+        return {
+          ...currentState,
+          theme: persisted?.theme ?? currentState.theme,
+          fullscreenEnabled: persisted?.fullscreenEnabled ?? currentState.fullscreenEnabled,
+          // 老版本没有该字段：只要本地已存过全屏偏好就视为回答过，避免老用户被再次弹窗
+          fullscreenPromptSeen:
+            persisted?.fullscreenPromptSeen ?? persisted?.fullscreenEnabled !== undefined,
+        }
+      },
     },
   ),
 )

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ListOrdered, LogOut, MessageSquare, Settings2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Headphones, ListOrdered, LogOut, MessageSquare, Settings2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -9,6 +9,8 @@ import ReaderCommentsPanel from '../components/ReaderCommentsPanel'
 import ReaderDirectory from '../components/ReaderDirectory'
 import ReaderProgressBar from '../components/ReaderProgressBar'
 import ReaderSettingsContent from '../components/ReaderSettingsContent'
+import TtsControlSheet from '../tts/TtsControlSheet'
+import TtsMiniBar from '../tts/TtsMiniBar'
 import { useChapterGestures } from '../useChapterGestures'
 import type { ReaderState } from '../useReaderState'
 
@@ -25,6 +27,7 @@ type ReaderMobileProps = {
  */
 export default function ReaderMobile({ state }: ReaderMobileProps) {
   const [controlsVisible, setControlsVisible] = useState(true)
+  const [ttsSheetOpen, setTtsSheetOpen] = useState(false)
   const navigate = useNavigate()
   const tone = state.toneOption
 
@@ -100,7 +103,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         {/* 顶部留出控制栏高度（安全区 + 栏体 56px + 呼吸感），避免章节头部被半透明控制栏遮住 */}
-        <div className="mx-auto max-w-[680px] px-5 pb-32 pt-[calc(env(safe-area-inset-top)+76px)]">
+        <div className="mx-auto max-w-[680px] px-5 pb-32 pt-[calc(var(--safe-top)+76px)]">
           <ReaderArticle
             state={state}
             header="compact"
@@ -121,7 +124,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
         }}
       >
         <div
-          className="flex items-center gap-2 px-2 pb-2 pt-[calc(env(safe-area-inset-top)+8px)]"
+          className="flex items-center gap-2 px-2 pb-2 pt-[calc(var(--safe-top)+8px)]"
           style={{ color: tone.text }}
         >
           <Link
@@ -135,6 +138,22 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
             <p className="truncate text-sm font-medium">{state.novelTitle}</p>
             <p className="truncate text-xs opacity-60">{state.chapterTitle}</p>
           </div>
+          {state.tts.available ? (
+            <button
+              type="button"
+              aria-label="听书"
+              onClick={() => {
+                if (state.tts.isActive) {
+                  setTtsSheetOpen(true)
+                } else {
+                  state.tts.start()
+                }
+              }}
+              className="touch-target inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-pill)] press-feedback"
+            >
+              <Headphones className="h-5 w-5" />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label="阅读设置"
@@ -157,7 +176,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
           borderColor: 'color-mix(in srgb, currentColor 12%, transparent)',
         }}
       >
-        <div className="grid grid-cols-6 px-2 pb-[env(safe-area-inset-bottom)]">
+        <div className="grid grid-cols-6 px-2 pb-[var(--safe-bottom)]">
           {bottomItem('退出', <LogOut className="h-5 w-5 rotate-180" />, () => navigate(state.backHref))}
           {bottomItem(
             '上一章',
@@ -177,6 +196,17 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
         </div>
       </div>
 
+      {/* 听书迷你条：吸底，控制栏可见时让位到操作栏上方 */}
+      <TtsMiniBar
+        tts={state.tts}
+        tone={tone}
+        onExpand={() => setTtsSheetOpen(true)}
+        className={cn(
+          'absolute inset-x-0 z-20 transition-all [transition-duration:var(--duration-normal)]',
+          controlsVisible ? 'bottom-[calc(var(--safe-bottom)+56px)]' : 'bottom-0 pb-[var(--safe-bottom)]',
+        )}
+      />
+
       {/* 底部抽屉：目录 / 评论 / 设置 */}
       <BottomSheet open={state.activePanel === 'directory'} onClose={closePanel} title="目录">
         <ReaderDirectory state={state} onNavigate={closePanel} />
@@ -191,6 +221,9 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
           onFontScaleChange={state.setFontScale}
           onToneChange={state.setTone}
         />
+      </BottomSheet>
+      <BottomSheet open={ttsSheetOpen} onClose={() => setTtsSheetOpen(false)} title="听书设置">
+        <TtsControlSheet tts={state.tts} />
       </BottomSheet>
     </div>
   )

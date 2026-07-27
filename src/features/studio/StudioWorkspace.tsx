@@ -1,13 +1,16 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, BookOpen, BookOpenText, Clock3, FileText, Globe2, LoaderCircle, Lock, Menu, MessageSquareText, PenLine, RefreshCcw, Settings2, Upload, Users, WandSparkles, X } from 'lucide-react'
+import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Upload, Users, WandSparkles, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
+import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import Tag from '@/components/ui/Tag'
 import TextInput from '@/components/ui/TextInput'
 import { useToast } from '@/components/ui/Toast'
+import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
+import { useKeyboardInset } from '@/hooks/useMobileComposer'
 import { cn } from '@/lib/utils'
 import { FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type {
@@ -67,6 +70,7 @@ import AgentTaskSidebar from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
 import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
+import { buildReviewDiff, resolveReviewHunk } from './components/diff'
 import ImmersiveComposer from './components/ImmersiveComposer'
 import MetaPanel from './components/MetaPanel'
 import NovelCoverCropDialog from './components/NovelCoverCropDialog'
@@ -77,7 +81,7 @@ import WritingAgentPanel from './components/WritingAgentPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle, useStudioPanelWidths } from './panel-resize'
-import { ActionCommandButton, InputLabel } from './components/StudioControls'
+import { ActionCommandButton, InputLabel, SaveStatusPill } from './components/StudioControls'
 import type {
   AgentArtifact,
   AgentLocalRollbackChapterSnapshot,
@@ -2400,6 +2404,25 @@ function readStoredPendingReview<T extends { id: string }>(key: string): T | nul
   }
 }
 
+// 章节审查已改为多章并存的数组；兼容历史遗留的单对象存储格式
+function readStoredPendingReviewList<T extends { id: string }>(key: string): T[] {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) {
+      return []
+    }
+    const parsed = JSON.parse(raw) as T[] | T | null
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (item) => item && typeof item === 'object' && typeof item.id === 'string',
+      )
+    }
+    return parsed && typeof parsed === 'object' && typeof parsed.id === 'string' ? [parsed] : []
+  } catch {
+    return []
+  }
+}
+
 function writeStoredPendingReview(key: string, review: unknown) {
   try {
     if (review) {
@@ -2755,7 +2778,10 @@ export default function StudioWorkspace() {
   const [novelLastSavedAt, setNovelLastSavedAt] = useState<string | null>(null)
   const [novelMessage, setNovelMessage] = useState('作品设置支持自动保存，也可以手动点击保存。')
   const [mobileView, setMobileView] = useState<MobileView>('assistant')
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const keyboardInset = useKeyboardInset()
+  // 创作区（含沉浸创作/弹层 portal）内滚动条静止时隐藏，滚动中才显示
+  useAutoHideScrollbars()
   const { panelWidths, beginPanelResize } = useStudioPanelWidths()
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
   const [isImmersive, setIsImmersive] = useState(false)
@@ -2796,8 +2822,15 @@ export default function StudioWorkspace() {
   const [coverMessage, setCoverMessage] = useState('先整理提示词，再生成候选封面。')
   const [pendingCoverUploadFile, setPendingCoverUploadFile] = useState<File | null>(null)
   const [editorChapterSettingsOpen, setEditorChapterSettingsOpen] = useState(false)
-  const [pendingChapterReview, setPendingChapterReview] = useState<ChapterPendingReview | null>(null)
+  // 章节审查改为数组：Agent 连续写多章时各章审查态并存，互不覆盖（fix：新章写入导致旧审查被自动采纳）
+  const [pendingChapterReviews, setPendingChapterReviews] = useState<ChapterPendingReview[]>([])
   const [pendingChapterReviewBusy, setPendingChapterReviewBusy] = useState(false)
+    // 刚在哪一章完成全部定夺：仅该章展示「下一个文件」浮标，避免浏览其它未修改章节时误出现（fix）
+    const [reviewHandoffChapterId, setReviewHandoffChapterId] = useState<string | null>(null)
+  // 切章后收回流转浮标：只在定夺发生的那一章短暂展示
+  useEffect(() => {
+    setReviewHandoffChapterId(null)
+  }, [selectedChapterId])
   // 计划审查条（plan/14 方案F）：plan_save 更新既有计划后非阻塞事后审，新建计划不触发
   const [pendingPlanReview, setPendingPlanReview] = useState<PlanPendingReview | null>(null)
   const [pendingPlanReviewBusy, setPendingPlanReviewBusy] = useState(false)
@@ -2805,8 +2838,8 @@ export default function StudioWorkspace() {
   const pendingReviewHydratedNovelIdRef = useRef<string | null>(null)
   useEffect(() => {
     pendingReviewHydratedNovelIdRef.current = null
-    setPendingChapterReview(
-      readStoredPendingReview<ChapterPendingReview>(`${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`),
+    setPendingChapterReviews(
+      readStoredPendingReviewList<ChapterPendingReview>(`${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`),
     )
     setPendingPlanReview(
       readStoredPendingReview<PlanPendingReview>(`${PENDING_PLAN_REVIEW_STORAGE_PREFIX}${activeNovelId}`),
@@ -2817,8 +2850,11 @@ export default function StudioWorkspace() {
     if (pendingReviewHydratedNovelIdRef.current !== activeNovelId) {
       return
     }
-    writeStoredPendingReview(`${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`, pendingChapterReview)
-  }, [activeNovelId, pendingChapterReview])
+    writeStoredPendingReview(
+      `${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`,
+      pendingChapterReviews.length > 0 ? pendingChapterReviews : null,
+    )
+  }, [activeNovelId, pendingChapterReviews])
   useEffect(() => {
     if (pendingReviewHydratedNovelIdRef.current !== activeNovelId) {
       return
@@ -3038,9 +3074,9 @@ export default function StudioWorkspace() {
     )
   }
 
+  // 切换作品时只重置树选中与目录文档；审查态交由上方水合 effect 按作品键恢复，
+  // 此处若清空会在「返回创作区/刷新」时把未定夺的 diff 误判为已采纳（fix2）
   useEffect(() => {
-    setPendingChapterReview(null)
-    setPendingChapterReviewBusy(false)
     setSelectedTreeItemId(null)
     setCatalogDocument(null)
   }, [activeNovelId])
@@ -3181,7 +3217,20 @@ export default function StudioWorkspace() {
           return
         }
 
+        // 服务端会话列表是唯一真相：本地快照里 sessionId 已不存在的任务窗口（会话被删除后残留）
+        // 必须剔除，否则会拿着僵尸 sessionId 反复 404（拉消息/发消息都报「会话不存在或无权访问」），刷新也无法自愈
+        const validSessionIds = new Set(sessions.map((session) => session.id))
+        const aliveSnapshotTasks = snapshotTasks.filter(
+          (taskWindow) => !taskWindow.sessionId || validSessionIds.has(taskWindow.sessionId),
+        )
+
         if (sessions.length === 0) {
+          if (aliveSnapshotTasks.length === snapshotTasks.length) {
+            return
+          }
+          const fallbackTasks = aliveSnapshotTasks.length > 0 ? aliveSnapshotTasks : [createLocalAgentTaskWindow()]
+          setAgentTaskWindows(fallbackTasks)
+          applyAgentTaskWindowState(fallbackTasks[0] ?? null)
           return
         }
 
@@ -3211,7 +3260,7 @@ export default function StudioWorkspace() {
           }
 
           return [...current, buildAgentTaskWindowFromSession(session)]
-        }, dedupeAgentTaskWindows(snapshotTasks)))
+        }, dedupeAgentTaskWindows(aliveSnapshotTasks)))
 
         const nextTaskWindow =
           mergedTasks.find((taskWindow) => taskWindow.id === (snapshot?.activeTaskId ?? initialTaskWindow?.id)) ??
@@ -3419,8 +3468,8 @@ export default function StudioWorkspace() {
   const agentWorkspaceDirtyRef = useRef(false)
   const chapterQueryRefetchRef = useRef(chapterQuery.refetch)
   chapterQueryRefetchRef.current = chapterQuery.refetch
-  const pendingChapterReviewRef = useRef(pendingChapterReview)
-  pendingChapterReviewRef.current = pendingChapterReview
+  const pendingChapterReviewsRef = useRef(pendingChapterReviews)
+  pendingChapterReviewsRef.current = pendingChapterReviews
   const chaptersStateRef = useRef(chapters)
   chaptersStateRef.current = chapters
   const currentNovelStateRef = useRef(currentNovel)
@@ -3449,8 +3498,8 @@ export default function StudioWorkspace() {
     setChapterSaveMessage('Agent 正在写这一章，已自动跟随…')
   }
 
-  // Agent Loop 写正文后进入 IDE 式审查：用 chapterDiff 负载构造 pendingChapterReview，
-  // 编辑器随即以绿(新增)/红(删除) diff 呈现，由用户“保留/撤销”定夺
+  // Agent Loop 写正文后进入 IDE 式审查：用 chapterDiff 负载构造待审章节，按 chapterId upsert 进数组，
+  // 编辑器随即以绿(新增)/红(删除) diff 呈现，由用户“保留/撤销”逐章定夺
   const captureAgentChapterReview = useCallback(
     (event: Extract<AgentStreamEvent, { type: 'tool.result' }>) => {
       const display = event.display
@@ -3479,18 +3528,27 @@ export default function StudioWorkspace() {
         localOnly: false,
       }
 
-      // 同一章节连续写入（如 chapter_write 后再 append）：保留最早的 before/回滚快照，仅推进 after
-      const currentReview = pendingChapterReviewRef.current
-      if (currentReview && currentReview.chapterId === display.chapterId) {
-        setPendingChapterReview({
-          ...currentReview,
-          after: afterState,
-          runId: event.runId,
-          description: buildChapterReviewDescription(
-            currentReview.before === null ? 'create' : 'replace',
-            display.chapterTitle,
+      // 同一章节连续写入（如 chapter_write 后再 append）：保留最早的 before/回滚快照，仅推进 after；
+      // 其他章节的审查态不受影响（fix：新章写入不再覆盖旧章未定夺的审查）
+      const currentReview = pendingChapterReviewsRef.current.find(
+        (item) => item.chapterId === display.chapterId,
+      )
+      if (currentReview) {
+        setPendingChapterReviews((current) =>
+          current.map((item) =>
+            item.chapterId === display.chapterId
+              ? {
+                  ...item,
+                  after: afterState,
+                  runId: event.runId,
+                  description: buildChapterReviewDescription(
+                    item.before === null ? 'create' : 'replace',
+                    display.chapterTitle,
+                  ),
+                }
+              : item,
           ),
-        })
+        )
         return
       }
 
@@ -3529,7 +3587,8 @@ export default function StudioWorkspace() {
             selectedChapterId: selectedChapterIdStateRef.current,
           }
 
-      setPendingChapterReview(
+      setPendingChapterReviews((current) => [
+        ...current.filter((item) => item.chapterId !== display.chapterId),
         buildPendingChapterReview({
           before: isCreate
             ? null
@@ -3542,7 +3601,7 @@ export default function StudioWorkspace() {
           ),
           runId: event.runId,
         }),
-      )
+      ])
     },
     [],
   )
@@ -3977,7 +4036,7 @@ export default function StudioWorkspace() {
       return
     }
 
-    if (pendingChapterReview) {
+    if (pendingChapterReviews.length > 0) {
       promptConfirmPendingChapterReview('切换作品')
       return
     }
@@ -3987,7 +4046,7 @@ export default function StudioWorkspace() {
   }
 
   function handleCreateWorkspaceNovel() {
-    if (pendingChapterReview) {
+    if (pendingChapterReviews.length > 0) {
       promptConfirmPendingChapterReview('新建作品')
       return
     }
@@ -5017,7 +5076,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       message: 'Agent 已将正文写入新章节。',
       wordCountDelta: savedChapter.wordCount - workingChapter.content.length,
     })
-    setPendingChapterReview(review)
+    upsertPendingChapterReview(review)
     actionResults.push({
       applied: true,
       message: `已将正文写入新章节《${savedChapter.title}》。`,
@@ -5129,7 +5188,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       message: append ? 'Agent 已把最新内容追加到当前章节。' : 'Agent 已把最新内容写入当前章节。',
       wordCountDelta: savedChapter.wordCount - targetChapter.content.length,
     })
-    setPendingChapterReview(review)
+    upsertPendingChapterReview(review)
     return {
       applied: true,
       message: append ? '已把最新内容追加到当前章节。' : '已把最新内容写入当前章节。',
@@ -5426,6 +5485,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     onError: (error: Error) => {
       setNovelSaveState('error')
       setNovelMessage(error.message)
+      // 发布弹窗还开着时，底层状态条被遮挡，用 toast 把后端校验信息顶到用户眼前
+      toast.error(error.message)
     },
   })
 
@@ -5557,6 +5618,17 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       return
     }
 
+    // 上架前置校验：0 章节的作品不允许发布，先引导去写第一章
+    if (chapters.length === 0) {
+      setWorkspaceDialog({
+        title: '还不能发布这部作品',
+        description: '发布前需要至少写好一个章节，并在发布时选择公开，读者才能看到这部作品。',
+        confirmLabel: '我知道了',
+        onConfirm: () => undefined,
+      })
+      return
+    }
+
     // 上架前置校验：没有标签的作品先引导去作品设置选标签
     const tags = novelForm.tagsText
       .split(/[、/\s]+/)
@@ -5670,11 +5742,22 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
   function promptConfirmPendingChapterReview(actionLabel: string) {
     setWorkspaceDialog({
       title: '请先确认当前正文改动',
-      description: `当前章节还有一处待确认的正文变更，请先选择“保留”或“撤销”，再继续${actionLabel}。`,
+      description: `当前章节还有待确认的正文变更，请先选择“保留”或“撤销”，再继续${actionLabel}。`,
       confirmLabel: '我知道了',
       cancelLabel: '关闭',
       onConfirm: () => undefined,
     })
+  }
+
+  // 按章节 upsert 待审条目：同章替换、异章并存（legacy 引擎路径与产物应用路径共用）
+  function upsertPendingChapterReview(review: ChapterPendingReview | null) {
+    if (!review) {
+      return
+    }
+    setPendingChapterReviews((current) => [
+      ...current.filter((item) => item.chapterId !== review.chapterId),
+      review,
+    ])
   }
 
   const persistChapter = useCallback(
@@ -5683,8 +5766,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
         return
       }
 
-      // 仅拦截待审查的那一章，其他章节正常保存
-      if (pendingChapterReview && pendingChapterReview.chapterId === chapterDraft.id) {
+      // 仅拦截待审查的那些章，其他章节正常保存
+      if (pendingChapterReviews.some((item) => item.chapterId === chapterDraft.id)) {
         if (reason !== 'auto') {
           promptConfirmPendingChapterReview('保存当前章节')
         }
@@ -5771,7 +5854,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
         setChapterSaveMessage(error instanceof Error ? error.message : '章节保存失败，请稍后重试。')
       }
     },
-    [activeNovelId, chapterDraft, pendingChapterReview, syncStudioPayload],
+    [activeNovelId, chapterDraft, pendingChapterReviews, syncStudioPayload],
   )
 
   useEffect(() => {
@@ -6196,8 +6279,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       return
     }
 
-    // 审查拦截仅限待审查的那一章，其他章节可自由删除
-    if (pendingChapterReview && pendingChapterReview.chapterId === chapterDraft.id) {
+    // 审查拦截仅限待审查的那些章，其他章节可自由删除
+    if (pendingChapterReviews.some((item) => item.chapterId === chapterDraft.id)) {
       promptConfirmPendingChapterReview('删除章节')
       return
     }
@@ -6396,15 +6479,16 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     }
   }
 
-  function handleKeepPendingChapterReview() {
-    if (!pendingChapterReview || pendingChapterReviewBusy) {
+  function handleKeepPendingChapterReview(review: ChapterPendingReview) {
+    if (pendingChapterReviewBusy) {
       return
     }
 
-    const review = pendingChapterReview
     setPendingChapterReviewBusy(true)
     try {
-      setPendingChapterReview(null)
+      setPendingChapterReviews((current) => current.filter((item) => item.id !== review.id))
+      // 本章定夺完毕：若还有其它章待审，在当前章底部给出「下一个文件」流转入口
+      setReviewHandoffChapterId(review.chapterId)
       setChapterSaveState('saved')
       setChapterSaveMessage('已保留本次正文变更。')
 
@@ -6419,12 +6503,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     }
   }
 
-  async function handleRevertPendingChapterReview() {
-    if (!pendingChapterReview || pendingChapterReviewBusy) {
+  async function handleRevertPendingChapterReview(review: ChapterPendingReview) {
+    if (pendingChapterReviewBusy) {
       return
     }
 
-    const review = pendingChapterReview
     setPendingChapterReviewBusy(true)
     try {
       if (review.rollbackSnapshot.kind === 'restore_chapter') {
@@ -6445,7 +6528,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
         syncLocalRollbackSnapshot(review.rollbackSnapshot)
       }
 
-      setPendingChapterReview(null)
+      setPendingChapterReviews((current) => current.filter((item) => item.id !== review.id))
+      if (review.rollbackSnapshot.kind === 'restore_chapter') {
+        // 整章撤销后同样给出流转入口（删除新建章的分支会切章，由切章 effect 清空）
+        setReviewHandoffChapterId(review.chapterId)
+      }
       if (review.artifactId) {
         updateAgentArtifact(review.artifactId, (current) => ({
           ...current,
@@ -6463,22 +6550,115 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
   }
 
   // Agent 面板✕图标的拒绝入口：先弹自定义确认框，确认后才真正撤销
-  function handleRequestRejectPendingChapterReview() {
-    if (!pendingChapterReview || pendingChapterReviewBusy) {
+  function handleRequestRejectPendingChapterReview(review: ChapterPendingReview) {
+    if (pendingChapterReviewBusy) {
       return
     }
 
-    const chapterTitle = pendingChapterReview.after.title.trim() || '当前章节'
+    const chapterTitle = review.after.title.trim() || '当前章节'
     setWorkspaceDialog({
       title: '撤销本次正文变更？',
       description:
-        pendingChapterReview.rollbackSnapshot.kind === 'remove_created_chapter'
+        review.rollbackSnapshot.kind === 'remove_created_chapter'
           ? `将删除本轮新建的《${chapterTitle}》并回到写入前的状态，删除后不可恢复。`
           : `《${chapterTitle}》将恢复到本次写入前的内容，AI 新写的这部分正文会被移除。`,
       confirmLabel: '撤销变更',
       cancelLabel: '再想想',
       tone: 'danger',
-      onConfirm: () => handleRevertPendingChapterReview(),
+      onConfirm: () => handleRevertPendingChapterReview(review),
+    })
+  }
+
+  // 块级采纳（片段右下角✓）：把该变更块写进审查基线；全部块定夺完毕即视为整章保留
+  function handleAcceptReviewHunk(review: ChapterPendingReview, hunkIndex: number) {
+    if (pendingChapterReviewBusy) {
+      return
+    }
+
+    const beforeContent = review.before?.content ?? ''
+    const resolved = resolveReviewHunk(beforeContent, review.after.content, hunkIndex, 'accept')
+    if (buildReviewDiff(resolved.before, review.after.content).hunkCount === 0) {
+      handleKeepPendingChapterReview(review)
+      return
+    }
+
+    setPendingChapterReviews((current) =>
+      current.map((item) =>
+        item.id === review.id
+          ? { ...item, before: { ...(item.before ?? item.after), content: resolved.before } }
+          : item,
+      ),
+    )
+  }
+
+  // 块级撤回：把该变更块从章节结果中还原并落库；全部块定夺完毕即结束审查
+  async function handleRejectReviewHunk(review: ChapterPendingReview, hunkIndex: number) {
+    if (pendingChapterReviewBusy) {
+      return
+    }
+
+    const beforeContent = review.before?.content ?? ''
+    const { hunkCount } = buildReviewDiff(beforeContent, review.after.content)
+    // 本轮新建的章节只剩这一个变更块时，撤回等价于整章撤销（删除新建章节）
+    if (review.rollbackSnapshot.kind === 'remove_created_chapter' && hunkCount <= 1) {
+      await handleRevertPendingChapterReview(review)
+      return
+    }
+
+    const resolved = resolveReviewHunk(beforeContent, review.after.content, hunkIndex, 'reject')
+    setPendingChapterReviewBusy(true)
+    try {
+      const savedChapter = await updateChapterDraft(activeNovelId, review.after.id, {
+        title: review.after.title,
+        summary: review.after.summary.trim() || undefined,
+        content: resolved.after,
+        status: review.after.status,
+        visibility: review.after.visibility,
+      })
+
+      syncSavedChapterState(savedChapter, {
+        message: '已撤回该处变更。',
+        wordCountDelta: savedChapter.wordCount - review.after.content.length,
+      })
+
+      if (buildReviewDiff(beforeContent, resolved.after).hunkCount === 0) {
+        setPendingChapterReviews((current) => current.filter((item) => item.id !== review.id))
+        // 逐块撤回至全部定夺完毕：同样给出「下一个文件」流转入口
+        setReviewHandoffChapterId(review.chapterId)
+        if (review.artifactId) {
+          updateAgentArtifact(review.artifactId, (current) => ({
+            ...current,
+            pendingChapterReview: null,
+          }))
+        }
+      } else {
+        setPendingChapterReviews((current) =>
+          current.map((item) =>
+            item.id === review.id ? { ...item, after: { ...item.after, content: resolved.after } } : item,
+          ),
+        )
+      }
+    } catch (error) {
+      setChapterSaveState('error')
+      setChapterSaveMessage(error instanceof Error ? error.message : '撤回该处变更失败，请稍后重试。')
+    } finally {
+      setPendingChapterReviewBusy(false)
+    }
+  }
+
+  // 块级✕撤回入口：自定义弹窗确认后才真正回滚该处片段
+  function handleRequestRejectReviewHunk(review: ChapterPendingReview, hunkIndex: number) {
+    if (pendingChapterReviewBusy) {
+      return
+    }
+
+    setWorkspaceDialog({
+      title: '撤回这一处变更？',
+      description: '这一处绿色/红色片段将恢复为 AI 写入前的内容，撤回后不可恢复。',
+      confirmLabel: '撤回',
+      cancelLabel: '再想想',
+      tone: 'danger',
+      onConfirm: () => handleRejectReviewHunk(review, hunkIndex),
     })
   }
 
@@ -6580,6 +6760,134 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     })
   }
 
+  // 计划块级采纳（片段右下角✓）：把该变更块写进审查基线；全部块定夺完毕即视为整份保留
+  function handleAcceptPlanReviewHunk(hunkIndex: number) {
+    const review = pendingPlanReview
+    if (!review || pendingPlanReviewBusy) {
+      return
+    }
+
+    const resolved = resolveReviewHunk(review.before, review.after, hunkIndex, 'accept')
+    if (buildReviewDiff(resolved.before, review.after).hunkCount === 0) {
+      handleKeepPendingPlanReview()
+      return
+    }
+
+    setPendingPlanReview({ ...review, before: resolved.before })
+  }
+
+  // 计划块级撤回：把该变更块从计划内容中还原并回写云端；全部块定夺完毕即结束审查
+  async function handleRejectPlanReviewHunk(hunkIndex: number) {
+    const review = pendingPlanReview
+    if (!review || pendingPlanReviewBusy) {
+      return
+    }
+
+    const { hunkCount } = buildReviewDiff(review.before, review.after)
+    // 新建计划只剩这一个变更块时，撤回等价于撤销整份新建计划
+    if (review.isCreate && hunkCount <= 1) {
+      await handleRevertPendingPlanReview()
+      return
+    }
+
+    const resolved = resolveReviewHunk(review.before, review.after, hunkIndex, 'reject')
+    setPendingPlanReviewBusy(true)
+    try {
+      await updateNovelPlanFile(review.backendArtifactId, { content: resolved.after })
+
+      // 本地计划夹/产物列表同步到撤回后的内容
+      setServerPlanFiles((current) =>
+        current.map((plan) =>
+          plan.backendArtifactId === review.backendArtifactId
+            ? { ...plan, content: resolved.after.trim() }
+            : plan,
+        ),
+      )
+      setAgentArtifacts((current) =>
+        current.map((artifact) =>
+          artifact.backendArtifactId === review.backendArtifactId
+            ? { ...artifact, content: resolved.after, rawContent: resolved.after }
+            : artifact,
+        ),
+      )
+
+      if (buildReviewDiff(review.before, resolved.after).hunkCount === 0) {
+        setPendingPlanReview(null)
+        setChapterSaveState('saved')
+        setChapterSaveMessage(`已撤回该处变更，计划《${review.title}》审查完成。`)
+      } else {
+        setPendingPlanReview({ ...review, after: resolved.after })
+        setChapterSaveState('saved')
+        setChapterSaveMessage('已撤回该处计划变更。')
+      }
+    } catch (error) {
+      setChapterSaveState('error')
+      setChapterSaveMessage(error instanceof Error ? error.message : '撤回该处计划变更失败，请稍后重试。')
+    } finally {
+      setPendingPlanReviewBusy(false)
+    }
+  }
+
+  // 计划块级✕撤回入口：自定义弹窗确认后才真正回滚该处片段
+  function handleRequestRejectPlanReviewHunk(hunkIndex: number) {
+    if (!pendingPlanReview || pendingPlanReviewBusy) {
+      return
+    }
+
+    setWorkspaceDialog({
+      title: '撤回这一处计划变更？',
+      description: '这一处绿色/红色片段将恢复为 AI 修订前的内容，撤回后不可恢复。',
+      confirmLabel: '撤回',
+      cancelLabel: '再想想',
+      tone: 'danger',
+      onConfirm: () => handleRejectPlanReviewHunk(hunkIndex),
+    })
+  }
+
+  // 工作区变更头部的✓一键全部采纳：逐章保留全部待审正文，再保留待审计划
+  function handleApproveAllPendingReviews() {
+    if (pendingChapterReviewBusy || pendingPlanReviewBusy) {
+      return
+    }
+
+    for (const review of pendingChapterReviewsRef.current) {
+      if (review.artifactId) {
+        updateAgentArtifact(review.artifactId, (current) => ({
+          ...current,
+          pendingChapterReview: null,
+        }))
+      }
+    }
+    setPendingChapterReviews([])
+    handleKeepPendingPlanReview()
+    setChapterSaveState('saved')
+    setChapterSaveMessage('已保留本次全部变更。')
+  }
+
+  // ✕一键全部撤回：合并成一个确认框，确认后依次回滚全部待审正文与计划
+  function handleRequestRejectAllPendingReviews() {
+    if (pendingChapterReviewBusy || pendingPlanReviewBusy) {
+      return
+    }
+    if (pendingChapterReviews.length === 0 && !pendingPlanReview) {
+      return
+    }
+
+    setWorkspaceDialog({
+      title: '撤销全部变更？',
+      description: '本轮全部正文变更与计划修订都会恢复到 AI 写入前的状态，撤销后不可恢复。',
+      confirmLabel: '全部撤销',
+      cancelLabel: '再想想',
+      tone: 'danger',
+      onConfirm: async () => {
+        for (const review of [...pendingChapterReviewsRef.current]) {
+          await handleRevertPendingChapterReview(review)
+        }
+        await handleRevertPendingPlanReview()
+      },
+    })
+  }
+
   function handleRetrySave() {
     void persistChapter('manual')
   }
@@ -6593,9 +6901,27 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
   // 审查态按章节挂载：只在对应章节激活时展示绿增红减审查视图，切走不丢状态
   const activeChapterPendingReview =
-    pendingChapterReview && pendingChapterReview.chapterId === selectedChapterId
-      ? pendingChapterReview
-      : null
+    pendingChapterReviews.find((item) => item.chapterId === selectedChapterId) ?? null
+
+  // IDE 式审查条「文件 x/y」：按待审数组顺序给出当前章节位置（1 基）
+  const reviewFileCount = pendingChapterReviews.length
+  const activeReviewFileIndex = activeChapterPendingReview
+    ? pendingChapterReviews.findIndex((item) => item.id === activeChapterPendingReview.id) + 1
+    : 0
+
+  // 审查条「‹ 文件 ›」与「下一个文件」浮标：在多个待审章节之间循环跳转
+  function handleNavigateReviewFile(offset: 1 | -1) {
+    const list = pendingChapterReviewsRef.current
+    if (list.length === 0) {
+      return
+    }
+    const currentIndex = list.findIndex((item) => item.chapterId === selectedChapterId)
+    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + offset + list.length) % list.length
+    const target = list[nextIndex]
+    if (target && target.chapterId !== selectedChapterId) {
+      handleSelectChapter(target.chapterId)
+    }
+  }
 
   function resetAgentWorkspace() {
     setAgentSessionId(null)
@@ -7121,7 +7447,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       onConfirm: async () => {
         const result = await rollbackWritingAgentRun(rollbackRunId)
         removeAgentArtifactsByRunId(rollbackRunId)
-        setPendingChapterReview(null)
+        setPendingChapterReviews([])
         setPendingChapterReviewBusy(false)
         syncRollbackToWorkspace(result)
         syncLocalRollbackSnapshots(rollbackArtifacts)
@@ -7999,7 +8325,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     artifactId: string,
     strategy: 'replaceChapterContent' | 'appendChapterContent' | 'saveChapterSummary' | 'setNovelCoverPrompt',
   ) {
-    if (pendingChapterReview) {
+    if (pendingChapterReviews.length > 0) {
       promptConfirmPendingChapterReview('继续应用新的结果')
       return 'not_available' as const
     }
@@ -8102,7 +8428,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           : null
 
       syncChapterDraftAfterApply(strategy, artifact)
-      setPendingChapterReview(review)
+      upsertPendingChapterReview(review)
       updateAgentArtifact(artifactId, (current) => ({
         ...current,
         savedAsPlan: strategy === 'saveChapterSummary' ? true : current.savedAsPlan,
@@ -8414,17 +8740,21 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           selection={editorSelection.text.trim() ? editorSelection : null}
           ensureSession={ensureAgentLoopSession}
           onStreamEvent={handleAgentStreamEvent}
-          pendingReview={pendingChapterReview}
-          pendingReviewBusy={pendingChapterReviewBusy}
-          onApproveReview={handleKeepPendingChapterReview}
-          onRejectReview={handleRequestRejectPendingChapterReview}
-          pendingPlanReview={pendingPlanReview}
-          pendingPlanReviewBusy={pendingPlanReviewBusy}
-          onApprovePlanReview={handleKeepPendingPlanReview}
-          onRejectPlanReview={handleRequestRejectPendingPlanReview}
+          pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
+          reviewBusy={pendingChapterReviewBusy || pendingPlanReviewBusy}
+          onApproveAllReviews={handleApproveAllPendingReviews}
+          onRejectAllReviews={handleRequestRejectAllPendingReviews}
           onSelectSession={(nextSessionId) => {
             setAgentSessionId(nextSessionId)
             setActiveAgentTaskWindowId(nextSessionId)
+          }}
+          onSessionDeleted={(deletedSessionId) => {
+            // 删除会话成功后同步移除对应任务窗口，避免僵尸 sessionId 写回本地快照后反复 404
+            setAgentTaskWindows((current) =>
+              current.filter(
+                (taskWindow) => taskWindow.sessionId !== deletedSessionId && taskWindow.id !== deletedSessionId,
+              ),
+            )
           }}
           onNewSession={() => {
             // 新建任务对话：建本地任务窗口并激活（sessionId 为 null，首次发送时懒创建）；
@@ -8596,46 +8926,43 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
           <div className="flex shrink-0 items-center gap-2 px-0.5 pb-2 pt-1">
-            <button
-              type="button"
-              onClick={() => setMobileSidebarOpen(true)}
-              aria-label="打开创作菜单"
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-              {mobileView === 'assistant'
-                ? novelTitleMissing
-                  ? '未命名作品'
-                  : novelTitle
-                : mobileView === 'editor'
-                  ? chapterTitle
-                  : mobileView === 'chapters'
-                    ? '章节'
-                    : mobileView === 'cover'
-                      ? '封面工坊'
-                      : '作品设置'}
-            </p>
-            {mobileView !== 'assistant' ? (
-              <button
-                type="button"
-                onClick={() => setMobileView('assistant')}
-                className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-              >
-                <MessageSquareText className="h-4 w-4" />
-                对话
-              </button>
+            {mobileView === 'cover' || mobileView === 'meta' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setMobileView('assistant')}
+                  className="inline-flex h-11 shrink-0 items-center gap-1 rounded-full pl-1.5 pr-3 text-sm font-medium text-[var(--text-secondary)] transition-colors active:bg-[var(--surface-muted)]"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                  返回
+                </button>
+                <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
+                  {mobileView === 'cover' ? '封面工坊' : '作品设置'}
+                </p>
+              </>
             ) : (
-              <span className="h-10 w-10 shrink-0" aria-hidden />
+              <>
+                <WorkspaceNovelSwitcher
+                  currentNovelId={currentNovel.id}
+                  currentNovelTitle={novelTitle}
+                  novels={novelOptions}
+                  busy={createNovelMutation.isPending}
+                  loading={myNovelsQuery.isLoading}
+                  onSelectNovel={handleSelectWorkspaceNovel}
+                  onCreateNovel={handleCreateWorkspaceNovel}
+                />
+                <div className="min-w-0 flex-1" aria-hidden />
+              </>
             )}
+            <SaveStatusPill state={chapterSaveState} message={saveDisplayMessage} onRetry={handleRetrySave} compact />
           </div>
 
           <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
 
             {mobileView === 'editor' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+              <div className="flex min-h-0 flex-1 flex-col">
                 <EditorCanvas
+                  variant="mobile"
                   chapterDraft={chapterDraft}
                   workspaceDocument={activeWorkspaceDocument}
                   chapterLoading={chapterQuery.isLoading}
@@ -8650,6 +8977,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
+                  onPublishNovel={handlePublishNovel}
+                  novelPublished={novelForm?.status === 'published'}
                   onStatusChange={handleEditorStatusChange}
                   onChange={handleChapterDraftChange}
                   onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
@@ -8657,19 +8986,45 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onEditorBlur={handleEditorBlurFlush}
                   pendingChapterReview={activeChapterPendingReview}
                   pendingChapterReviewBusy={pendingChapterReviewBusy}
-                  onKeepPendingReview={handleKeepPendingChapterReview}
-                  onRevertPendingReview={() => void handleRevertPendingChapterReview()}
+                  onKeepPendingReview={() => {
+                    if (activeChapterPendingReview) {
+                      handleKeepPendingChapterReview(activeChapterPendingReview)
+                    }
+                  }}
+                  onRevertPendingReview={() => {
+                    if (activeChapterPendingReview) {
+                      handleRequestRejectPendingChapterReview(activeChapterPendingReview)
+                    }
+                  }}
+                  onAcceptReviewHunk={(hunkIndex) => {
+                    if (activeChapterPendingReview) {
+                      handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
+                    }
+                  }}
+                  onRejectReviewHunk={(hunkIndex) => {
+                    if (activeChapterPendingReview) {
+                      handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
+                    }
+                  }}
+                  reviewFileIndex={activeReviewFileIndex}
+                  reviewFileCount={reviewFileCount}
+                  onNavigateReviewFile={handleNavigateReviewFile}
+                  pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
+                  onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
                   pendingPlanReview={activePlanPendingReview}
                   pendingPlanReviewBusy={pendingPlanReviewBusy}
                   onKeepPendingPlanReview={handleKeepPendingPlanReview}
                   onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
+                  onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
+                  onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
                 />
               </div>
             ) : null}
 
             {mobileView === 'chapters' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
                 <ChapterSidebar
+                  embedded
                   chapters={chapters}
                   savedPlans={savedPlanFiles}
                   selectedChapterId={selectedChapterId}
@@ -8689,9 +9044,9 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
             ) : null}
 
             {mobileView === 'assistant' ? (
-              <Surface as="section" padding="md" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {renderWritingAgent(undefined, false)}
-              </Surface>
+              </div>
             ) : null}
 
             {mobileView === 'cover' ? (
@@ -8701,7 +9056,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
             ) : null}
 
             {mobileView === 'meta' ? (
-              <Surface as="section" padding="md" className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-0.5 pb-4">
                 <MetaPanel
                   novelForm={novelForm}
                   wordCountLabel={wordCountLabel}
@@ -8717,129 +9072,98 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onSave={handleSaveNovel}
                   onClose={() => setMobileView('assistant')}
                 />
-              </Surface>
+              </div>
             ) : null}
           </div>
 
-          {mobileSidebarOpen ? (
-            <div className="fixed inset-0 z-50 lg:hidden">
-              <div
-                className="absolute inset-0 bg-[rgba(15,23,42,0.32)]"
-                onClick={() => setMobileSidebarOpen(false)}
-                aria-hidden
-              />
-              <div className="absolute inset-y-0 left-0 flex w-[min(20rem,85vw)] flex-col gap-4 overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 pt-[calc(env(safe-area-inset-top)+16px)] shadow-[0_24px_64px_rgba(15,23,42,0.18)]">
-                <div className="flex items-start justify-between gap-2">
-                  <WorkspaceNovelSwitcher
-                    currentNovelId={currentNovel.id}
-                    currentNovelTitle={novelTitle}
-                    novels={novelOptions}
-                    busy={createNovelMutation.isPending}
-                    loading={myNovelsQuery.isLoading}
-                    onSelectNovel={(nextNovelId) => {
-                      setMobileSidebarOpen(false)
-                      handleSelectWorkspaceNovel(nextNovelId)
-                    }}
-                    onCreateNovel={() => {
-                      setMobileSidebarOpen(false)
-                      handleCreateWorkspaceNovel()
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setMobileSidebarOpen(false)}
-                    aria-label="关闭创作菜单"
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-
-                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-3 py-2 text-xs leading-5 text-[var(--text-secondary)]">
-                  {saveDisplayMessage}
-                </div>
-
-                <nav className="space-y-1">
-                  {(
-                    [
-                      { key: 'assistant', label: 'Agent 对话', icon: MessageSquareText },
-                      { key: 'editor', label: '继续写作', icon: PenLine },
-                      { key: 'chapters', label: '查看章节', icon: BookOpenText },
-                      { key: 'cover', label: '封面工坊', icon: Upload },
-                      { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2 },
-                    ] as Array<{ key: MobileView; label: string; icon: typeof Menu }>
-                  ).map(({ key, label, icon: Icon }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => {
-                        setMobileView(key)
-                        setMobileSidebarOpen(false)
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left text-sm transition-colors',
-                        mobileView === key
-                          ? 'bg-[var(--surface-muted)] font-medium text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
-                      )}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      {label}
-                    </button>
-                  ))}
-                </nav>
-
-                <div className="space-y-1 border-t border-[var(--border-subtle)] pt-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileSidebarOpen(false)
-                      handleEnterImmersive()
-                    }}
-                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                  >
-                    <WandSparkles className="h-4 w-4 shrink-0" />
-                    沉浸创作
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileSidebarOpen(false)
-                      navigate(detailPreviewHref)
-                    }}
-                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                  >
-                    <BookOpenText className="h-4 w-4 shrink-0" />
-                    作品页
-                  </button>
-                  {previewHref ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileSidebarOpen(false)
-                        navigate(previewHref)
-                      }}
-                      className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                    >
-                      <BookOpen className="h-4 w-4 shrink-0" />
-                      预览阅读
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileSidebarOpen(false)
-                      handleRequestCreateChapter()
-                    }}
-                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                  >
-                    <FileText className="h-4 w-4 shrink-0" />
-                    新建章节
-                  </button>
-                </div>
-              </div>
-            </div>
+          {keyboardInset === 0 ? (
+            <nav className="flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.history.length > 1) {
+                    navigate(-1)
+                  } else {
+                    navigate('/')
+                  }
+                }}
+                className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 text-[var(--text-tertiary)] transition-colors active:text-[var(--text-primary)]"
+              >
+                <LogOut className="h-5 w-5 rotate-180" />
+                退出
+              </button>
+              {(
+                [
+                  { key: 'assistant', label: '对话', icon: MessageSquareText },
+                  { key: 'editor', label: '写作', icon: PenLine },
+                  { key: 'chapters', label: '章节', icon: BookOpenText },
+                ] as Array<{ key: MobileView; label: string; icon: typeof PenLine }>
+              ).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setMobileView(key)}
+                  className={cn(
+                    'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
+                    mobileView === key
+                      ? 'font-medium text-[var(--text-primary)]'
+                      : 'text-[var(--text-tertiary)] active:text-[var(--text-primary)]',
+                  )}
+                >
+                  <Icon className="h-5 w-5" />
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setMobileMoreOpen(true)}
+                className={cn(
+                  'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
+                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta'
+                    ? 'font-medium text-[var(--text-primary)]'
+                    : 'text-[var(--text-tertiary)] active:text-[var(--text-primary)]',
+                )}
+              >
+                <MoreHorizontal className="h-5 w-5" />
+                更多
+              </button>
+            </nav>
           ) : null}
+
+          <BottomSheet
+            open={mobileMoreOpen}
+            onClose={() => setMobileMoreOpen(false)}
+            title={novelTitleMissing ? '未命名作品' : novelTitle}
+          >
+            <div className="space-y-0.5 px-3 pt-1">
+              {(
+                [
+                  { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
+                  { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
+                  { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
+                  { key: 'immersive', label: '沉浸创作', icon: WandSparkles, action: () => handleEnterImmersive() },
+                  { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
+                  ...(previewHref
+                    ? [{ key: 'preview', label: '预览阅读', icon: BookOpen, action: () => navigate(previewHref) }]
+                    : []),
+                  { key: 'create-chapter', label: '新建章节', icon: FileText, action: () => handleRequestCreateChapter() },
+                ] as Array<{ key: string; label: string; icon: typeof PenLine; action: () => void }>
+              ).map(({ key, label, icon: Icon, action }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setMobileMoreOpen(false)
+                    action()
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3 rounded-[16px] px-3 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                >
+                  <Icon className="h-5 w-5 shrink-0 text-[var(--text-secondary)]" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </BottomSheet>
         </div>
 
         <div className="hidden min-h-0 flex-1 flex-col lg:flex">
@@ -8923,6 +9247,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
+                  onPublishNovel={handlePublishNovel}
+                  novelPublished={novelForm?.status === 'published'}
                   onStatusChange={handleEditorStatusChange}
                   onChange={handleChapterDraftChange}
                   onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
@@ -8930,12 +9256,37 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onEditorBlur={handleEditorBlurFlush}
                   pendingChapterReview={activeChapterPendingReview}
                   pendingChapterReviewBusy={pendingChapterReviewBusy}
-                  onKeepPendingReview={handleKeepPendingChapterReview}
-                  onRevertPendingReview={() => void handleRevertPendingChapterReview()}
+                  onKeepPendingReview={() => {
+                    if (activeChapterPendingReview) {
+                      handleKeepPendingChapterReview(activeChapterPendingReview)
+                    }
+                  }}
+                  onRevertPendingReview={() => {
+                    if (activeChapterPendingReview) {
+                      handleRequestRejectPendingChapterReview(activeChapterPendingReview)
+                    }
+                  }}
+                  onAcceptReviewHunk={(hunkIndex) => {
+                    if (activeChapterPendingReview) {
+                      handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
+                    }
+                  }}
+                  onRejectReviewHunk={(hunkIndex) => {
+                    if (activeChapterPendingReview) {
+                      handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
+                    }
+                  }}
+                  reviewFileIndex={activeReviewFileIndex}
+                  reviewFileCount={reviewFileCount}
+                  onNavigateReviewFile={handleNavigateReviewFile}
+                  pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
+                  onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
                   pendingPlanReview={activePlanPendingReview}
                   pendingPlanReviewBusy={pendingPlanReviewBusy}
                   onKeepPendingPlanReview={handleKeepPendingPlanReview}
                   onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
+                  onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
+                  onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
                 />
               </div>
 
@@ -9001,14 +9352,39 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           onChange={handleChapterDraftChange}
           onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
           onSelectionChange={setEditorSelection}
-          pendingChapterReview={pendingChapterReview}
+          pendingChapterReview={activeChapterPendingReview}
           pendingChapterReviewBusy={pendingChapterReviewBusy}
-          onKeepPendingReview={handleKeepPendingChapterReview}
-          onRevertPendingReview={() => void handleRevertPendingChapterReview()}
+          onKeepPendingReview={() => {
+            if (activeChapterPendingReview) {
+              handleKeepPendingChapterReview(activeChapterPendingReview)
+            }
+          }}
+          onRevertPendingReview={() => {
+            if (activeChapterPendingReview) {
+              handleRequestRejectPendingChapterReview(activeChapterPendingReview)
+            }
+          }}
+          onAcceptReviewHunk={(hunkIndex) => {
+            if (activeChapterPendingReview) {
+              handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
+            }
+          }}
+          onRejectReviewHunk={(hunkIndex) => {
+            if (activeChapterPendingReview) {
+              handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
+            }
+          }}
+          reviewFileIndex={activeReviewFileIndex}
+          reviewFileCount={reviewFileCount}
+          onNavigateReviewFile={handleNavigateReviewFile}
+          pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
+          onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
           pendingPlanReview={activePlanPendingReview}
           pendingPlanReviewBusy={pendingPlanReviewBusy}
           onKeepPendingPlanReview={handleKeepPendingPlanReview}
           onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
+          onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
+          onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
           onOpenCover={() => setActiveToolPanel((current) => (current === 'cover' ? null : 'cover'))}
           onOpenMeta={() => {
             // 与封面按钮一致：在沉浸层内直接展开/收起作品设置面板，不退出沉浸

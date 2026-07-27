@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useToast } from '@/components/ui/Toast'
 import { requestJson } from '@/app/api-client'
+import { deleteComment, setNovelFavorite, updateComment } from '@/features/community/api'
 import {
   asArray,
   getAuthorName,
@@ -91,6 +92,10 @@ export function useNovelDetailState() {
   const [shelfVersion, setShelfVersion] = useState(0)
   const [commentDraft, setCommentDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<Comment | null>(null)
+  // 正在编辑的自己的评论；非空时发表按钮变为保存修改
+  const [editingComment, setEditingComment] = useState<Comment | null>(null)
+  // 作品根评论的评星草稿：0 表示未选星
+  const [ratingDraft, setRatingDraft] = useState(0)
 
   const fromStudio = searchParams.get('from') === 'studio'
   const returnTo = searchParams.get('returnTo')
@@ -111,7 +116,18 @@ export function useNovelDetailState() {
   const chapters = asArray(detail?.chapters)
   const topComments = asArray(detail?.topComments)
   const relatedNovels = asArray(detail?.relatedNovels)
-  const novelComments = asArray(commentsQuery.data?.items)
+  // 自己的根评论固定排在最前，其余保持服务端顺序（sort 稳定）
+  const novelComments = useMemo(() => {
+    const items = asArray(commentsQuery.data?.items)
+    if (!sessionUser?.id) {
+      return items
+    }
+    return [...items].sort(
+      (left, right) =>
+        Number(right.author?.id === sessionUser.id && !right.parentId) -
+        Number(left.author?.id === sessionUser.id && !left.parentId),
+    )
+  }, [commentsQuery.data, sessionUser?.id])
   const publishedChapters = [...chapters]
     .filter(isPublicReadableChapter)
     .sort((left, right) => left.orderIndex - right.orderIndex)
@@ -267,26 +283,93 @@ export function useNovelDetailState() {
         throw new Error('请先写下想说的内容。')
       }
 
-      const payload = await requestJson<CreateCommentResponse>('/api/comments', {
+      // 编辑模式：改走 PATCH，根评论同步更新评星
+      if (editingComment) {
+        const payload = await updateComment(editingComment.id, {
+          content: commentDraft.trim(),
+          ...(editingComment.parentId ? {} : { rating: ratingDraft }),
+        })
+        return payload.comment
+      }
+
+      // requestJson 已解包到 data，这里的泛型必须是 data 的形状
+      const payload = await requestJson<CreateCommentResponse['data']>('/api/comments', {
         method: 'POST',
         body: JSON.stringify({
           targetType: 'novel',
           targetId: novelId,
           content: commentDraft.trim(),
           parentId: replyTarget?.id,
+          // 仅根评论携带评星，回复不记分
+          ...(replyTarget ? {} : { rating: ratingDraft }),
         }),
       })
-      return payload.data.comment
+      return payload.comment
     },
     onSuccess: async () => {
+      const wasEditing = Boolean(editingComment)
       setCommentDraft('')
       setReplyTarget(null)
-      toast.success('评论已发表')
+      setEditingComment(null)
+      setRatingDraft(0)
+      toast.success(wasEditing ? '评论已更新' : '评论已发表')
       await queryClient.invalidateQueries({ queryKey: ['comments', 'novel', novelId] })
       await queryClient.invalidateQueries({ queryKey: ['novel-detail', novelId] })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : '评论发表失败，请稍后再试。')
+    },
+  })
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: (commentId: string) => deleteComment(commentId),
+    onSuccess: async (_result, commentId) => {
+      if (editingComment?.id === commentId) {
+        setEditingComment(null)
+        setCommentDraft('')
+        setRatingDraft(0)
+      }
+      toast.success('评论已删除')
+      await queryClient.invalidateQueries({ queryKey: ['comments', 'novel', novelId] })
+      await queryClient.invalidateQueries({ queryKey: ['novel-detail', novelId] })
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : '删除失败，请稍后再试。')
+    },
+  })
+
+  const favoritedByViewer = Boolean(detail?.novel?.favoritedByViewer)
+
+  const toggleFavoriteMutation = useMutation({
+    mutationFn: async () => {
+      if (!detail?.novel) {
+        throw new Error('作品详情还没有准备好，请稍后再试。')
+      }
+      return setNovelFavorite(detail.novel.id, !favoritedByViewer)
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(['novel-detail', novelId], (current: typeof detailQuery.data) =>
+        current
+          ? {
+              ...current,
+              novel: {
+                ...current.novel,
+                favoritedByViewer: result.favorited,
+                favoriteCount: result.favoriteCount,
+              },
+            }
+          : current,
+      )
+      if (result.favorited) {
+        toast.success('已收藏这部作品')
+      } else {
+        toast.info('已取消收藏')
+      }
+      // 个人页「收藏」面板的列表同步刷新
+      void queryClient.invalidateQueries({ queryKey: ['profile', 'favorite-novels'] })
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试。')
     },
   })
 
@@ -362,7 +445,51 @@ export function useNovelDetailState() {
       return
     }
 
+    // 新发/编辑作品根评论都要求已点星；回复不需要
+    const needsRating = editingComment ? !editingComment.parentId : !replyTarget
+    if (needsRating && ratingDraft < 1) {
+      toast.error('请先为作品点亮星级评分')
+      return
+    }
+
     createCommentMutation.mutate()
+  }
+
+  /** 把自己的评论装进输入框进入编辑模式 */
+  function handleStartEditComment(comment: Comment) {
+    setEditingComment(comment)
+    setReplyTarget(null)
+    setCommentDraft(comment.content)
+    setRatingDraft(typeof comment.rating === 'number' ? comment.rating : 0)
+  }
+
+  function handleCancelEditComment() {
+    setEditingComment(null)
+    setCommentDraft('')
+    setRatingDraft(0)
+  }
+
+  function handleDeleteComment(comment: Comment) {
+    if (deleteCommentMutation.isPending) {
+      return
+    }
+    if (!window.confirm('确定删除这条评论吗？它的回复也会一并删除。')) {
+      return
+    }
+    deleteCommentMutation.mutate(comment.id)
+  }
+
+  function handleToggleFavorite() {
+    if (authStatus !== 'authenticated') {
+      navigate('/auth')
+      return
+    }
+
+    if (toggleFavoriteMutation.isPending) {
+      return
+    }
+
+    toggleFavoriteMutation.mutate()
   }
 
   return {
@@ -417,14 +544,24 @@ export function useNovelDetailState() {
     setCommentDraft,
     replyTarget,
     setReplyTarget,
+    editingComment,
+    ratingDraft,
+    setRatingDraft,
+    favoritedByViewer,
+    toggleFavoriteMutation,
     createCommentMutation,
+    deleteCommentMutation,
     handleStartReading,
     handleContinueReading,
     handleToggleShelf,
+    handleToggleFavorite,
     handleShare,
     handleSelectLocalCover,
     handleDownloadHistoryCover,
     handleSubmitComment,
+    handleStartEditComment,
+    handleCancelEditComment,
+    handleDeleteComment,
   }
 }
 

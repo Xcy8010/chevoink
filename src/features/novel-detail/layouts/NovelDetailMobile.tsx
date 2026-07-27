@@ -1,6 +1,9 @@
-import { PenLine } from 'lucide-react'
+import { ChevronRight, PenLine } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import Avatar from '@/features/community/components/Avatar'
+import ImageLightbox from '@/features/studio/components/ImageLightbox'
 import DetailCtaRow from '../components/DetailCtaRow'
 import DetailStatsRow from '../components/DetailStatsRow'
 import { DetailTabContent, DetailTabs } from '../components/DetailTabs'
@@ -12,6 +15,7 @@ type NovelDetailMobileProps = {
 
 /** 手机端详情页：竖版封面完整显示（模糊底图烘托），信息右排 + 底部固定操作栏 */
 export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
+  const [coverPreviewOpen, setCoverPreviewOpen] = useState(false)
   const {
     detail,
     detailTitle,
@@ -60,11 +64,18 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
 
         <div className="relative flex gap-4 px-4 pb-5 pt-6">
           {detailCoverUrl ? (
-            <img
-              src={detailCoverUrl}
-              alt={detailTitle}
-              className="aspect-[20/27] w-[108px] shrink-0 self-start rounded-[10px] object-cover shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
-            />
+            <button
+              type="button"
+              onClick={() => setCoverPreviewOpen(true)}
+              className="block shrink-0 self-start cursor-zoom-in"
+              aria-label="查看封面大图"
+            >
+              <img
+                src={detailCoverUrl}
+                alt={detailTitle}
+                className="aspect-[20/27] w-[108px] rounded-[10px] object-cover shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
+              />
+            </button>
           ) : (
             <div className="flex aspect-[20/27] w-[108px] shrink-0 flex-col justify-end self-start rounded-[10px] bg-white/12 p-3">
               <p className="text-[15px] font-semibold leading-snug text-white">{detailTitle}</p>
@@ -73,9 +84,20 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
 
           <div className="min-w-0 flex-1 self-center">
             <h1 className="text-xl font-bold leading-snug text-white">{detailTitle}</h1>
+            {/* 作者信息块：头像 + 名字 + 箭头，整块可点进入作者主页 */}
             {authorId ? (
-              <Link to={`/author/${authorId}`} className="mt-1.5 inline-block text-sm text-white/85">
-                {authorName}
+              <Link
+                to={`/author/${authorId}`}
+                className="press-feedback mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-pill)] bg-white/12 py-1 pl-1 pr-2.5 backdrop-blur transition-colors hover:bg-white/20"
+              >
+                <Avatar
+                  name={authorName}
+                  src={detail.novel.author.avatarUrl}
+                  size="sm"
+                  className="h-6 w-6 border-white/25"
+                />
+                <span className="truncate text-sm text-white/90">{authorName}</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/60" />
               </Link>
             ) : (
               <p className="mt-1.5 text-sm text-white/85">{authorName}</p>
@@ -130,6 +152,14 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
       <div className="fixed inset-x-0 bottom-[64px] z-40 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 py-2.5 backdrop-blur">
         <DetailCtaRow state={state} compact />
       </div>
+
+      {coverPreviewOpen && detailCoverUrl ? (
+        <ImageLightbox
+          src={detailCoverUrl}
+          alt={detailTitle}
+          onClose={() => setCoverPreviewOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

@@ -1,8 +1,14 @@
 import { Router, type Request, type Response } from 'express'
 
-import type { SendMessageRequest } from '../../shared/contracts/index.js'
+import type { CreateConversationRequest, SendMessageRequest } from '../../shared/contracts/index.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
-import { listConversationsData, listMessagesData, markConversationReadData, sendMessageData } from '../lib/data-access.js'
+import {
+  createDirectConversationData,
+  listConversationsData,
+  listMessagesData,
+  markConversationReadData,
+  sendMessageData,
+} from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -17,6 +23,31 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const userId = requireSessionUserId(req)
     const payload = await listConversationsData(userId, page, pageSize)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as Partial<CreateConversationRequest>
+
+  try {
+    const userId = requireSessionUserId(req)
+
+    if (!body.targetUserId?.trim()) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请指定要私信的用户。'))
+      return
+    }
+
+    const conversation = await createDirectConversationData(userId, body.targetUserId.trim())
+
+    if (!conversation) {
+      res.status(404).json(buildError(requestId, 'USER_NOT_FOUND', '未找到该用户。'))
+      return
+    }
+
+    res.status(201).json(buildSuccess(requestId, { conversation }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

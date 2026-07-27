@@ -1,5 +1,6 @@
 import { ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
@@ -7,8 +8,10 @@ import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import QuickCreateSheet from '@/components/layout/QuickCreateSheet'
 import Avatar from '@/features/community/components/Avatar'
+import { getInteractionBadges, listConversations } from '@/features/community/api'
 import GlobalSearchBox from '@/features/search/GlobalSearchBox'
 import { brandMeta } from '@/lib/theme/tokens'
+import { enterImmersiveFullscreen } from '@/lib/immersive-fullscreen'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
 import { desktopNavItems, mobileNavItems, workspaceLinks } from '@/types/app'
@@ -28,6 +31,8 @@ export default function AppShell({ title, description, children }: AppShellProps
   const toggleTheme = useShellStore((state) => state.toggleTheme)
   const theme = useShellStore((state) => state.theme)
   const fullscreenEnabled = useShellStore((state) => state.fullscreenEnabled)
+  const fullscreenPromptSeen = useShellStore((state) => state.fullscreenPromptSeen)
+  const chooseFullscreen = useShellStore((state) => state.chooseFullscreen)
   const authStatus = useShellStore((state) => state.authStatus)
   const sessionUser = useShellStore((state) => state.sessionUser)
   const setGuest = useShellStore((state) => state.setGuest)
@@ -38,6 +43,10 @@ export default function AppShell({ title, description, children }: AppShellProps
   const isNovelDetailRoute = /^\/novel\/[^/]+$/.test(location.pathname)
   // 帖子详情页以正文为中心，壳层大标题会造成信息重复，同样隐藏
   const isPostDetailRoute = /^\/post\/[^/]+$/.test(location.pathname)
+  // 消息页自带列表标题，壳层页头只会占掉聊天区高度，隐藏；主容器改为固定不滚动
+  const isMessagesRoute = location.pathname === '/messages'
+  // 关注粉丝/获赞明细页自带紧凑标题，壳层大标题多余，隐藏
+  const isMeListRoute = location.pathname === '/me/follows' || location.pathname === '/me/likes'
   const isAuthRoute = location.pathname === '/login' || location.pathname === '/register'
   const isAuthenticated = authStatus === 'authenticated' && !!sessionUser
   const accountRoute = authStatus === 'guest' ? '/login?redirect=%2Fme' : '/me'
@@ -50,12 +59,35 @@ export default function AppShell({ title, description, children }: AppShellProps
   const [desktopAccountMenuOpen, setDesktopAccountMenuOpen] = useState(false)
   const [inlineAccountExpanded, setInlineAccountExpanded] = useState(false)
   const [headerHeight, setHeaderHeight] = useState(160)
-  // 首次进入全屏后的一次性提示弹窗
-  const [fullscreenNoticeOpen, setFullscreenNoticeOpen] = useState(false)
 
-  // 全站沉浸全屏（手机/平板/电脑通用，可在设置中关闭）：浏览器禁止页面加载时自动全屏，
-  // 故在用户第一次点击/触摸时进入并持续保持；首次成功进入时弹窗告知可在设置中关闭；
-  // 关闭开关后立即退出全屏且不再自动进入；不支持的环境静默降级
+  // 全局未读汇总（私信 + 互动 + 新粉丝）：驱动底部导航/侧边栏的消息红点；
+  // queryKey 与消息页共用，避免重复请求，30s 轻轮询保持新鲜
+  const shellBadgesQuery = useQuery({
+    queryKey: ['community', 'interaction-badges'],
+    queryFn: getInteractionBadges,
+    enabled: isAuthenticated,
+    refetchInterval: 30_000,
+  })
+  const shellConversationsQuery = useQuery({
+    queryKey: ['community', 'conversations'],
+    queryFn: () => listConversations(30),
+    enabled: isAuthenticated,
+    refetchInterval: 30_000,
+  })
+  const conversationUnread = (shellConversationsQuery.data?.items ?? []).reduce(
+    (sum, item) => sum + item.unreadCount,
+    0,
+  )
+  const totalUnread =
+    conversationUnread +
+    (shellBadgesQuery.data?.interactionsUnseen ?? 0) +
+    (shellBadgesQuery.data?.followersUnseen ?? 0)
+  // 所有红点数字上限 99，超过也只显示 99
+  const unreadBadgeText = totalUnread > 99 ? '99' : `${totalUnread}`
+
+  // 全站沉浸全屏（手机/平板/电脑通用，首次进入弹窗询问、设置页可改）：浏览器禁止页面
+  // 加载时自动全屏，故开启后在用户每次点击/触摸时进入并持续保持；关闭开关后立即
+  // 退出全屏且不再自动进入；不支持的环境静默降级（进入逻辑见 lib/immersive-fullscreen）
   useEffect(() => {
     if (!fullscreenEnabled) {
       if (document.fullscreenElement) {
@@ -64,20 +96,8 @@ export default function AppShell({ title, description, children }: AppShellProps
       return
     }
 
-    const requestFullscreen = () => {
-      if (document.fullscreenElement) return
-      document.documentElement
-        .requestFullscreen?.({ navigationUI: 'hide' })
-        .then(() => {
-          if (!window.localStorage.getItem('chevoink-fullscreen-notice-shown')) {
-            window.localStorage.setItem('chevoink-fullscreen-notice-shown', '1')
-            setFullscreenNoticeOpen(true)
-          }
-        })
-        .catch(() => {})
-    }
-    window.addEventListener('pointerup', requestFullscreen)
-    return () => window.removeEventListener('pointerup', requestFullscreen)
+    window.addEventListener('pointerup', enterImmersiveFullscreen)
+    return () => window.removeEventListener('pointerup', enterImmersiveFullscreen)
   }, [fullscreenEnabled])
 
   useEffect(() => {
@@ -338,7 +358,13 @@ export default function AppShell({ title, description, children }: AppShellProps
           )
         }
       >
-        <Icon className="h-4 w-4" />
+        <span className="relative inline-flex">
+          <Icon className="h-4 w-4" />
+          {/* 折叠态只提示有新消息，不显示具体数字 */}
+          {href === '/messages' && totalUnread > 0 ? (
+            <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-rose-500" />
+          ) : null}
+        </span>
       </NavLink>
     )
   }
@@ -369,7 +395,8 @@ export default function AppShell({ title, description, children }: AppShellProps
 
   return (
     <div
-      className="h-[100dvh] overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]"
+      // 壳高随软键盘收缩（iOS 等不缩小布局视口的浏览器），消息输入栏、评论框等随之被顶到键盘上方
+      className="h-[calc(100dvh-var(--keyboard-inset,0px))] overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]"
       style={{ ['--app-header-height' as string]: `${headerHeight}px` }}
     >
       {/* IDE 式布局：侧边栏贴视口左缘常驻文档流，收起/展开只变宽度，右侧内容区随之自然靠拢 */}
@@ -383,7 +410,7 @@ export default function AppShell({ title, description, children }: AppShellProps
           )}
         >
           {sidebarExpanded ? (
-            <div className="hidden min-h-full w-full flex-col px-3 pb-5 pt-[calc(env(safe-area-inset-top)+14px)] lg:flex">
+            <div className="hidden min-h-full w-full flex-col px-3 pb-5 pt-[calc(var(--safe-top)+14px)] lg:flex">
               {/* 导航与账号整合为一张卡片：顶部收起按钮 + 导航链接，底部头像账号区 */}
               <Surface
                 as="nav"
@@ -410,7 +437,14 @@ export default function AppShell({ title, description, children }: AppShellProps
                         to={item.href === '/me' ? accountRoute : item.href}
                         className={railNavClass}
                       >
-                        {item.label}
+                        <span className="flex w-full items-center justify-between gap-2">
+                          {item.label}
+                          {item.href === '/messages' && totalUnread > 0 ? (
+                            <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-rose-500 px-1 text-center text-[11px] font-semibold leading-none tabular-nums text-white">
+                              {unreadBadgeText}
+                            </span>
+                          ) : null}
+                        </span>
                       </NavLink>
                     ))}
                 </div>
@@ -424,7 +458,7 @@ export default function AppShell({ title, description, children }: AppShellProps
           {/* 收起态导航轨：平板端(md)常驻，桌面端展开时隐藏 */}
           <div
             className={cn(
-              'flex min-h-full w-full flex-col items-center px-2 pb-5 pt-[calc(env(safe-area-inset-top)+14px)]',
+              'flex min-h-full w-full flex-col items-center px-2 pb-5 pt-[calc(var(--safe-top)+14px)]',
               sidebarExpanded && 'lg:hidden',
             )}
           >
@@ -505,7 +539,7 @@ export default function AppShell({ title, description, children }: AppShellProps
             <header
               ref={headerRef}
               className={cn(
-                'pointer-events-none fixed left-0 right-0 top-0 z-40 px-4 pt-[calc(env(safe-area-inset-top)+8px)] transition-[left] duration-200 md:px-6 md:pt-4 xl:px-8',
+                'pointer-events-none fixed left-0 right-0 top-0 z-40 px-4 pt-[calc(var(--safe-top)+8px)] transition-[left] duration-200 md:px-6 md:pt-4 xl:px-8',
                 !isAuthRoute && 'md:left-[64px]',
                 !isAuthRoute && sidebarExpanded && 'lg:left-[284px]',
                 isStudioRoute && 'hidden lg:block',
@@ -566,7 +600,12 @@ export default function AppShell({ title, description, children }: AppShellProps
                               : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
                           )}
                         >
-                          <MessageSquareMore className="h-4 w-4" />
+                          <span className="relative inline-flex">
+                            <MessageSquareMore className="h-4 w-4" />
+                            {totalUnread > 0 ? (
+                              <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-rose-500" />
+                            ) : null}
+                          </span>
                         </span>
                       )}
                     </NavLink>
@@ -603,19 +642,20 @@ export default function AppShell({ title, description, children }: AppShellProps
             onScroll={handleMainScroll}
             className={cn(
               'app-main-scroll min-h-0 flex-1 overscroll-contain lg:self-stretch',
-              isStudioRoute
+              isStudioRoute || isReaderRoute || isMessagesRoute
                 ? 'overflow-hidden'
-                : isReaderRoute
-                  ? 'overflow-hidden'
-                  : // 只声明 overflow-y-auto 时 overflow-x 会隐式变成 auto，子元素负外边距溢出会让整页可横滑，这里明确封死横向
-                    'overflow-x-hidden overflow-y-auto',
+                : // 只声明 overflow-y-auto 时 overflow-x 会隐式变成 auto，子元素负外边距溢出会让整页可横滑，这里明确封死横向
+                  'overflow-x-hidden overflow-y-auto',
             )}
           >
             <div
               className={cn(
-                'space-y-4 pb-[calc(88px+env(safe-area-inset-bottom))] pr-0.5 md:space-y-6 md:pb-8',
+                'space-y-4 pb-[calc(88px+var(--safe-bottom))] pr-0.5 md:space-y-6 md:pb-8',
                 isReaderRoute && 'flex h-full min-h-0 flex-col space-y-4 pb-0 md:pb-0',
-                isStudioRoute && 'flex h-full min-h-0 flex-col space-y-4 md:space-y-4 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-0',
+                // 创作区手机端由自己的底部导航接管，不再为全局底栏留白
+                isStudioRoute && 'flex h-full min-h-0 flex-col space-y-4 md:space-y-4 pb-0 md:pb-0',
+                // 消息页：列式铺满剩余高度，手机端避让底部导航，桌面端留少量底边距；app-messages-main 供键盘打开时收紧底部留白
+                isMessagesRoute && 'app-messages-main flex h-full min-h-0 flex-col space-y-0 pb-[calc(76px+var(--safe-bottom))] md:pb-6',
               )}
               style={{ paddingTop: headerHeight + 12 }}
             >
@@ -627,6 +667,8 @@ export default function AppShell({ title, description, children }: AppShellProps
                     isReaderRoute && 'hidden',
                     isNovelDetailRoute && 'hidden',
                     isPostDetailRoute && 'hidden',
+                    isMessagesRoute && 'hidden',
+                    isMeListRoute && 'hidden',
                     isAuthRoute && 'pt-3 md:pt-4',
                   )}
                 >
@@ -648,14 +690,23 @@ export default function AppShell({ title, description, children }: AppShellProps
 
       <nav
         className={cn(
-          'fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3 backdrop-blur md:hidden',
+          'app-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 pb-[calc(12px+var(--safe-bottom))] pt-3 backdrop-blur md:hidden',
           isReaderRoute && 'hidden',
+          // 创作区有自己的底部导航（对话/写作/章节/更多），隐藏全局底栏
+          isStudioRoute && 'hidden',
         )}
       >
         <div className="mx-auto grid max-w-lg grid-cols-[1fr_1fr_auto_1fr_1fr] items-center gap-2">
           {mobileNavItems.slice(0, 2).map((item) => (
             <NavLink key={item.href} to={item.href === '/me' ? accountRoute : item.href} className={bottomNavClass}>
-              {item.label}
+              <span className="relative">
+                {item.label}
+                {item.href === '/messages' && totalUnread > 0 ? (
+                  <span className="absolute -right-3 -top-2 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-center text-[10px] font-semibold leading-none tabular-nums text-white">
+                    {unreadBadgeText}
+                  </span>
+                ) : null}
+              </span>
             </NavLink>
           ))}
           <Button onClick={() => navigate('/studio')} variant="primary" className="h-11 w-11 px-0" aria-label="进入创作区">
@@ -671,28 +722,34 @@ export default function AppShell({ title, description, children }: AppShellProps
 
       <QuickCreateSheet open={quickCreateOpen} onClose={closeQuickCreate} />
 
-      {/* 首次进入全屏的一次性提示：告知可在设置中关闭 */}
-      {fullscreenNoticeOpen ? (
+      {/* 首次进入网站的全屏选择弹窗：默认不开启全屏，由用户自己选；选择后不再弹出，
+          「开启」按钮点击本身就是用户手势，可直接进入全屏 */}
+      {!fullscreenPromptSeen ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4">
           <div className="w-full max-w-[380px] rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-[var(--text-primary)]">已进入全屏模式</h3>
+            <h3 className="text-lg font-semibold text-[var(--text-primary)]">选择浏览方式</h3>
             <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-              如果想关闭，可前往设置进行关闭。
+              开启全屏模式可获得更沉浸的阅读体验；之后随时可在设置中更改。
             </p>
             <div className="mt-5 flex gap-3">
-              <Button type="button" variant="primary" className="flex-1" onClick={() => setFullscreenNoticeOpen(false)}>
+              <Button
+                type="button"
+                variant="primary"
+                className="flex-1"
+                onClick={() => {
+                  chooseFullscreen(true)
+                  enterImmersiveFullscreen()
+                }}
+              >
                 喜欢全屏
               </Button>
               <Button
                 type="button"
                 variant="secondary"
                 className="flex-1"
-                onClick={() => {
-                  setFullscreenNoticeOpen(false)
-                  navigate('/settings')
-                }}
+                onClick={() => chooseFullscreen(false)}
               >
-                我要关闭
+                不要全屏
               </Button>
             </div>
           </div>

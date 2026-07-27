@@ -111,6 +111,12 @@ export interface User extends UserSummary {
   postCount: number
   unreadMessageCount: number
   unreadNotificationCount: number
+  /** 查看他人主页时：当前登录用户是否已关注该用户 */
+  followedByViewer?: boolean
+  /** 仅本人可见：自己的隐私设置 */
+  privacy?: PrivacySettings
+  /** 查看他人主页时：各隐私区块对当前查看者是否可见 */
+  visibility?: ProfileVisibility
   createdAt: string
   updatedAt: string
 }
@@ -119,6 +125,114 @@ export interface AuthorSummary extends UserSummary {
   followerCount: number
   novelCount: number
   isFollowed: boolean
+}
+
+/** 关注列表（粉丝/关注中）里的单个用户条目 */
+export interface FollowUserItem extends UserSummary {
+  followerCount: number
+  /** 当前登录用户是否已关注该用户 */
+  followedByViewer: boolean
+  /** 该用户是否关注了当前登录用户（用于互相关注标记） */
+  followsViewer: boolean
+  followedAt: string
+}
+
+/** 获赞明细条目：谁赞了你的什么内容 */
+export interface ReceivedLikeItem {
+  id: EntityId
+  /** 点赞的用户 */
+  user: UserSummary
+  targetType: 'post' | 'comment'
+  /** 被赞内容摘要 */
+  excerpt: string
+  /** 帖子赞/帖子评论赞：对应帖子 id，用于跳转 */
+  postId: EntityId | null
+  /** 小说/章节评论赞：对应小说 id，用于跳转 */
+  novelId: EntityId | null
+  likedAt: string
+  [key: string]: unknown
+}
+
+/** 互动消息类型：赞/收藏/作品评论/章节评论 */
+export type InteractionKind = 'postLike' | 'commentLike' | 'novelFavorite' | 'novelComment' | 'chapterComment'
+
+/** 互动消息条目：谁对你的内容做了什么 */
+export interface InteractionItem {
+  id: EntityId
+  /** 发起互动的用户 */
+  user: UserSummary
+  kind: InteractionKind
+  /** 相关内容摘要（被赞内容/评论正文） */
+  excerpt: string
+  /** 作品评论的评星（1-5） */
+  rating?: number | null
+  /** 跳转用：帖子 id */
+  postId: EntityId | null
+  /** 跳转用：作品 id */
+  novelId: EntityId | null
+  /** 作品标题（收藏/作品评论/章节评论时带上） */
+  novelTitle?: string | null
+  /** 章节标题（章节评论时带上） */
+  chapterTitle?: string | null
+  happenedAt: string
+  [key: string]: unknown
+}
+
+/** 消息中心固定入口的未读徽标：互动消息/新关注我的 */
+export interface InteractionBadges {
+  /** 未读互动消息数 */
+  interactionsUnseen: number
+  /** 上次查看互动消息的时间（用于新消息高亮） */
+  interactionsSeenAt: string | null
+  /** 未读新粉丝数 */
+  followersUnseen: number
+  /** 上次查看新关注的时间（用于新粉丝高亮） */
+  followersSeenAt: string | null
+  [key: string]: unknown
+}
+
+/** 隐私可见级别：公开 / 仅自己 / 仅互关可见 */
+export type PrivacyLevel = 'public' | 'private' | 'mutual'
+
+/** 用户隐私设置：谁可以查看我的粉丝/关注/获赞/喜欢/已回复 */
+export interface PrivacySettings {
+  followers: PrivacyLevel
+  following: PrivacyLevel
+  /** 获赞 */
+  likes: PrivacyLevel
+  /** 喜欢（我赞过的帖子） */
+  favorites: PrivacyLevel
+  /** 已回复（我发出的评论） */
+  replies: PrivacyLevel
+}
+
+/** 查看他人主页时：各隐私区块对当前查看者是否可见 */
+export interface ProfileVisibility {
+  followers: boolean
+  following: boolean
+  likes: boolean
+  favorites: boolean
+  replies: boolean
+}
+
+/** 已回复条目：用户发出的一条评论及其上下文 */
+export interface UserReplyItem {
+  id: EntityId
+  targetType: CommentTargetType
+  content: string
+  /** 作品点评的评星（1-5） */
+  rating?: number | null
+  likeCount: number
+  /** 跳转用：帖子 id */
+  postId: EntityId | null
+  /** 跳转用：作品 id */
+  novelId: EntityId | null
+  novelTitle?: string | null
+  chapterTitle?: string | null
+  /** 被回复内容摘要（帖子正文/上级评论） */
+  targetExcerpt?: string | null
+  createdAt: string
+  [key: string]: unknown
 }
 
 export interface TopicSummary {
@@ -156,6 +270,12 @@ export interface Novel {
   favoriteCount: number
   likeCount: number
   viewCount: number
+  /** 作品评分：平均星级（1-5，保留一位小数）；没有评分时为 null */
+  ratingAverage?: number | null
+  /** 参与评星的人数 */
+  ratingCount?: number
+  /** 当前登录用户是否已收藏（未登录缺省 false） */
+  favoritedByViewer?: boolean
   lastChapterTitle: string | null
   lastPublishedAt: string | null
   publishedAt: string | null
@@ -231,6 +351,8 @@ export interface Comment {
   parentId: EntityId | null
   rootId: EntityId | null
   content: string
+  /** 作品评论的评星（1-5）；仅根评论携带 */
+  rating?: number | null
   likeCount: number
   replyCount: number
   auditStatus: ContentAuditStatus
@@ -289,6 +411,12 @@ export interface Conversation {
   lastMessageAt: string | null
   members: ConversationMemberSummary[]
   counterpart?: ConversationMemberSummary | null
+  /** 直聊会话：我是否关注了对方 */
+  viewerFollowsCounterpart?: boolean
+  /** 直聊会话：对方是否关注了我 */
+  counterpartFollowsViewer?: boolean
+  /** 直聊会话：是否互相关注；未互关属于陌生消息，单方最多发 3 条 */
+  isMutualFollow?: boolean
   presence?: ConversationPresence
   createdAt?: string
   updatedAt?: string

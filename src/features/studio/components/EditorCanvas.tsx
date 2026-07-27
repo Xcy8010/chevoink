@@ -1,11 +1,13 @@
-import { FilePenLine, LoaderCircle, RefreshCcw, Save, Settings2, WandSparkles } from 'lucide-react'
+import { useState } from 'react'
+import { FilePenLine, LoaderCircle, MoreHorizontal, RefreshCcw, Save, Settings2, Upload, WandSparkles } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
+import { useAutoGrowTextarea } from '@/hooks/useMobileComposer'
 import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 
 import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingReview, type SaveState, type WorkspaceDocumentView } from '../types'
-import ChapterChangeReview from './ChapterChangeReview'
+import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import { SaveStatusPill } from './StudioControls'
 
@@ -24,6 +26,9 @@ type EditorCanvasProps = {
   onRetryLoad: () => void
   onCreateChapter: () => void
   onOpenChapterSettings: () => void
+  /** 发布作品入口（仅手机端工具行展示；桌面端由 StudioToolbar 承担） */
+  onPublishNovel?: () => void
+  novelPublished?: boolean
   onStatusChange: (nextStatus: ChapterStatus) => void
   onChange: (next: ChapterDraftState) => void
   onWorkspaceDocumentChange?: (next: { title: string; content: string }) => void
@@ -33,11 +38,24 @@ type EditorCanvasProps = {
   pendingChapterReviewBusy?: boolean
   onKeepPendingReview?: () => void
   onRevertPendingReview?: () => void
+  onAcceptReviewHunk?: (hunkIndex: number) => void
+  onRejectReviewHunk?: (hunkIndex: number) => void
+  /** 待审文件序号（1 基）与总数：审查条「文件 x/y」多章导航 */
+  reviewFileIndex?: number
+  reviewFileCount?: number
+  onNavigateReviewFile?: (offset: 1 | -1) => void
+  /** 当前章无待审但其它章还有待审时，展示「下一个文件」浮标 */
+  pendingReviewRemaining?: number
+  onGoToNextReviewFile?: () => void
   pendingPlanReview?: PlanPendingReview | null
   pendingPlanReviewBusy?: boolean
   onKeepPendingPlanReview?: () => void
   onRevertPendingPlanReview?: () => void
+  onAcceptPlanReviewHunk?: (hunkIndex: number) => void
+  onRejectPlanReviewHunk?: (hunkIndex: number) => void
   embedded?: boolean
+  /** mobile=手机端零卡片单滚动形态；默认保持桌面卡片形态 */
+  variant?: 'default' | 'mobile'
 }
 
 export default function EditorCanvas({
@@ -55,6 +73,8 @@ export default function EditorCanvas({
   onRetryLoad,
   onCreateChapter,
   onOpenChapterSettings,
+  onPublishNovel,
+  novelPublished = false,
   onStatusChange: _onStatusChange,
   onChange,
   onWorkspaceDocumentChange,
@@ -64,17 +84,94 @@ export default function EditorCanvas({
   pendingChapterReviewBusy = false,
   onKeepPendingReview,
   onRevertPendingReview,
+  onAcceptReviewHunk,
+  onRejectReviewHunk,
+  reviewFileIndex = 1,
+  reviewFileCount = 1,
+  onNavigateReviewFile,
+  pendingReviewRemaining = 0,
+  onGoToNextReviewFile,
   pendingPlanReview = null,
   pendingPlanReviewBusy = false,
   onKeepPendingPlanReview,
   onRevertPendingPlanReview,
+  onAcceptPlanReviewHunk,
+  onRejectPlanReviewHunk,
   embedded = false,
+  variant = 'default',
 }: EditorCanvasProps) {
+  const isMobile = variant === 'mobile'
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  // 移动端 textarea 自动增高：正文与工作区文档两处 textarea 不会同时渲染，共用同一 ref
+  const mobileTextareaRef = useAutoGrowTextarea(
+    workspaceDocument ? workspaceDocument.content : chapterDraft?.content ?? '',
+    isMobile,
+  )
   const sectionClassName = embedded
     ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-default)]'
     : 'flex h-full min-h-0 flex-col overflow-hidden pb-2'
 
   if (workspaceDocument) {
+    if (isMobile) {
+      return (
+        <section className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
+          <div className="flex items-start justify-between gap-2 pb-3">
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                {workspaceDocument.editableTitle ? null : workspaceDocument.title}
+              </p>
+              {workspaceDocument.editableTitle ? (
+                <input
+                  value={workspaceDocument.title}
+                  onChange={(event) =>
+                    onWorkspaceDocumentChange?.({
+                      title: event.target.value,
+                      content: workspaceDocument.content,
+                    })
+                  }
+                  className="w-full border-0 bg-transparent text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)] outline-none"
+                  placeholder={workspaceDocument.kind === 'plan' ? '给这份创作计划命名' : '目录'}
+                />
+              ) : null}
+              <p className="text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
+            </div>
+            <Button onClick={onCreateChapter} variant="ghost" size="sm" className="shrink-0">
+              <FilePenLine className="h-4 w-4" />
+              新建章节
+            </Button>
+          </div>
+          {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
+            <PlanChangeReview
+              review={pendingPlanReview}
+              busy={pendingPlanReviewBusy}
+              onKeep={onKeepPendingPlanReview ?? (() => undefined)}
+              onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+              onAcceptHunk={onAcceptPlanReviewHunk}
+              onRejectHunk={onRejectPlanReviewHunk}
+              className="min-h-[50vh]"
+            />
+          ) : workspaceDocument.editableContent ? (
+            <textarea
+              ref={mobileTextareaRef}
+              value={workspaceDocument.content}
+              onChange={(event) =>
+                onWorkspaceDocumentChange?.({
+                  title: workspaceDocument.title,
+                  content: event.target.value,
+                })
+              }
+              rows={1}
+              className="w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+              placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+            />
+          ) : (
+            <div className="whitespace-pre-wrap break-words composer-body-text text-[var(--text-primary)]">
+              {workspaceDocument.content}
+            </div>
+          )}
+        </section>
+      )
+    }
     return (
       <Surface as="section" padding="md" className={embedded ? `${sectionClassName} border-0 px-5 py-5 shadow-none xl:px-6` : sectionClassName}>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-4">
@@ -110,6 +207,8 @@ export default function EditorCanvas({
               busy={pendingPlanReviewBusy}
               onKeep={onKeepPendingPlanReview ?? (() => undefined)}
               onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+              onAcceptHunk={onAcceptPlanReviewHunk}
+              onRejectHunk={onRejectPlanReviewHunk}
               className="min-h-0 flex-1"
             />
           ) : (
@@ -200,6 +299,120 @@ export default function EditorCanvas({
     })
   }
 
+  if (isMobile) {
+    return (
+      <section className="relative flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2">
+          <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]">{latestWordCountLabel}</span>
+          <div className="relative flex shrink-0 items-center gap-1.5">
+            <Button
+              onClick={onSave}
+              variant="secondary"
+              size="sm"
+              disabled={chapterSaveState === 'saving' || pendingChapterReviewBusy || Boolean(pendingChapterReview)}
+            >
+              <Save className="h-4 w-4" />
+              保存
+            </Button>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label="更多操作"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] transition-colors active:bg-[var(--surface-muted)]"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {mobileMenuOpen ? (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} aria-hidden />
+                <div className="absolute right-0 top-full z-40 mt-2 w-44 overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false)
+                      onOpenChapterSettings()
+                    }}
+                    className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                  >
+                    <Settings2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                    章节设置
+                  </button>
+                  {onPublishNovel ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        onPublishNovel()
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                    >
+                      <Upload className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      {novelPublished ? '更新发布' : '发布作品'}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false)
+                      onEnterImmersive()
+                    }}
+                    className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                  >
+                    <WandSparkles className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                    沉浸创作
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
+          {pendingChapterReview ? (
+            <ChapterChangeReview
+              review={pendingChapterReview}
+              busy={pendingChapterReviewBusy}
+              onKeep={onKeepPendingReview ?? (() => undefined)}
+              onRevert={onRevertPendingReview ?? (() => undefined)}
+              onAcceptHunk={onAcceptReviewHunk}
+              onRejectHunk={onRejectReviewHunk}
+              fileIndex={reviewFileIndex}
+              fileCount={reviewFileCount}
+              onNavigateFile={onNavigateReviewFile}
+              className="min-h-[60vh]"
+            />
+          ) : (
+            <>
+              <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
+              </p>
+              <textarea
+                ref={mobileTextareaRef}
+                value={chapterDraft.content}
+                onChange={(event) => {
+                  onChange({ ...chapterDraft, content: event.target.value })
+                  emitSelection(event.target)
+                }}
+                onSelect={(event) => emitSelection(event.currentTarget)}
+                onClick={(event) => emitSelection(event.currentTarget)}
+                onKeyUp={(event) => emitSelection(event.currentTarget)}
+                onBlur={(event) => {
+                  emitSelection(event.currentTarget)
+                  onEditorBlur?.()
+                }}
+                rows={1}
+                className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                placeholder="继续写这一章的正文。"
+              />
+            </>
+          )}
+        </div>
+        {onGoToNextReviewFile && !pendingChapterReview ? (
+          <NextReviewFilePill count={pendingReviewRemaining} onClick={onGoToNextReviewFile} />
+        ) : null}
+      </section>
+    )
+  }
+
   return (
     <Surface as="section" padding="md" className={embedded ? `${sectionClassName} border-0 px-5 py-5 shadow-none xl:px-6` : sectionClassName}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-4">
@@ -210,6 +423,17 @@ export default function EditorCanvas({
           compact
         />
         <div className="flex flex-wrap items-center gap-2">
+          {onPublishNovel ? (
+            <Button
+              onClick={onPublishNovel}
+              variant="secondary"
+              size="sm"
+              className="lg:hidden"
+            >
+              <Upload className="h-4 w-4" />
+              {novelPublished ? '更新发布' : '发布'}
+            </Button>
+          ) : null}
           <Button
             onClick={onOpenChapterSettings}
             variant="primary"
@@ -235,16 +459,22 @@ export default function EditorCanvas({
         </div>
       </div>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
+      <div className="relative mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
         {pendingChapterReview ? (
           <ChapterChangeReview
             review={pendingChapterReview}
             busy={pendingChapterReviewBusy}
             onKeep={onKeepPendingReview ?? (() => undefined)}
             onRevert={onRevertPendingReview ?? (() => undefined)}
+            onAcceptHunk={onAcceptReviewHunk}
+            onRejectHunk={onRejectReviewHunk}
+            fileIndex={reviewFileIndex}
+            fileCount={reviewFileCount}
+            onNavigateFile={onNavigateReviewFile}
             className="min-h-0 flex-1"
           />
         ) : (
+          <>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
             <div className="border-b border-[var(--border-subtle)] pb-4">
               <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
@@ -269,6 +499,10 @@ export default function EditorCanvas({
               placeholder="继续写这一章的正文。"
             />
           </div>
+          {onGoToNextReviewFile ? (
+            <NextReviewFilePill count={pendingReviewRemaining} onClick={onGoToNextReviewFile} />
+          ) : null}
+          </>
         )}
       </div>
     </Surface>

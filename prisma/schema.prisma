@@ -135,6 +135,13 @@ enum SmsVerificationPurpose {
   reset_password
 }
 
+/// 隐私可见级别：公开 / 仅自己 / 仅互关可见
+enum PrivacyLevel {
+  public
+  private
+  mutual
+}
+
 model User {
   id                      String               @id @default(cuid()) @db.VarChar(64)
   email                   String?              @unique @db.VarChar(255)
@@ -152,6 +159,13 @@ model User {
   postCount               Int                  @default(0) @map("post_count")
   unreadMessageCount      Int                  @default(0) @map("unread_message_count")
   unreadNotificationCount Int                  @default(0) @map("unread_notification_count")
+  interactionsSeenAt      DateTime?            @map("interactions_seen_at")
+  followersSeenAt         DateTime?            @map("followers_seen_at")
+  privacyFollowers        PrivacyLevel         @default(public) @map("privacy_followers")
+  privacyFollowing        PrivacyLevel         @default(public) @map("privacy_following")
+  privacyLikes            PrivacyLevel         @default(public) @map("privacy_likes")
+  privacyFavorites        PrivacyLevel         @default(public) @map("privacy_favorites")
+  privacyReplies          PrivacyLevel         @default(public) @map("privacy_replies")
   createdAt               DateTime             @default(now()) @map("created_at")
   updatedAt               DateTime             @updatedAt @map("updated_at")
   novels                  Novel[]
@@ -168,6 +182,9 @@ model User {
   postLikes               PostLike[]
   postBookmarks           PostBookmark[]
   commentLikes            CommentLike[]
+  novelFavorites          NovelFavorite[]
+  following               UserFollow[]         @relation("UserFollowFollower")
+  followers               UserFollow[]         @relation("UserFollowFollowing")
 
   @@map("users")
 }
@@ -223,6 +240,7 @@ model Novel {
   coverAssets     CoverAsset[] @relation("CoverAssetCandidates")
   chapters        Chapter[]
   comments        Comment[]
+  favorites       NovelFavorite[]
   posts           Post[]
   aiUsageLogs     AiUsageLog[]
   agentSessions   AgentSession[]
@@ -273,6 +291,8 @@ model Comment {
   parentId    String?            @map("parent_id") @db.VarChar(64)
   rootId      String?            @map("root_id") @db.VarChar(64)
   content     String
+  /** 作品评论的评星（1-5）；仅 targetType=novel 的根评论使用 */
+  rating      Int?
   likeCount   Int                @default(0) @map("like_count")
   replyCount  Int                @default(0) @map("reply_count")
   auditStatus ContentAuditStatus @default(pending) @map("audit_status")
@@ -355,6 +375,32 @@ model PostBookmark {
   @@unique([postId, userId])
   @@index([userId])
   @@map("post_bookmarks")
+}
+
+model UserFollow {
+  id          String   @id @default(cuid()) @db.VarChar(64)
+  followerId  String   @map("follower_id") @db.VarChar(64)
+  followingId String   @map("following_id") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+  follower    User     @relation("UserFollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("UserFollowFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("user_follows")
+}
+
+model NovelFavorite {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  novelId   String   @map("novel_id") @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  novel     Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([novelId, userId])
+  @@index([userId])
+  @@map("novel_favorites")
 }
 
 model CommentLike {

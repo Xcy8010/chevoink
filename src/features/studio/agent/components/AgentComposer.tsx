@@ -89,8 +89,8 @@ export function AgentComposer({
         className="max-h-40 w-full resize-none bg-transparent px-1.5 py-1 text-sm leading-6 text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none disabled:opacity-50"
       />
       <div className="mt-1.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <div className="flex items-center gap-1 rounded-full bg-[var(--surface-muted)] p-0.5">
+        <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-muted)] p-0.5">
             {MODE_OPTIONS.map((option) => (
               <button
                 key={option.mode}
@@ -99,7 +99,7 @@ export function AgentComposer({
                 disabled={running}
                 onClick={() => onModeChange(option.mode)}
                 className={cn(
-                  'rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed',
+                  'whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed',
                   mode === option.mode
                     ? 'bg-[var(--surface-default)] text-[var(--text-primary)] shadow-sm'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
@@ -109,14 +109,14 @@ export function AgentComposer({
               </button>
             ))}
           </div>
-          {/* 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文 */}
+          {/* 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文；手机端屏幕窄且编辑器不同屏，隐藏该入口 */}
           <button
             type="button"
             onClick={() => setAutoFollow(!autoFollow)}
             title={autoFollow ? '自动追踪已开启：Agent 写到哪章，编辑器跟到哪章' : '自动追踪已关闭：留在当前章节不跳转'}
             aria-pressed={autoFollow}
             className={cn(
-              'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+              'hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors md:inline-flex',
               autoFollow
                 ? 'bg-[var(--surface-contrast)] text-[var(--text-contrast)]'
                 : 'bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]',

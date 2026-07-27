@@ -4,6 +4,10 @@
 
 :root {
   color-scheme: light;
+  /* 安全区统一变量：默认取浏览器上报的 env 值；部分安卓内置 WebView（如 QQ）
+     沉浸式全屏时 env 恒为 0，由 lib/safe-area.ts 探测后注入状态栏高度兑底值 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   line-height: 1.5;
   font-weight: 400;
@@ -31,6 +35,7 @@
   /* 表面与文字 */
   --app-bg: #f4f0e8;
   --surface-default: rgba(255, 252, 247, 0.94);
+  --surface-solid: #fffcf7;
   --surface-muted: #ede7de;
   --surface-contrast: #17212d;
   --surface-contrast-hover: #1f2d3d;
@@ -86,6 +91,7 @@ html.dark {
   --color-info: #60a5fa;
   --app-bg: #111318;
   --surface-default: rgba(22, 26, 33, 0.94);
+  --surface-solid: #161a21;
   --surface-muted: #171b22;
   --surface-contrast: #f2f4f7;
   --surface-contrast-hover: #ffffff;
@@ -114,12 +120,29 @@ body,
   min-height: 100%;
 }
 
+/* 禁用安卓 WebView（QQ/微信等）的文本自动缩放（font boosting），避免长文本块渲染后突然被放大 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--app-bg);
   color: var(--text-primary);
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+/* 软键盘打开时（由 lib/keyboard-inset.ts 挂类）：
+   底部导航要么被键盘盖住要么被顶到键盘上方占空间，直接隐藏；
+   消息页为底导航预留的底部留白同步收紧，让聊天输入栏紧贴键盘 */
+html.keyboard-open .app-bottom-nav {
+  display: none;
+}
+
+html.keyboard-open .app-messages-main {
+  padding-bottom: 12px;
 }
 
 a {
@@ -202,6 +225,18 @@ select {
   display: none;
 }
 
+/* 创作区（含沉浸创作）：静止时隐藏滚动条，滚动中才显示。
+   由 useAutoHideScrollbars 在创作区挂载时给 body 加作用域类，
+   正在滚动的容器会被临时打上 data-scrolling，回退到全局 6px 细滚动条样式。
+   滚动条隐藏采用透明 thumb 而非 display:none，避免出现/消失时内容宽度跳动 */
+body.autohide-scrollbars *:not([data-scrolling='true']) {
+  scrollbar-color: transparent transparent;
+}
+
+body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
 /* ===== 动画与微交互 ===== */
 
 @keyframes fade-in-up {
@@ -253,6 +288,22 @@ select {
   }
 }
 
+/* 新互动/新粉丝进入列表时的高亮闪烁提示 */
+@keyframes unseen-flash {
+  0% {
+    background-color: transparent;
+  }
+  15% {
+    background-color: var(--color-brand-soft);
+  }
+  60% {
+    background-color: var(--color-brand-soft);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
 .animate-fade-in-up {
   animation: fade-in-up var(--duration-normal) var(--easing-default) both;
 }
@@ -265,8 +316,19 @@ select {
   animation: sheet-slide-up var(--duration-normal) var(--easing-default) both;
 }
 
+/* 平板/电脑端 BottomSheet 降级为居中模态：换成轻微上移淡入，避免 keyframe 覆盖定位 transform */
+@media (min-width: 768px) {
+  .animate-sheet-slide-up {
+    animation-name: fade-in-up;
+  }
+}
+
 .animate-toast-slide-down {
   animation: toast-slide-down var(--duration-normal) var(--easing-default) both;
+}
+
+.animate-unseen-flash {
+  animation: unseen-flash 1.8s var(--easing-default) 0.25s 1 both;
 }
 
 .skeleton-shimmer {
@@ -324,6 +386,19 @@ select {
 
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* 手机端创作区正文：17px 舒适档，<375px 小屏机型自动降到 16px 压缩档 */
+.composer-body-text {
+  font-size: 17px;
+  line-height: 1.9;
+}
+
+@media (max-width: 374px) {
+  .composer-body-text {
+    font-size: 16px;
+    line-height: 1.85;
+  }
 }
 
 /* 触屏设备确保点击区域不小于 44px 的工具类 */

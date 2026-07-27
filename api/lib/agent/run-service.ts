@@ -192,6 +192,30 @@ export async function streamLoopRun(
   for (const event of events) {
     writeEvent(event)
   }
+
+  // 进程重启后的孤儿/已收尾 run：持久化事件里可能永远没有终态事件，
+  // 直播中的前端会无限重连并卡在“执行中”。按 DB 终态补发合成终态事件收尾。
+  const hasTerminal = events.some(
+    (event) => event.type === 'run.finished' || event.type === 'run.paused' || (event.type === 'error' && !event.recoverable),
+  )
+  if (!hasTerminal) {
+    const latest = await prisma.agentRun.findUnique({ where: { id: runId }, select: { status: true, outputSummary: true } })
+    const nextSeq = (events.length > 0 ? events[events.length - 1].seq : sinceSeq) + 1
+    const base = { seq: nextSeq, runId, ts: new Date().toISOString() }
+    if (latest?.status === 'paused') {
+      writeEvent({ ...base, type: 'run.paused', reason: 'user_stop' })
+    } else {
+      const status = latest?.status === 'completed' ? 'succeeded' : latest?.status === 'cancelled' ? 'cancelled' : 'failed'
+      writeEvent({
+        ...base,
+        type: 'run.finished',
+        status,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        artifacts: [],
+        outputSummary: latest?.outputSummary ?? '',
+      })
+    }
+  }
   res.end()
 }
 
@@ -232,15 +256,78 @@ export async function resolveLoopRunQuestion(
 }
 
 export async function stopLoopRun(userId: string, runId: string): Promise<{ stopped: boolean }> {
-  await findOwnedLoopRun(userId, runId)
+  const run = await findOwnedLoopRun(userId, runId)
 
   const stopped = stopAgentRun(runId)
 
   if (!stopped) {
+    // 内存里没有活跃 run 但 DB 还停在进行中：进程重启（部署 reload/崩溃）遗留的孤儿任务，
+    // 就地收尾为 paused 并补一条中断说明消息，避免用户永远无法暂停/看不到终止原因
+    if (run.status === 'queued' || run.status === 'running' || run.status === 'awaiting_approval') {
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { status: 'paused', errorMessage: '任务因服务重启而中断，已就地停止。' },
+      })
+      await prisma.agentMessage
+        .create({
+          data: {
+            runId: run.id,
+            sessionId: run.sessionId,
+            role: 'assistant',
+            parts: [
+              { type: 'text', text: '任务已终止（服务重启导致执行中断）。直接发送“继续”，我会接着完成剩余待办。' },
+            ] as unknown as object,
+          },
+        })
+        .catch(() => {})
+      return { stopped: true }
+    }
     throw new DataAccessError(409, 'RUN_NOT_ACTIVE', '任务不在运行中，无需停止。')
   }
 
   return { stopped: true }
+}
+
+/**
+ * 进程启动兜底：上一个进程被杀（部署 reload/崩溃）时遗留的进行中 run 无人收尾，
+ * 前端会永远显示“执行中”、暂停接口报“任务不在运行中”。启动时统一标记为 failed，
+ * 并在会话里补一条终止说明消息，让刷新后的对话结尾能看到终止原因。
+ */
+export async function recoverOrphanLoopRuns(): Promise<void> {
+  try {
+    const orphans = await prisma.agentRun.findMany({
+      where: { engine: 'loop', status: { in: ['queued', 'running', 'awaiting_approval'] } },
+      select: { id: true, sessionId: true },
+    })
+
+    if (orphans.length === 0) {
+      return
+    }
+
+    await prisma.agentRun.updateMany({
+      where: { id: { in: orphans.map((run) => run.id) } },
+      data: {
+        status: 'failed',
+        errorMessage: '服务更新导致任务中断。点击「继续执行」或直接发送“继续”，我会接着完成剩余工作。',
+        finishedAt: new Date(),
+      },
+    })
+
+    await prisma.agentMessage.createMany({
+      data: orphans.map((run) => ({
+        runId: run.id,
+        sessionId: run.sessionId,
+        role: 'assistant' as const,
+        parts: [
+          { type: 'text', text: '任务已终止（服务更新导致执行中断）。直接发送“继续”，我会接着完成剩余待办。' },
+        ] as unknown as object,
+      })),
+    })
+
+    console.log(`[agent-loop] 启动清理：${orphans.length} 个遗留进行中任务已标记为中断`)
+  } catch (error) {
+    console.error('[agent-loop] 启动清理遗留任务失败', error)
+  }
 }
 
 export async function continueLoopRun(

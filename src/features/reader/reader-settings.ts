@@ -1,4 +1,4 @@
-/** 阅读器显示设置：字号 4 档 + 背景色 4 模式，localStorage 持久化 */
+/** 阅读器显示设置：字号 4 档 + 背景色 4 模式 + 听书偏好，localStorage 持久化 */
 
 export type ReaderFontScale = 'compact' | 'comfortable' | 'relaxed' | 'large'
 export type ReaderTone = 'paper' | 'mist' | 'green' | 'night'
@@ -61,14 +61,24 @@ export const toneOptions: ToneOption[] = [
 
 const STORAGE_KEY = 'chevoink-reader-settings'
 
+/** 听书语速档位（前端 playbackRate 变速，不参与合成，见方案 17-2.2） */
+export const ttsRateOptions = [0.75, 1, 1.25, 1.5, 2, 3] as const
+
 type PersistedSettings = {
   fontScale?: ReaderFontScale
   tone?: ReaderTone
+  /** 听书音色 id，空串 = 跟随服务端默认音色 */
+  ttsVoice?: string
+  ttsRate?: number
+  ttsAutoNext?: boolean
 }
 
 const FALLBACK: Required<PersistedSettings> = {
   fontScale: 'comfortable',
   tone: 'paper',
+  ttsVoice: '',
+  ttsRate: 1,
+  ttsAutoNext: true,
 }
 
 export function loadReaderSettings(): Required<PersistedSettings> {
@@ -84,6 +94,11 @@ export function loadReaderSettings(): Required<PersistedSettings> {
       tone: toneOptions.some((option) => option.id === parsed.tone)
         ? (parsed.tone as ReaderTone)
         : FALLBACK.tone,
+      ttsVoice: typeof parsed.ttsVoice === 'string' ? parsed.ttsVoice : FALLBACK.ttsVoice,
+      ttsRate: ttsRateOptions.some((option) => option === parsed.ttsRate)
+        ? (parsed.ttsRate as number)
+        : FALLBACK.ttsRate,
+      ttsAutoNext: typeof parsed.ttsAutoNext === 'boolean' ? parsed.ttsAutoNext : FALLBACK.ttsAutoNext,
     }
   } catch {
     return FALLBACK

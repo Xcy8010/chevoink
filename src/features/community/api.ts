@@ -3,22 +3,39 @@ import type {
   CommentTargetType,
   Conversation,
   CreateCommentRequest,
+  CreateConversationResponse,
   CreatePostRequest,
   CreatePostResponse,
   GetMeResponse,
+  GetInteractionBadgesResponse,
   GetPostDetailResponse,
   GetTopicsResponse,
   ListCommentsResponse,
   ListConversationsResponse,
+  ListFollowUsersResponse,
+  ListInteractionsResponse,
+  ListFavoriteNovelsResponse,
+  ListLikedPostsResponse,
   ListMessagesResponse,
   ListNovelsResponse,
   ListPostsResponse,
+  ListReceivedLikesResponse,
+  ListUserRepliesResponse,
   MarkConversationReadResponse,
+  MarkInteractionSeenRequest,
+  MarkInteractionSeenResponse,
   SendMessageRequest,
   SendMessageResponse,
   SetCommentLikeResponse,
+  SetNovelFavoriteResponse,
   SetPostBookmarkResponse,
   SetPostLikeResponse,
+  SetUserFollowResponse,
+  UpdateCommentRequest,
+  UpdateCommentResponse,
+  DeleteCommentResponse,
+  UpdatePrivacyRequest,
+  UpdatePrivacyResponse,
   User,
 } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
@@ -143,6 +160,82 @@ export function setCommentLike(commentId: string, liked: boolean) {
   })
 }
 
+export function setUserFollow(userId: string, following: boolean) {
+  return requestData<SetUserFollowResponse['data']>(`/api/users/${userId}/follow`, {
+    method: following ? 'POST' : 'DELETE',
+  })
+}
+
+export function listUserFollowers(userId: string) {
+  return requestData<ListFollowUsersResponse['data']>(`/api/users/${userId}/followers`)
+}
+
+export function listUserFollowing(userId: string) {
+  return requestData<ListFollowUsersResponse['data']>(`/api/users/${userId}/following`)
+}
+
+/** 喜欢列表：用户赞过的帖子 */
+export function listUserLikedPosts(userId: string) {
+  return requestData<ListLikedPostsResponse['data']>(`/api/users/${userId}/liked-posts`)
+}
+
+/** 已回复列表：用户发出的各类评论 */
+export function listUserReplies(userId: string) {
+  return requestData<ListUserRepliesResponse['data']>(`/api/users/${userId}/replies`)
+}
+
+/** 更新隐私设置，返回最新全量设置 */
+export function updateMyPrivacy(input: UpdatePrivacyRequest) {
+  return requestData<UpdatePrivacyResponse['data']>('/api/users/me/privacy', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function listReceivedLikes() {
+  return requestData<ListReceivedLikesResponse['data']>('/api/users/me/received-likes')
+}
+
+/** 互动消息明细：赞/收藏/作品评论/章节评论 */
+export function listInteractions() {
+  return requestData<ListInteractionsResponse['data']>('/api/users/me/interactions')
+}
+
+/** 互动/新关注未读徽标 */
+export function getInteractionBadges() {
+  return requestData<GetInteractionBadgesResponse['data']>('/api/users/me/interaction-badges')
+}
+
+/** 标记互动/新关注已读，返回最新徽标 */
+export function markInteractionSeen(target: MarkInteractionSeenRequest['target']) {
+  return requestData<MarkInteractionSeenResponse['data']>('/api/users/me/interaction-badges/seen', {
+    method: 'POST',
+    body: JSON.stringify({ target }),
+  })
+}
+
+/** 收藏/取消收藏作品 */
+export function setNovelFavorite(novelId: string, favorited: boolean) {
+  return requestData<SetNovelFavoriteResponse['data']>(`/api/novels/${novelId}/favorite`, {
+    method: favorited ? 'POST' : 'DELETE',
+  })
+}
+
+/** 我收藏的作品列表（按收藏时间倒序） */
+export function listFavoriteNovels() {
+  return requestData<ListFavoriteNovelsResponse['data']>('/api/users/me/favorite-novels')
+}
+
+/** 创建或复用与目标用户的双人直聊会话 */
+export async function createDirectConversation(targetUserId: string): Promise<Conversation> {
+  const data = await requestData<CreateConversationResponse['data']>('/api/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId }),
+  })
+
+  return data.conversation
+}
+
 export function markConversationRead(conversationId: string) {
   return requestData<MarkConversationReadResponse['data']>(`/api/conversations/${conversationId}/read`, {
     method: 'POST',
@@ -175,6 +268,21 @@ export function createComment(payload: CreateCommentRequest) {
   return requestData<{ comment: ListCommentsResponse['data']['items'][number] }>('/api/comments', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+/** 编辑自己的评论；作品根评论可同步修改评星 */
+export function updateComment(commentId: string, payload: UpdateCommentRequest) {
+  return requestData<UpdateCommentResponse['data']>(`/api/comments/${commentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 删除自己的评论（后端会连同回复与点赞一并清理） */
+export function deleteComment(commentId: string) {
+  return requestData<DeleteCommentResponse['data']>(`/api/comments/${commentId}`, {
+    method: 'DELETE',
   })
 }
 

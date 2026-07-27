@@ -39,7 +39,8 @@ export default function HotPostsRail({ posts }: HotPostsRailProps) {
               <span className="rounded-[var(--radius-pill)] bg-[var(--color-brand-soft)] px-2 py-0.5 font-medium text-[var(--color-brand)]">
                 {getTopicName(post.topic)}
               </span>
-              <span>{formatRelativeTime(post.updatedAt)}</span>
+              {/* 显示发帖时间：updatedAt 会被点赞/评论顶新，不能代表发布时间 */}
+              <span>{formatRelativeTime(post.createdAt)}</span>
             </div>
             <p className="mt-2.5 line-clamp-3 text-sm leading-6 text-[var(--text-primary)]">
               {getPostExcerpt(post)}

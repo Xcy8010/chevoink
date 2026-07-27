@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import ImageLightbox from '@/features/studio/components/ImageLightbox'
 import DetailCtaRow from '../components/DetailCtaRow'
 import DetailStatsRow from '../components/DetailStatsRow'
 import { DetailTabContent, DetailTabs } from '../components/DetailTabs'
@@ -11,6 +13,7 @@ type NovelDetailTabletProps = {
 
 /** 平板端详情页：扁平化排版——封面左(168x227) + 右侧信息区 + Tab 内容，无卡片嵌套 */
 export default function NovelDetailTablet({ state }: NovelDetailTabletProps) {
+  const [coverPreviewOpen, setCoverPreviewOpen] = useState(false)
   const {
     detail,
     detailTitle,
@@ -33,11 +36,18 @@ export default function NovelDetailTablet({ state }: NovelDetailTabletProps) {
       <section className="flex gap-6">
         <div className="shrink-0">
           {detailCoverUrl ? (
-            <img
-              src={detailCoverUrl}
-              alt={detailTitle}
-              className="aspect-[20/27] w-[168px] rounded-[var(--radius-lg)] object-cover shadow-[0_14px_32px_rgba(17,24,39,0.16)]"
-            />
+            <button
+              type="button"
+              onClick={() => setCoverPreviewOpen(true)}
+              className="block cursor-zoom-in"
+              aria-label="查看封面大图"
+            >
+              <img
+                src={detailCoverUrl}
+                alt={detailTitle}
+                className="aspect-[20/27] w-[168px] rounded-[var(--radius-lg)] object-cover shadow-[0_14px_32px_rgba(17,24,39,0.16)]"
+              />
+            </button>
           ) : (
             <div className="flex aspect-[20/27] w-[168px] flex-col justify-end rounded-[var(--radius-lg)] bg-[var(--surface-contrast)] p-4 shadow-[0_14px_32px_rgba(17,24,39,0.16)]">
               <p className="text-xs text-[var(--text-contrast)]/70">{authorName}</p>
@@ -115,6 +125,14 @@ export default function NovelDetailTablet({ state }: NovelDetailTabletProps) {
         <DetailTabs state={state} />
         <DetailTabContent state={state} />
       </section>
+
+      {coverPreviewOpen && detailCoverUrl ? (
+        <ImageLightbox
+          src={detailCoverUrl}
+          alt={detailTitle}
+          onClose={() => setCoverPreviewOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

@@ -9,8 +9,10 @@ import {
   chapterReadTool,
   memorySearchTool,
   novelGetContextTool,
+  planReadTool,
 } from './read-tools.js'
 import type { AgentTool } from './types.js'
+import { todoWriteTool } from './todo-tools.js'
 import {
   chapterAppendTool,
   chapterCreateTool,
@@ -37,6 +39,7 @@ export const allTools: AgentTool<any>[] = [
   chapterReadTool,
   chapterListSummariesTool,
   memorySearchTool,
+  planReadTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
@@ -59,6 +62,7 @@ export const allTools: AgentTool<any>[] = [
   // 记忆与流程
   memorySaveTool,
   planExitTool,
+  todoWriteTool,
   // 交互
   askUserTool,
 ]

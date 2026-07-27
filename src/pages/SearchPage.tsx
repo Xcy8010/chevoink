@@ -105,7 +105,7 @@ export default function SearchPage() {
   const tabs: Array<{ id: ResultTabId; label: string; count: number }> = [
     { id: 'all', label: '全部', count: total },
     { id: 'novel', label: '作品', count: novels.length },
-    { id: 'author', label: '作者', count: authors.length },
+    { id: 'author', label: '用户', count: authors.length },
     { id: 'post', label: '讨论', count: posts.length },
   ]
 
@@ -189,7 +189,7 @@ export default function SearchPage() {
         <section>
           <h2 className="inline-flex items-center gap-2 text-lg font-bold text-[var(--text-primary)]">
             <UserRound className="h-5 w-5 text-[var(--text-tertiary)]" />
-            相关作者
+            相关用户
           </h2>
           <div className="mt-1 divide-y divide-[var(--border-subtle)]">
             {authors.map((author) => (

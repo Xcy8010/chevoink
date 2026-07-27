@@ -18,7 +18,7 @@ export default function QuickCreateSheet({ open, onClose }: QuickCreateSheetProp
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[rgba(15,23,42,0.24)] px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-14 backdrop-blur-[2px] md:items-center md:pt-20">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[rgba(15,23,42,0.24)] px-4 pb-[calc(1rem+var(--safe-bottom))] pt-14 backdrop-blur-[2px] md:items-center md:pt-20">
       <Surface className="w-full max-w-xl" padding="md">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>

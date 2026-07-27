@@ -1,11 +1,14 @@
 import { Heart, MessageSquareMore, Share2, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { useToast } from '@/components/ui/Toast'
 import { setPostBookmark, setPostLike } from '@/features/community/api'
+import { patchPostInCaches } from '@/features/community/post-cache'
 import Avatar from '@/features/community/components/Avatar'
 import NovelReferenceCard from '@/features/community/components/NovelReferenceCard'
+import PostImageViewer from '@/features/community/components/PostImageViewer'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
 import { cn } from '@/lib/utils'
 import type { Post } from '../../../../shared/contracts/index.js'
@@ -23,9 +26,11 @@ const TRUNCATE_THRESHOLD = 180
 export default function PostCard({ post, compact = false, flat = false }: PostCardProps) {
   const navigate = useNavigate()
   const toast = useToast()
+  const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [liked, setLiked] = useState(Boolean(post.likedByViewer))
   const [favorited, setFavorited] = useState(Boolean(post.bookmarkedByViewer))
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
 
   // 服务端 viewer 状态刷新后同步本地状态
   useEffect(() => {
@@ -37,6 +42,7 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
 
   const fullContent = compact ? post.excerpt : post.content
   const shouldTruncate = !flat && !expanded && fullContent.length > TRUNCATE_THRESHOLD
+  const imageUrls = post.imageUrls.filter(Boolean)
   // 以服务端计数为基线，叠加本地乐观增量
   const likeCount = Math.max(0, post.likeCount + Number(liked) - Number(Boolean(post.likedByViewer)))
   const favoriteCount = Math.max(0, post.favoriteCount + Number(favorited) - Number(Boolean(post.bookmarkedByViewer)))
@@ -47,20 +53,32 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
     event.stopPropagation()
     const next = !liked
     setLiked(next)
-    setPostLike(post.id, next).catch((error) => {
-      setLiked(!next)
-      toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
-    })
+    setPostLike(post.id, next)
+      .then((data) => {
+        // 把服务端权威状态写回所有含该帖子的缓存，保证列表与详情页点赞一致
+        patchPostInCaches(queryClient, post.id, { likedByViewer: data.liked, likeCount: data.likeCount })
+      })
+      .catch((error) => {
+        setLiked(!next)
+        toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
+      })
   }
 
   const handleToggleBookmark = (event: React.MouseEvent) => {
     event.stopPropagation()
     const next = !favorited
     setFavorited(next)
-    setPostBookmark(post.id, next).catch((error) => {
-      setFavorited(!next)
-      toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
-    })
+    setPostBookmark(post.id, next)
+      .then((data) => {
+        patchPostInCaches(queryClient, post.id, {
+          bookmarkedByViewer: data.bookmarked,
+          favoriteCount: data.favoriteCount,
+        })
+      })
+      .catch((error) => {
+        setFavorited(!next)
+        toast.error(error instanceof Error ? error.message : '操作失败，请稍后再试')
+      })
   }
 
   const handleShare = async (event: React.MouseEvent) => {
@@ -99,10 +117,11 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
           <Avatar name={post.author.nickname} src={post.author.avatarUrl} size="md" />
         </Link>
         <div className="min-w-0 flex-1">
+          {/* 昵称链接收窄到内容宽：只有点到头像/名字才进作者页，右侧空白冒泡到卡片进帖子详情 */}
           <Link
             to={`/author/${post.author.id}`}
             onClick={(event) => event.stopPropagation()}
-            className="block truncate text-sm font-medium text-[var(--text-primary)] transition-colors hover:text-[var(--color-brand)]"
+            className="inline-block max-w-full truncate align-top text-sm font-medium text-[var(--text-primary)] transition-colors hover:text-[var(--color-brand)]"
           >
             {post.author.nickname}
           </Link>
@@ -140,12 +159,49 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
         ) : null}
       </div>
 
-      {post.imageUrls[0] ? (
-        <img
-          src={post.imageUrls[0]}
-          alt={post.excerpt}
-          className="mt-3 aspect-[16/9] w-full rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
-        />
+      {/* 配图（微信朋友圈式）：单图按原始比例完整展示且限制最大高度；多图用定宽宫格
+          （2/4 张两列、其余三列），九张时整体也不会撞大；点击打开全屏查看 */}
+      {imageUrls.length === 1 ? (
+        <button
+          type="button"
+          aria-label="查看配图"
+          onClick={(event) => {
+            event.stopPropagation()
+            setPreviewIndex(0)
+          }}
+          className="mt-3 block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
+        >
+          <img
+            src={imageUrls[0]}
+            alt="配图 1"
+            loading="lazy"
+            className="block h-auto max-h-[340px] w-auto max-w-full"
+          />
+        </button>
+      ) : imageUrls.length > 1 ? (
+        <div
+          className={cn(
+            'mt-3 grid gap-1.5',
+            imageUrls.length === 2 || imageUrls.length === 4
+              ? 'max-w-[300px] grid-cols-2'
+              : 'max-w-[440px] grid-cols-3',
+          )}
+        >
+          {imageUrls.map((url, index) => (
+            <button
+              key={`${index}-${url}`}
+              type="button"
+              aria-label={`查看第 ${index + 1} 张配图`}
+              onClick={(event) => {
+                event.stopPropagation()
+                setPreviewIndex(index)
+              }}
+              className="block cursor-zoom-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
+            >
+              <img src={url} alt={`配图 ${index + 1}`} loading="lazy" className="aspect-square h-full w-full object-cover" />
+            </button>
+          ))}
+        </div>
       ) : null}
 
       {post.relatedNovel ? (
@@ -203,6 +259,10 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
           分享
         </button>
       </div>
+
+      {previewIndex !== null && imageUrls.length > 0 ? (
+        <PostImageViewer images={imageUrls} initialIndex={previewIndex} onClose={() => setPreviewIndex(null)} />
+      ) : null}
     </article>
   )
 }

@@ -1,5 +1,11 @@
 import type { AgentExecutionMode, EntityId } from './models.js'
 
+/** 任务待办项：todo_write 工具全量维护，驱动 Agent 面板待办清单与循环防早停 */
+export interface AgentTodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 /** 一次模型调用/一次 run 的 token 用量 */
 export interface AgentTokenUsage {
   promptTokens: number
@@ -42,6 +48,7 @@ export type AgentToolDisplayPayload =
       unanswered?: boolean
     }
   | { kind: 'uiIntent'; intent: 'open_meta' | 'open_cover' }
+  | { kind: 'todoList'; items: AgentTodoItem[] }
 
 /** 工具调用的回滚快照（写操作自动记录） */
 export interface AgentRollbackSnapshot {

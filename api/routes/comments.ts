@@ -1,8 +1,14 @@
 import { Router, type Request, type Response } from 'express'
 
-import type { CreateCommentRequest } from '../../shared/contracts/index.js'
+import type { CreateCommentRequest, UpdateCommentRequest } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
-import { createCommentData, listCommentsData, setCommentLikeData } from '../lib/data-access.js'
+import {
+  createCommentData,
+  deleteCommentData,
+  listCommentsData,
+  setCommentLikeData,
+  updateCommentData,
+} from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -52,6 +58,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       targetId: body.targetId.trim(),
       content: body.content.trim(),
       parentId: body.parentId,
+      // 作品根评论的评星此前被路由层丢弃，导致已评星仍报「请先打分」
+      rating: body.rating,
     })
 
     res.status(201).json(buildSuccess(requestId, { comment }))
@@ -80,5 +88,50 @@ async function handleCommentLike(req: Request, res: Response, liked: boolean): P
 
 router.post('/:commentId/like', (req, res) => handleCommentLike(req, res, true))
 router.delete('/:commentId/like', (req, res) => handleCommentLike(req, res, false))
+
+router.patch('/:commentId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as Partial<UpdateCommentRequest>
+
+  try {
+    const userId = requireSessionUserId(req)
+    if (!body.content?.trim()) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请填写评论内容。'))
+      return
+    }
+
+    const comment = await updateCommentData(userId, req.params.commentId, {
+      content: body.content.trim(),
+      rating: body.rating,
+    })
+
+    if (!comment) {
+      res.status(404).json(buildError(requestId, 'COMMENT_NOT_FOUND', '未找到评论。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, { comment }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/:commentId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await deleteCommentData(userId, req.params.commentId)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'COMMENT_NOT_FOUND', '未找到评论。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
 
 export default router

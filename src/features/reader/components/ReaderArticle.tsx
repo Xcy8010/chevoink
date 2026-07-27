@@ -81,15 +81,23 @@ export default function ReaderArticle({
             }
           />
         ) : (
-          paragraphs.map((paragraph, index) => (
-            <p
-              key={`${reader.currentChapter.id}-${index}`}
-              className="indent-[2em] tracking-[0.01em]"
-              style={textStyle}
-            >
-              {paragraph}
-            </p>
-          ))
+          paragraphs.map((paragraph, index) => {
+            const isSpeaking = state.tts.activeParagraphIndex === index
+            return (
+              <p
+                key={`${reader.currentChapter.id}-${index}`}
+                data-tts-p={index}
+                className="indent-[2em] tracking-[0.01em] rounded-[10px] transition-colors [transition-duration:var(--duration-normal)]"
+                style={{
+                  ...textStyle,
+                  // 听书跟读高亮：随阅读底色自适应，不引入新颜色 token
+                  background: isSpeaking ? 'color-mix(in srgb, currentColor 9%, transparent)' : undefined,
+                }}
+              >
+                {paragraph}
+              </p>
+            )
+          })
         )}
       </div>
 

@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import type {
   AgentMessagePart,
   AgentStreamEvent,
+  AgentTodoItem,
   AgentTokenUsage,
   AgentUIMessage,
 } from '../../../../shared/contracts/index.js'
@@ -121,8 +122,14 @@ type AgentStoreState = {
   composerDraft: string
   /** 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文（默认开启） */
   autoFollow: boolean
-  /** 本次 run 的工作区写入活动（变更条） */
+  /** 当前任务窗口（会话）累计的工作区写入活动（变更区） */
   workspaceActivities: WorkspaceActivity[]
+  /** 工作区变更触发版本：仅 live 事件递增，驱动变更区自动展开（历史恢复不触发） */
+  activitiesVersion: number
+  /** 当前会话的任务待办清单（todo_write 全量维护） */
+  todos: AgentTodoItem[]
+  /** 待办触发版本：仅 live 事件递增，驱动待办区自动展开（历史恢复不触发） */
+  todosVersion: number
   /** 事件 reducer：live 与 replay 共用同一构建逻辑 */
   applyEvent: (event: AgentStreamEvent) => void
   beginRun: (runId: string, userPrompt: string, sessionId: string | null) => void
@@ -180,6 +187,40 @@ function activityFromDisplay(display: unknown): { label: string | null; chapterI
   return { label: null, chapterId: null, deltaChars: null }
 }
 
+/** 从历史消息的工具轨迹推导会话级的工作区变更与待办清单（刷新/切换会话后恢复） */
+function deriveSessionStateFromMessages(messages: AgentUIMessage[]): {
+  workspaceActivities: WorkspaceActivity[]
+  todos: AgentTodoItem[]
+} {
+  const workspaceActivities: WorkspaceActivity[] = []
+  let todos: AgentTodoItem[] = []
+
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== 'tool-call') {
+        continue
+      }
+      if (part.display?.kind === 'todoList') {
+        todos = part.display.items
+      }
+      if (!WORKSPACE_WRITE_TOOLS.has(part.toolName)) {
+        continue
+      }
+      const extracted = activityFromDisplay(part.display)
+      workspaceActivities.push({
+        callId: part.callId,
+        toolName: part.toolName,
+        label: extracted.label ?? WRITE_TOOL_LABELS[part.toolName] ?? part.title,
+        chapterId: extracted.chapterId,
+        deltaChars: extracted.deltaChars,
+        status: part.status === 'failed' ? 'failed' : 'done',
+      })
+    }
+  }
+
+  return { workspaceActivities, todos }
+}
+
 function updateMessageParts(
   messages: AgentUIMessage[],
   messageId: string,
@@ -221,6 +262,9 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   composerDraft: '',
   autoFollow: readStoredAutoFollow(),
   workspaceActivities: [],
+  activitiesVersion: 0,
+  todos: [],
+  todosVersion: 0,
 
   beginRun: (runId, userPrompt, sessionId) =>
     set((state) => ({
@@ -234,7 +278,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
-      workspaceActivities: [],
+      // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空
       messages: [
         ...state.messages,
         {
@@ -259,11 +303,21 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
-      workspaceActivities: [],
+      // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
     }),
 
   restoreMessages: (messages) =>
-    set({ messages, phase: 'idle', runId: null, activeSessionId: null, pendingApproval: null, pendingQuestion: null, errorMessage: null, workspaceActivities: [] }),
+    set({
+      messages,
+      phase: 'idle',
+      runId: null,
+      activeSessionId: null,
+      pendingApproval: null,
+      pendingQuestion: null,
+      errorMessage: null,
+      // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
+      ...deriveSessionStateFromMessages(messages),
+    }),
 
   resetRun: () =>
     set({
@@ -278,6 +332,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       outputSummary: '',
       errorMessage: null,
       workspaceActivities: [],
+      todos: [],
     }),
 
   clearError: () => set({ errorMessage: null }),
@@ -343,6 +398,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             ...(question ? { phase: 'awaiting_input' as const, pendingQuestion: question } : {}),
             ...(isWrite && !existingActivity
               ? {
+                  activitiesVersion: state.activitiesVersion + 1,
                   workspaceActivities: [
                     ...state.workspaceActivities,
                     {
@@ -401,9 +457,15 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
         case 'tool.result': {
           const extracted = activityFromDisplay(event.display)
           const clearQuestion = state.pendingQuestion?.callId === event.callId
+          // todo_write 成功后同步待办快照并递增触发版本（驱动待办区自动展开）
+          const todoUpdate =
+            event.ok && event.display?.kind === 'todoList'
+              ? { todos: event.display.items, todosVersion: state.todosVersion + 1 }
+              : {}
           return {
             ...base,
             ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null } : {}),
+            ...todoUpdate,
             workspaceActivities: state.workspaceActivities.map((activity) =>
               activity.callId === event.callId
                 ? {

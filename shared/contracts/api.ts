@@ -19,7 +19,12 @@ import type {
   CommentTargetType,
   Conversation,
   CoverAsset,
+  FollowUserItem,
   HomePagePayload,
+  InteractionBadges,
+  InteractionItem,
+  PrivacySettings,
+  UserReplyItem,
   Message,
   NotificationItem,
   Novel,
@@ -33,6 +38,7 @@ import type {
   Post,
   ProjectMemoryEntry,
   ReaderPayload,
+  ReceivedLikeItem,
   StatCardItem,
   StudioPayload,
   User,
@@ -170,6 +176,11 @@ export type ListNovelsResponse = ApiSuccess<{
   pagination: Pagination
 }>
 
+/** 我收藏的作品列表（按收藏时间倒序） */
+export type ListFavoriteNovelsResponse = ApiSuccess<{
+  items: NovelCard[]
+}>
+
 export type GetNovelDetailResponse = ApiSuccess<NovelDetailPayload>
 
 export type GetReaderResponse = ApiSuccess<ReaderPayload>
@@ -241,9 +252,21 @@ export type CreateCommentRequest = {
   targetId: string
   content: string
   parentId?: string
+  /** 作品评论的评星（1-5）；仅 targetType=novel 的根评论必填 */
+  rating?: number
 }
 
 export type CreateCommentResponse = ApiSuccess<{ comment: Comment }>
+
+export type UpdateCommentRequest = {
+  content: string
+  /** 作品根评论可同步修改评星（1-5） */
+  rating?: number
+}
+
+export type UpdateCommentResponse = ApiSuccess<{ comment: Comment }>
+
+export type DeleteCommentResponse = ApiSuccess<{ deletedCount: number }>
 
 export type ListPostsResponse = ApiSuccess<{
   items: Post[]
@@ -260,6 +283,8 @@ export type CreatePostRequest = {
   content: string
   topicId?: string
   imageUrls?: string[]
+  /** 发帖配图（base64 data URL，最多 9 张），服务端落盘后写入 imageUrls */
+  imageDataUrls?: string[]
   relatedNovelId?: string
 }
 
@@ -271,8 +296,51 @@ export type SetPostLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number
 /** 帖子收藏：POST/DELETE /api/posts/:postId/bookmark */
 export type SetPostBookmarkResponse = ApiSuccess<{ bookmarked: boolean; favoriteCount: number }>
 
+/** 作品收藏：POST/DELETE /api/novels/:novelId/favorite */
+export type SetNovelFavoriteResponse = ApiSuccess<{ favorited: boolean; favoriteCount: number }>
+
 /** 评论点赞：POST/DELETE /api/comments/:commentId/like */
 export type SetCommentLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>
+
+/** 关注/取关用户：POST/DELETE /api/users/:userId/follow */
+export type SetUserFollowResponse = ApiSuccess<{ following: boolean; followerCount: number }>
+
+/** 粉丝/关注中列表：GET /api/users/:userId/followers | /api/users/:userId/following */
+export type ListFollowUsersResponse = ApiSuccess<{ items: FollowUserItem[]; total: number; restricted?: boolean }>
+
+/** 隐私设置更新：PATCH /api/users/me/privacy */
+export type UpdatePrivacyRequest = Partial<PrivacySettings>
+
+export type UpdatePrivacyResponse = ApiSuccess<PrivacySettings>
+
+/** 喜欢（赞过的帖子）：GET /api/users/:userId/liked-posts */
+export type ListLikedPostsResponse = ApiSuccess<{ items: Post[]; total: number; restricted?: boolean }>
+
+/** 已回复（发出的评论）：GET /api/users/:userId/replies */
+export type ListUserRepliesResponse = ApiSuccess<{ items: UserReplyItem[]; total: number; restricted?: boolean }>
+
+/** 获赞明细：GET /api/users/me/received-likes */
+export type ListReceivedLikesResponse = ApiSuccess<{ items: ReceivedLikeItem[]; total: number }>
+
+/** 互动消息（赞/收藏/作品评论/章节评论）：GET /api/users/me/interactions */
+export type ListInteractionsResponse = ApiSuccess<{ items: InteractionItem[]; total: number }>
+
+/** 互动/新关注未读徽标：GET /api/users/me/interaction-badges */
+export type GetInteractionBadgesResponse = ApiSuccess<InteractionBadges>
+
+/** 标记互动/新关注已读：POST /api/users/me/interaction-badges/seen */
+export type MarkInteractionSeenRequest = {
+  target: 'interactions' | 'followers'
+}
+
+export type MarkInteractionSeenResponse = ApiSuccess<InteractionBadges>
+
+/** 创建/复用双人直聊会话：POST /api/conversations */
+export type CreateConversationRequest = {
+  targetUserId: string
+}
+
+export type CreateConversationResponse = ApiSuccess<{ conversation: Conversation }>
 
 export type ListConversationsResponse = ApiSuccess<{
   items: Conversation[]

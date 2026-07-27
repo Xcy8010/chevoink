@@ -1,13 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, UserRoundPlus } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
-import { ConversationSkeleton } from '@/components/ui/Skeleton'
+import { ConversationSkeleton, Skeleton } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/Toast'
-import { getMe, listConversations, listMessages, markConversationRead, sendMessage } from '@/features/community/api'
+import {
+  createDirectConversation,
+  getInteractionBadges,
+  getMe,
+  listConversations,
+  listInteractions,
+  listMessages,
+  listUserFollowers,
+  markConversationRead,
+  sendMessage,
+  setUserFollow,
+} from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import ChatComposer from '@/features/messages/components/ChatComposer'
 import ConversationList from '@/features/messages/components/ConversationList'
@@ -15,10 +26,10 @@ import MessageBubbleList, { type PendingMessage } from '@/features/messages/comp
 import type { Conversation, Message } from '../../shared/contracts/index.js'
 
 /**
- * 消息中心（方案 2.5.5 / 9.2）：
+ * 消息中心（TikTok/Messenger 式重设计）：
  * - 手机：会话列表 ↔ 聊天全屏切换
- * - 平板/电脑：左会话列表(280/320px) + 右聊天区分栏
- * - 气泡指向性圆角、时间分隔线、发送状态、自动增高输入区
+ * - 平板：左会话列表 300px + 右聊天区分栏；电脑：列表加宽到 360px
+ * - 列表面板：互关好友横向头像栏 + 「新关注我的」与系统消息固定置顶 + 私聊会话
  */
 export default function MessagesPage() {
   const { isMobile } = useDevice()
@@ -26,10 +37,11 @@ export default function MessagesPage() {
   const queryClient = useQueryClient()
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeFilter, setActiveFilter] = useState('all')
   const [selectedConversationId, setSelectedConversationId] = useState(searchParams.get('conversationId') ?? '')
+  const [openingFriendId, setOpeningFriendId] = useState<string | null>(null)
   const [draftByConversationId, setDraftByConversationId] = useState<Record<string, string>>({})
   const [pendingByConversation, setPendingByConversation] = useState<Record<string, PendingMessage[]>>({})
+  const [followBackSubmitting, setFollowBackSubmitting] = useState(false)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
 
   const meQuery = useQuery({
@@ -45,35 +57,57 @@ export default function MessagesPage() {
   })
 
   const allConversations = conversationsQuery.data?.items ?? []
-  const filteredConversations = useMemo(() => {
-    if (activeFilter === 'unread') {
-      return allConversations.filter((item) => item.unreadCount > 0)
-    }
-    if (activeFilter === 'direct') {
-      return allConversations.filter((item) => item.type === 'direct')
-    }
-    return allConversations
-  }, [activeFilter, allConversations])
+
+  // 互关好友与最新粉丝：登录后拉取自己的粉丝列表（含 followedByViewer/followsViewer 标记）
+  const followersQuery = useQuery({
+    queryKey: ['community', 'followers', 'me'],
+    queryFn: () => listUserFollowers('me'),
+    enabled: Boolean(meQuery.data?.user?.id),
+  })
+  const followerItems = useMemo(() => followersQuery.data?.items ?? [], [followersQuery.data])
+  const mutualFriends = useMemo(
+    () => followerItems.filter((item) => item.followedByViewer && item.followsViewer),
+    [followerItems],
+  )
+  const latestFollower = followerItems[0] ?? null
+
+  // 最新互动（赞/收藏/评论）：给「互动消息」固定入口提供副标题
+  const interactionsQuery = useQuery({
+    queryKey: ['community', 'interactions'],
+    queryFn: listInteractions,
+    enabled: Boolean(meQuery.data?.user?.id),
+  })
+  const latestInteraction = interactionsQuery.data?.items?.[0] ?? null
+
+  // 互动/新关注未读红点：15s 轻轮询保持新鲜
+  const badgesQuery = useQuery({
+    queryKey: ['community', 'interaction-badges'],
+    queryFn: getInteractionBadges,
+    enabled: Boolean(meQuery.data?.user?.id),
+    refetchInterval: 15_000,
+  })
+  const interactionsUnseen = badgesQuery.data?.interactionsUnseen ?? 0
+  const followersUnseen = badgesQuery.data?.followersUnseen ?? 0
 
   useEffect(() => {
     const routeConversationId = searchParams.get('conversationId')
 
-    if (routeConversationId && filteredConversations.some((item) => item.id === routeConversationId)) {
+    // 直接信任路由参数：新建会话可能还不在缓存列表里（staleTime 内不会重拉），
+    // 聊天区已有 messagesQuery.data.conversation 兑底，选中不依赖列表包含该会话
+    if (routeConversationId) {
       setSelectedConversationId(routeConversationId)
       return
     }
 
     if (isSplitLayout) {
-      if (!filteredConversations.some((item) => item.id === selectedConversationId)) {
-        setSelectedConversationId(filteredConversations[0]?.id ?? '')
+      if (!allConversations.some((item) => item.id === selectedConversationId)) {
+        setSelectedConversationId(allConversations[0]?.id ?? '')
       }
       return
     }
 
-    if (!routeConversationId) {
-      setSelectedConversationId('')
-    }
-  }, [filteredConversations, isSplitLayout, searchParams, selectedConversationId])
+    setSelectedConversationId('')
+  }, [allConversations, isSplitLayout, searchParams, selectedConversationId])
 
   const messagesQuery = useQuery({
     queryKey: ['community', 'messages', selectedConversationId],
@@ -171,7 +205,6 @@ export default function MessagesPage() {
   })
 
   const selectedConversation =
-    filteredConversations.find((item) => item.id === selectedConversationId) ??
     allConversations.find((item) => item.id === selectedConversationId) ??
     messagesQuery.data?.conversation ??
     null
@@ -182,6 +215,19 @@ export default function MessagesPage() {
   const totalUnread = allConversations.reduce((sum, item) => sum + item.unreadCount, 0)
   const shouldShowListPane = isSplitLayout || !selectedConversation
   const shouldShowConversationPane = isSplitLayout || Boolean(selectedConversation)
+
+  // 回关横幅：对方关注了我而我还没回关时展示
+  const showFollowBackBanner =
+    selectedConversation?.type === 'direct' &&
+    selectedConversation.counterpartFollowsViewer === true &&
+    selectedConversation.viewerFollowsCounterpart === false
+  // 陌生消息限额：未互关的直聊单方最多发 3 条（含发送中的乐观消息，失败的不占额度）
+  const isStrangerConversation =
+    selectedConversation?.type === 'direct' && selectedConversation.isMutualFollow === false
+  const sentByMeCount =
+    activeMessages.filter((message) => message.senderId === currentUserId).length +
+    activePending.filter((item) => item.status !== 'failed').length
+  const strangerQuotaLeft = isStrangerConversation ? Math.max(0, 3 - sentByMeCount) : Infinity
 
   // 新消息到达后滚动到底部
   useEffect(() => {
@@ -215,6 +261,10 @@ export default function MessagesPage() {
   const handleSend = () => {
     const content = activeDraft.trim()
     if (!selectedConversationId || !content) return
+    if (isStrangerConversation && strangerQuotaLeft <= 0) {
+      toast.info('你们还没有互相关注，最多只能发送 3 条陌生消息。')
+      return
+    }
     setDraftByConversationId((current) => ({ ...current, [selectedConversationId]: '' }))
     dispatchMessage(selectedConversationId, content)
   }
@@ -235,6 +285,51 @@ export default function MessagesPage() {
     setSearchParams({})
   }
 
+  // 回关对方：成功后刷新会话/消息/粉丝数据，横幅与陌生限额随之解除
+  const handleFollowBack = async () => {
+    const counterpartId = selectedConversation?.counterpart?.id
+    if (!counterpartId || followBackSubmitting) return
+
+    setFollowBackSubmitting(true)
+    try {
+      await setUserFollow(String(counterpartId), true)
+      toast.success('已回关，现在可以不限次数畅聊了。')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community', 'conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['community', 'messages', selectedConversationId] }),
+        queryClient.invalidateQueries({ queryKey: ['community', 'followers', 'me'] }),
+      ])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '回关暂时没有成功，请稍后再试。')
+    } finally {
+      setFollowBackSubmitting(false)
+    }
+  }
+
+  // 点互关好友头像：复用已有直聊会话，否则创建后选中
+  const handleOpenFriend = async (userId: string) => {
+    if (openingFriendId) return
+
+    const existing = allConversations.find(
+      (item) => item.type === 'direct' && item.counterpart?.id === userId,
+    )
+    if (existing) {
+      handleSelectConversation(existing.id)
+      return
+    }
+
+    setOpeningFriendId(userId)
+    try {
+      const conversation = await createDirectConversation(userId)
+      await queryClient.invalidateQueries({ queryKey: ['community', 'conversations'] })
+      handleSelectConversation(conversation.id)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '暂时无法打开会话，请稍后再试。')
+    } finally {
+      setOpeningFriendId(null)
+    }
+  }
+
   if (conversationsQuery.isLoading) {
     return <ConversationSkeleton />
   }
@@ -252,23 +347,28 @@ export default function MessagesPage() {
   }
 
   return (
-    // 单一分栏面：桌面/平板用一张卡片包住两栏中间分隔线，手机端全出血去掉卡片壳，避免容器套容器
-    <div className="flex overflow-hidden md:h-[calc(100dvh-14rem)] md:rounded-[var(--radius-lg)] md:border md:border-[var(--border-subtle)] md:bg-[var(--surface-default)] md:shadow-[var(--shadow-card)]">
+    // 单一分栏面：桌面/平板用一张卡片包住两栏中间分隔线，手机端全出血去掉卡片壳；壳层已改 overflow-hidden 固定布局，直接 flex-1 铺满剩余高度，不再估算 dvh 减值
+    <div className="flex min-h-0 flex-1 overflow-hidden md:rounded-[var(--radius-lg)] md:border md:border-[var(--border-subtle)] md:bg-[var(--surface-default)] md:shadow-[var(--shadow-card)]">
       {shouldShowListPane ? (
-        <aside className="h-[calc(100dvh-11rem)] w-full shrink-0 overflow-hidden md:h-full md:w-[280px] md:border-r md:border-[var(--border-subtle)] xl:w-[320px]">
+        <aside className="h-full w-full shrink-0 overflow-hidden md:w-[300px] md:border-r md:border-[var(--border-subtle)] xl:w-[360px]">
           <ConversationList
-            conversations={filteredConversations}
+            conversations={allConversations}
             selectedId={selectedConversationId || null}
             onSelect={handleSelectConversation}
-            activeFilter={activeFilter}
-            onFilterChange={setActiveFilter}
             totalUnread={totalUnread}
+            mutualFriends={mutualFriends}
+            latestFollower={latestFollower}
+            latestInteraction={latestInteraction}
+            interactionsUnseen={interactionsUnseen}
+            followersUnseen={followersUnseen}
+            onOpenFriend={(userId) => void handleOpenFriend(userId)}
+            openingFriendId={openingFriendId}
           />
         </aside>
       ) : null}
 
       {shouldShowConversationPane ? (
-        <section className="flex h-[calc(100dvh-11rem)] min-w-0 flex-1 flex-col overflow-hidden md:h-full">
+        <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           {selectedConversation ? (
             <>
               {/* 聊天头部 */}
@@ -283,33 +383,72 @@ export default function MessagesPage() {
                     <ChevronLeft className="h-5 w-5" />
                   </button>
                 ) : null}
-                <Avatar name={selectedConversation.title ?? '系统'} src={selectedConversation.avatarUrl} size="sm" />
+                {/* 直聊会话：头像与昵称可点进入对方主页 */}
+                {selectedConversation.type === 'direct' && selectedConversation.counterpart ? (
+                  <Link
+                    to={`/author/${selectedConversation.counterpart.id}`}
+                    aria-label={`查看 ${selectedConversation.title ?? selectedConversation.counterpart.nickname} 的主页`}
+                    className="shrink-0"
+                  >
+                    <Avatar
+                      name={selectedConversation.title ?? selectedConversation.counterpart.nickname}
+                      src={selectedConversation.avatarUrl ?? selectedConversation.counterpart.avatarUrl}
+                      size="sm"
+                    />
+                  </Link>
+                ) : (
+                  <Avatar name={selectedConversation.title ?? '系统'} src={selectedConversation.avatarUrl} size="sm" />
+                )}
                 <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-medium text-[var(--text-primary)]">
-                    {selectedConversation.title ?? '系统通知'}
-                  </h3>
-                  <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">
-                    {selectedConversation.type === 'system'
-                      ? '系统会把重要提醒收在这里'
-                      : selectedConversation.presence === 'online'
-                        ? '在线'
-                        : selectedConversation.presence === 'typing'
-                          ? '正在输入...'
-                          : selectedConversation.unreadCount > 0
-                            ? `${selectedConversation.unreadCount} 条未读`
-                            : '消息已读完'}
-                  </p>
+                  {selectedConversation.type === 'direct' && selectedConversation.counterpart ? (
+                    <Link
+                      to={`/author/${selectedConversation.counterpart.id}`}
+                      className="block truncate text-sm font-medium text-[var(--text-primary)] transition-colors hover:text-[var(--color-brand)]"
+                    >
+                      {selectedConversation.title ?? selectedConversation.counterpart.nickname}
+                    </Link>
+                  ) : (
+                    <h3 className="truncate text-sm font-medium text-[var(--text-primary)]">
+                      {selectedConversation.title ?? '系统通知'}
+                    </h3>
+                  )}
+                  {selectedConversation.type === 'system' ? (
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">系统会把重要提醒收在这里</p>
+                  ) : selectedConversation.presence === 'online' ? (
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">在线</p>
+                  ) : selectedConversation.presence === 'typing' ? (
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">正在输入...</p>
+                  ) : selectedConversation.unreadCount > 0 ? (
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{selectedConversation.unreadCount} 条未读</p>
+                  ) : null}
                 </div>
               </div>
 
+              {/* 回关横幅：对方关注了你而你未回关，实心红色长方形白字按钮一键回关 */}
+              {showFollowBackBanner ? (
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-2.5">
+                  <p className="min-w-0 truncate text-xs text-[var(--text-secondary)]">
+                    对方关注了你，回关后可以不限次数畅聊
+                  </p>
+                  <button
+                    type="button"
+                    disabled={followBackSubmitting}
+                    onClick={() => void handleFollowBack()}
+                    className="press-feedback shrink-0 rounded-[6px] bg-rose-500 px-4 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                  >
+                    {followBackSubmitting ? '关注中...' : '关注'}
+                  </button>
+                </div>
+              ) : null}
+
               {/* 消息区 */}
               {messagesQuery.isLoading ? (
-                <AppState
-                  tone="loading"
-                  title="会话内容正在载入"
-                  description="稍等一下，这段对话很快就会出现。"
-                  className="min-h-0 flex-1 border-0 shadow-none"
-                />
+                <div className="min-h-0 flex-1 space-y-4 overflow-hidden px-4 py-5" aria-busy="true" aria-label="会话加载中">
+                  <Skeleton className="h-10 w-3/5 rounded-[16px]" />
+                  <Skeleton className="ml-auto h-10 w-1/2 rounded-[16px]" />
+                  <Skeleton className="h-16 w-2/3 rounded-[16px]" />
+                  <Skeleton className="ml-auto h-10 w-2/5 rounded-[16px]" />
+                </div>
               ) : messagesQuery.isError ? (
                 <AppState
                   tone="error"
@@ -329,30 +468,45 @@ export default function MessagesPage() {
                 </div>
               )}
 
-              {/* 输入区 / 系统会话提示 */}
+              {/* 输入区 / 系统会话提示 / 陌生消息限额 */}
               {selectedConversation.type === 'system' ? (
                 <div className="border-t border-[var(--border-subtle)] px-4 py-3 text-center text-xs text-[var(--text-tertiary)]">
                   系统通知不支持回复
                 </div>
+              ) : isStrangerConversation && strangerQuotaLeft <= 0 ? (
+                <div className="border-t border-[var(--border-subtle)] px-4 py-3 text-center text-xs text-[var(--text-tertiary)]">
+                  你们还没有互相关注，最多发送 3 条陌生消息，等对方回关后再继续聊吧。
+                </div>
               ) : (
-                <ChatComposer
-                  value={activeDraft}
-                  onChange={(value) =>
-                    setDraftByConversationId((current) => ({
-                      ...current,
-                      [selectedConversation.id]: value,
-                    }))
-                  }
-                  onSend={handleSend}
-                  isSending={sendMessageMutation.isPending}
-                />
+                <>
+                  {isStrangerConversation ? (
+                    <div className="flex justify-center border-t border-[var(--border-subtle)] px-4 pt-2.5">
+                      <span className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-[var(--surface-muted)] px-3 py-1 text-[11px] text-[var(--text-tertiary)]">
+                        <UserRoundPlus className="h-3 w-3" />
+                        互相关注前还可以发送
+                        <span className="font-semibold tabular-nums text-[var(--text-primary)]">{strangerQuotaLeft}</span>
+                        条消息
+                      </span>
+                    </div>
+                  ) : null}
+                  <ChatComposer
+                    value={activeDraft}
+                    onChange={(value) =>
+                      setDraftByConversationId((current) => ({
+                        ...current,
+                        [selectedConversation.id]: value,
+                      }))
+                    }
+                    onSend={handleSend}
+                    isSending={sendMessageMutation.isPending}
+                  />
+                </>
               )}
             </>
           ) : (
             <AppState
               tone="empty"
-              title="先选一段会话再继续浏览"
-              description="左侧会话会按最近消息更新，点开后就能继续查看。"
+              title="选一个会话开始聊天"
               className="min-h-0 flex-1 border-0 shadow-none"
             />
           )}

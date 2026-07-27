@@ -1,10 +1,10 @@
-import { LoaderCircle } from 'lucide-react'
 import { useState } from 'react'
+import { Trash2 } from 'lucide-react'
 
-import Empty from '@/components/Empty'
 import Button from '@/components/ui/Button'
+import { SkeletonText } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/Toast'
-import { createComment } from '@/features/community/api'
+import { createComment, deleteComment } from '@/features/community/api'
 import { getAuthorName, getCommentBody } from '@/features/discover/api'
 import { useShellStore } from '@/store/useShellStore'
 import type { ReaderState } from '../useReaderState'
@@ -19,9 +19,27 @@ const COMMENT_MAX_LENGTH = 500
 export default function ReaderCommentsPanel({ state }: ReaderCommentsPanelProps) {
   const { commentsQuery, chapterComments, chapterId } = state
   const authStatus = useShellStore((shell) => shell.authStatus)
+  const sessionUser = useShellStore((shell) => shell.sessionUser)
   const toast = useToast()
   const [draft, setDraft] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const handleDelete = async (commentId: string) => {
+    if (deletingId) return
+    if (!window.confirm('确定删除这条评论吗？')) return
+
+    setDeletingId(commentId)
+    try {
+      await deleteComment(commentId)
+      toast.success('评论已删除')
+      await commentsQuery.refetch()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除失败，请稍后再试')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const handleSubmit = async () => {
     const content = draft.trim()
@@ -45,16 +63,17 @@ export default function ReaderCommentsPanel({ state }: ReaderCommentsPanelProps)
     }
   }
 
+  // 扁平的发评论区：只留一个输入框，不再套外层卡片
   const composer = (
-    <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-3">
+    <div className="border-t border-[var(--border-subtle)] pt-3">
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value.slice(0, COMMENT_MAX_LENGTH))}
         rows={3}
         placeholder={authStatus === 'authenticated' ? '说说你对这一章的看法…' : '登录后即可发表评论'}
-        className="w-full resize-none rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--color-brand)]"
+        className="w-full resize-none rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:ring-1 focus:ring-[var(--color-brand)]"
       />
-      <div className="flex items-center justify-between">
+      <div className="mt-1.5 flex items-center justify-between">
         <span className="text-xs text-[var(--text-tertiary)]">
           {draft.length}/{COMMENT_MAX_LENGTH}
         </span>
@@ -67,9 +86,9 @@ export default function ReaderCommentsPanel({ state }: ReaderCommentsPanelProps)
 
   if (commentsQuery.isLoading) {
     return (
-      <div className="flex items-center gap-3 p-4 text-sm text-[var(--text-secondary)]">
-        <LoaderCircle className="h-4 w-4 animate-spin" />
-        正在加载评论...
+      <div className="space-y-5 px-1 py-4" aria-busy="true" aria-label="评论加载中">
+        <SkeletonText lines={2} />
+        <SkeletonText lines={2} />
       </div>
     )
   }
@@ -89,27 +108,41 @@ export default function ReaderCommentsPanel({ state }: ReaderCommentsPanelProps)
 
   if (chapterComments.length === 0) {
     return (
-      <div className="space-y-3 p-2">
-        <Empty title="这一章还没有读者留言" description="等第一批读者看完后，讨论会在这里慢慢出现。" />
+      <div className="px-1">
+        <p className="py-10 text-center text-sm text-[var(--text-tertiary)]">还没有留言，说说你的看法吧。</p>
         {composer}
       </div>
     )
   }
 
   return (
-    <div className="space-y-3 p-1">
-      {chapterComments.map((comment) => (
-        <article
-          key={comment.id}
-          className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4"
-        >
-          <div className="flex items-center justify-between gap-3 text-xs text-[var(--text-tertiary)]">
-            <span>{getAuthorName(comment.author)}</span>
-            <span>{comment.replyCount} 回复</span>
+    <div className="px-1">
+      {/* 评论直接用分隔线分行，不再逐条包卡片 */}
+      <div className="divide-y divide-[var(--border-subtle)]">
+        {chapterComments.map((comment) => (
+          <div key={comment.id} className="py-3">
+            <div className="flex items-center justify-between gap-3 text-xs text-[var(--text-tertiary)]">
+              <span className="font-medium text-[var(--text-secondary)]">{getAuthorName(comment.author)}</span>
+              <span className="inline-flex items-center gap-3">
+                <span>{comment.replyCount} 回复</span>
+                {sessionUser?.id === comment.author?.id ? (
+                  <button
+                    type="button"
+                    disabled={deletingId === comment.id}
+                    onClick={() => void handleDelete(comment.id)}
+                    className="press-feedback inline-flex items-center gap-1 transition-colors hover:text-red-500 disabled:opacity-50"
+                    aria-label="删除评论"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    删除
+                  </button>
+                ) : null}
+              </span>
+            </div>
+            <p className="mt-1.5 text-sm leading-6 text-[var(--text-primary)]">{getCommentBody(comment)}</p>
           </div>
-          <p className="mt-3 text-sm leading-7 text-[var(--text-primary)]">{getCommentBody(comment)}</p>
-        </article>
-      ))}
+        ))}
+      </div>
       {composer}
     </div>
   )

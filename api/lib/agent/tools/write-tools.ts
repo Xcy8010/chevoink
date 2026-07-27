@@ -25,6 +25,10 @@ async function recalcNovelStats(novelId: string) {
 
   const wordCount = chapters.reduce((total, chapter) => total + (chapter.wordCount ?? 0), 0)
   const lastChapter = chapters[chapters.length - 1] ?? null
+  // 与 data-access 的 recalculateNovelStats 口径一致：取序号最大的已发布章节的发布时间
+  const latestPublished = [...chapters]
+    .reverse()
+    .find((chapter) => chapter.status === 'published' && chapter.publishedAt)
 
   await prisma.novel.update({
     where: { id: novelId },
@@ -32,6 +36,7 @@ async function recalcNovelStats(novelId: string) {
       wordCount,
       chapterCount: chapters.length,
       lastChapterTitle: lastChapter?.title ?? null,
+      lastPublishedAt: latestPublished?.publishedAt ?? null,
     },
   })
 }
@@ -539,10 +544,10 @@ export const planSaveTool = defineTool({
   name: 'plan_save',
   title: '写入计划',
   description:
-    '把完整的创作计划/规划文档写入作品树的「计划」文件夹。规划类诉求（如"帮我规划第六章"）完成分析后必须调用本工具落盘完整计划。修订已有计划必须传 planId 就地更新，禁止另存一份同名计划；不传 planId 时若存在同名计划也会自动转为更新。同一次任务里同一份计划只落盘一次，后续都是修订。不要把计划内容粘贴在回复正文里。',
+    '把完整的创作计划/规划文档写入作品树的「计划」文件夹。规划类诉求（如"帮我规划第六章"）完成分析后必须调用本工具落盘完整计划。修订已有计划必须传 planId 就地更新，禁止另存一份同名计划；不传 planId 时若存在同名计划也会自动转为更新。同一次任务里同一份计划只落盘一次，后续都是修订。本工具只用于写入/修订，查看既有计划内容请用只读的 plan_read，禁止用本工具重写一遍来代替读取。不要把计划内容粘贴在回复正文里。',
   parameters: z.object({
     title: z.string().min(2).max(60).describe('计划标题，如"第六章规划"'),
-    content: z.string().min(1).describe('完整的计划正文（Markdown）'),
+    content: z.string().min(1).describe('完整的计划正文（Markdown）。必须一次传入全文，禁止传 placeholder/待补充等占位文本，否则会被拦截'),
     planId: z
       .string()
       .optional()
@@ -576,6 +581,22 @@ export const planSaveTool = defineTool({
       return {
         output: `未找到 planId=${args.planId} 对应的计划，本次未执行任何写入。请核对 planId，或不传 planId 重试（同名计划会自动就地更新）。`,
         summary: '计划更新失败：planId 不存在',
+      }
+    }
+
+    // 防误清空护栏：模型偶发把占位文本当正文传入（如 "placeholder"），或把长计划覆盖成几句话，
+    // 这里直接拦截不落库，并要求携带完整正文重试，避免既有计划被意外摧毁
+    const nextContent = args.content.trim()
+    const looksPlaceholder = /^(placeholder|todo|tbd|n\/a|待补充|待填充|待完善|占位|暂无|略)[\s.。…]*$/i.test(nextContent)
+    const beforeLength = existing?.content.trim().length ?? 0
+    const shrunkTooMuch =
+      Boolean(existing) && beforeLength >= 200 && nextContent.length < Math.min(80, Math.ceil(beforeLength * 0.1))
+    if (looksPlaceholder || shrunkTooMuch) {
+      return {
+        output: existing
+          ? `已拦截本次计划更新：传入内容疑似占位或不完整（${nextContent.length} 字，原计划 ${beforeLength} 字），计划《${existing.title}》保持原样未被修改。plan_save 必须一次传入完整的计划正文（Markdown 全文），请带上 planId=${existing.id} 和完整内容重新调用；如确需删除计划请改用 plan_delete。`
+          : `已拦截本次计划写入：传入内容疑似占位文本（「${nextContent.slice(0, 20)}」），未创建任何计划。请携带完整的计划正文（Markdown 全文）重新调用 plan_save。`,
+        summary: '计划写入已拦截：疑似占位/不完整内容',
       }
     }
 

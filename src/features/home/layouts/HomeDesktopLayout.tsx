@@ -33,7 +33,7 @@ export default function HomeDesktopLayout({
         {data.continueReading.length > 0 ? (
           <ContinueReadingRail novels={data.continueReading} progressMap={data.progressMap} />
         ) : null}
-        <FeaturedNovelList novels={data.featuredNovels} variant="grid" maxItems={10} />
+        <FeaturedNovelList novels={data.featuredNovels} variant="grid" maxItems={4} />
         <RankingBoard
           hot={data.rankingHot}
           fresh={data.rankingNew}
@@ -79,7 +79,8 @@ export default function HomeDesktopLayout({
                   <div className="flex items-center gap-2">
                     <Avatar name={getAuthorName(post.author)} src={post.author?.avatarUrl ?? null} size="sm" />
                     <span className="truncate text-xs text-[var(--text-secondary)]">{getAuthorName(post.author)}</span>
-                    <span className="ml-auto shrink-0 text-[11px] text-[var(--text-tertiary)]">{formatRelativeTime(post.updatedAt)}</span>
+                    {/* 显示发帖时间：updatedAt 会被点赞/评论顶新，不能代表发布时间 */}
+                    <span className="ml-auto shrink-0 text-[11px] text-[var(--text-tertiary)]">{formatRelativeTime(post.createdAt)}</span>
                   </div>
                   <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-[var(--text-primary)]">{getPostExcerpt(post)}</p>
                   <p className="mt-1 text-[11px] text-[var(--color-brand)]">{getTopicName(post.topic)}</p>

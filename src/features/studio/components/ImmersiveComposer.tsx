@@ -9,12 +9,16 @@ import {
   FilePlus2,
   FileText as FileTextIcon,
   ImagePlus,
+  MoreHorizontal,
+  PanelBottomOpen,
   Save,
   Settings2,
   Upload,
 } from 'lucide-react'
 
+import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
+import { useAutoGrowTextarea, useKeyboardInset } from '@/hooks/useMobileComposer'
 import { cn } from '@/lib/utils'
 import type { ChapterStatus, Novel, StudioPayload, Visibility } from '../../../../shared/contracts/index.js'
 import type {
@@ -27,13 +31,16 @@ import type {
   WorkspacePlanFile,
 } from '../types'
 import ChapterSidebar from './ChapterSidebar'
-import ChapterChangeReview from './ChapterChangeReview'
+import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import ChapterSettingsPanel from './ChapterSettingsPanel'
 import ConfirmDialog from './ConfirmDialog'
 import { SaveStatusPill } from './StudioControls'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
 import { PanelResizeHandle, useStudioPanelWidths } from '../panel-resize'
+
+/** 手机端全屏面板 sheet 的内容页：编辑区是常驻基座，不再参与切换 */
+type MobileSheetPanel = 'agent' | 'chapters' | 'cover' | 'meta'
 
 type ImmersiveComposerProps = {
   currentNovelId: string
@@ -75,10 +82,21 @@ type ImmersiveComposerProps = {
   pendingChapterReviewBusy?: boolean
   onKeepPendingReview?: () => void
   onRevertPendingReview?: () => void
+  onAcceptReviewHunk?: (hunkIndex: number) => void
+  onRejectReviewHunk?: (hunkIndex: number) => void
+  /** 待审文件序号（1 基）与总数：审查条「文件 x/y」多章导航 */
+  reviewFileIndex?: number
+  reviewFileCount?: number
+  onNavigateReviewFile?: (offset: 1 | -1) => void
+  /** 当前章无待审但其它章还有待审时，展示「下一个文件」浮标 */
+  pendingReviewRemaining?: number
+  onGoToNextReviewFile?: () => void
   pendingPlanReview?: PlanPendingReview | null
   pendingPlanReviewBusy?: boolean
   onKeepPendingPlanReview?: () => void
   onRevertPendingPlanReview?: () => void
+  onAcceptPlanReviewHunk?: (hunkIndex: number) => void
+  onRejectPlanReviewHunk?: (hunkIndex: number) => void
   onOpenCover?: () => void
   onOpenMeta?: () => void
   onPublishNovel?: () => void
@@ -130,10 +148,19 @@ export default function ImmersiveComposer({
   pendingChapterReviewBusy = false,
   onKeepPendingReview,
   onRevertPendingReview,
+  onAcceptReviewHunk,
+  onRejectReviewHunk,
+  reviewFileIndex = 1,
+  reviewFileCount = 1,
+  onNavigateReviewFile,
+  pendingReviewRemaining = 0,
+  onGoToNextReviewFile,
   pendingPlanReview = null,
   pendingPlanReviewBusy = false,
   onKeepPendingPlanReview,
   onRevertPendingPlanReview,
+  onAcceptPlanReviewHunk,
+  onRejectPlanReviewHunk,
   onOpenCover,
   onOpenMeta,
   onPublishNovel,
@@ -152,8 +179,16 @@ export default function ImmersiveComposer({
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1280px)').matches : false,
   )
   const { panelWidths, beginPanelResize } = useStudioPanelWidths()
-  // 手机端默认直接展示 Agent 对话区，保持沉浸简洁
-  const [mobilePanel, setMobilePanel] = useState<'agent' | 'editor' | 'chapters' | 'cover' | 'meta'>('agent')
+  // 手机端：编辑区是常驻纸面，Agent/章节/封面/设置收进全屏底部 sheet
+  const [mobilePanel, setMobilePanel] = useState<MobileSheetPanel>('agent')
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const keyboardInset = useKeyboardInset()
+  // 手机端正文/工作区文档 textarea 自动增高（两处不会同时渲染，共用同一 ref）
+  const mobileTextareaRef = useAutoGrowTextarea(
+    workspaceDocument ? workspaceDocument.content : chapterDraft?.content ?? '',
+    !isDesktop,
+  )
   const [showChapterSettings, setShowChapterSettings] = useState(false)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -180,21 +215,19 @@ export default function ImmersiveComposer({
     return () => mediaQuery.removeEventListener('change', handleChange)
   }, [])
 
-  useEffect(() => {
-    if (!chapterDraft && mobilePanel === 'editor') {
-      setMobilePanel('agent')
-    }
-  }, [chapterDraft, mobilePanel])
+  // 注意：手机端编辑区常驻渲染，选中计划/目录时走 workspaceDocument，切章加载瞬间草稿短暂为空也有空态引导
 
-  // 外部（发布引导、Agent 指令等）打开作品设置/封面面板时，手机端联动切到对应标签页
+  // 外部（发布引导、Agent 指令等）打开作品设置/封面面板时，手机端联动打开底部 sheet
   useEffect(() => {
     if (isDesktop) {
       return
     }
     if (showMetaPanel && metaPanel) {
       setMobilePanel('meta')
+      setSheetOpen(true)
     } else if (showCoverPanel && coverPanel) {
       setMobilePanel('cover')
+      setSheetOpen(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesktop, showMetaPanel, showCoverPanel])
@@ -335,7 +368,7 @@ export default function ImmersiveComposer({
 
   return createPortal(
     <div className="fixed inset-0 z-[90] isolate overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
-      <div className="mx-auto flex h-full max-w-[140rem] flex-col px-3 pb-3 pt-[calc(env(safe-area-inset-top)+10px)] md:px-6 md:py-5">
+      <div className="mx-auto flex h-full max-w-[140rem] flex-col px-3 pb-3 pt-[calc(var(--safe-top)+10px)] md:px-6 md:py-5">
         {isDesktop ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
             <div className="min-w-0 space-y-3">
@@ -437,34 +470,6 @@ export default function ImmersiveComposer({
           </div>
         )}
 
-        {!isDesktop ? (
-          <div className="sticky top-0 z-10 -mx-1 shrink-0 overflow-x-auto bg-[var(--app-bg)] px-1 py-3">
-            <div className="inline-flex min-w-full gap-2">
-              {[
-                ['editor', '写作'],
-                ['chapters', '作品'],
-                ['agent', 'Agent'],
-                ...(coverPanel ? [['cover', '封面']] : []),
-                ...(metaPanel ? [['meta', '设置']] : []),
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMobilePanel(key as 'agent' | 'editor' | 'chapters' | 'cover' | 'meta')}
-                  className={cn(
-                    'whitespace-nowrap rounded-full border px-4 py-2.5 text-sm font-medium transition',
-                    mobilePanel === key
-                      ? 'border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-primary)]'
-                      : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)]',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
         <div
           className={cn(
             'flex min-h-0 flex-1 flex-col pt-4',
@@ -513,7 +518,7 @@ export default function ImmersiveComposer({
             </div>
           ) : null}
 
-          {(isDesktop || mobilePanel === 'editor') ? (
+          {isDesktop ? (
             <div className={cn('flex h-full min-h-0 flex-col', isDesktop && 'border-r border-[var(--border-subtle)] px-5 py-5 xl:px-6')}>
               {workspaceDocument ? (
                 <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4">
@@ -523,6 +528,8 @@ export default function ImmersiveComposer({
                       busy={pendingPlanReviewBusy}
                       onKeep={onKeepPendingPlanReview ?? (() => undefined)}
                       onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+                      onAcceptHunk={onAcceptPlanReviewHunk}
+                      onRejectHunk={onRejectPlanReviewHunk}
                       className="min-h-0 flex-1"
                     />
                   ) : (
@@ -574,7 +581,13 @@ export default function ImmersiveComposer({
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
                     <SaveStatusPill state={saveState} message={saveMessage} onRetry={onRetrySave} />
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!isDesktop && onPublishNovel ? (
+                        <Button variant="secondary" size="sm" onClick={onPublishNovel} disabled={novelSaving}>
+                          <Upload className="h-4 w-4" />
+                          {novelPublished ? '更新发布' : '发布'}
+                        </Button>
+                      ) : null}
                       <Button variant="ghost" size="sm" onClick={onCreateChapter}>
                         <FilePlus2 className="h-4 w-4" />
                         新建章节
@@ -616,10 +629,15 @@ export default function ImmersiveComposer({
                         busy={pendingChapterReviewBusy}
                         onKeep={onKeepPendingReview ?? (() => undefined)}
                         onRevert={onRevertPendingReview ?? (() => undefined)}
+                        onAcceptHunk={onAcceptReviewHunk}
+                        onRejectHunk={onRejectReviewHunk}
+                        fileIndex={reviewFileIndex}
+                        fileCount={reviewFileCount}
+                        onNavigateFile={onNavigateReviewFile}
                         className="min-h-0 flex-1"
                       />
                     ) : (
-                      <div className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-6 py-6 md:px-8 md:py-8">
+                      <div className="relative flex min-h-0 flex-1 flex-col rounded-[28px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-6 py-6 md:px-8 md:py-8">
                         <div className="border-b border-[var(--border-subtle)] pb-5">
                           <p className="text-[1.18rem] font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                             {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
@@ -639,6 +657,9 @@ export default function ImmersiveComposer({
                           className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-base leading-9 text-[var(--text-primary)] outline-none md:text-[1.04rem]"
                           placeholder="继续写这一章的正文。"
                         />
+                        {onGoToNextReviewFile ? (
+                          <NextReviewFilePill count={pendingReviewRemaining} onClick={onGoToNextReviewFile} />
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -669,7 +690,126 @@ export default function ImmersiveComposer({
             </div>
           ) : null}
 
-          {(isDesktop || mobilePanel === 'agent') ? (
+          {!isDesktop ? (
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-24 [-webkit-overflow-scrolling:touch]">
+                {workspaceDocument ? (
+                  workspaceDocument.kind === 'plan' && pendingPlanReview ? (
+                    <PlanChangeReview
+                      review={pendingPlanReview}
+                      busy={pendingPlanReviewBusy}
+                      onKeep={onKeepPendingPlanReview ?? (() => undefined)}
+                      onRevert={onRevertPendingPlanReview ?? (() => undefined)}
+                      onAcceptHunk={onAcceptPlanReviewHunk}
+                      onRejectHunk={onRejectPlanReviewHunk}
+                      className="min-h-[60vh]"
+                    />
+                  ) : (
+                    <>
+                      <div className="border-b border-[var(--border-subtle)] pb-3">
+                        {workspaceDocument.editableTitle ? (
+                          <input
+                            value={workspaceDocument.title}
+                            onChange={(event) =>
+                              onWorkspaceDocumentChange?.({
+                                title: event.target.value,
+                                content: workspaceDocument.content,
+                              })
+                            }
+                            className="w-full border-0 bg-transparent text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)] outline-none"
+                            placeholder={workspaceDocument.kind === 'plan' ? '给这份创作计划命名' : '目录'}
+                          />
+                        ) : (
+                          <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                            {workspaceDocument.title}
+                          </p>
+                        )}
+                        <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
+                      </div>
+                      {workspaceDocument.editableContent ? (
+                        <textarea
+                          ref={mobileTextareaRef}
+                          value={workspaceDocument.content}
+                          onChange={(event) =>
+                            onWorkspaceDocumentChange?.({
+                              title: workspaceDocument.title,
+                              content: event.target.value,
+                            })
+                          }
+                          rows={1}
+                          className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                          placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+                        />
+                      ) : (
+                        <div className="mt-3 whitespace-pre-wrap break-words composer-body-text text-[var(--text-primary)]">
+                          {workspaceDocument.content}
+                        </div>
+                      )}
+                    </>
+                  )
+                ) : chapterDraft ? (
+                  pendingChapterReview ? (
+                    <ChapterChangeReview
+                      review={pendingChapterReview}
+                      busy={pendingChapterReviewBusy}
+                      onKeep={onKeepPendingReview ?? (() => undefined)}
+                      onRevert={onRevertPendingReview ?? (() => undefined)}
+                      onAcceptHunk={onAcceptReviewHunk}
+                      onRejectHunk={onRejectReviewHunk}
+                      fileIndex={reviewFileIndex}
+                      fileCount={reviewFileCount}
+                      onNavigateFile={onNavigateReviewFile}
+                      className="min-h-[60vh]"
+                    />
+                  ) : (
+                    <>
+                      <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+                        {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
+                      </p>
+                      <textarea
+                        ref={mobileTextareaRef}
+                        value={chapterDraft.content}
+                        onChange={(event) => {
+                          onChange({ ...chapterDraft, content: event.target.value })
+                          emitSelection(event.target)
+                        }}
+                        onSelect={(event) => emitSelection(event.currentTarget)}
+                        onClick={(event) => emitSelection(event.currentTarget)}
+                        onKeyUp={(event) => emitSelection(event.currentTarget)}
+                        onBlur={(event) => emitSelection(event.currentTarget)}
+                        rows={1}
+                        className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                        placeholder="继续写这一章的正文。"
+                      />
+                    </>
+                  )
+                ) : (
+                  <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+                    <h3 className="text-lg font-semibold text-[var(--text-primary)]">沉浸区已经打开</h3>
+                    <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">
+                      现在可以先和 Agent 继续对话，也可以新建章节或切到已有章节开始写作。
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      <Button onClick={onCreateChapter} variant="secondary">
+                        <FilePlus2 className="h-4 w-4" />
+                        新建章节
+                      </Button>
+                      {chapters[0] ? (
+                        <Button onClick={() => onSelectChapter(chapters[0].id)} variant="ghost">
+                          选择现有章节
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {!workspaceDocument && chapterDraft && !pendingChapterReview && onGoToNextReviewFile ? (
+                <NextReviewFilePill count={pendingReviewRemaining} onClick={onGoToNextReviewFile} />
+              ) : null}
+            </div>
+          ) : null}
+
+          {isDesktop ? (
             <div className={cn('flex min-h-0 flex-1 flex-col', isDesktop && 'relative border-r border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-4')}>
               {isDesktop ? (
                 <PanelResizeHandle
@@ -693,47 +833,213 @@ export default function ImmersiveComposer({
             <div className="min-h-0 overflow-hidden">{taskSidebar}</div>
           ) : null}
 
-          {!isDesktop && mobilePanel === 'chapters' ? (
-            <aside className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-soft)]">
-              {previewHref ? (
-                <Link
-                  to={previewHref}
-                  className="mb-3 inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
-                >
-                  <BookOpen className="h-4 w-4" />
-                  预览阅读
-                </Link>
-              ) : null}
-              <div className="min-h-0 flex-1 overflow-hidden">
-                <ChapterSidebar
-                  chapters={chapters}
-                  savedPlans={savedPlans}
-                  selectedChapterId={selectedChapterId}
-                  selectedTreeItemId={selectedTreeItemId}
-                  catalogPreview={catalogPreview}
-                  novelWordCountLabel={wordCountLabel}
-                  chapterCountLabel={`共 ${chapters.length} 章`}
-                  novelTitle={novelTitle}
-                  activeCoverLabel=""
-                  onSelectChapter={onSelectChapter}
-                  onSelectPlan={onSelectPlan}
-                  onDeletePlan={onDeletePlan}
-                  onSelectCatalog={onSelectCatalog}
-                  onCreateChapter={onCreateChapter}
-                />
-              </div>
-            </aside>
-          ) : null}
-
-          {!isDesktop && mobilePanel === 'cover' && coverPanel ? (
-            <div className="min-h-0 overflow-hidden">{coverPanel}</div>
-          ) : null}
-
-          {!isDesktop && mobilePanel === 'meta' && metaPanel ? (
-            <div className="min-h-0 overflow-hidden">{metaPanel}</div>
-          ) : null}
         </div>
       </div>
+
+      {!isDesktop ? (
+        <div
+          className={cn(
+            'fixed inset-x-0 z-20 border-t border-[var(--border-subtle)] bg-[var(--app-bg)] px-3 pt-2',
+            keyboardInset > 0 ? 'pb-2' : 'pb-[max(var(--safe-bottom),8px)]',
+          )}
+          style={{ bottom: keyboardInset }}
+        >
+          <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]">{wordCountLabel}</span>
+            <div className="relative flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                aria-label="更多操作"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors active:bg-[var(--surface-muted)]"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              {mobileMenuOpen ? (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} aria-hidden />
+                  <div className="absolute bottom-full right-0 z-40 mb-2 w-44 overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+                    <button
+                      type="button"
+                      disabled={!chapterDraft}
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        setShowChapterSettings(true)
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
+                    >
+                      <Settings2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      章节设置
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        onCreateChapter()
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                    >
+                      <FilePlus2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      新建章节
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!previousChapter}
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        if (previousChapter) {
+                          onSelectChapter(previousChapter.id)
+                        }
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
+                    >
+                      <ChevronLeft className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      上一章
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!nextChapter}
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        if (nextChapter) {
+                          onSelectChapter(nextChapter.id)
+                        }
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
+                    >
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      下一章
+                    </button>
+                    {onPublishNovel ? (
+                      <button
+                        type="button"
+                        disabled={novelSaving}
+                        onClick={() => {
+                          setMobileMenuOpen(false)
+                          onPublishNovel()
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
+                      >
+                        <Upload className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                        {novelPublished ? '更新发布' : '发布作品'}
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setSheetOpen(true)}
+                className="inline-flex h-10 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 text-sm font-medium text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+              >
+                <PanelBottomOpen className="h-4 w-4" />
+                面板
+              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onSave}
+                disabled={!chapterDraft || pendingChapterReviewBusy || Boolean(pendingChapterReview)}
+              >
+                <Save className="h-4 w-4" />
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {!isDesktop ? (
+        <BottomSheet
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          height="full"
+          zIndexClassName="z-[100]"
+          contentClassName="flex flex-col overflow-hidden"
+        >
+          <div className="mx-4 mb-3 flex shrink-0 gap-1 rounded-full bg-[var(--surface-muted)] p-1">
+            {(
+              [
+                ['agent', 'Agent'],
+                ['chapters', '章节'],
+                ...(coverPanel ? [['cover', '封面']] : []),
+                ...(metaPanel ? [['meta', '设置']] : []),
+              ] as Array<[MobileSheetPanel, string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setMobilePanel(key)}
+                className={cn(
+                  'h-9 min-w-0 flex-1 rounded-full text-sm font-medium transition-colors',
+                  mobilePanel === key
+                    ? 'bg-[var(--surface-default)] text-[var(--text-primary)] shadow-[var(--shadow-soft)]'
+                    : 'text-[var(--text-secondary)]',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-1">
+            {mobilePanel === 'agent' ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{agentPanel}</div>
+            ) : null}
+            {mobilePanel === 'chapters' ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {previewHref ? (
+                  <Link
+                    to={previewHref}
+                    onClick={() => setSheetOpen(false)}
+                    className="mb-2 inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-sm font-medium text-[var(--text-primary)] transition active:bg-[var(--surface-muted)]"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    预览阅读
+                  </Link>
+                ) : null}
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <ChapterSidebar
+                    embedded
+                    chapters={chapters}
+                    savedPlans={savedPlans}
+                    selectedChapterId={selectedChapterId}
+                    selectedTreeItemId={selectedTreeItemId}
+                    catalogPreview={catalogPreview}
+                    novelWordCountLabel={wordCountLabel}
+                    chapterCountLabel={`共 ${chapters.length} 章`}
+                    novelTitle={novelTitle}
+                    activeCoverLabel=""
+                    onSelectChapter={(chapterId) => {
+                      onSelectChapter(chapterId)
+                      setSheetOpen(false)
+                    }}
+                    onSelectPlan={(planId) => {
+                      onSelectPlan(planId)
+                      setSheetOpen(false)
+                    }}
+                    onDeletePlan={onDeletePlan}
+                    onSelectCatalog={() => {
+                      onSelectCatalog()
+                      setSheetOpen(false)
+                    }}
+                    onCreateChapter={() => {
+                      onCreateChapter()
+                      setSheetOpen(false)
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {mobilePanel === 'cover' && coverPanel ? (
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{coverPanel}</div>
+            ) : null}
+            {mobilePanel === 'meta' && metaPanel ? (
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{metaPanel}</div>
+            ) : null}
+          </div>
+        </BottomSheet>
+      ) : null}
+
       {chapterDraft && showChapterSettings ? (
         <ChapterSettingsPanel
           chapterDraft={chapterDraft}

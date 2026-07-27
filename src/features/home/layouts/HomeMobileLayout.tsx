@@ -27,7 +27,7 @@ export default function HomeMobileLayout({
       {data.continueReading.length > 0 ? (
         <ContinueReadingRail novels={data.continueReading} progressMap={data.progressMap} />
       ) : null}
-      <FeaturedNovelList novels={data.featuredNovels} variant="list" maxItems={4} />
+      <FeaturedNovelList novels={data.featuredNovels} variant="list" maxItems={1} />
       <RankingBoard hot={data.rankingHot} fresh={data.rankingNew} finished={data.rankingFinished} visibleCount={5} />
       <LatestUpdatesList novels={data.latestUpdated} maxItems={5} />
       <HotPostsRail posts={data.hotPosts} />

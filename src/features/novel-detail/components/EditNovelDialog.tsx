@@ -39,7 +39,7 @@ export default function EditNovelDialog({ state }: EditNovelDialogProps) {
   const busy = editNovelMutation.isPending || uploadCoverMutation.isPending
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
+    <div className="fixed inset-x-0 top-0 bottom-[var(--keyboard-inset,0px)] z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
       <div
         className="absolute inset-0"
         onClick={() => {
@@ -48,7 +48,7 @@ export default function EditNovelDialog({ state }: EditNovelDialogProps) {
           }
         }}
       />
-      <div className="relative z-[1] max-h-[calc(100dvh-2rem)] w-full max-w-[1040px] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
+      <div className="relative z-[1] max-h-full w-full max-w-[1040px] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[var(--shadow-modal)]">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-2">
             <h3 className="text-2xl font-semibold text-[var(--text-primary)]">编辑作品页</h3>

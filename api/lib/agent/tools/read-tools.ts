@@ -206,3 +206,41 @@ export const memorySearchTool = defineTool({
     }
   },
 })
+
+/** 读取计划正文：回顾/修订既有计划前必须先读，禁止用 plan_save 凭记忆重写来“对齐” */
+export const planReadTool = defineTool({
+  name: 'plan_read',
+  title: '读取计划',
+  description:
+    '只读查看「计划」文件夹里某份既有计划的完整正文。回顾整体规划、确认某章定位、修订计划前，都必须先用本工具读取；绝对禁止用 plan_save 重写一遍来代替读取。不传 planId 时返回最近更新的一份计划。',
+  parameters: z.object({
+    planId: z.string().optional().describe('计划 id（上下文的计划清单提供）；缺省返回最近更新的一份'),
+  }),
+  permission: READ_PERMISSION,
+  readOnly: true,
+  async execute(ctx, args) {
+    const plan = await prisma.agentArtifact.findFirst({
+      where: {
+        artifactType: 'chapterPlan',
+        metadata: { path: ['savedAsPlan'], equals: true },
+        run: { userId: ctx.userId, novelId: ctx.novelId },
+        ...(args.planId ? { id: args.planId } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, content: true, updatedAt: true },
+    })
+
+    if (!plan) {
+      return {
+        output: args.planId
+          ? `未找到 planId=${args.planId} 对应的计划，请核对上下文里的计划清单。`
+          : '计划文件夹目前是空的，还没有任何计划。',
+      }
+    }
+
+    return {
+      output: `《${plan.title}》（planId=${plan.id}，${plan.content.length} 字）：\n${clip(plan.content, 8000)}`,
+      summary: `读取计划《${plan.title}》`,
+    }
+  },
+})

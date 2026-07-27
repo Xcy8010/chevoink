@@ -1,21 +1,96 @@
-import { useQuery } from '@tanstack/react-query'
-import { BookOpen, MapPin, MessageSquareMore, UserPlus2 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronLeft, ChevronRight, MessageSquareMore, UserCheck2, UserPlus2 } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
 import Button from '@/components/ui/Button'
-import SectionCard from '@/components/ui/SectionCard'
-import { AuthorSkeleton, PostListSkeleton, Skeleton } from '@/components/ui/Skeleton'
-import { getDirectConversationByUserId, getMe, getUser, listConversations, listNovels, listPosts } from '@/features/community/api'
+import { PostListSkeleton, Skeleton } from '@/components/ui/Skeleton'
+import { useToast } from '@/components/ui/Toast'
+import { createDirectConversation, getDirectConversationByUserId, getMe, getUser, listConversations, listNovels, listPosts, setUserFollow } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import PostCard from '@/features/community/components/PostCard'
 import { formatRelativeTime } from '@/features/community/utils'
-import { getDisplayTitle } from '@/features/discover/api'
+import { getCoverUrl, getDisplayTitle } from '@/features/discover/api'
+import { LikedPostsPanel, RepliesPanel } from '@/features/profile/components/UserContentPanels'
+import { cn } from '@/lib/utils'
 
+const authorTabs = [
+  { id: 'novels', label: '作品' },
+  { id: 'posts', label: '动态' },
+  { id: 'liked', label: '喜欢' },
+  { id: 'replies', label: '已回复' },
+] as const
+
+type AuthorTab = (typeof authorTabs)[number]['id']
+
+const CONTENT_MAX_WIDTH = 'max-w-[680px] md:max-w-[840px] lg:max-w-[1080px] xl:max-w-[1200px]'
+
+/**
+ * 独立页面骨架：sticky 返回栏 + 整页滚动容器。
+ * body 为 overflow:hidden，本页自己做满屏滚动容器（隐藏滚动条），
+ * headerContent（封面/资料/tab）与 children（列表）在同一滚动流里整页一起滚动。
+ */
+function PageChrome({
+  headerTitle,
+  onBack,
+  headerContent,
+  children,
+}: {
+  headerTitle?: string
+  onBack: () => void
+  headerContent?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className="app-main-scroll h-dvh overflow-y-auto">
+      <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[color:var(--app-bg)]/85 backdrop-blur">
+        <div className={cn('mx-auto flex h-12 w-full items-center gap-2 px-2 sm:px-4', CONTENT_MAX_WIDTH)}>
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="返回上一页"
+            className="touch-target press-feedback inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <div className="min-w-0">
+            <p className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
+              {headerTitle ?? '作者主页'}
+            </p>
+          </div>
+        </div>
+      </header>
+      <div className={cn('mx-auto w-full px-4 pb-16', CONTENT_MAX_WIDTH)}>
+        {headerContent}
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 作者主页：独立全屏页面（无导航壳层），X 风格平铺结构——
+ * sticky 返回栏 + 封面 + 头像压边 + 纯文本资料与数据行 + 作品/动态 tab，
+ * 不做卡片套卡片，小屏封面全出血。
+ */
 export default function AuthorPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const toast = useToast()
   const { authorId } = useParams()
+  const [activeTab, setActiveTab] = useState<AuthorTab>('novels')
+
+  // 关注状态本地乐观覆盖：接口返回前先按点击结果展示，失败再回滚
+  const [followOverride, setFollowOverride] = useState<{ following: boolean; followerCount: number } | null>(null)
+  const [followSubmitting, setFollowSubmitting] = useState(false)
+  const [messagingSubmitting, setMessagingSubmitting] = useState(false)
+
+  // 切换到另一位作者时清掉上一位的乐观覆盖与 tab 状态，避免串页
+  useEffect(() => {
+    setFollowOverride(null)
+    setActiveTab('novels')
+  }, [authorId])
 
   const meQuery = useQuery({
     queryKey: ['community', 'me'],
@@ -66,203 +141,346 @@ export default function AuthorPage() {
   }, [authorQuery.data, postsQuery.data?.items])
 
   const isOwnProfile = Boolean(authorQuery.data && meQuery.data?.user && authorQuery.data.id === meQuery.data.user.id)
+  const isLoggedIn = Boolean(meQuery.data?.user)
+  const isFollowing = followOverride?.following ?? Boolean(authorQuery.data?.followedByViewer)
+  const followerCount = followOverride?.followerCount ?? authorQuery.data?.followerCount ?? 0
+  const likesCount = useMemo(
+    () => authorPosts.reduce((total, post) => total + post.likeCount + post.favoriteCount, 0),
+    [authorPosts],
+  )
+
+  async function handleToggleFollow() {
+    const author = authorQuery.data
+    if (!author || followSubmitting) {
+      return
+    }
+
+    if (!isLoggedIn) {
+      navigate(`/login?redirect=${encodeURIComponent(`/author/${author.id}`)}`)
+      return
+    }
+
+    const nextFollowing = !isFollowing
+    setFollowSubmitting(true)
+    setFollowOverride({
+      following: nextFollowing,
+      followerCount: Math.max(0, followerCount + (nextFollowing ? 1 : -1)),
+    })
+
+    try {
+      const payload = await setUserFollow(author.id, nextFollowing)
+      setFollowOverride(payload)
+    } catch {
+      setFollowOverride(null)
+    } finally {
+      setFollowSubmitting(false)
+    }
+  }
+
+  function handleBack() {
+    if (window.history.length > 1) {
+      navigate(-1)
+      return
+    }
+    navigate('/')
+  }
+
   const directConversation = useMemo(
     () => getDirectConversationByUserId(conversationsQuery.data?.items ?? [], authorQuery.data?.id),
     [authorQuery.data?.id, conversationsQuery.data?.items],
   )
-  const latestActivityTime = authorPosts[0]?.createdAt ?? authorNovels[0]?.updatedAt ?? null
+
+  /** 私信入口：已有直聊会话直接进，否则先创建；未互关时后端会按陌生消息限 3 条 */
+  async function handleOpenMessage() {
+    const author = authorQuery.data
+    if (!author || messagingSubmitting) {
+      return
+    }
+
+    if (!isLoggedIn) {
+      navigate(`/login?redirect=${encodeURIComponent(`/author/${author.id}`)}`)
+      return
+    }
+
+    if (directConversation) {
+      navigate(`/messages?conversationId=${directConversation.id}`)
+      return
+    }
+
+    setMessagingSubmitting(true)
+    try {
+      const conversation = await createDirectConversation(author.id)
+      // 新建会话可能不在 staleTime 内的会话列表缓存里，先失效再跳转，避免消息页选不中
+      await queryClient.invalidateQueries({ queryKey: ['community', 'conversations'] })
+      navigate(`/messages?conversationId=${conversation.id}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '会话暂时没有打开，请稍后再试。')
+    } finally {
+      setMessagingSubmitting(false)
+    }
+  }
 
   if (!authorId) {
     return (
-      <SectionCard eyebrow="作者主页" title="这位作者暂时没有找到">
+      <PageChrome onBack={handleBack}>
         <AppState
           tone="empty"
-          title="回到社区继续逛逛"
+          title="这位作者暂时没有找到"
           description="你可以先去社区广场或作品详情里继续寻找感兴趣的作者。"
           primaryAction={{ label: '返回社区', href: '/community' }}
-          className="min-h-[360px]"
+          className="mt-4 min-h-[360px] border-0 shadow-none"
         />
-      </SectionCard>
+      </PageChrome>
     )
   }
 
   if (authorQuery.isLoading) {
     return (
-      <SectionCard
-        eyebrow="作者主页"
-        title="先展示作者气质、代表作和最近互动，再把读者送进作品与私聊"
-        description="作者页不做后台式资料陈列，而是把首屏做成可信的创作者介绍，桌面端并置作品和动态，手机端优先关注与开读。"
-      >
-        <AuthorSkeleton />
-      </SectionCard>
+      <PageChrome onBack={handleBack}>
+        <div className="-mx-4 sm:mx-0 sm:pt-3">
+          <Skeleton className="aspect-[3/1] w-full sm:rounded-[var(--radius-xl)]" />
+        </div>
+        <div className="px-1 sm:px-2">
+          <Skeleton className="-mt-9 h-[76px] w-[76px] rounded-full border-4 border-[var(--app-bg)] sm:-mt-12 sm:h-24 sm:w-24" />
+          <Skeleton className="mt-4 h-6 w-40" />
+          <Skeleton className="mt-3 h-4 w-64" />
+        </div>
+      </PageChrome>
     )
   }
 
   if (authorQuery.isError || !authorQuery.data) {
     return (
-      <SectionCard
-        eyebrow="作者主页"
-        title="先展示作者气质、代表作和最近互动，再把读者送进作品与私聊"
-        description="作者页不做后台式资料陈列，而是把首屏做成可信的创作者介绍，桌面端并置作品和动态，手机端优先关注与开读。"
-      >
+      <PageChrome onBack={handleBack}>
         <AppState
           tone="error"
           title="作者主页暂时没有打开"
           description={authorQuery.error instanceof Error ? authorQuery.error.message : '请稍后再试。'}
           primaryAction={{ label: '重新加载', onClick: () => void authorQuery.refetch() }}
           secondaryAction={{ label: '返回社区', href: '/community' }}
-          className="min-h-[420px]"
+          className="mt-4 min-h-[420px] border-0 shadow-none"
         />
-      </SectionCard>
+      </PageChrome>
     )
   }
 
   const author = authorQuery.data
 
+  // 数据行可点：作品/获赞切到对应 tab（tab 已固定，无需滚动），粉丝进入该作者的关注·粉丝列表页
+  function scrollToTabs(tab: AuthorTab) {
+    setActiveTab(tab)
+  }
+
+  const stats = [
+    { label: '作品', value: authorNovels.length, onClick: () => scrollToTabs('novels') },
+    { label: '粉丝', value: followerCount, onClick: () => navigate(`/author/${author.id}/follows?tab=followers`) },
+    { label: '获赞', value: likesCount, onClick: () => scrollToTabs('posts') },
+  ]
+
+  // 按隐私设置隐藏不可见的 tab（X 式：直接不展示入口），本人永远可见
+  const visibleTabs = authorTabs.filter((tab) => {
+    if (tab.id === 'liked') {
+      return isOwnProfile || author.visibility?.favorites !== false
+    }
+    if (tab.id === 'replies') {
+      return isOwnProfile || author.visibility?.replies !== false
+    }
+    return true
+  })
+
+  // 头部：封面 + 资料（头像/昵称/简介/数据行）+ tab 栏，与下方列表整页一起滚动
+  const headerContent = (
+    <>
+      {/* 封面：与上传裁切比例（3:1）一致，避免 object-cover 把手机端封面裁掉；
+          小屏全出血、sm 起圆角；lg 宽屏压扁比例避免过高；无封面用与个人中心一致的渐变 */}
+      <div className="relative -mx-4 aspect-[3/1] overflow-hidden sm:mx-0 sm:mt-3 sm:rounded-[var(--radius-xl)] lg:aspect-[4/1]">
+        {author.profileCoverUrl ? (
+          <img src={author.profileCoverUrl} alt="作者封面" className="absolute inset-0 h-full w-full object-cover" />
+        ) : (
+          <div className="absolute inset-0 bg-[linear-gradient(135deg,#28435f_0%,#16233a_58%,#1f2f47_100%)]" />
+        )}
+      </div>
+
+      {/* 头像压住封面下缘，操作按钮右对齐——同一行 */}
+      <div className="flex items-start justify-between px-1 sm:px-2">
+        <Avatar
+          name={author.nickname}
+          src={author.avatarUrl}
+          size="lg"
+          className="relative z-10 -mt-9 h-[76px] w-[76px] border-4 border-[var(--app-bg)] bg-[var(--surface-muted)] sm:-mt-12 sm:h-24 sm:w-24"
+        />
+        <div className="mt-3 flex shrink-0 gap-2">
+          {isOwnProfile ? (
+            <Button variant="secondary" size="sm" onClick={() => navigate('/studio')}>
+              继续创作
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={messagingSubmitting}
+                onClick={() => void handleOpenMessage()}
+              >
+                <MessageSquareMore className="h-4 w-4" />
+                私信
+              </Button>
+              <Button
+                variant={isFollowing ? 'secondary' : 'primary'}
+                size="sm"
+                disabled={followSubmitting}
+                onClick={() => void handleToggleFollow()}
+              >
+                {isFollowing ? <UserCheck2 className="h-4 w-4" /> : <UserPlus2 className="h-4 w-4" />}
+                {isFollowing ? '已关注' : '关注'}
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-2.5 space-y-2 px-1 sm:px-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+          <h1 className="truncate text-xl font-bold tracking-tight text-[var(--text-primary)] sm:text-2xl">
+            {author.nickname}
+          </h1>
+          {author.isAuthor ? (
+            <span className="shrink-0 rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-2 py-0.5 text-[11px] text-[var(--text-tertiary)]">
+              创作者
+            </span>
+          ) : null}
+        </div>
+
+        <p className="max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+          {author.bio || '这位作者还没有留下简介。'}
+        </p>
+
+        <p className="text-xs text-[var(--text-tertiary)]">
+          {author.createdAt ? `${formatRelativeTime(author.createdAt)}加入启创墨域` : '最近加入启创墨域'}
+        </p>
+
+        {/* 数据行：可点击，作品/获赞切 tab，粉丝进列表页 */}
+        <div className="flex items-center gap-4 text-[13px] text-[var(--text-tertiary)] sm:gap-5 sm:text-sm">
+          {stats.map((stat) => (
+            <button
+              key={stat.label}
+              type="button"
+              onClick={stat.onClick}
+              className="press-feedback whitespace-nowrap transition-colors hover:text-[var(--text-primary)]"
+            >
+              <span className="font-semibold tabular-nums text-[var(--text-primary)]">{stat.value}</span> {stat.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 作品 / 动态 tab：与个人中心一致的 pill 风格，固定在头部 */}
+      <div className="mt-4 flex gap-2 px-1 pb-3 sm:px-2">
+        {visibleTabs.map((tab) => {
+          const count = tab.id === 'novels' ? authorNovels.length : tab.id === 'posts' ? authorPosts.length : null
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'press-feedback inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-4 py-2 text-sm font-medium transition-colors',
+                activeTab === tab.id
+                  ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
+                  : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
+              )}
+            >
+              {tab.label}
+              {count !== null ? <span className="text-xs opacity-75">{count}</span> : null}
+            </button>
+          )
+        })}
+      </div>
+    </>
+  )
+
   return (
-    <SectionCard
-      eyebrow="作者主页"
-      title="先展示作者气质、代表作和最近互动，再把读者送进作品与私聊"
-      description="作者页不做后台式资料陈列，而是把首屏做成可信的创作者介绍，桌面端并置作品和动态，手机端优先关注与开读。"
-    >
-      <div className="space-y-6">
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_320px]">
-          <div className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)] sm:p-5">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-start gap-4">
-                <Avatar name={author.nickname} src={author.avatarUrl} size="lg" />
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
-                      {author.nickname}
-                    </h3>
-                    <p className="mt-2 max-w-2xl text-sm leading-7 text-[var(--text-secondary)]">
-                      {author.bio || '这位作者还没有留下简介。'}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs text-[var(--text-tertiary)]">
-                    <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-3 py-1">
-                      <MapPin className="h-3.5 w-3.5" />
-                      {author.isAuthor ? '作者身份已开启' : '读者身份'}
-                    </span>
-                    <span className="rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-3 py-1">
-                      {author.createdAt ? `${formatRelativeTime(author.createdAt)} 加入` : '最近加入'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {isOwnProfile ? (
-                  <>
-                    <Button variant="primary" onClick={() => navigate('/studio')}>
-                      继续创作
-                    </Button>
-                    <Button variant="secondary" onClick={() => navigate('/messages')}>
-                      查看消息
-                    </Button>
-                  </>
-                ) : null}
-                {!isOwnProfile && directConversation ? (
-                  <Button
-                    variant="secondary"
-                    onClick={() => navigate(`/messages?conversationId=${directConversation.id}`)}
-                  >
-                    <UserPlus2 className="h-4 w-4" />
-                    发起私聊
-                  </Button>
-                ) : null}
-              </div>
+    <PageChrome headerTitle={author.nickname} onBack={handleBack} headerContent={headerContent}>
+      <div className="pt-2">
+        {activeTab === 'novels' ? (
+          novelsQuery.isLoading ? (
+            <div className="space-y-3 px-1 pt-3 sm:px-2">
+              <Skeleton className="h-24 w-full rounded-[var(--radius-lg)]" />
+              <Skeleton className="h-24 w-full rounded-[var(--radius-lg)]" />
             </div>
+          ) : authorNovels.length > 0 ? (
+            <div className="divide-y divide-[var(--border-subtle)] md:grid md:grid-cols-2 md:gap-x-4 md:divide-y-0">
+              {authorNovels.map((novel) => {
+                const coverUrl = getCoverUrl(novel.coverUrl)
 
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
-                <p className="text-xs text-[var(--text-tertiary)]">粉丝</p>
-                <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{author.followerCount}</p>
-              </div>
-              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
-                <p className="text-xs text-[var(--text-tertiary)]">已发布作品</p>
-                <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{authorNovels.length}</p>
-              </div>
-              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-4">
-                <p className="text-xs text-[var(--text-tertiary)]">最近活跃</p>
-                <p className="mt-2 text-sm leading-7 text-[var(--text-primary)]">
-                  {latestActivityTime ? formatRelativeTime(latestActivityTime) : '最近还没有公开动态'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <aside className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)]">
-            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-              <MessageSquareMore className="h-4 w-4 text-[var(--text-tertiary)]" />
-              作者近况
-            </div>
-            <div className="mt-4 space-y-3 text-sm leading-7 text-[var(--text-secondary)]">
-              <p>公开作品 {authorNovels.length} 部，公开讨论 {authorPosts.length} 条。</p>
-              <p>{latestActivityTime ? `最近一次公开更新在 ${formatRelativeTime(latestActivityTime)}。` : '最近还没有公开更新。'}</p>
-            </div>
-          </aside>
-        </section>
-
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-              <BookOpen className="h-4 w-4 text-[var(--text-tertiary)]" />
-              代表作品
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              {novelsQuery.isLoading ? (
-                <>
-                  <Skeleton className="aspect-[4/5] w-full rounded-[var(--radius-xl)]" />
-                  <Skeleton className="aspect-[4/5] w-full rounded-[var(--radius-xl)]" />
-                </>
-              ) : authorNovels.length > 0 ? (
-                authorNovels.map((novel) => (
+                return (
                 <Link
                   key={novel.id}
                   to={`/novel/${novel.id}`}
-                  className="hover-lift rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)] transition-colors hover:border-[var(--border-strong)]"
+                  className="group flex items-center gap-3.5 px-1 py-3.5 transition-colors hover:bg-[var(--surface-muted)] sm:rounded-[var(--radius-lg)] sm:px-2"
                 >
-                  <img
-                    src={novel.coverUrl ?? ''}
-                    alt={getDisplayTitle(novel)}
-                    className="aspect-[4/5] w-full rounded-[var(--radius-lg)] border border-[var(--border-subtle)] object-cover"
-                  />
-                  <h3 className="mt-4 text-lg font-semibold text-[var(--text-primary)]">{getDisplayTitle(novel)}</h3>
-                  <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{novel.summary}</p>
+                  {coverUrl ? (
+                    <img
+                      src={coverUrl}
+                      alt={getDisplayTitle(novel)}
+                      className="aspect-[20/27] w-[64px] shrink-0 rounded-[8px] border border-[var(--border-subtle)] object-cover"
+                    />
+                  ) : (
+                    <div className="flex aspect-[20/27] w-[64px] shrink-0 items-end rounded-[8px] bg-[var(--surface-muted)] p-1.5">
+                      <span className="line-clamp-3 text-[10px] font-medium leading-snug text-[var(--text-secondary)]">
+                        {getDisplayTitle(novel)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate text-[15px] font-semibold text-[var(--text-primary)] transition-colors group-hover:text-[var(--color-brand)]">
+                      {getDisplayTitle(novel)}
+                    </h3>
+                    <p className="mt-1 line-clamp-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+                      {novel.summary}
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
                 </Link>
-                ))
-              ) : (
-                <AppState
-                  tone="empty"
-                  title="这位作者还没有公开作品"
-                  description="先去社区看看这位作者最近在聊什么。"
-                  className="md:col-span-2 min-h-[260px]"
-                />
-              )}
+                )
+              })}
             </div>
-          </div>
-
-          <aside className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-              <MessageSquareMore className="h-4 w-4 text-[var(--text-tertiary)]" />
-              最近讨论
-            </div>
-            {postsQuery.isLoading ? (
+          ) : (
+            <AppState
+              tone="empty"
+              title="这位作者还没有公开作品"
+              description="切到动态看看这位作者最近在聊什么。"
+              className="min-h-[240px] border-0 shadow-none"
+            />
+          )
+        ) : activeTab === 'posts' ? (
+          postsQuery.isLoading ? (
+            <div className="pt-3">
               <PostListSkeleton count={2} />
-            ) : authorPosts.length > 0 ? (
-              authorPosts.map((post) => <PostCard key={post.id} post={post} compact />)
-            ) : (
-              <AppState
-                tone="empty"
-                title="这位作者还没有公开讨论"
-                description="等作者开始发帖后，这里会更新最近的互动内容。"
-                className="min-h-[260px]"
-              />
-            )}
-          </aside>
-        </section>
+            </div>
+          ) : authorPosts.length > 0 ? (
+            <div className="divide-y divide-[var(--border-subtle)]">
+              {authorPosts.map((post) => (
+                <div key={post.id} className="py-1">
+                  <PostCard post={post} flat />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <AppState
+              tone="empty"
+              title="这位作者还没有公开讨论"
+              description="等作者开始发帖后，这里会更新最近的互动内容。"
+              className="min-h-[240px] border-0 shadow-none"
+            />
+          )
+        ) : activeTab === 'liked' ? (
+          <LikedPostsPanel userId={author.id} isSelf={isOwnProfile} />
+        ) : (
+          <RepliesPanel userId={author.id} isSelf={isOwnProfile} />
+        )}
       </div>
-    </SectionCard>
+    </PageChrome>
   )
 }

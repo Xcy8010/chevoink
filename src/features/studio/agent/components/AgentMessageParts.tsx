@@ -261,6 +261,14 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
           </p>
         </div>
       )
+    case 'todoList': {
+      const completed = display.items.filter((item) => item.status === 'completed').length
+      return (
+        <p className="text-[11px] text-[var(--text-secondary)]">
+          待办清单已更新 · {completed}/{display.items.length} 已完成
+        </p>
+      )
+    }
     default:
       return null
   }

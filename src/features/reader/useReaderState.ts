@@ -20,6 +20,7 @@ import {
   type ReaderFontScale,
   type ReaderTone,
 } from './reader-settings'
+import { useTtsPlayer } from './tts/useTtsPlayer'
 
 export type ReaderPanelId = 'directory' | 'comments' | 'settings' | null
 
@@ -178,6 +179,22 @@ export function useReaderState() {
     ? `第 ${reader.currentChapter.orderIndex} 章 · ${numberFormatter.format(reader.currentChapter.wordCount)} 字 · ${formatDateTime(reader.currentChapter.publishedAt)}`
     : ''
 
+  // 听书播放引擎（方案 17）：三端共用，创作区预览（fromStudio）不启用
+  const tts = useTtsPlayer({
+    novelId,
+    chapterId,
+    fromStudio,
+    paragraphs,
+    nextHref,
+    novelTitle,
+    chapterTitle,
+    coverUrl: reader?.novel.coverUrl ?? null,
+    contentScrollRef,
+    initialVoice: initialSettings.ttsVoice,
+    initialRate: initialSettings.ttsRate,
+    initialAutoNext: initialSettings.ttsAutoNext,
+  })
+
   /** 绑定到各布局的正文滚动容器 */
   const handleContentScroll = () => {
     const element = contentScrollRef.current
@@ -236,6 +253,7 @@ export function useReaderState() {
     buildReadHref,
     previousHref,
     nextHref,
+    tts,
   }
 }
 

@@ -1,5 +1,6 @@
 import {
   ChevronLeft,
+  Headphones,
   ListOrdered,
   Maximize2,
   MessageSquare,
@@ -20,6 +21,8 @@ import ReaderDirectory from '../components/ReaderDirectory'
 import ReaderProgressBar from '../components/ReaderProgressBar'
 import ReaderSettingsContent from '../components/ReaderSettingsContent'
 import ReaderSettingsPopover from '../components/ReaderSettingsPopover'
+import TtsControlSheet from '../tts/TtsControlSheet'
+import TtsMiniBar from '../tts/TtsMiniBar'
 import { useChapterGestures } from '../useChapterGestures'
 import type { ReaderState } from '../useReaderState'
 
@@ -43,6 +46,7 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sheetPanel, setSheetPanel] = useState<'directory' | 'comments' | 'settings' | null>(null)
   const [immersive, setImmersive] = useState(false)
+  const [ttsSheetOpen, setTtsSheetOpen] = useState(false)
 
   const tone = state.toneOption
   const gestures = useChapterGestures({
@@ -66,6 +70,29 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
     >
       <Settings2 className="h-5 w-5" />
     </button>
+  )
+
+  const ttsButton = state.tts.available ? (
+    <button
+      type="button"
+      aria-label="听书"
+      onClick={() => {
+        if (state.tts.isActive) {
+          setTtsSheetOpen(true)
+        } else {
+          state.tts.start()
+        }
+      }}
+      className="touch-target inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-pill)] transition-colors hover:bg-black/5 press-feedback"
+    >
+      <Headphones className="h-5 w-5" />
+    </button>
+  ) : null
+
+  const ttsSheet = (
+    <BottomSheet open={ttsSheetOpen} onClose={() => setTtsSheetOpen(false)} title="听书设置">
+      <TtsControlSheet tts={state.tts} />
+    </BottomSheet>
   )
 
   const immersiveButton = (
@@ -151,6 +178,7 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
             >
               {sideOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
             </button>
+            {ttsButton}
             {immersiveButton}
             <div className="relative">
               {settingsButton(() => setSettingsOpen((open) => !open), settingsOpen)}
@@ -182,7 +210,17 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
               />
             </div>
           </div>
+
+          {/* 听书迷你条：正文列底部常驻 */}
+          <TtsMiniBar
+            tts={state.tts}
+            tone={tone}
+            onExpand={() => setTtsSheetOpen(true)}
+            className="shrink-0"
+          />
         </div>
+
+        {ttsSheet}
       </div>
     )
   }
@@ -227,6 +265,7 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
           <MessageSquare className="h-5 w-5" />
         </button>
         {settingsButton(() => setSheetPanel('settings'), sheetPanel === 'settings')}
+        {ttsButton}
         {immersiveButton}
       </header>
 
@@ -240,6 +279,14 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
           <ReaderArticle state={state} header="full" onOpenComments={() => setSheetPanel('comments')} />
         </div>
       </div>
+
+      {/* 听书迷你条：吸底常驻 */}
+      <TtsMiniBar
+        tts={state.tts}
+        tone={tone}
+        onExpand={() => setTtsSheetOpen(true)}
+        className="shrink-0 pb-[var(--safe-bottom)]"
+      />
 
       <BottomSheet open={sheetPanel === 'directory'} onClose={() => setSheetPanel(null)} title="目录">
         <ReaderDirectory state={state} onNavigate={() => setSheetPanel(null)} />
@@ -255,6 +302,7 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
           onToneChange={state.setTone}
         />
       </BottomSheet>
+      {ttsSheet}
     </div>
   )
 }

@@ -1,0 +1,556 @@
+import { useQuery } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+
+import { splitTtsBatches } from '../../../../shared/contracts/index.js'
+import { saveReaderSettings, ttsRateOptions } from '../reader-settings'
+import { fetchTtsBatchAudio, fetchTtsVoices } from './tts-api'
+
+export type TtsStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error'
+export type TtsTimerOption = 'off' | 15 | 30 | 60 | 'chapter'
+
+type UseTtsPlayerArgs = {
+  novelId: string | undefined
+  chapterId: string | undefined
+  fromStudio: boolean
+  paragraphs: string[]
+  nextHref: string | null
+  novelTitle: string
+  chapterTitle: string
+  coverUrl: string | null
+  contentScrollRef: React.MutableRefObject<HTMLDivElement | null>
+  initialVoice: string
+  initialRate: number
+  initialAutoNext: boolean
+}
+
+/** 手势内先播一段静音 wav 解锁 iOS 音频，再换真实音频（方案 17-4.3） */
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='
+
+/** 手动滚动后暂停自动跟随的时长 */
+const USER_SCROLL_HOLD_MS = 5000
+
+/**
+ * 听书播放引擎（方案 17-4.2）：
+ * - 批次队列 + objectURL 预取下一批，批间隙感知 <100ms
+ * - 语速走 playbackRate（合成一律原速，缓存键无语速维度）
+ * - 段落高亮按批内字数占比映射 currentTime，自动滚动居中（手动滚动 5s 内不抢）
+ * - 章末自动续播下一章、定时关闭、Media Session 锁屏控制
+ */
+export function useTtsPlayer(args: UseTtsPlayerArgs) {
+  const {
+    novelId,
+    chapterId,
+    fromStudio,
+    paragraphs,
+    nextHref,
+    novelTitle,
+    chapterTitle,
+    coverUrl,
+    contentScrollRef,
+    initialVoice,
+    initialRate,
+    initialAutoNext,
+  } = args
+
+  const navigate = useNavigate()
+
+  const [status, setStatus] = useState<TtsStatus>('idle')
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0)
+  const [activeParagraphIndex, setActiveParagraphIndex] = useState<number | null>(null)
+  const [voiceIdState, setVoiceIdState] = useState(initialVoice)
+  const [rate, setRateState] = useState(initialRate)
+  const [autoNext, setAutoNextState] = useState(initialAutoNext)
+  const [timerOption, setTimerOptionState] = useState<TtsTimerOption>('off')
+  const [timerDeadline, setTimerDeadline] = useState<number | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  // 30s 一跳，仅驱动"剩余 X 分钟"文案刷新
+  const [, setTimerTick] = useState(0)
+
+  const voicesQuery = useQuery({
+    queryKey: ['tts-voices'],
+    queryFn: fetchTtsVoices,
+    enabled: !fromStudio,
+    staleTime: 60 * 60_000,
+    gcTime: 60 * 60_000,
+  })
+
+  const voices = voicesQuery.data?.voices ?? []
+  const defaultVoiceId = voicesQuery.data?.defaultVoiceId ?? ''
+  const available = Boolean(voicesQuery.data?.available && voices.length > 0 && !fromStudio)
+  /** 生效音色：本地持久化优先，失效（白名单下线）回退服务端默认 */
+  const voiceId =
+    voiceIdState && voices.some((voice) => voice.id === voiceIdState) ? voiceIdState : defaultVoiceId
+  const voiceLabel = voices.find((voice) => voice.id === voiceId)?.label ?? '默认音色'
+
+  const batches = useMemo(() => splitTtsBatches(paragraphs), [paragraphs])
+
+  // ---- 可变引用（异步回调里取最新值） ----
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const unlockedRef = useRef(false)
+  const sessionRef = useRef(0)
+  const blobUrlsRef = useRef(new Map<string, string>())
+  const fetchingRef = useRef(new Map<string, Promise<string>>())
+  const pendingResumeRef = useRef(false)
+  const userScrollUntilRef = useRef(0)
+  const programmaticScrollUntilRef = useRef(0)
+  const stateRef = useRef({
+    batches,
+    paragraphs,
+    rate,
+    autoNext,
+    timerOption,
+    nextHref,
+    novelId,
+    chapterId,
+    voiceId,
+    currentBatchIndex,
+    status,
+  })
+  stateRef.current = {
+    batches,
+    paragraphs,
+    rate,
+    autoNext,
+    timerOption,
+    nextHref,
+    novelId,
+    chapterId,
+    voiceId,
+    currentBatchIndex,
+    status,
+  }
+
+  const blobKey = (chapter: string, voice: string, batchIndex: number) =>
+    `${chapter}:${voice}:${batchIndex}`
+
+  const revokeAllBlobs = useCallback(() => {
+    blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    blobUrlsRef.current.clear()
+    fetchingRef.current.clear()
+  }, [])
+
+  /** 拿一批音频的 objectURL（缓存 → 进行中请求 → 新请求） */
+  const getBatchAudio = useCallback((batchIndex: number): Promise<string> => {
+    const { novelId: novel, chapterId: chapter, voiceId: voice } = stateRef.current
+    if (!novel || !chapter || !voice) return Promise.reject(new Error('章节未就绪'))
+
+    const key = blobKey(chapter, voice, batchIndex)
+    const cached = blobUrlsRef.current.get(key)
+    if (cached) return Promise.resolve(cached)
+
+    const inflight = fetchingRef.current.get(key)
+    if (inflight) return inflight
+
+    const task = fetchTtsBatchAudio({ novelId: novel, chapterId: chapter, batchIndex, voiceId: voice })
+      .then((url) => {
+        blobUrlsRef.current.set(key, url)
+        return url
+      })
+      .finally(() => {
+        fetchingRef.current.delete(key)
+      })
+
+    fetchingRef.current.set(key, task)
+    return task
+  }, [])
+
+  const getAudio = useCallback((): HTMLAudioElement => {
+    if (!audioRef.current) {
+      const audio = new Audio()
+      audio.preload = 'auto'
+      audioRef.current = audio
+    }
+    return audioRef.current
+  }, [])
+
+  /** 播放指定批次（核心推进函数） */
+  const playBatch = useCallback(
+    async (batchIndex: number) => {
+      const session = sessionRef.current
+      const audio = getAudio()
+
+      setCurrentBatchIndex(batchIndex)
+      setErrorMessage(null)
+      setStatus('loading')
+
+      try {
+        const url = await getBatchAudio(batchIndex)
+        if (sessionRef.current !== session) return
+
+        audio.src = url
+        audio.playbackRate = stateRef.current.rate
+        await audio.play()
+        if (sessionRef.current !== session) return
+
+        setStatus('playing')
+
+        // 预取下一批，批间隙无缝续播
+        if (batchIndex + 1 < stateRef.current.batches.length) {
+          void getBatchAudio(batchIndex + 1).catch(() => undefined)
+        }
+      } catch (error) {
+        if (sessionRef.current !== session) return
+        setStatus('error')
+        setErrorMessage(error instanceof Error ? error.message : '听书暂时不可用，请稍后重试。')
+      }
+    },
+    [getAudio, getBatchAudio],
+  )
+
+  const playBatchRef = useRef(playBatch)
+  playBatchRef.current = playBatch
+
+  /** 一批播完：推进下一批 / 播完本章停 / 自动翻章 / 全书完 */
+  const handleBatchEnded = useCallback(() => {
+    const { batches: allBatches, currentBatchIndex: index, autoNext: shouldAutoNext, timerOption: timer, nextHref: next } =
+      stateRef.current
+
+    if (index + 1 < allBatches.length) {
+      void playBatchRef.current(index + 1)
+      return
+    }
+
+    // 章末
+    if (timer === 'chapter') {
+      setTimerOptionState('off')
+      setStatus('ended')
+      setActiveParagraphIndex(null)
+      return
+    }
+
+    if (shouldAutoNext && next) {
+      pendingResumeRef.current = true
+      navigate(next)
+      return
+    }
+
+    setStatus('ended')
+    setActiveParagraphIndex(null)
+  }, [navigate])
+
+  /** timeupdate：按批内各段字数占比把播放进度映射为段落下标 */
+  const handleTimeUpdate = useCallback(() => {
+    const audio = audioRef.current
+    const { batches: allBatches, paragraphs: allParagraphs, currentBatchIndex: index, status: currentStatus } =
+      stateRef.current
+    if (!audio || currentStatus !== 'playing') return
+
+    const batch = allBatches[index]
+    if (!batch || !audio.duration || !Number.isFinite(audio.duration)) return
+
+    const progress = Math.min(1, audio.currentTime / audio.duration)
+    let cumulative = 0
+    let target = batch.paragraphStart
+
+    for (let i = batch.paragraphStart; i <= batch.paragraphEnd; i += 1) {
+      cumulative += (allParagraphs[i]?.length ?? 0) / Math.max(1, batch.charCount)
+      target = i
+      if (progress < cumulative) break
+    }
+
+    setActiveParagraphIndex((previous) => (previous === target ? previous : target))
+  }, [])
+
+  // 音频元素事件绑定（一次）
+  useEffect(() => {
+    const audio = getAudio()
+    const onEnded = () => handleBatchEnded()
+    const onTime = () => handleTimeUpdate()
+
+    audio.addEventListener('ended', onEnded)
+    audio.addEventListener('timeupdate', onTime)
+
+    return () => {
+      audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('timeupdate', onTime)
+    }
+  }, [getAudio, handleBatchEnded, handleTimeUpdate])
+
+  /** 从阅读视口内第一个可见段落所在批次开始播放（听书入口点击） */
+  const start = useCallback(() => {
+    const audio = getAudio()
+
+    // iOS：首次 play 必须发生在用户手势调用栈内
+    if (!unlockedRef.current) {
+      audio.src = SILENT_WAV
+      void audio.play().catch(() => undefined)
+      unlockedRef.current = true
+    }
+
+    const { batches: allBatches } = stateRef.current
+    if (allBatches.length === 0) return
+
+    let startBatch = 0
+    const container = contentScrollRef.current
+    if (container) {
+      const containerTop = container.getBoundingClientRect().top
+      const nodes = container.querySelectorAll<HTMLElement>('[data-tts-p]')
+      for (const node of nodes) {
+        if (node.getBoundingClientRect().bottom > containerTop + 8) {
+          const paragraphIndex = Number(node.dataset.ttsP)
+          const matched = allBatches.find(
+            (batch) => paragraphIndex >= batch.paragraphStart && paragraphIndex <= batch.paragraphEnd,
+          )
+          if (matched) startBatch = matched.index
+          break
+        }
+      }
+    }
+
+    sessionRef.current += 1
+    void playBatchRef.current(startBatch)
+  }, [contentScrollRef, getAudio])
+
+  const pause = useCallback(() => {
+    audioRef.current?.pause()
+    setStatus((previous) => (previous === 'playing' ? 'paused' : previous))
+  }, [])
+
+  const resume = useCallback(() => {
+    const { status: currentStatus, currentBatchIndex: index } = stateRef.current
+    if (currentStatus === 'paused' && audioRef.current?.src) {
+      void audioRef.current.play().then(() => setStatus('playing')).catch(() => undefined)
+      return
+    }
+    if (currentStatus === 'ended' || currentStatus === 'error') {
+      sessionRef.current += 1
+      void playBatchRef.current(currentStatus === 'ended' ? 0 : index)
+    }
+  }, [])
+
+  const toggle = useCallback(() => {
+    if (stateRef.current.status === 'playing') {
+      pause()
+    } else {
+      resume()
+    }
+  }, [pause, resume])
+
+  const stop = useCallback(() => {
+    sessionRef.current += 1
+    pendingResumeRef.current = false
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.removeAttribute('src')
+    }
+    revokeAllBlobs()
+    setStatus('idle')
+    setActiveParagraphIndex(null)
+    setTimerOptionState('off')
+    setTimerDeadline(null)
+    setErrorMessage(null)
+  }, [revokeAllBlobs])
+
+  const jumpBatch = useCallback((delta: number) => {
+    const { currentBatchIndex: index, batches: allBatches } = stateRef.current
+    const target = index + delta
+    if (target < 0 || target >= allBatches.length) return
+    sessionRef.current += 1
+    void playBatchRef.current(target)
+  }, [])
+
+  const setVoice = useCallback(
+    (nextVoiceId: string) => {
+      setVoiceIdState(nextVoiceId)
+      saveReaderSettings({ ttsVoice: nextVoiceId })
+
+      // 播放中切音色：清缓存，从当前批用新音色重播
+      const { status: currentStatus, currentBatchIndex: index } = stateRef.current
+      if (currentStatus === 'playing' || currentStatus === 'paused' || currentStatus === 'loading') {
+        sessionRef.current += 1
+        audioRef.current?.pause()
+        revokeAllBlobs()
+        // stateRef 在下一次渲染才更新 voiceId，这里直接写入让 getBatchAudio 立即取到新值
+        stateRef.current.voiceId = nextVoiceId
+        void playBatchRef.current(index)
+      }
+    },
+    [revokeAllBlobs],
+  )
+
+  const setRate = useCallback((nextRate: number) => {
+    if (!ttsRateOptions.some((option) => option === nextRate)) return
+    setRateState(nextRate)
+    saveReaderSettings({ ttsRate: nextRate })
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate
+    }
+  }, [])
+
+  const setAutoNext = useCallback((next: boolean) => {
+    setAutoNextState(next)
+    saveReaderSettings({ ttsAutoNext: next })
+  }, [])
+
+  const setTimerOption = useCallback((option: TtsTimerOption) => {
+    setTimerOptionState(option)
+    setTimerDeadline(typeof option === 'number' ? Date.now() + option * 60_000 : null)
+  }, [])
+
+  // 定时关闭：到点即停
+  useEffect(() => {
+    if (!timerDeadline) return
+
+    const check = () => {
+      if (Date.now() >= timerDeadline) {
+        stop()
+        return
+      }
+      setTimerTick((tick) => tick + 1)
+    }
+
+    const interval = window.setInterval(check, 30_000)
+    const timeout = window.setTimeout(check, Math.max(0, timerDeadline - Date.now()) + 50)
+
+    return () => {
+      window.clearInterval(interval)
+      window.clearTimeout(timeout)
+    }
+  }, [timerDeadline, stop])
+
+  // 章节切换：重置播放态；若带"待续播"标记（自动翻章），批次就绪后从头续播
+  useEffect(() => {
+    sessionRef.current += 1
+    audioRef.current?.pause()
+    revokeAllBlobs()
+    setActiveParagraphIndex(null)
+    setCurrentBatchIndex(0)
+    if (!pendingResumeRef.current) {
+      setStatus((previous) => (previous === 'idle' ? previous : 'idle'))
+    }
+  }, [chapterId, revokeAllBlobs])
+
+  useEffect(() => {
+    if (pendingResumeRef.current && batches.length > 0) {
+      pendingResumeRef.current = false
+      sessionRef.current += 1
+      void playBatchRef.current(0)
+    }
+  }, [chapterId, batches])
+
+  // 手动滚动 5s 内暂停自动跟随（程序化滚动通过时间窗标记区分）
+  useEffect(() => {
+    if (status !== 'playing') return
+    const container = contentScrollRef.current
+    if (!container) return
+
+    const onScroll = () => {
+      if (Date.now() > programmaticScrollUntilRef.current) {
+        userScrollUntilRef.current = Date.now() + USER_SCROLL_HOLD_MS
+      }
+    }
+
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [status, contentScrollRef])
+
+  // 高亮段落自动滚动居中
+  useEffect(() => {
+    if (activeParagraphIndex === null || status !== 'playing') return
+    if (Date.now() < userScrollUntilRef.current) return
+
+    const node = contentScrollRef.current?.querySelector<HTMLElement>(
+      `[data-tts-p="${activeParagraphIndex}"]`,
+    )
+    if (!node) return
+
+    programmaticScrollUntilRef.current = Date.now() + 1200
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [activeParagraphIndex, status, contentScrollRef])
+
+  // Media Session：锁屏/系统媒体中心控制（方案 17-4.2）
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    if (status !== 'playing' && status !== 'paused') return
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: chapterTitle,
+      artist: novelTitle,
+      album: '启创墨域 · 听书',
+      artwork: coverUrl ? [{ src: coverUrl, sizes: '512x512' }] : [],
+    })
+    navigator.mediaSession.playbackState = status === 'playing' ? 'playing' : 'paused'
+
+    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => resume()],
+      ['pause', () => pause()],
+      ['previoustrack', () => jumpBatch(-1)],
+      ['nexttrack', () => jumpBatch(1)],
+    ]
+
+    for (const [action, handler] of handlers) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler)
+      } catch {
+        // 个别浏览器不支持某些 action
+      }
+    }
+
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          navigator.mediaSession.setActionHandler(action, null)
+        } catch {
+          // 忽略
+        }
+      }
+    }
+  }, [status, chapterTitle, novelTitle, coverUrl, resume, pause, jumpBatch])
+
+  // 卸载清理：停止播放、释放 objectURL
+  useEffect(() => {
+    return () => {
+      sessionRef.current += 1
+      const audio = audioRef.current
+      if (audio) {
+        audio.pause()
+        audio.removeAttribute('src')
+      }
+      blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      blobUrlsRef.current.clear()
+      fetchingRef.current.clear()
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null
+      }
+    }
+  }, [])
+
+  const timerRemainingMinutes = timerDeadline
+    ? Math.max(1, Math.ceil((timerDeadline - Date.now()) / 60_000))
+    : null
+
+  return {
+    available,
+    voices,
+    voiceId,
+    voiceLabel,
+    status,
+    isActive: status !== 'idle',
+    currentBatchIndex,
+    totalBatches: batches.length,
+    activeParagraphIndex,
+    rate,
+    autoNext,
+    timerOption,
+    timerRemainingMinutes,
+    errorMessage,
+    hasPrevBatch: currentBatchIndex > 0,
+    hasNextBatch: currentBatchIndex + 1 < batches.length,
+    start,
+    toggle,
+    pause,
+    resume,
+    stop,
+    nextBatch: () => jumpBatch(1),
+    prevBatch: () => jumpBatch(-1),
+    setVoice,
+    setRate,
+    setAutoNext,
+    setTimerOption,
+  }
+}
+
+export type TtsPlayer = ReturnType<typeof useTtsPlayer>

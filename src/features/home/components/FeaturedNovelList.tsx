@@ -65,7 +65,7 @@ export default function FeaturedNovelList({ novels, variant = 'list', maxItems =
       </div>
 
       {variant === 'grid' ? (
-        <div className="grid grid-cols-3 gap-x-4 gap-y-6 sm:grid-cols-4 xl:grid-cols-5">
+        <div className="grid grid-cols-3 gap-x-4 gap-y-6 sm:grid-cols-4">
           {items.map((novel) => (
             <Link key={novel.id} to={`/novel/${novel.id}`} className="group block min-w-0">
               <NovelCover novel={novel} className="transition-transform duration-[var(--duration-normal)] group-hover:-translate-y-0.5" />

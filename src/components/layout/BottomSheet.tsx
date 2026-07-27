@@ -71,7 +71,12 @@ export default function BottomSheet({
   }
 
   return (
-    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="fixed inset-0 z-[70] md:flex md:items-center md:justify-center md:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       {/* 遮罩 */}
       <button
         type="button"
@@ -80,16 +85,16 @@ export default function BottomSheet({
         className="absolute inset-0 bg-black/40 animate-fade-in"
       />
 
-      {/* 手机端：底部抽屉；平板/电脑端：居中模态 */}
+      {/* 手机端：底部抽屉（bottom 随软键盘上移，输入时整个抽屉被顶到键盘上方）；平板/电脑端：flex 居中模态（不用 translate 定位，避免被动画 transform 覆盖） */}
       <div
         ref={sheetRef}
         className={cn(
-          'animate-sheet-slide-up absolute inset-x-0 bottom-0 flex flex-col overflow-hidden',
-          'rounded-t-[var(--radius-xl)] border border-b-0 border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[var(--shadow-modal)]',
-          'md:animate-fade-in-up md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-[min(560px,calc(100vw-48px))] md:-translate-x-1/2 md:-translate-y-1/2',
+          'animate-sheet-slide-up absolute inset-x-0 bottom-[var(--keyboard-inset,0px)] flex flex-col overflow-hidden',
+          'rounded-t-[var(--radius-xl)] border border-b-0 border-[var(--border-subtle)] bg-[var(--surface-solid)] shadow-[var(--shadow-modal)]',
+          'md:relative md:inset-auto md:w-[min(560px,100%)]',
           'md:rounded-[var(--radius-xl)] md:border-b',
         )}
-        style={{ maxHeight }}
+        style={{ maxHeight: `min(${maxHeight}, calc(100dvh - var(--keyboard-inset, 0px)))` }}
       >
         {/* 拖拽指示条（仅手机端显示） */}
         <div

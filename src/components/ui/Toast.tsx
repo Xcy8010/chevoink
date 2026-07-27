@@ -69,7 +69,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       {/* portal 到 body 并置于全站最高层级（高于沉浸层 90 / 弹窗 120 / 灯箱 140），避免被沉浸创作区等全屏浮层盖住 */}
       {createPortal(
-        <div className="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+12px)] z-[150] flex flex-col items-center gap-2 px-4">
+        <div className="pointer-events-none fixed inset-x-0 top-[calc(var(--safe-top)+12px)] z-[150] flex flex-col items-center gap-2 px-4">
           {toasts.map((item) => {
             const config = toneConfig[item.tone]
             const Icon = config.icon

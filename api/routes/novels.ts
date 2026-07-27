@@ -22,6 +22,7 @@ import {
   getStudioPayloadData,
   listNovelsData,
   publishNovelData,
+  setNovelFavoriteData,
   updateChapterData,
   updateNovelData,
 } from '../lib/data-access.js'
@@ -150,6 +151,27 @@ router.patch('/:novelId/cover', async (req: Request, res: Response): Promise<voi
     sendRouteError(res, requestId, error)
   }
 })
+
+async function handleNovelFavorite(req: Request, res: Response, favorited: boolean): Promise<void> {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await setNovelFavoriteData(userId, req.params.novelId, favorited)
+
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOVEL_NOT_FOUND', '未找到作品。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+}
+
+router.post('/:novelId/favorite', (req, res) => handleNovelFavorite(req, res, true))
+router.delete('/:novelId/favorite', (req, res) => handleNovelFavorite(req, res, false))
 
 router.post('/:novelId/publish', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()

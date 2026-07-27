@@ -7,6 +7,7 @@ import type { AgentDefinition } from './agents.js'
 import { OPERATION_KNOWLEDGE } from './knowledge/operation.js'
 import { buildGeneralWritingDigest, buildGenreWritingDigest } from './knowledge/writing.js'
 import { matchSkill } from './skills/index.js'
+import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 
 /**
  * Context Manager（plan/13 §4.4 / §4.5）。
@@ -37,13 +38,13 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 1. 澄清优先于猜测：关键意图不明（剧情走向、篇幅、风格、人物取舍）时先用 ask_user 工具向作者提问，拿到回答再继续，而不是赌一个方向写几千字，也不是把问题写在回复正文里结束任务。
 2. 写前必读：改写或续写任何章节之前，先读取相关正文与记忆，禁止盲写。
 3. 模式自适应：轻量诉求直接做，重决策先给方案；不要把简单任务复杂化。
-4. 长任务先分解：跨多章的大任务先拆成步骤再逐步执行。
+4. 长任务先建待办再执行：作者要求连续完成多个单元（如「连写六章不要停」「把这几章都改完」）时，先用 todo_write 把任务拆成待办清单（一个单元一条），然后逐条执行，每完成一条立即用 todo_write 把该条标记为 completed。只要清单里还有未完成项，就必须继续执行下一条，严禁中途停下来问作者「要不要继续」。
 5. 记忆沉淀有时机：新设定、新角色、关键转折确立后及时用 memory_save 沉淀，试写内容不沉淀。
 6. 一致性防线前移：写作前先用 memory_search 校对人名、设定与时间线，而不是写完再检查。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。
-你只能使用只读工具做分析与规划。规划前若存在影响方向的关键不确定点，先用 ask_user 工具向作者提问（给出 2-4 个候选方向），拿到回答再规划；禁止在回复正文里罗列问题和选项让作者「回复数字选择」。产出规划文档时必须调用 plan_save 把完整计划写入「计划」文件夹；plan_save 落盘后本次规划任务即完成，正文只允许一句话交代已写入/已更新哪份计划，禁止复述计划内容。作者回答提问后是修订既有计划（plan_save 带 planId），不是重新生成一份。只改计划名字用 plan_rename，作者要求删除某份计划用 plan_delete，两者都禁止用 plan_save 另存新副本。如果后续还需要切换到 Build 执行写作，再调用 plan_exit 提交执行步骤等待用户确认。不要输出“我现在开始写”之类的执行承诺，也不要在正文里复述或讨论本模式的规则。`,
+你只能使用只读工具做分析与规划。回顾既有计划用只读的 plan_read，禁止用 plan_save 重写一遍来代替读取。规划前若存在影响方向的关键不确定点，先用 ask_user 工具向作者提问（给出 2-4 个候选方向），拿到回答再规划；禁止在回复正文里罗列问题和选项让作者「回复数字选择」。产出规划文档时必须调用 plan_save 把完整计划写入「计划」文件夹；plan_save 落盘后本次规划任务即完成，正文只允许一句话交代已写入/已更新哪份计划，禁止复述计划内容。作者回答提问后是修订既有计划（plan_save 带 planId），不是重新生成一份。只改计划名字用 plan_rename，作者要求删除某份计划用 plan_delete，两者都禁止用 plan_save 另存新副本。如果后续还需要切换到 Build 执行写作，再调用 plan_exit 提交执行步骤等待用户确认。不要输出“我现在开始写”之类的执行承诺，也不要在正文里复述或讨论本模式的规则。`,
   build: `当前模式：Build（执行）。
 你可以调用全部授权工具完成任务。写入类操作会直接落库并生成 diff 供用户审阅；高危操作会触发审批。执行完毕用不超过 2 句话的纯文本总结结果即可，不要罗列细节。`,
   review: `当前模式：Review（审阅）。
@@ -130,7 +131,7 @@ async function buildPlanFolderDigest(userId: string, novelId: string): Promise<s
   }
 
   const lines = plans.map((plan) => `《${plan.title}》 planId=${plan.id}`)
-  return `计划文件夹里的既有计划（修订用 plan_save 带 planId，改名用 plan_rename，删除用 plan_delete）：
+  return `计划文件夹里的既有计划（查看内容用 plan_read，修订用 plan_save 带 planId，改名用 plan_rename，删除用 plan_delete）：
 ${lines.join('\n')}`
 }
 
@@ -157,6 +158,22 @@ async function buildCoverCandidateDigest(userId: string, novelId: string): Promi
 ${lines.join('\n')}`
 }
 
+/** 会话待办清单摘要：续跑/新一轮任务时让模型接上上次的待办进度。
+ * 注入在历史对话之后（而非 system 中部）：历史里残留着旧任务的待办痕迹，
+ * 曾导致模型被带偏、把旧清单当作当前状态（“继续”后回去重写早已完成的章节） */
+async function buildTodoDigest(sessionId: string): Promise<string | null> {
+  const items = await loadSessionTodoItems(sessionId)
+
+  if (items.length === 0) {
+    return null
+  }
+
+  const unfinished = items.filter((item) => item.status !== 'completed').length
+  return `[系统] 当前会话的任务待办清单最新状态（${items.length - unfinished}/${items.length} 已完成）：
+${renderTodoItems(items)}
+注意：这是待办清单的唯一真实状态，历史对话中出现的任何旧待办清单、旧进度数字均已过时作废，一律以本清单为准。标记为 [x] 的项已真实完成，严禁重做；用 todo_write 全量更新状态。${unfinished > 0 ? '\n清单里还有未完成项：除非作者提出了新任务，否则请从第一条未完成项接着执行（先用 chapter_read 等工具核实它的实际进度再动笔）。' : ''}`
+}
+
 /** 把持久化的 AgentMessage.parts 还原为对话文本（工具轨迹压缩为一行，封面类保留 coverAssetId 供跨轮引用） */
 function partsToPlainText(parts: AgentMessagePart[]): string {
   return parts
@@ -165,6 +182,10 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
         return part.text
       }
       if (part.type === 'tool-call') {
+        // todo_write 的旧进度数字（如“待办 1/5”）会污染模型对当前状态的判断，压缩时不保留
+        if (part.toolName === 'todo_write') {
+          return '[调用工具 todo_write：更新了当时的待办清单（该状态已过时，以最新待办快照为准）]'
+        }
         const coverIds =
           part.display?.kind === 'coverImages' ? part.display.images.map((image) => image.id).join('、') : ''
         return `[调用工具 ${part.toolName}${part.summary ? `：${part.summary}` : ''}${coverIds ? `，coverAssetId：${coverIds}` : ''}]`
@@ -228,11 +249,12 @@ export type AssembleContextInput = {
 }
 
 export async function assembleContext(input: AssembleContextInput): Promise<ChatMessage[]> {
-  const [ruleBundle, memoryDigest, planDigest, coverDigest, history, chapter, novelTags] = await Promise.all([
+  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, history, chapter, novelTags] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
     buildStoryMemoryDigest(input.novelId),
     buildPlanFolderDigest(input.userId, input.novelId),
     buildCoverCandidateDigest(input.userId, input.novelId),
+    buildTodoDigest(input.sessionId),
     loadSessionHistory(input.sessionId, input.runId, 16000),
     input.chapterId
       ? prisma.chapter.findFirst({
@@ -281,6 +303,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
   return [
     { role: 'system', content: systemPrompt },
     ...history,
+    // 待办快照紧跟在历史之后、用户指令之前：位置越靠近当前轮次权重越高，
+    // 避免被历史里旧任务的待办痕迹带偏（尤其是“继续”这类短指令）
+    ...(todoDigest ? [{ role: 'user' as const, content: todoDigest }] : []),
     { role: 'user', content: intentSections.join('\n\n') },
   ]
 }

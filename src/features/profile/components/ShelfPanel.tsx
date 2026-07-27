@@ -43,21 +43,21 @@ export default function ShelfPanel({ items, progressMap, onOpenNovel, onDiscover
             key={item.key}
             type="button"
             onClick={() => item.novelId && onOpenNovel(item.novelId)}
-            className="group text-left"
+            className="group min-w-0 text-left"
           >
-            <div className="hover-lift overflow-hidden rounded-[var(--radius-lg)] bg-[var(--surface-muted)] p-2 transition-colors group-hover:bg-[var(--surface-default)]">
+            <div className="hover-lift">
               {item.coverUrl ? (
                 <img
                   src={item.coverUrl}
                   alt={item.title}
-                  className="aspect-[3/4] w-full rounded-[var(--radius-md)] object-cover"
+                  className="aspect-[3/4] w-full rounded-[var(--radius-lg)] object-cover"
                 />
               ) : (
-                <div className="flex aspect-[3/4] w-full flex-col justify-end rounded-[var(--radius-md)] bg-[var(--surface-default)] p-3">
+                <div className="flex aspect-[3/4] w-full flex-col justify-end rounded-[var(--radius-lg)] bg-[var(--surface-muted)] p-3">
                   <p className="line-clamp-4 text-xs font-medium text-[var(--text-primary)]">{item.title}</p>
                 </div>
               )}
-              <div className="px-1 pb-1 pt-2.5">
+              <div className="pt-2">
                 <p className="line-clamp-2 text-sm font-medium leading-6 text-[var(--text-primary)]">{item.title}</p>
                 {progress && percent !== null ? (
                   <div className="mt-2 space-y-1.5">

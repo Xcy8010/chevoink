@@ -8,6 +8,7 @@ import {
 } from '@/features/discover/api'
 import { getAllReadingProgress, type ReadingProgressEntry } from '@/features/home/reading-progress'
 import { readContinueCards, writeContinueCards } from '@/features/home/continue-cache'
+import { buildDailyPicks } from '@/features/home/daily-picks'
 import { buildWeeklyPicks } from '@/features/home/weekly-picks'
 import { PRIMARY_CATEGORIES } from '@/lib/novel-tags'
 import type { NovelCard, Post, TopicSummary } from '../../../shared/contracts/index.js'
@@ -108,9 +109,12 @@ export function useHomeData() {
     // Banner：每周力荐算法选出固定 5 本（UTC+8 自然周重置），候选范围覆盖全部榜单
     const bannerNovels = buildWeeklyPicks(dedupeNovels([...recommended, ...latest, ...all]), 5)
 
-    // 精选推荐：服务端热度推荐去掉 Banner 已展示的
+    // 精选好书：每日（UTC+8）按阅读人数/评论/章节更新等信号选出固定 4 本；优先避开 Banner 已展示的，不足时再用全量池补齐
     const bannerIds = new Set(bannerNovels.map((novel) => novel.id))
-    const featuredNovels = dedupeNovels([...recommended, ...latest]).filter((novel) => !bannerIds.has(novel.id))
+    const featuredNovels = dedupeNovels([
+      ...buildDailyPicks(all.filter((novel) => !bannerIds.has(novel.id)), 4),
+      ...buildDailyPicks(all, 4),
+    ]).slice(0, 4)
 
     // 榜单：优先用服务端加权榜单，缺失时回退到客户端排序
     const rankingHot = serverHot.length > 0 ? serverHot.slice(0, 10) : dedupeNovels([...recommended, ...all]).slice(0, 10)

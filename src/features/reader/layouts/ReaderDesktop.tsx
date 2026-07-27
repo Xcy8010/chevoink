@@ -1,6 +1,7 @@
 import {
   BookOpen,
   ChevronLeft,
+  Headphones,
   ListOrdered,
   MessageSquare,
   PanelLeftClose,
@@ -10,7 +11,7 @@ import {
   Settings2,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -19,6 +20,8 @@ import ReaderCommentsPanel from '../components/ReaderCommentsPanel'
 import ReaderDirectory from '../components/ReaderDirectory'
 import ReaderProgressBar from '../components/ReaderProgressBar'
 import ReaderSettingsPopover from '../components/ReaderSettingsPopover'
+import TtsControlSheet from '../tts/TtsControlSheet'
+import TtsMiniBar from '../tts/TtsMiniBar'
 import type { ReaderState } from '../useReaderState'
 
 type ReaderDesktopProps = {
@@ -36,6 +39,39 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
   const [commentsOpen, setCommentsOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [immersive, setImmersive] = useState(false)
+  const [ttsPanelOpen, setTtsPanelOpen] = useState(false)
+  // 进出沉浸前记录视口第一个可见段落，布局重建后恢复到同一阅读位置
+  const immersiveAnchorRef = useRef<number | null>(null)
+
+  const toggleImmersive = useCallback(
+    (next: boolean) => {
+      immersiveAnchorRef.current = null
+      const container = state.contentScrollRef.current
+      if (container) {
+        const containerTop = container.getBoundingClientRect().top
+        const nodes = container.querySelectorAll<HTMLElement>('[data-tts-p]')
+        for (const node of nodes) {
+          if (node.getBoundingClientRect().bottom > containerTop + 8) {
+            immersiveAnchorRef.current = Number(node.dataset.ttsP)
+            break
+          }
+        }
+      }
+      setImmersive(next)
+    },
+    [state.contentScrollRef],
+  )
+
+  // 布局重建完成后滚回锚点段落（绘制前执行，避免闪动）
+  useLayoutEffect(() => {
+    const anchor = immersiveAnchorRef.current
+    if (anchor === null) return
+    immersiveAnchorRef.current = null
+    const node = state.contentScrollRef.current?.querySelector<HTMLElement>(
+      `[data-tts-p="${anchor}"]`,
+    )
+    node?.scrollIntoView({ block: 'start' })
+  }, [immersive, state.contentScrollRef])
 
   const tone = state.toneOption
   const { previousHref, nextHref } = state
@@ -44,7 +80,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setImmersive(false)
+        toggleImmersive(false)
         return
       }
 
@@ -64,7 +100,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [previousHref, nextHref, navigate])
+  }, [previousHref, nextHref, navigate, toggleImmersive])
 
   const headerIconButton = (
     label: string,
@@ -89,6 +125,26 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
     </button>
   )
 
+  /* 听书控制面板浮层（桌面端用卡片浮层而非底部抽屉） */
+  const ttsFloatingPanel = ttsPanelOpen ? (
+    <>
+      <div className="fixed inset-0 z-40" onClick={() => setTtsPanelOpen(false)} />
+      <div className="fixed bottom-24 left-1/2 z-50 w-[380px] -translate-x-1/2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-primary)] shadow-[var(--shadow-lg)]">
+        <TtsControlSheet tts={state.tts} />
+      </div>
+    </>
+  ) : null
+
+  /* 听书迷你条：居中悬浮胶囊 */
+  const ttsMiniBar = (
+    <TtsMiniBar
+      tts={state.tts}
+      tone={tone}
+      onExpand={() => setTtsPanelOpen(true)}
+      className="absolute bottom-5 left-1/2 z-30 w-[min(480px,92%)] -translate-x-1/2 rounded-[var(--radius-pill)] border shadow-[var(--shadow-lg)]"
+    />
+  )
+
   // 沉浸模式：隐藏三栏与顶栏，正文居中 720px，仅保留进度条
   if (immersive) {
     return (
@@ -100,7 +156,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
         <div className="absolute right-5 top-5 z-20">
           <button
             type="button"
-            onClick={() => setImmersive(false)}
+            onClick={() => toggleImmersive(false)}
             className="inline-flex h-10 items-center gap-2 rounded-[var(--radius-pill)] border px-4 text-sm backdrop-blur transition-colors press-feedback"
             style={{
               borderColor: 'color-mix(in srgb, currentColor 20%, transparent)',
@@ -118,18 +174,21 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
         >
           <div
             className="mx-auto max-w-[720px] px-8 py-14"
-            onDoubleClick={() => setImmersive(false)}
+            onDoubleClick={() => toggleImmersive(false)}
           >
             <ReaderArticle state={state} header="full" />
           </div>
         </div>
+
+        {ttsMiniBar}
+        {ttsFloatingPanel}
       </div>
     )
   }
 
   return (
     <div
-      className="-mt-4 flex min-h-0 flex-1 flex-col overflow-hidden md:-mt-6"
+      className="relative -mt-4 flex min-h-0 flex-1 flex-col overflow-hidden md:-mt-6"
       style={{ background: tone.background, color: tone.text }}
     >
       <ReaderProgressBar percent={state.progressPercent} />
@@ -163,6 +222,20 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
             () => setCommentsOpen((open) => !open),
             commentsOpen,
           )}
+          {state.tts.available
+            ? headerIconButton(
+                '听书',
+                <Headphones className="h-4.5 w-4.5" />,
+                () => {
+                  if (state.tts.isActive) {
+                    setTtsPanelOpen((open) => !open)
+                  } else {
+                    state.tts.start()
+                  }
+                },
+                state.tts.isActive,
+              )
+            : null}
           <div className="relative">
             {headerIconButton(
               '阅读设置',
@@ -179,7 +252,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
               onToneChange={state.setTone}
             />
           </div>
-          {headerIconButton('沉浸阅读（双击正文）', <BookOpen className="h-4.5 w-4.5" />, () => setImmersive(true))}
+          {headerIconButton('沉浸阅读（双击正文）', <BookOpen className="h-4.5 w-4.5" />, () => toggleImmersive(true))}
         </div>
       </header>
 
@@ -207,7 +280,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
         >
           <div
             className="mx-auto max-w-[760px] px-10 py-10"
-            onDoubleClick={() => setImmersive(true)}
+            onDoubleClick={() => toggleImmersive(true)}
             title="双击进入沉浸阅读"
           >
             <ReaderArticle state={state} header="full" onOpenComments={() => setCommentsOpen(true)} />
@@ -226,6 +299,9 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
           </aside>
         ) : null}
       </div>
+
+      {ttsMiniBar}
+      {ttsFloatingPanel}
     </div>
   )
 }

@@ -20,8 +20,8 @@ export function getWeekKey(now = new Date()): string {
   return `week-${weekIndex}`
 }
 
-/** 确定性字符串哈希（FNV-1a），用于给"作品 × 周"生成稳定的轮换扰动 */
-function hashSeed(text: string): number {
+/** 确定性字符串哈希（FNV-1a），用于给“作品 × 周期”生成稳定的轮换扰动 */
+export function hashSeed(text: string): number {
   let hash = 0x811c9dc5
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index)
@@ -31,7 +31,7 @@ function hashSeed(text: string): number {
 }
 
 /** 更新活跃度：越近更新得分越高，两周外快速衰减 */
-function updateRecencyScore(novel: NovelCard, now: number): number {
+export function updateRecencyScore(novel: NovelCard, now: number): number {
   const lastPublished = novel.lastPublishedAt ?? novel.updatedAt
   const elapsedDays = Math.max(0, (now - new Date(lastPublished).getTime()) / DAY_MS)
   if (elapsedDays <= 1) return 40
@@ -42,7 +42,7 @@ function updateRecencyScore(novel: NovelCard, now: number): number {
 }
 
 /** 篇幅得分：有一定体量的作品更值得力推，10 万字后收益封顶 */
-function lengthScore(novel: NovelCard): number {
+export function lengthScore(novel: NovelCard): number {
   const words = Math.max(0, novel.wordCount)
   const chapters = Math.max(0, novel.chapterCount)
   return Math.min(20, words / 5000) * 0.7 + Math.min(10, chapters) * 0.3

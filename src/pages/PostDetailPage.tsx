@@ -184,7 +184,7 @@ export default function PostDetailPage() {
                     <p className="mt-1.5 flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
                       <span className="truncate">{post.author.nickname}</span>
                       <span className="shrink-0">{formatCompactCount(post.commentCount)} 评论</span>
-                      <span className="ml-auto shrink-0">{formatRelativeTime(post.updatedAt)}</span>
+                      <span className="ml-auto shrink-0">{formatRelativeTime(post.createdAt)}</span>
                     </p>
                   </Link>
                 ))}

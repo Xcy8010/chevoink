@@ -8,6 +8,8 @@ import SettingsPage from '@/app/routes/SettingsPage'
 import AuthorPage from '@/pages/AuthorPage'
 import CommunityPage from '@/pages/CommunityPage'
 import DiscoverPage from '@/pages/DiscoverPage'
+import FollowListPage from '@/pages/FollowListPage'
+import LikesListPage from '@/pages/LikesListPage'
 import Home from '@/pages/Home'
 import MessagesPage from '@/pages/MessagesPage'
 import NovelDetailPage from '@/pages/NovelDetailPage'
@@ -115,10 +117,44 @@ export const appRoutes: AppRouteDefinition[] = [
     ),
   },
   {
+    path: '/me/follows',
+    title: '看看你关注的人和关注你的人',
+    description: '关注与粉丝集中在同一页管理，随时回访、回关或取消关注。',
+    element: (
+      <RequireAuthRoute
+        title="登录后即可查看关注与粉丝"
+        description="登录后，你关注的人和关注你的人都会展示在这里。"
+      >
+        <FollowListPage />
+      </RequireAuthRoute>
+    ),
+  },
+  {
+    path: '/me/likes',
+    title: '看看你的内容收到了哪些互动',
+    description: '收到的赞、收藏和评论都会汇总在这里。',
+    element: (
+      <RequireAuthRoute
+        title="登录后即可查看互动消息"
+        description="登录后，你收到的赞、收藏和评论会展示在这里。"
+      >
+        <LikesListPage />
+      </RequireAuthRoute>
+    ),
+  },
+  {
     path: '/author/:authorId',
-    title: '认识这位作者，也看看他正在写什么',
+    title: '作者主页',
     description: '在作者主页里集中浏览简介、作品和最近动态，决定要不要继续关注。',
     element: <AuthorPage />,
+    useShell: false,
+  },
+  {
+    path: '/author/:authorId/follows',
+    title: '作者的关注与粉丝',
+    description: '查看这位作者关注的人和关注 TA 的人。',
+    element: <FollowListPage />,
+    useShell: false,
   },
   {
     path: '/post/:postId',

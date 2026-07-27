@@ -14,6 +14,7 @@ import type {
   TopicSummary,
   Comment,
 } from '../../../shared/contracts/index.js'
+import { splitTtsParagraphs } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
 
 type RequestDataOptions = RequestInit & {
@@ -202,8 +203,7 @@ export function getCommentBody(comment: Pick<Comment, 'content'>): string {
   return normalized && normalized.length > 0 ? normalized : '这条评论暂时没有可显示的正文。'
 }
 
+// 委托 shared 的切分实现：听书切批与正文渲染必须共享同一段落边界
 export function splitReaderParagraphs(content: string | null | undefined): string[] {
-  const normalized = content?.trim()
-
-  return normalized ? normalized.split('\n\n').map((paragraph) => paragraph.trim()).filter(Boolean) : []
+  return splitTtsParagraphs(content)
 }

@@ -11,9 +11,13 @@ import type {
   CoverAsset,
   CreateChapterRequest,
   CreateCommentRequest,
+  UpdateCommentRequest,
   CreateNovelRequest,
   CreatePostRequest,
+  FollowUserItem,
   HotSearchPayload,
+  InteractionBadges,
+  InteractionItem,
   Message,
   Novel,
   NovelCard,
@@ -21,7 +25,11 @@ import type {
   Pagination,
   Post,
   PostDetailPayload,
+  PrivacyLevel,
+  PrivacySettings,
+  ProfileVisibility,
   ReaderPayload,
+  ReceivedLikeItem,
   SearchResultPayload,
   SearchSuggestItem,
   SearchSuggestPayload,
@@ -32,6 +40,7 @@ import type {
   UpdateNovelRequest,
   User,
   UserMePayload,
+  UserReplyItem,
   UserSummary,
   Visibility,
 } from '../../shared/contracts/index.js'
@@ -281,6 +290,7 @@ function toComment(record: any): Comment {
     parentId: record.parentId ?? null,
     rootId: record.rootId ?? null,
     content: record.content,
+    rating: record.rating ?? null,
     likeCount: record.likeCount ?? 0,
     replyCount: record.replyCount ?? 0,
     auditStatus: record.auditStatus,
@@ -342,8 +352,9 @@ function toConversation(record: any, viewerUserId: string): Conversation {
   return {
     id: record.id,
     type: record.type,
-    title: record.title ?? null,
-    avatarUrl: record.avatarUrl ?? null,
+    // 直聊会话未设标题/头像时，回退到对方昵称与头像，保证双方视角各自正确
+    title: record.title ?? (record.type === 'direct' ? counterpart?.nickname ?? null : null),
+    avatarUrl: record.avatarUrl ?? (record.type === 'direct' ? counterpart?.avatarUrl ?? null : null),
     unreadCount: record.unreadCount ?? 0,
     lastMessagePreview: record.lastMessagePreview ?? null,
     lastMessageAt: toIso(record.lastMessageAt),
@@ -353,6 +364,47 @@ function toConversation(record: any, viewerUserId: string): Conversation {
     createdAt: toIso(record.createdAt) ?? nowIso(),
     updatedAt: toIso(record.updatedAt) ?? nowIso(),
   }
+}
+
+/** 给直聊会话回填与对方的关注关系标记；未互关的会话在前端归入「陌生消息」 */
+async function attachDirectFollowRelations(conversations: Conversation[], viewerUserId: string): Promise<Conversation[]> {
+  const counterpartIds = conversations
+    .filter((item) => item.type === 'direct' && item.counterpart && item.counterpart.id !== viewerUserId)
+    .map((item) => String(item.counterpart!.id))
+
+  if (counterpartIds.length === 0) {
+    return conversations
+  }
+
+  const [followingRecords, followerRecords] = await Promise.all([
+    prisma.userFollow.findMany({
+      where: { followerId: viewerUserId, followingId: { in: counterpartIds } },
+      select: { followingId: true },
+    }),
+    prisma.userFollow.findMany({
+      where: { followerId: { in: counterpartIds }, followingId: viewerUserId },
+      select: { followerId: true },
+    }),
+  ])
+
+  const followingIds = new Set(followingRecords.map((record) => record.followingId))
+  const followerIds = new Set(followerRecords.map((record) => record.followerId))
+
+  return conversations.map((item) => {
+    if (item.type !== 'direct' || !item.counterpart || item.counterpart.id === viewerUserId) {
+      return item
+    }
+
+    const viewerFollowsCounterpart = followingIds.has(String(item.counterpart.id))
+    const counterpartFollowsViewer = followerIds.has(String(item.counterpart.id))
+
+    return {
+      ...item,
+      viewerFollowsCounterpart,
+      counterpartFollowsViewer,
+      isMutualFollow: viewerFollowsCounterpart && counterpartFollowsViewer,
+    }
+  })
 }
 
 function toMessage(record: any): Message {
@@ -517,10 +569,10 @@ export async function listTopicsData(): Promise<{ items: TopicSummary[] }> {
 
 export async function getHomePayloadData() {
   const [novelPool, hotTopics, hotPosts] = await prisma.$transaction([
-    // 候选池：只取公开且已发布/已完结的作品，榜单在内存中加权计算
+    // 候选池：只取公开且已发布/已完结、且至少有一个公开章节的作品，榜单在内存中加权计算
     prisma.novel.findMany({
       include: novelInclude,
-      where: { visibility: 'public', status: { in: ['published', 'archived'] } },
+      where: searchableNovelWhere,
       orderBy: [{ lastPublishedAt: 'desc' }, { updatedAt: 'desc' }],
       take: 120,
     }),
@@ -593,6 +645,8 @@ export async function listNovelsData(
   if (options?.publishedOnly) {
     where.visibility = 'public'
     where.status = { in: ['published', 'archived'] }
+    // 没有任何公开章节的作品不对外展示（例如发布后又全部改成仅自己可见）
+    where.chapters = { some: publicChapterWhere }
   }
   if (options?.tag) {
     where.tagNames = { has: options.tag }
@@ -743,6 +797,18 @@ export async function publishNovelData(
       })
     }
 
+    // 发布前置校验：作品至少要有一个公开的已发布章节，否则 0 章节/全私密的作品会对外展示空壳
+    const publicChapterCount = await tx.chapter.count({
+      where: { novelId, ...publicChapterWhere },
+    })
+    if (publicChapterCount === 0) {
+      throw new DataAccessError(
+        400,
+        'VALIDATION_ERROR',
+        '发布失败：请至少选择一个章节并设为公开，读者才能看到这部作品。',
+      )
+    }
+
     const novel = await tx.novel.update({
       where: { id: novelId },
       data: {
@@ -792,7 +858,7 @@ export async function getNovelDetailData(
         OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }],
       }
 
-  const [chapterRecords, commentRecords, relatedRecords] = await prisma.$transaction([
+  const [chapterRecords, commentRecords, relatedRecords, authorPublicNovelCount, ratingAggregate] = await prisma.$transaction([
     prisma.chapter.findMany({
       where: chapterWhere,
       select: chapterListItemSelect,
@@ -810,17 +876,40 @@ export async function getNovelDetailData(
     prisma.novel.findMany({
       where: {
         id: { not: novelId },
-        status: 'published',
-        visibility: 'public',
+        ...searchableNovelWhere,
       },
       include: novelInclude,
       orderBy: [{ updatedAt: 'desc' }],
       take: 4,
     }),
+    // 作者卡片的「X 部作品」只统计对外可见的作品，与作者主页口径一致
+    prisma.novel.count({
+      where: { authorId: novel.authorId, ...searchableNovelWhere },
+    }),
+    // 作品评分聚合：只统计带评星的作品根评论
+    prisma.comment.aggregate({
+      where: { targetType: 'novel', targetId: novelId, rating: { not: null } },
+      _avg: { rating: true },
+      _count: { rating: true },
+    }),
   ])
 
+  const viewerFavorite = viewerUserId
+    ? await prisma.novelFavorite.findUnique({
+        where: { novelId_userId: { novelId, userId: viewerUserId } },
+        select: { id: true },
+      })
+    : null
+
+  const novelPayload = toNovel(novel, viewerUserId)
+  novelPayload.author.novelCount = authorPublicNovelCount
+  novelPayload.ratingCount = ratingAggregate._count.rating
+  novelPayload.ratingAverage =
+    ratingAggregate._avg.rating == null ? null : Math.round(ratingAggregate._avg.rating * 10) / 10
+  novelPayload.favoritedByViewer = Boolean(viewerFavorite)
+
   return {
-    novel: toNovel(novel, viewerUserId),
+    novel: novelPayload,
     chapters: chapterRecords.map(toChapterListItem),
     topComments: commentRecords.map(toComment),
     relatedNovels: relatedRecords.map((record) => toNovelCard(record)),
@@ -1179,6 +1268,24 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
   const targetIds = buildCommentTargetIds(input.targetType, input.targetId)
   ensureNonEmptyText(input.content, 'content')
 
+  // 作品根评论必须携带 1-5 星评分；回复与其他目标不记评分
+  const isNovelRootComment = input.targetType === 'novel' && !input.parentId
+  if (isNovelRootComment && (!Number.isInteger(input.rating) || input.rating! < 1 || input.rating! > 5)) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '请先为作品打分（1-5 星）。')
+  }
+  const rating = isNovelRootComment ? input.rating! : null
+
+  // 作品根评论一人只能发一条，重复发表引导去编辑/删除
+  if (isNovelRootComment) {
+    const existing = await prisma.comment.findFirst({
+      where: { targetType: 'novel', targetId: input.targetId, userId, parentId: null },
+      select: { id: true },
+    })
+    if (existing) {
+      throw new DataAccessError(409, 'COMMENT_EXISTS', '你已点评过这部作品，可以在自己的评论上编辑或删除后重新发表。')
+    }
+  }
+
   const comment = await prisma.$transaction(async (tx) => {
     const created = await tx.comment.create({
       data: {
@@ -1188,6 +1295,7 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
         parentId: input.parentId ?? null,
         rootId: input.parentId ?? null,
         content: input.content,
+        rating,
         auditStatus: 'pending',
         ...targetIds,
       },
@@ -1251,6 +1359,91 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
   })
 
   return toComment(comment)
+}
+
+/** 编辑自己的评论；作品根评论可同步修改评星 */
+export async function updateCommentData(
+  userId: string,
+  commentId: string,
+  input: UpdateCommentRequest,
+): Promise<Comment | null> {
+  const existing = await prisma.comment.findUnique({ where: { id: commentId } })
+  if (!existing) {
+    return null
+  }
+  if (existing.userId !== userId) {
+    throw new DataAccessError(403, 'FORBIDDEN', '只能编辑自己的评论。')
+  }
+  ensureNonEmptyText(input.content, 'content')
+
+  const isNovelRootComment = existing.targetType === 'novel' && !existing.parentId
+  if (
+    isNovelRootComment &&
+    input.rating !== undefined &&
+    (!Number.isInteger(input.rating) || input.rating < 1 || input.rating > 5)
+  ) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '请先为作品打分（1-5 星）。')
+  }
+
+  const updated = await prisma.comment.update({
+    where: { id: commentId },
+    data: {
+      content: input.content,
+      ...(isNovelRootComment && input.rating !== undefined ? { rating: input.rating } : {}),
+    },
+    include: commentInclude,
+  })
+
+  return toComment(updated)
+}
+
+/** 删除自己的评论（连同它的回复与点赞），并回算目标与父评论计数 */
+export async function deleteCommentData(
+  userId: string,
+  commentId: string,
+): Promise<{ deletedCount: number } | null> {
+  const existing = await prisma.comment.findUnique({ where: { id: commentId } })
+  if (!existing) {
+    return null
+  }
+  if (existing.userId !== userId) {
+    throw new DataAccessError(403, 'FORBIDDEN', '只能删除自己的评论。')
+  }
+
+  const deletedCount = await prisma.$transaction(async (tx) => {
+    const descendants = await tx.comment.findMany({
+      where: { OR: [{ parentId: commentId }, { rootId: commentId }] },
+      select: { id: true },
+    })
+    const ids = [commentId, ...descendants.map((item) => item.id)]
+
+    await tx.commentLike.deleteMany({ where: { commentId: { in: ids } } })
+    await tx.comment.deleteMany({ where: { id: { in: ids } } })
+
+    // 用剩余条数回算计数，避免 decrement 出现负数
+    const remaining = await tx.comment.count({
+      where: { targetType: existing.targetType, targetId: existing.targetId },
+    })
+    if (existing.targetType === 'post') {
+      await tx.post.updateMany({ where: { id: existing.targetId }, data: { commentCount: remaining } })
+    } else if (existing.targetType === 'chapter') {
+      await tx.chapter.updateMany({ where: { id: existing.targetId }, data: { commentCount: remaining } })
+    } else if (existing.targetType === 'novel') {
+      await tx.novel.updateMany({ where: { id: existing.targetId }, data: { commentCount: remaining } })
+    }
+
+    if (existing.parentId) {
+      const parentReplies = await tx.comment.count({ where: { parentId: existing.parentId } })
+      await tx.comment.updateMany({
+        where: { id: existing.parentId },
+        data: { replyCount: parentReplies },
+      })
+    }
+
+    return ids.length
+  })
+
+  return { deletedCount }
 }
 
 /** 查询 viewer 已点赞的评论 id 集合 */
@@ -1365,6 +1558,50 @@ export async function setPostBookmarkData(
   })
 }
 
+export async function setNovelFavoriteData(
+  userId: string,
+  novelId: string,
+  favorited: boolean,
+): Promise<{ favorited: boolean; favoriteCount: number } | null> {
+  await ensureUserExists(userId)
+  const novel = await prisma.novel.findUnique({ where: { id: novelId }, select: { id: true } })
+  if (!novel) {
+    return null
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (favorited) {
+      const existing = await tx.novelFavorite.findUnique({
+        where: { novelId_userId: { novelId, userId } },
+      })
+      if (!existing) {
+        await tx.novelFavorite.create({ data: { novelId, userId } })
+        await tx.novel.update({ where: { id: novelId }, data: { favoriteCount: { increment: 1 } } })
+      }
+    } else {
+      const deleted = await tx.novelFavorite.deleteMany({ where: { novelId, userId } })
+      if (deleted.count > 0) {
+        await tx.novel.update({ where: { id: novelId }, data: { favoriteCount: { decrement: 1 } } })
+      }
+    }
+
+    const updated = await tx.novel.findUnique({ where: { id: novelId }, select: { favoriteCount: true } })
+    return { favorited, favoriteCount: Math.max(0, updated?.favoriteCount ?? 0) }
+  })
+}
+
+/** 我收藏的作品列表（按收藏时间倒序，只返回仍对外可见的作品） */
+export async function listFavoriteNovelsData(userId: string): Promise<NovelCard[]> {
+  const favorites = await prisma.novelFavorite.findMany({
+    where: { userId, novel: { visibility: 'public' } },
+    orderBy: { createdAt: 'desc' },
+    include: { novel: { include: novelInclude } },
+    take: 100,
+  })
+
+  return favorites.map((item) => toNovelCard(item.novel, userId))
+}
+
 export async function setCommentLikeData(
   userId: string,
   commentId: string,
@@ -1430,10 +1667,18 @@ export async function listPostsData(
   }
 }
 
-/** 公开可搜索的作品过滤条件：与首页榜单候选池口径一致 */
+/** 对读者可见的公开章节条件：已发布且公开 */
+const publicChapterWhere = {
+  status: 'published',
+  visibility: 'public',
+} satisfies Prisma.ChapterWhereInput
+
+/** 公开可搜索的作品过滤条件：与首页榜单候选池口径一致；
+ * 额外要求至少有一个公开章节，避免发布后又全部设为仅自己可见的空壳作品对外展示 */
 const searchableNovelWhere = {
   visibility: 'public',
   status: { in: ['published', 'archived'] },
+  chapters: { some: publicChapterWhere },
 } satisfies Prisma.NovelWhereInput
 
 function buildNovelKeywordWhere(keyword: string): Prisma.NovelWhereInput {
@@ -1447,8 +1692,70 @@ function buildNovelKeywordWhere(keyword: string): Prisma.NovelWhereInput {
       { displayTitle: { contains: keyword, mode: 'insensitive' } },
       { tagNames: { has: keyword } },
       ...(matchedTags.length > 0 ? [{ tagNames: { hasSome: matchedTags } }] : []),
+      // 搜作者名也能带出他的作品
+      { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
     ],
   }
+}
+
+/** 帖子关键词条件：正文命中或发帖人昵称命中（搜用户名也能带出他的讨论） */
+function buildPostKeywordWhere(keyword: string): Prisma.PostWhereInput {
+  return {
+    OR: [
+      { content: { contains: keyword, mode: 'insensitive' } },
+      { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
+    ],
+  }
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** 用户昵称模糊检索：先用「整词包含 + 单字包含」宽口径召回候选，
+ * 再用子序列正则打分排序，让搜“叙远”也能匹配到“叙尘远”这类不连续命中的昵称；
+ * 不再要求必须有公开作品，普通用户也能被搜到 */
+async function searchUsersByNickname(keyword: string, take: number) {
+  const chars = [...new Set(keyword.split('').filter((char) => char.trim()))].slice(0, 8)
+  if (chars.length === 0) {
+    return []
+  }
+
+  const candidates = await prisma.user.findMany({
+    where: {
+      OR: [
+        { nickname: { contains: keyword, mode: 'insensitive' } },
+        ...chars.map((char) => ({ nickname: { contains: char, mode: 'insensitive' as const } })),
+      ],
+    },
+    orderBy: [{ followerCount: 'desc' }, { novelCount: 'desc' }],
+    take: 80,
+  })
+
+  const lowerKeyword = keyword.toLowerCase()
+  const subsequencePattern = new RegExp(chars.map((char) => escapeRegExp(char)).join('.*'), 'i')
+
+  return candidates
+    .map((user) => {
+      const nickname = user.nickname.toLowerCase()
+      const hitCount = chars.filter((char) => nickname.includes(char.toLowerCase())).length
+      // 整词包含 > 子序列命中 > 多数字符命中，其余候选丢弃避免单字误命中满屏噪声
+      const score = nickname.includes(lowerKeyword)
+        ? 3
+        : subsequencePattern.test(user.nickname)
+          ? 2
+          : hitCount >= Math.max(2, Math.ceil(chars.length / 2))
+            ? 1
+            : 0
+      return { user, score, hitCount }
+    })
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score || b.hitCount - a.hitCount || b.user.followerCount - a.user.followerCount,
+    )
+    .slice(0, take)
+    .map((entry) => entry.user)
 }
 
 /** 搜索联想：轻量返回书名 / 作者 / 帖子的前几条候选 */
@@ -1458,20 +1765,16 @@ export async function searchSuggestData(keyword: string): Promise<SearchSuggestP
     return { items: [] }
   }
 
-  const [novels, authors, posts] = await prisma.$transaction([
+  const [novels, authors, posts] = await Promise.all([
     prisma.novel.findMany({
       where: buildNovelKeywordWhere(normalized),
       include: novelInclude,
       orderBy: [{ viewCount: 'desc' }, { lastPublishedAt: 'desc' }],
       take: 5,
     }),
-    prisma.user.findMany({
-      where: { nickname: { contains: normalized, mode: 'insensitive' }, novels: { some: searchableNovelWhere } },
-      orderBy: [{ followerCount: 'desc' }, { novelCount: 'desc' }],
-      take: 3,
-    }),
+    searchUsersByNickname(normalized, 3),
     prisma.post.findMany({
-      where: { content: { contains: normalized, mode: 'insensitive' } },
+      where: buildPostKeywordWhere(normalized),
       include: postInclude,
       orderBy: [{ likeCount: 'desc' }, { createdAt: 'desc' }],
       take: 3,
@@ -1490,7 +1793,7 @@ export async function searchSuggestData(keyword: string): Promise<SearchSuggestP
       type: 'author' as const,
       id: user.id,
       text: user.nickname,
-      subText: '作者',
+      subText: user.isAuthor ? '作者' : '用户',
       imageUrl: user.avatarUrl ?? null,
     })),
     ...posts.map((post) => ({
@@ -1512,20 +1815,16 @@ export async function searchAllData(keyword: string): Promise<SearchResultPayloa
     return { novels: [], authors: [], posts: [] }
   }
 
-  const [novels, authors, posts] = await prisma.$transaction([
+  const [novels, authors, posts] = await Promise.all([
     prisma.novel.findMany({
       where: buildNovelKeywordWhere(normalized),
       include: novelInclude,
       orderBy: [{ viewCount: 'desc' }, { lastPublishedAt: 'desc' }],
       take: 20,
     }),
-    prisma.user.findMany({
-      where: { nickname: { contains: normalized, mode: 'insensitive' }, novels: { some: searchableNovelWhere } },
-      orderBy: [{ followerCount: 'desc' }, { novelCount: 'desc' }],
-      take: 8,
-    }),
+    searchUsersByNickname(normalized, 8),
     prisma.post.findMany({
-      where: { content: { contains: normalized, mode: 'insensitive' } },
+      where: buildPostKeywordWhere(normalized),
       include: postInclude,
       orderBy: [{ likeCount: 'desc' }, { createdAt: 'desc' }],
       take: 10,
@@ -1694,7 +1993,7 @@ export async function getMePayloadData(userId: string): Promise<UserMePayload> {
     ])
 
   return {
-    user: toUser(user),
+    user: { ...toUser(user), privacy: toPrivacySettings(user) },
     shelf: [],
     drafts: draftChapters.map((chapter) => ({
       id: `draft-${chapter.id}`,
@@ -1754,12 +2053,529 @@ export async function getMePayloadData(userId: string): Promise<UserMePayload> {
   }
 }
 
-export async function getUserByIdData(userId: string): Promise<User | null> {
+export async function getUserByIdData(userId: string, viewerUserId?: string | null): Promise<User | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
   })
 
-  return user ? toUser(user) : null
+  if (!user) {
+    return null
+  }
+
+  const payload = toUser(user)
+
+  // 作者主页展示的作品数只统计对外可见的作品，不含草稿/私密/无公开章节的作品
+  payload.novelCount = await prisma.novel.count({
+    where: { authorId: user.id, ...searchableNovelWhere },
+  })
+
+  // 登录态下查看他人主页时，补充“我是否已关注 TA”，驱动关注按钮状态
+  if (viewerUserId && viewerUserId !== user.id) {
+    const follow = await prisma.userFollow.findUnique({
+      where: { followerId_followingId: { followerId: viewerUserId, followingId: user.id } },
+      select: { id: true },
+    })
+    payload.followedByViewer = Boolean(follow)
+  }
+
+  // 本人带上隐私设置；任意查看者都带上各隐私区块的可见性，驱动前端隐藏对应入口
+  if (viewerUserId === user.id) {
+    payload.privacy = toPrivacySettings(user)
+  }
+  payload.visibility = await resolveProfileVisibility(user, viewerUserId ?? null)
+
+  return payload
+}
+
+export async function setUserFollowData(
+  viewerUserId: string,
+  targetUserId: string,
+  following: boolean,
+): Promise<{ following: boolean; followerCount: number } | null> {
+  await ensureUserExists(viewerUserId)
+
+  if (viewerUserId === targetUserId) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '不能关注自己。')
+  }
+
+  const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } })
+  if (!target) {
+    return null
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (following) {
+      const existing = await tx.userFollow.findUnique({
+        where: { followerId_followingId: { followerId: viewerUserId, followingId: targetUserId } },
+      })
+      if (!existing) {
+        await tx.userFollow.create({ data: { followerId: viewerUserId, followingId: targetUserId } })
+        await tx.user.update({ where: { id: targetUserId }, data: { followerCount: { increment: 1 } } })
+        await tx.user.update({ where: { id: viewerUserId }, data: { followingCount: { increment: 1 } } })
+      }
+    } else {
+      const deleted = await tx.userFollow.deleteMany({
+        where: { followerId: viewerUserId, followingId: targetUserId },
+      })
+      if (deleted.count > 0) {
+        await tx.user.update({ where: { id: targetUserId }, data: { followerCount: { decrement: 1 } } })
+        await tx.user.update({ where: { id: viewerUserId }, data: { followingCount: { decrement: 1 } } })
+      }
+    }
+
+    const updated = await tx.user.findUnique({ where: { id: targetUserId }, select: { followerCount: true } })
+    return { following, followerCount: Math.max(0, updated?.followerCount ?? 0) }
+  })
+}
+
+const PRIVACY_LEVELS: PrivacyLevel[] = ['public', 'private', 'mutual']
+
+function toPrivacySettings(user: any): PrivacySettings {
+  return {
+    followers: (user.privacyFollowers ?? 'public') as PrivacyLevel,
+    following: (user.privacyFollowing ?? 'public') as PrivacyLevel,
+    likes: (user.privacyLikes ?? 'public') as PrivacyLevel,
+    favorites: (user.privacyFavorites ?? 'public') as PrivacyLevel,
+    replies: (user.privacyReplies ?? 'public') as PrivacyLevel,
+  }
+}
+
+/** 互相关注判定：双向 follow 记录都存在 */
+async function areMutualFollows(userId: string, viewerUserId: string): Promise<boolean> {
+  const [a, b] = await Promise.all([
+    prisma.userFollow.findUnique({
+      where: { followerId_followingId: { followerId: viewerUserId, followingId: userId } },
+      select: { id: true },
+    }),
+    prisma.userFollow.findUnique({
+      where: { followerId_followingId: { followerId: userId, followingId: viewerUserId } },
+      select: { id: true },
+    }),
+  ])
+  return Boolean(a && b)
+}
+
+function canViewByLevel(level: PrivacyLevel, isSelf: boolean, isMutual: boolean): boolean {
+  if (isSelf || level === 'public') {
+    return true
+  }
+  if (level === 'mutual') {
+    return isMutual
+  }
+  return false
+}
+
+/** 计算目标用户各隐私区块对查看者的可见性；仅在确实需要时才查互关关系 */
+async function resolveProfileVisibility(targetUser: any, viewerUserId: string | null): Promise<ProfileVisibility> {
+  const isSelf = Boolean(viewerUserId && viewerUserId === targetUser.id)
+  const settings = toPrivacySettings(targetUser)
+  const levels = [settings.followers, settings.following, settings.likes, settings.favorites, settings.replies]
+  const needMutual = !isSelf && Boolean(viewerUserId) && levels.includes('mutual')
+  const isMutual = needMutual ? await areMutualFollows(targetUser.id, viewerUserId as string) : false
+
+  return {
+    followers: canViewByLevel(settings.followers, isSelf, isMutual),
+    following: canViewByLevel(settings.following, isSelf, isMutual),
+    likes: canViewByLevel(settings.likes, isSelf, isMutual),
+    favorites: canViewByLevel(settings.favorites, isSelf, isMutual),
+    replies: canViewByLevel(settings.replies, isSelf, isMutual),
+  }
+}
+
+/** 把一批关注关系记录映射为列表条目，并标记“查看者是否已关注对方/对方是否关注查看者” */
+async function toFollowUserItems(
+  records: Array<{ createdAt: Date; user: any }>,
+  viewerUserId: string | null,
+): Promise<FollowUserItem[]> {
+  const userIds = records.map((record) => record.user.id)
+  const followedIds = new Set<string>()
+  const followerIds = new Set<string>()
+
+  if (viewerUserId && userIds.length > 0) {
+    const [followingRows, followerRows] = await Promise.all([
+      prisma.userFollow.findMany({
+        where: { followerId: viewerUserId, followingId: { in: userIds } },
+        select: { followingId: true },
+      }),
+      prisma.userFollow.findMany({
+        where: { followerId: { in: userIds }, followingId: viewerUserId },
+        select: { followerId: true },
+      }),
+    ])
+    followingRows.forEach((row) => followedIds.add(row.followingId))
+    followerRows.forEach((row) => followerIds.add(row.followerId))
+  }
+
+  return records.map((record) => ({
+    ...toUserSummary(record.user),
+    followerCount: record.user.followerCount ?? 0,
+    followedByViewer: followedIds.has(record.user.id),
+    followsViewer: followerIds.has(record.user.id),
+    followedAt: toIso(record.createdAt) ?? nowIso(),
+  }))
+}
+
+export async function listUserFollowersData(
+  userId: string,
+  viewerUserId: string | null,
+): Promise<{ items: FollowUserItem[]; total: number; restricted?: boolean }> {
+  const target = await prisma.user.findUnique({ where: { id: userId } })
+  if (!target) {
+    return { items: [], total: 0 }
+  }
+
+  // 隐私拦截：目标用户把粉丝列表设为私密/仅互关时，无权查看者拿到 restricted 标记
+  const visibility = await resolveProfileVisibility(target, viewerUserId)
+  if (!visibility.followers) {
+    return { items: [], total: 0, restricted: true }
+  }
+
+  const records = await prisma.userFollow.findMany({
+    where: { followingId: userId },
+    include: { follower: true },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  })
+
+  const items = await toFollowUserItems(
+    records.map((record) => ({ createdAt: record.createdAt, user: record.follower })),
+    viewerUserId,
+  )
+  return { items, total: items.length }
+}
+
+export async function listUserFollowingData(
+  userId: string,
+  viewerUserId: string | null,
+): Promise<{ items: FollowUserItem[]; total: number; restricted?: boolean }> {
+  const target = await prisma.user.findUnique({ where: { id: userId } })
+  if (!target) {
+    return { items: [], total: 0 }
+  }
+
+  const visibility = await resolveProfileVisibility(target, viewerUserId)
+  if (!visibility.following) {
+    return { items: [], total: 0, restricted: true }
+  }
+
+  const records = await prisma.userFollow.findMany({
+    where: { followerId: userId },
+    include: { following: true },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  })
+
+  const items = await toFollowUserItems(
+    records.map((record) => ({ createdAt: record.createdAt, user: record.following })),
+    viewerUserId,
+  )
+  return { items, total: items.length }
+}
+
+/** 更新我的隐私设置：只改传入的维度，返回最新全量设置 */
+export async function updateMyPrivacyData(
+  userId: string,
+  input: Partial<PrivacySettings>,
+): Promise<PrivacySettings> {
+  await ensureUserExists(userId)
+
+  const fieldMap: Record<keyof PrivacySettings, string> = {
+    followers: 'privacyFollowers',
+    following: 'privacyFollowing',
+    likes: 'privacyLikes',
+    favorites: 'privacyFavorites',
+    replies: 'privacyReplies',
+  }
+
+  const data: Record<string, PrivacyLevel> = {}
+  for (const key of Object.keys(fieldMap) as Array<keyof PrivacySettings>) {
+    const value = input[key]
+    if (value === undefined) {
+      continue
+    }
+    if (!PRIVACY_LEVELS.includes(value)) {
+      throw new DataAccessError(400, 'VALIDATION_ERROR', '隐私级别不合法。')
+    }
+    data[fieldMap[key]] = value
+  }
+
+  if (Object.keys(data).length === 0) {
+    const user = await ensureUserExists(userId)
+    return toPrivacySettings(user)
+  }
+
+  const updated = await prisma.user.update({ where: { id: userId }, data: data as any })
+  return toPrivacySettings(updated)
+}
+
+/** 喜欢列表：用户赞过的帖子，受 favorites 隐私级别管控 */
+export async function listUserLikedPostsData(
+  userId: string,
+  viewerUserId: string | null,
+): Promise<{ items: Post[]; total: number; restricted?: boolean }> {
+  const target = await prisma.user.findUnique({ where: { id: userId } })
+  if (!target) {
+    throw new DataAccessError(404, 'USER_NOT_FOUND', '未找到用户。')
+  }
+
+  const visibility = await resolveProfileVisibility(target, viewerUserId)
+  if (!visibility.favorites) {
+    return { items: [], total: 0, restricted: true }
+  }
+
+  const records = await prisma.postLike.findMany({
+    where: { userId },
+    include: { post: { include: postInclude } },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+
+  const items = records.map((record) => toPost(record.post))
+  return { items, total: items.length }
+}
+
+/** 已回复列表：用户发出的帖子/作品/章节评论，受 replies 隐私级别管控 */
+export async function listUserRepliesData(
+  userId: string,
+  viewerUserId: string | null,
+): Promise<{ items: UserReplyItem[]; total: number; restricted?: boolean }> {
+  const target = await prisma.user.findUnique({ where: { id: userId } })
+  if (!target) {
+    throw new DataAccessError(404, 'USER_NOT_FOUND', '未找到用户。')
+  }
+
+  const visibility = await resolveProfileVisibility(target, viewerUserId)
+  if (!visibility.replies) {
+    return { items: [], total: 0, restricted: true }
+  }
+
+  const records = await prisma.comment.findMany({
+    where: { userId },
+    include: {
+      post: { select: { id: true, excerpt: true, content: true } },
+      novel: { select: { id: true, title: true, displayTitle: true } },
+      chapter: {
+        select: {
+          id: true,
+          title: true,
+          novelId: true,
+          novel: { select: { id: true, title: true, displayTitle: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+
+  const items: UserReplyItem[] = records.map((record) => {
+    const novel = record.novel ?? record.chapter?.novel ?? null
+
+    return {
+      id: record.id,
+      targetType: record.targetType as CommentTargetType,
+      content: record.content,
+      rating: record.rating ?? null,
+      likeCount: record.likeCount ?? 0,
+      postId: record.postId ?? null,
+      novelId: record.novelId ?? record.chapter?.novelId ?? null,
+      novelTitle: novel ? resolveEffectiveNovelTitle(novel.title, novel.displayTitle) : null,
+      chapterTitle: record.chapter?.title ?? null,
+      targetExcerpt: record.post ? record.post.excerpt || excerptContent(record.post.content) : null,
+      createdAt: toIso(record.createdAt) ?? nowIso(),
+    }
+  })
+
+  return { items, total: items.length }
+}
+
+export async function listReceivedLikesData(userId: string): Promise<{ items: ReceivedLikeItem[]; total: number }> {
+  await ensureUserExists(userId)
+
+  // 别人给我的帖子/评论点的赞：各取最近 100 条后合并按时间降序
+  const [postLikes, commentLikes] = await Promise.all([
+    prisma.postLike.findMany({
+      where: { post: { userId }, userId: { not: userId } },
+      include: { user: true, post: { select: { id: true, excerpt: true, content: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    prisma.commentLike.findMany({
+      where: { comment: { userId }, userId: { not: userId } },
+      include: { user: true, comment: { select: { id: true, content: true, postId: true, novelId: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+  ])
+
+  const items: ReceivedLikeItem[] = [
+    ...postLikes.map((record) => ({
+      id: `post-like-${record.id}`,
+      user: toUserSummary(record.user),
+      targetType: 'post' as const,
+      excerpt: record.post.excerpt || excerptContent(record.post.content),
+      postId: record.post.id,
+      novelId: null,
+      likedAt: toIso(record.createdAt) ?? nowIso(),
+    })),
+    ...commentLikes.map((record) => ({
+      id: `comment-like-${record.id}`,
+      user: toUserSummary(record.user),
+      targetType: 'comment' as const,
+      excerpt: excerptContent(record.comment.content),
+      postId: record.comment.postId ?? null,
+      novelId: record.comment.novelId ?? null,
+      likedAt: toIso(record.createdAt) ?? nowIso(),
+    })),
+  ]
+    .sort((a, b) => (a.likedAt < b.likedAt ? 1 : -1))
+    .slice(0, 100)
+
+  return { items, total: items.length }
+}
+
+export async function listInteractionsData(userId: string): Promise<{ items: InteractionItem[]; total: number }> {
+  await ensureUserExists(userId)
+
+  // 互动消息全部从现有表派生：赞/收藏/作品评论/章节评论，各取最近 100 条合并按时间降序
+  const [postLikes, commentLikes, favorites, commentRecords] = await Promise.all([
+    prisma.postLike.findMany({
+      where: { post: { userId }, userId: { not: userId } },
+      include: { user: true, post: { select: { id: true, excerpt: true, content: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    prisma.commentLike.findMany({
+      where: { comment: { userId }, userId: { not: userId } },
+      include: { user: true, comment: { select: { id: true, content: true, postId: true, novelId: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    prisma.novelFavorite.findMany({
+      where: { novel: { authorId: userId }, userId: { not: userId } },
+      include: { user: true, novel: { select: { id: true, title: true, displayTitle: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    prisma.comment.findMany({
+      where: {
+        userId: { not: userId },
+        OR: [
+          { targetType: 'novel', novel: { authorId: userId } },
+          { targetType: 'chapter', chapter: { authorId: userId } },
+        ],
+      },
+      include: {
+        author: true,
+        novel: { select: { id: true, title: true, displayTitle: true } },
+        chapter: {
+          select: {
+            id: true,
+            title: true,
+            novelId: true,
+            novel: { select: { id: true, title: true, displayTitle: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+  ])
+
+  const items: InteractionItem[] = [
+    ...postLikes.map((record) => ({
+      id: `post-like-${record.id}`,
+      user: toUserSummary(record.user),
+      kind: 'postLike' as const,
+      excerpt: record.post.excerpt || excerptContent(record.post.content),
+      postId: record.post.id,
+      novelId: null,
+      happenedAt: toIso(record.createdAt) ?? nowIso(),
+    })),
+    ...commentLikes.map((record) => ({
+      id: `comment-like-${record.id}`,
+      user: toUserSummary(record.user),
+      kind: 'commentLike' as const,
+      excerpt: excerptContent(record.comment.content),
+      postId: record.comment.postId ?? null,
+      novelId: record.comment.novelId ?? null,
+      happenedAt: toIso(record.createdAt) ?? nowIso(),
+    })),
+    ...favorites.map((record) => ({
+      id: `novel-favorite-${record.id}`,
+      user: toUserSummary(record.user),
+      kind: 'novelFavorite' as const,
+      excerpt: '',
+      postId: null,
+      novelId: record.novel.id,
+      novelTitle: resolveEffectiveNovelTitle(record.novel.title, record.novel.displayTitle),
+      happenedAt: toIso(record.createdAt) ?? nowIso(),
+    })),
+    ...commentRecords.map((record) => {
+      const isChapterComment = record.targetType === 'chapter'
+      const novelMeta = isChapterComment ? record.chapter?.novel : record.novel
+      return {
+        id: `comment-${record.id}`,
+        user: toUserSummary(record.author),
+        kind: (isChapterComment ? 'chapterComment' : 'novelComment') as InteractionItem['kind'],
+        excerpt: excerptContent(record.content),
+        rating: record.rating ?? null,
+        postId: null,
+        novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
+        novelTitle: novelMeta ? resolveEffectiveNovelTitle(novelMeta.title, novelMeta.displayTitle) : null,
+        chapterTitle: isChapterComment ? record.chapter?.title ?? null : null,
+        happenedAt: toIso(record.createdAt) ?? nowIso(),
+      }
+    }),
+  ]
+    .sort((a, b) => (a.happenedAt < b.happenedAt ? 1 : -1))
+    .slice(0, 100)
+
+  return { items, total: items.length }
+}
+
+export async function getInteractionBadgesData(userId: string): Promise<InteractionBadges> {
+  const user = await ensureUserExists(userId)
+  const interactionsSeenAt = user.interactionsSeenAt ?? null
+  const followersSeenAt = user.followersSeenAt ?? null
+  const interactionsAfter = interactionsSeenAt ? { createdAt: { gt: interactionsSeenAt } } : {}
+  const followersAfter = followersSeenAt ? { createdAt: { gt: followersSeenAt } } : {}
+
+  // 未读数 = 已读水位之后新产生的互动/新粉丝条数，与互动 feed 口径保持一致
+  const [postLikeCount, commentLikeCount, favoriteCount, commentCount, followerCount] = await prisma.$transaction([
+    prisma.postLike.count({ where: { post: { userId }, userId: { not: userId }, ...interactionsAfter } }),
+    prisma.commentLike.count({ where: { comment: { userId }, userId: { not: userId }, ...interactionsAfter } }),
+    prisma.novelFavorite.count({ where: { novel: { authorId: userId }, userId: { not: userId }, ...interactionsAfter } }),
+    prisma.comment.count({
+      where: {
+        userId: { not: userId },
+        OR: [
+          { targetType: 'novel', novel: { authorId: userId } },
+          { targetType: 'chapter', chapter: { authorId: userId } },
+        ],
+        ...interactionsAfter,
+      },
+    }),
+    prisma.userFollow.count({ where: { followingId: userId, ...followersAfter } }),
+  ])
+
+  return {
+    interactionsUnseen: postLikeCount + commentLikeCount + favoriteCount + commentCount,
+    interactionsSeenAt: toIso(interactionsSeenAt),
+    followersUnseen: followerCount,
+    followersSeenAt: toIso(followersSeenAt),
+  }
+}
+
+export async function markInteractionSeenData(
+  userId: string,
+  target: 'interactions' | 'followers',
+): Promise<InteractionBadges> {
+  await ensureUserExists(userId)
+  await prisma.user.update({
+    where: { id: userId },
+    data: target === 'interactions' ? { interactionsSeenAt: new Date() } : { followersSeenAt: new Date() },
+  })
+  return getInteractionBadgesData(userId)
 }
 
 export async function registerUserData(input: {
@@ -1947,6 +2763,53 @@ export async function updateMyProfileCoverData(userId: string, profileCoverUrl: 
   }
 }
 
+/** 创建或复用与目标用户的双人直聊会话；目标用户不存在时返回 null */
+export async function createDirectConversationData(
+  viewerUserId: string,
+  targetUserId: string,
+): Promise<Conversation | null> {
+  await ensureUserExists(viewerUserId)
+
+  if (viewerUserId === targetUserId) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '不能给自己发私信。')
+  }
+
+  const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } })
+  if (!target) {
+    return null
+  }
+
+  // 已存在的双人直聊直接复用，避免重复建会话
+  const existing = await prisma.conversation.findFirst({
+    where: {
+      type: 'direct',
+      AND: [
+        { members: { some: { userId: viewerUserId } } },
+        { members: { some: { userId: targetUserId } } },
+      ],
+    },
+    include: conversationInclude,
+  })
+
+  if (existing) {
+    const [enriched] = await attachDirectFollowRelations([toConversation(existing, viewerUserId)], viewerUserId)
+    return enriched
+  }
+
+  const created = await prisma.conversation.create({
+    data: {
+      type: 'direct',
+      members: {
+        create: [{ userId: viewerUserId }, { userId: targetUserId }],
+      },
+    },
+    include: conversationInclude,
+  })
+
+  const [enriched] = await attachDirectFollowRelations([toConversation(created, viewerUserId)], viewerUserId)
+  return enriched
+}
+
 export async function listConversationsData(userId: string, page: number, pageSize: number) {
   await ensureUserExists(userId)
 
@@ -1990,7 +2853,10 @@ export async function listConversationsData(userId: string, page: number, pageSi
   )
 
   return {
-    items: items.map((item, index) => ({ ...toConversation(item, userId), unreadCount: unreadCounts[index] })),
+    items: await attachDirectFollowRelations(
+      items.map((item, index) => ({ ...toConversation(item, userId), unreadCount: unreadCounts[index] })),
+      userId,
+    ),
     pagination: buildPagination(page, pageSize, total),
   }
 }
@@ -2025,16 +2891,48 @@ export async function listMessagesData(userId: string, conversationId: string, p
     }),
   ])
 
+  const [conversationPayload] = await attachDirectFollowRelations([toConversation(conversation, userId)], userId)
+
   return {
-    conversation: toConversation(conversation, userId),
+    conversation: conversationPayload,
     ...paginate(items.map(toMessage), page, pageSize),
     pagination: buildPagination(page, pageSize, total),
   }
 }
 
 export async function sendMessageData(userId: string, conversationId: string, input: SendMessageRequest): Promise<Message | null> {
-  await ensureConversationMember(userId, conversationId)
+  const conversation = await ensureConversationMember(userId, conversationId)
   ensureNonEmptyText(input.content, 'content')
+
+  // 防骚扰：未互关的直聊属于陌生消息，单方最多发 3 条，互关后不限
+  if (conversation.type === 'direct') {
+    const counterpart = conversation.members.find((member) => member.userId !== userId)
+
+    if (counterpart) {
+      const followBondCount = await prisma.userFollow.count({
+        where: {
+          OR: [
+            { followerId: userId, followingId: counterpart.userId },
+            { followerId: counterpart.userId, followingId: userId },
+          ],
+        },
+      })
+
+      if (followBondCount < 2) {
+        const sentCount = await prisma.message.count({
+          where: { conversationId, senderId: userId },
+        })
+
+        if (sentCount >= 3) {
+          throw new DataAccessError(
+            403,
+            'STRANGER_MESSAGE_LIMIT',
+            '你们还没有互相关注，最多只能发送 3 条陌生消息，等对方回关后再继续聊吧。',
+          )
+        }
+      }
+    }
+  }
 
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.message.create({
