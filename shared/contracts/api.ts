@@ -254,6 +254,8 @@ export type CreateCommentRequest = {
   parentId?: string
   /** 作品评论的评星（1-5）；仅 targetType=novel 的根评论必填 */
   rating?: number
+  /** 章节段评：所属段落序号（0 起）；仅 targetType=chapter 的根评论有效 */
+  paragraphIndex?: number | null
 }
 
 export type CreateCommentResponse = ApiSuccess<{ comment: Comment }>
@@ -271,12 +273,24 @@ export type DeleteCommentResponse = ApiSuccess<{ deletedCount: number }>
 export type ListPostsResponse = ApiSuccess<{
   items: Post[]
   pagination: Pagination
+  /** 推荐流快照时间：翻页时回传，同一轮浏览榜单冻结不跳位 */
+  snapshotAt?: string
 }>
 
 export type GetPostDetailResponse = ApiSuccess<PostDetailPayload>
 
 export type GetTopicsResponse = ApiSuccess<{
   items: import('./models.js').TopicSummary[]
+}>
+
+/** 推荐话题（方案 18 §3.4）：按近 7 天趋势分取前 3 个 */
+export type GetRecommendedTopicsResponse = ApiSuccess<{
+  items: import('./models.js').TopicSummary[]
+}>
+
+/** 话题详情：按 slug/name/id 解析 */
+export type GetTopicResponse = ApiSuccess<{
+  topic: import('./models.js').TopicSummary
 }>
 
 export type CreatePostRequest = {
@@ -286,6 +300,8 @@ export type CreatePostRequest = {
   /** 发帖配图（base64 data URL，最多 9 张），服务端落盘后写入 imageUrls */
   imageDataUrls?: string[]
   relatedNovelId?: string
+  /** 分享作者主页到社区时携带的作者 id */
+  sharedUserId?: string
 }
 
 export type CreatePostResponse = ApiSuccess<{ post: Post }>
@@ -315,6 +331,9 @@ export type UpdatePrivacyResponse = ApiSuccess<PrivacySettings>
 
 /** 喜欢（赞过的帖子）：GET /api/users/:userId/liked-posts */
 export type ListLikedPostsResponse = ApiSuccess<{ items: Post[]; total: number; restricted?: boolean }>
+
+/** 收藏的帖子（仅本人可见）：GET /api/users/:userId/bookmarked-posts */
+export type ListBookmarkedPostsResponse = ApiSuccess<{ items: Post[]; total: number; restricted?: boolean }>
 
 /** 已回复（发出的评论）：GET /api/users/:userId/replies */
 export type ListUserRepliesResponse = ApiSuccess<{ items: UserReplyItem[]; total: number; restricted?: boolean }>

@@ -223,6 +223,8 @@ export interface UserReplyItem {
   /** 作品点评的评星（1-5） */
   rating?: number | null
   likeCount: number
+  /** viewer 是否已赞该条评论 */
+  likedByViewer?: boolean
   /** 跳转用：帖子 id */
   postId: EntityId | null
   /** 跳转用：作品 id */
@@ -353,6 +355,8 @@ export interface Comment {
   content: string
   /** 作品评论的评星（1-5）；仅根评论携带 */
   rating?: number | null
+  /** 段评：评论所属正文段落序号（0 起）；仅章节根评论携带，null 表示整章评论 */
+  paragraphIndex?: number | null
   likeCount: number
   replyCount: number
   auditStatus: ContentAuditStatus
@@ -376,6 +380,13 @@ export interface Post {
   topic: TopicSummary | null
   imageUrls: string[]
   relatedNovel: NovelRelatedSummary | null
+  /** 分享的作者（分享作者主页到社区时携带） */
+  sharedUser?: {
+    id: EntityId
+    nickname: string
+    avatarUrl: string | null
+    bio: string | null
+  } | null
   likeCount: number
   commentCount: number
   favoriteCount: number

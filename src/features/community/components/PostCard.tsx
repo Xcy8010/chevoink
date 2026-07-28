@@ -7,10 +7,12 @@ import { useToast } from '@/components/ui/Toast'
 import { setPostBookmark, setPostLike } from '@/features/community/api'
 import { patchPostInCaches } from '@/features/community/post-cache'
 import Avatar from '@/features/community/components/Avatar'
+import AuthorReferenceCard from '@/features/community/components/AuthorReferenceCard'
 import NovelReferenceCard from '@/features/community/components/NovelReferenceCard'
 import PostImageViewer from '@/features/community/components/PostImageViewer'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
 import { cn } from '@/lib/utils'
+import { splitContentByTopics } from '../../../../shared/contracts/index.js'
 import type { Post } from '../../../../shared/contracts/index.js'
 
 type PostCardProps = {
@@ -143,7 +145,20 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
             shouldTruncate ? 'line-clamp-5' : '',
           )}
         >
-          {fullContent}
+          {splitContentByTopics(fullContent).map((segment, index) =>
+            segment.type === 'topic' ? (
+              <Link
+                key={`${index}-${segment.name}`}
+                to={`/community/topic/${encodeURIComponent(segment.name)}`}
+                onClick={(event) => event.stopPropagation()}
+                className="font-medium text-[var(--color-brand)] hover:underline"
+              >
+                {segment.text}
+              </Link>
+            ) : (
+              <span key={index}>{segment.text}</span>
+            ),
+          )}
         </p>
         {!flat && fullContent.length > TRUNCATE_THRESHOLD ? (
           <button
@@ -207,6 +222,12 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
       {post.relatedNovel ? (
         <div className="mt-3" onClick={(event) => event.stopPropagation()}>
           <NovelReferenceCard novel={post.relatedNovel} />
+        </div>
+      ) : null}
+
+      {post.sharedUser ? (
+        <div className="mt-3" onClick={(event) => event.stopPropagation()}>
+          <AuthorReferenceCard author={post.sharedUser} />
         </div>
       ) : null}
 

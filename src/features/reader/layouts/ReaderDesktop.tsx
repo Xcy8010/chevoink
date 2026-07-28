@@ -74,7 +74,12 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
   }, [immersive, state.contentScrollRef])
 
   const tone = state.toneOption
-  const { previousHref, nextHref } = state
+  const { previousHref, nextHref, activePanel, activeParagraphIndex } = state
+
+  // 段评气泡打开评论时同步展开右侧评论栏
+  useEffect(() => {
+    if (activePanel === 'comments') setCommentsOpen(true)
+  }, [activePanel, activeParagraphIndex])
 
   // 键盘快捷键：←/→ 翻章，Esc 退出沉浸（输入框聚焦时不触发翻章）
   useEffect(() => {
@@ -219,7 +224,11 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
           {headerIconButton(
             commentsOpen ? '收起评论' : '展开评论',
             commentsOpen ? <PanelRightClose className="h-4.5 w-4.5" /> : <PanelRightOpen className="h-4.5 w-4.5" />,
-            () => setCommentsOpen((open) => !open),
+            () => {
+              // 收起评论栏时重置段评筛选，避免下次展开仍停留在旧段落视图
+              if (commentsOpen) state.setActivePanel(null)
+              setCommentsOpen((open) => !open)
+            },
             commentsOpen,
           )}
           {state.tts.available

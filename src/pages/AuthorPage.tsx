@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, MessageSquareMore, UserCheck2, UserPlus2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MessageSquareMore, Share2, UserCheck2, UserPlus2 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/Toast'
 import { createDirectConversation, getDirectConversationByUserId, getMe, getUser, listConversations, listNovels, listPosts, setUserFollow } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import PostCard from '@/features/community/components/PostCard'
+import ShareMenu from '@/features/community/components/ShareMenu'
 import { formatRelativeTime } from '@/features/community/utils'
 import { getCoverUrl, getDisplayTitle } from '@/features/discover/api'
 import { LikedPostsPanel, RepliesPanel } from '@/features/profile/components/UserContentPanels'
@@ -309,7 +310,23 @@ export default function AuthorPage() {
           size="lg"
           className="relative z-10 -mt-9 h-[76px] w-[76px] border-4 border-[var(--app-bg)] bg-[var(--surface-muted)] sm:-mt-12 sm:h-24 sm:w-24"
         />
-        <div className="mt-3 flex shrink-0 gap-2">
+        <div className="mt-3 flex shrink-0 items-center gap-2">
+          <ShareMenu
+            share={{
+              kind: 'author',
+              author: {
+                id: author.id,
+                nickname: author.nickname,
+                avatarUrl: author.avatarUrl ?? null,
+                bio: author.bio ?? null,
+              },
+            }}
+            url={`${window.location.origin}/author/${author.id}`}
+            placement="down"
+            triggerClassName="press-feedback inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+            triggerContent={<Share2 className="h-4 w-4" />}
+            ariaLabel="分享作者主页"
+          />
           {isOwnProfile ? (
             <Button variant="secondary" size="sm" onClick={() => navigate('/studio')}>
               继续创作
@@ -374,25 +391,31 @@ export default function AuthorPage() {
         </div>
       </div>
 
-      {/* 作品 / 动态 tab：与个人中心一致的 pill 风格，固定在头部 */}
-      <div className="mt-4 flex gap-2 px-1 pb-3 sm:px-2">
+      {/* 作品 / 动态 tab：X 风格文字 + 活动下划线，无胶囊容器 */}
+      <div className="mt-4 flex border-b border-[var(--border-subtle)]">
         {visibleTabs.map((tab) => {
           const count = tab.id === 'novels' ? authorNovels.length : tab.id === 'posts' ? authorPosts.length : null
+          const active = activeTab === tab.id
 
           return (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                'press-feedback inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-4 py-2 text-sm font-medium transition-colors',
-                activeTab === tab.id
-                  ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
-                  : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
-              )}
+              className="press-feedback relative flex-1 px-2 py-3 text-center transition-colors hover:bg-[var(--surface-muted)] sm:flex-none sm:px-6"
             >
-              {tab.label}
-              {count !== null ? <span className="text-xs opacity-75">{count}</span> : null}
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1.5 text-[15px] transition-colors',
+                  active ? 'font-bold text-[var(--text-primary)]' : 'font-medium text-[var(--text-tertiary)]',
+                )}
+              >
+                {tab.label}
+                {count !== null ? <span className="text-xs font-normal opacity-75">{count}</span> : null}
+              </span>
+              {active ? (
+                <span className="absolute inset-x-0 bottom-0 mx-auto h-1 w-14 rounded-full bg-[var(--color-brand)]" />
+              ) : null}
             </button>
           )
         })}

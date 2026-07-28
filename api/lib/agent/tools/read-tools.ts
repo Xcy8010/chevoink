@@ -71,20 +71,25 @@ export const chapterReadTool = defineTool({
   description:
     '读取指定章节的正文。支持 offset/limit 按字符分段读取（正文超过 6000 字时建议分段）。写作或改写前先读相关章节，禁止盲写。',
   parameters: z.object({
-    chapterId: z.string().describe('章节 ID，可从 novel_get_context 的章节列表获取'),
+    chapterId: z.string().optional().describe('章节 ID，可从 novel_get_context 的章节列表获取；缺省时默认读当前正在编辑的章节'),
     offset: z.number().int().min(0).optional().describe('起始字符位置，默认 0'),
     limit: z.number().int().min(1).max(12000).optional().describe('读取字符数，默认 6000'),
   }),
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
+    // 缺省兜底：模型漏传 chapterId 时默认读作者当前打开的章节，避免白白打回一轮
+    const chapterId = args.chapterId?.trim() || ctx.chapterId
+    if (!chapterId) {
+      return { output: '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId。' }
+    }
     const chapter = await prisma.chapter.findFirst({
-      where: { id: args.chapterId, novelId: ctx.novelId, authorId: ctx.userId },
+      where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
       select: { id: true, title: true, content: true, wordCount: true, summary: true, updatedAt: true },
     })
 
     if (!chapter) {
-      return { output: `章节 ${args.chapterId} 不存在或不属于当前作品。` }
+      return { output: `章节 ${chapterId} 不存在或不属于当前作品。` }
     }
 
     // 读取即记录写入基线：后续写入前校验 updatedAt，防止覆盖用户手动修改

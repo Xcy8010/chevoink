@@ -200,9 +200,140 @@ const TOOL_ARGS_PROGRESS_STEP = 200
 /** 长上下文防稀释阈值（plan/14 §三 A4）：超过后每轮在队尾刷新一条轻量提醒 */
 const CONTEXT_REMINDER_THRESHOLD_CHARS = 60000
 
+/** 上下文瘦身阈值：messages 总字符超过后，把久远轮次的工具输出压缩成摘要，
+ * 支撑百轮长任务不撞模型上下文窗口（deepseek 128K token ≈ 中文 15 万字符量级） */
+const CONTEXT_SLIM_THRESHOLD_CHARS = 150000
+/** 瘦身时保留最近 N 条工具输出不动：近期结果是当前决策的主要依据 */
+const CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS = 8
+
+/** 长任务上下文瘦身：久远工具输出原文已落库/已被后续轮次消化，压成短摘要释放窗口；
+ * 模型需要旧内容时可重新调用读取类工具（chapter_read/plan_read 等）取回 */
+function slimEarlyToolOutputs(messages: ChatMessage[]) {
+  const toolIndexes: number[] = []
+  for (let index = 0; index < messages.length; index++) {
+    if (messages[index].role === 'tool') {
+      toolIndexes.push(index)
+    }
+  }
+
+  const cutoff = toolIndexes.length - CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS
+  for (let k = 0; k < cutoff; k++) {
+    const message = messages[toolIndexes[k]] as Extract<ChatMessage, { role: 'tool' }>
+    if (message.content.length > 600 && !message.content.startsWith('[工具输出已压缩]')) {
+      message.content = `[工具输出已压缩] ${message.content.slice(0, 300)}…（原 ${message.content.length} 字，内容已落库，需要时重新调用读取工具获取）`
+    }
+  }
+}
+
 type ToolCallOutcome = {
   observation: string
   part: Extract<AgentMessagePart, { type: 'tool-call' }>
+}
+
+/** 容错 JSON 解析：模型生成长正文参数时最常见的三类毛病可自动修复，
+ * 避免一整章内容因一个未转义换行符就全部作废重写：
+ * 1. 字符串内部出现未转义的控制字符（真换行/制表符）
+ * 2. 参数被 ```json 围栏或前后多余文本包裹
+ * 3. 输出被 length 截断导致字符串/花括号未闭合 */
+function parseToolArgsTolerant(raw: string): unknown {
+  const attempts: string[] = [raw]
+
+  // 剥离 Markdown 围栏与前后多余文本：取第一个 { 到最后一个 } 之间
+  const first = raw.indexOf('{')
+  const last = raw.lastIndexOf('}')
+  if (first > 0 || (first >= 0 && last >= 0 && last < raw.length - 1)) {
+    attempts.push(raw.slice(first, last + 1))
+  }
+
+  // 转义字符串内部的裸控制字符（逐字符扫描，只在引号内替换，不破坏结构性空白）
+  const escapeControlChars = (input: string): string => {
+    let out = ''
+    let inString = false
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i]
+      if (inString) {
+        if (char === '\\' && i + 1 < input.length) {
+          out += char + input[i + 1]
+          i += 1
+          continue
+        }
+        if (char === '"') {
+          inString = false
+          out += char
+          continue
+        }
+        if (char === '\n') {
+          out += '\\n'
+          continue
+        }
+        if (char === '\r') {
+          out += '\\r'
+          continue
+        }
+        if (char === '\t') {
+          out += '\\t'
+          continue
+        }
+        out += char
+        continue
+      }
+      if (char === '"') {
+        inString = true
+      }
+      out += char
+    }
+    return out
+  }
+
+  for (const candidate of [...attempts]) {
+    attempts.push(escapeControlChars(candidate))
+  }
+
+  // 截断修复：扫描未闭合的字符串与括号栈，补齐后再试
+  const repairTruncated = (input: string): string => {
+    let inString = false
+    const stack: string[] = []
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i]
+      if (inString) {
+        if (char === '\\') {
+          i += 1
+        } else if (char === '"') {
+          inString = false
+        }
+        continue
+      }
+      if (char === '"') {
+        inString = true
+      } else if (char === '{' || char === '[') {
+        stack.push(char === '{' ? '}' : ']')
+      } else if (char === '}' || char === ']') {
+        stack.pop()
+      }
+    }
+    let repaired = input
+    if (inString) {
+      repaired += '"'
+    }
+    while (stack.length > 0) {
+      repaired += stack.pop()
+    }
+    return repaired
+  }
+
+  for (const candidate of [...attempts]) {
+    attempts.push(repairTruncated(candidate))
+  }
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // 继续下一个候选
+    }
+  }
+
+  throw new Error('参数无法解析为 JSON')
 }
 
 async function handleToolCall(
@@ -222,12 +353,12 @@ async function handleToolCall(
     title: tool?.title ?? call.name,
   }
 
-  // 参数解析与校验：失败也作为观察回填，让模型自行修正
+  // 参数解析与校验：先容错修复常见格式毛病，实在修不好再作为观察回填让模型自行修正
   let parsedArgs: unknown = {}
   try {
-    parsedArgs = call.arguments ? JSON.parse(call.arguments) : {}
+    parsedArgs = call.arguments ? parseToolArgsTolerant(call.arguments) : {}
   } catch {
-    const observation = `工具 ${call.name} 的参数不是合法 JSON，本次调用完全没有执行。请立即用完整合法的 JSON 参数重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作（如 ask_user 失败后禁止把问题和选项写进正文）。原始参数：${call.arguments.slice(0, 400)}`
+    const observation = `工具 ${call.name} 的参数不是合法 JSON，本次调用完全没有执行。请立即重新发起同一个工具调用：字符串内的换行必须写成 \\n，不要用 Markdown 围栏包裹参数；如果正文很长，改用 chapter_write 写开头部分，再用 chapter_append 分 2-3 次追加剩余段落，避免单次参数过长被截断。绝对禁止放弃重试或改在回复正文里完成该操作。原始参数：${call.arguments.slice(0, 400)}`
     bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null })
     bus.emit({
       type: 'tool.result',
@@ -276,7 +407,9 @@ async function handleToolCall(
     const issues = validated.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('；')
-    return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
+    // 附带当前章节 ID：缺 chapterId 是最高发的校验失败，直接喂给模型避免它盲猜或多耗一轮去查
+    const chapterHint = ctx.chapterId ? `作者当前正在编辑的章节 chapterId=${ctx.chapterId}。` : ''
+    return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。${chapterHint}本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
   }
 
   // 审批：'ask' 且未被会话级"总是允许"覆盖时，挂起等待前端批复
@@ -489,6 +622,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       )
       if (totalChars > CONTEXT_REMINDER_THRESHOLD_CHARS) {
         messages.push(contextReminder)
+      }
+      // 上下文逼近模型窗口时压缩久远工具输出，长任务（连写多章）才能持续跑下去
+      if (totalChars > CONTEXT_SLIM_THRESHOLD_CHARS) {
+        slimEarlyToolOutputs(messages)
       }
 
       const messageId = randomUUID()

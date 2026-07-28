@@ -172,6 +172,7 @@ model User {
   chapters                Chapter[]
   comments                Comment[]
   posts                   Post[]
+  sharedInPosts           Post[]               @relation("PostSharedUser")
   coverAssets             CoverAsset[]
   conversationMembers     ConversationMember[]
   messages                Message[]
@@ -293,6 +294,8 @@ model Comment {
   content     String
   /** 作品评论的评星（1-5）；仅 targetType=novel 的根评论使用 */
   rating      Int?
+  /** 段评：评论所属正文段落序号（0 起）；仅 targetType=chapter 的根评论使用 */
+  paragraphIndex Int?            @map("paragraph_index")
   likeCount   Int                @default(0) @map("like_count")
   replyCount  Int                @default(0) @map("reply_count")
   auditStatus ContentAuditStatus @default(pending) @map("audit_status")
@@ -320,8 +323,23 @@ model Topic {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   posts     Post[]
+  postLinks PostTopic[]
 
   @@map("topics")
+}
+
+/** 帖子-话题多对多关联（方案 18 §3）：# 解析出的话题全部落这里，Post.topicId 保留主话题兼容旧链路 */
+model PostTopic {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  postId    String   @map("post_id") @db.VarChar(64)
+  topicId   String   @map("topic_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  post      Post     @relation(fields: [postId], references: [id])
+  topic     Topic    @relation(fields: [topicId], references: [id])
+
+  @@unique([postId, topicId])
+  @@index([topicId])
+  @@map("post_topics")
 }
 
 model Post {
@@ -329,6 +347,8 @@ model Post {
   userId        String             @map("user_id") @db.VarChar(64)
   topicId       String?            @map("topic_id") @db.VarChar(64)
   relatedNovelId String?           @map("related_novel_id") @db.VarChar(64)
+  /** 分享的作者（分享作者主页到社区时写入） */
+  sharedUserId  String?            @map("shared_user_id") @db.VarChar(64)
   content       String
   excerpt       String             @db.VarChar(240)
   imageUrls     String[]           @default([]) @map("image_urls")
@@ -341,13 +361,16 @@ model Post {
   author        User               @relation(fields: [userId], references: [id])
   topic         Topic?             @relation(fields: [topicId], references: [id])
   relatedNovel  Novel?             @relation(fields: [relatedNovelId], references: [id])
+  sharedUser    User?              @relation("PostSharedUser", fields: [sharedUserId], references: [id])
   comments      Comment[]
   likes         PostLike[]
   bookmarks     PostBookmark[]
+  topicLinks    PostTopic[]
 
   @@index([userId])
   @@index([topicId])
   @@index([relatedNovelId])
+  @@index([sharedUserId])
   @@map("posts")
 }
 

@@ -6,6 +6,9 @@
 
 const baselinesByRun = new Map<string, Map<string, string>>()
 
+/** 本 run 最近一次读/写/新建的章节：供模型漏传 chapterId 时做兜底（比「当前打开章节」更贴近意图） */
+const lastTouchedByRun = new Map<string, string>()
+
 export function recordChapterBaseline(runId: string, chapterId: string, updatedAt: Date | string) {
   let baselines = baselinesByRun.get(runId)
 
@@ -15,6 +18,11 @@ export function recordChapterBaseline(runId: string, chapterId: string, updatedA
   }
 
   baselines.set(chapterId, typeof updatedAt === 'string' ? updatedAt : updatedAt.toISOString())
+  lastTouchedByRun.set(runId, chapterId)
+}
+
+export function getLastTouchedChapter(runId: string): string | null {
+  return lastTouchedByRun.get(runId) ?? null
 }
 
 export function getChapterBaseline(runId: string, chapterId: string): string | null {
@@ -23,4 +31,5 @@ export function getChapterBaseline(runId: string, chapterId: string): string | n
 
 export function clearRunBaselines(runId: string) {
   baselinesByRun.delete(runId)
+  lastTouchedByRun.delete(runId)
 }

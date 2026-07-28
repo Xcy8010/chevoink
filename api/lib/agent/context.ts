@@ -255,7 +255,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     buildPlanFolderDigest(input.userId, input.novelId),
     buildCoverCandidateDigest(input.userId, input.novelId),
     buildTodoDigest(input.sessionId),
-    loadSessionHistory(input.sessionId, input.runId, 16000),
+    loadSessionHistory(input.sessionId, input.runId, 40000),
     input.chapterId
       ? prisma.chapter.findFirst({
           where: { id: input.chapterId, novelId: input.novelId },

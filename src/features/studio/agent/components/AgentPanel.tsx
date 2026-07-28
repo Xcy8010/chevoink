@@ -171,6 +171,8 @@ export function AgentPanel({
   const lazySessionRef = useRef<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  // 自动跟随开关：用户上滑离开底部后暂停自动滚底（避免运行中回看历史被强制弹回），滚回底部附近自动恢复
+  const pinnedToBottomRef = useRef(true)
   const active = isRunActive(phase)
 
   useEffect(
@@ -247,7 +249,7 @@ export function AgentPanel({
     }
   }, [sessionId, connect, disconnect])
 
-  // 消息更新自动滚动到底部；历史载入完成（historyLoading 置回 false）后等一帧再滚，确保消息已完成布局
+  // 消息更新自动滚动到底部（仅当用户本就贴底时）；历史载入完成（historyLoading 置回 false）后等一帧再滚，确保消息已完成布局
   useEffect(() => {
     if (historyLoading) {
       return
@@ -256,11 +258,23 @@ export function AgentPanel({
     if (!node) {
       return
     }
+    if (!pinnedToBottomRef.current) {
+      return
+    }
     const frame = requestAnimationFrame(() => {
       node.scrollTop = node.scrollHeight
     })
     return () => cancelAnimationFrame(frame)
   }, [messages, pendingApproval, pendingQuestion, historyLoading])
+
+  // 跟踪用户是否贴底：距底部 80px 内视为贴底；程序自动滚底时本就在底部，不会误关
+  const handleMessagesScroll = useCallback(() => {
+    const node = scrollRef.current
+    if (!node) {
+      return
+    }
+    pinnedToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80
+  }, [])
 
   const handleSend = useCallback(
     async (prompt: string) => {
@@ -641,7 +655,7 @@ export function AgentPanel({
       </div>
 
       {/* 消息流 */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {historyLoading ? (
           <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" />

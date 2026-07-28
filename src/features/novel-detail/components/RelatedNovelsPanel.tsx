@@ -57,9 +57,13 @@ export default function RelatedNovelsPanel({ novels, variant = 'grid' }: Related
                 {getDisplayTitle(novel)}
               </span>
               <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{getAuthorName(novel.author)}</span>
-              {/* 不能和 block 同用：display:block 会覆盖 line-clamp 的 -webkit-box 导致截断失效；固定两行高度保证每条推荐等高 */}
-              <span className="mt-1 line-clamp-2 h-10 text-xs leading-5 text-[var(--text-secondary)]">
-                {getNovelSummary(novel.summary)}
+              {/* 不能和 block 同用：display:block 会覆盖 line-clamp 的 -webkit-box 导致截断失效；
+                  外层按两行行高（40px）精确裁剪：QQ/微信 X5 内核下 line-clamp 的 overflow 裁剪不可靠，
+                  只靠 clamp 会漏出被横截的第三行；内层 max-height 同时禁用 X5 字体自动放大 */}
+              <span className="mt-1 block h-10 overflow-hidden">
+                <span className="line-clamp-2 max-h-10 text-xs leading-5 text-[var(--text-secondary)]">
+                  {getNovelSummary(novel.summary)}
+                </span>
               </span>
             </span>
           </Link>
@@ -82,8 +86,11 @@ export default function RelatedNovelsPanel({ novels, variant = 'grid' }: Related
               {getDisplayTitle(novel)}
             </span>
             <span className="mt-1 block text-xs text-[var(--text-tertiary)]">{getAuthorName(novel.author)}</span>
-            <span className="mt-2 line-clamp-2 h-10 text-xs leading-5 text-[var(--text-secondary)]">
-              {getNovelSummary(novel.summary)}
+            {/* 外层按两行行高精确裁剪 + 内层禁用字体自动放大，避免 QQ/微信 X5 内核漏出被横截的第三行 */}
+            <span className="mt-2 block h-10 overflow-hidden">
+              <span className="line-clamp-2 max-h-10 text-xs leading-5 text-[var(--text-secondary)]">
+                {getNovelSummary(novel.summary)}
+              </span>
             </span>
           </span>
         </Link>

@@ -1,31 +1,40 @@
-import { ImagePlus, PenSquare, X } from 'lucide-react'
-import { useRef, useState, type ChangeEvent } from 'react'
+import { BookOpen, ImagePlus, PenSquare, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
 import { useDevice } from '@/components/layout/DeviceProvider'
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
+import { listRecommendedTopics } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { communityPrompts } from '@/features/community/constants'
 import { MAX_POST_IMAGE_COUNT, preparePostImage } from '@/features/community/post-image'
+import type { CommunityShareDraft } from '@/features/community/share'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
-import type { CommunityTopic } from './TopicChannelBar'
 
 type PostComposerProps = {
-  topics: CommunityTopic[]
-  onSubmit: (payload: { content: string; topicId?: string; imageDataUrls?: string[] }) => void
+  onSubmit: (payload: {
+    content: string
+    imageDataUrls?: string[]
+    relatedNovelId?: string
+    sharedUserId?: string
+  }) => void
   isSubmitting: boolean
+  /** 从作品页/作者页带入的分享草稿：自动展开编辑器并预览卡片 */
+  initialShare?: CommunityShareDraft | null
 }
 
 /**
- * 发帖入口（方案 8.3.2）：
+ * 发帖入口（方案 8.3.2 / 18 §3.5）：
  * - 默认收起为"头像 + 占位提示"假输入框
  * - 手机端点击展开全屏编辑页（避免键盘遮挡）
  * - 平板/电脑端点击展开居中模态
+ * - 话题改用 X 式 # 语法：正文内 #话题 由服务端解析，不再选话题按钮
  */
-export default function PostComposer({ topics, onSubmit, isSubmitting }: PostComposerProps) {
+export default function PostComposer({ onSubmit, isSubmitting, initialShare }: PostComposerProps) {
   const { isMobile } = useDevice()
   const navigate = useNavigate()
   const toast = useToast()
@@ -33,12 +42,29 @@ export default function PostComposer({ topics, onSubmit, isSubmitting }: PostCom
   const sessionUser = useShellStore((state) => state.sessionUser)
   const [open, setOpen] = useState(false)
   const [content, setContent] = useState('')
-  const [topicId, setTopicId] = useState<string | undefined>(undefined)
   const [images, setImages] = useState<string[]>([])
   const [imageProcessing, setImageProcessing] = useState(false)
+  const [share, setShare] = useState<CommunityShareDraft | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const selectableTopics = topics.filter((topic) => topic.id !== 'all')
+  // 推荐话题：打开编辑器才拉，点击直接插入光标处
+  const recommendedTopicsQuery = useQuery({
+    queryKey: ['community', 'recommended-topics'],
+    queryFn: listRecommendedTopics,
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+  })
+  const recommendedTopics = recommendedTopicsQuery.data?.items ?? []
+
+  // 带分享草稿进入时自动展开编辑器（未登录保持收起，点假输入框会引导去登录）
+  useEffect(() => {
+    if (!initialShare) return
+    setShare(initialShare)
+    if (authStatus === 'authenticated') {
+      setOpen(true)
+    }
+  }, [initialShare, authStatus])
 
   const handleOpen = () => {
     if (authStatus !== 'authenticated') {
@@ -49,6 +75,25 @@ export default function PostComposer({ topics, onSubmit, isSubmitting }: PostCom
   }
 
   const handleClose = () => setOpen(false)
+
+  /** 推荐话题点击：把 #话题 插入光标处，光标落在插入内容之后 */
+  const handleInsertTopic = (name: string) => {
+    const tag = `#${name} `
+    const textarea = textareaRef.current
+    if (!textarea) {
+      setContent((value) => `${value}${tag}`)
+      return
+    }
+
+    const start = textarea.selectionStart ?? content.length
+    const end = textarea.selectionEnd ?? start
+    setContent(`${content.slice(0, start)}${tag}${content.slice(end)}`)
+    requestAnimationFrame(() => {
+      textarea.focus()
+      const caret = start + tag.length
+      textarea.setSelectionRange(caret, caret)
+    })
+  }
 
   /** 选图后逐张校验+压缩，超出 9 张的部分直接舍弃并提示 */
   const handlePickImages = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -91,24 +136,80 @@ export default function PostComposer({ topics, onSubmit, isSubmitting }: PostCom
   const handleSubmit = () => {
     const trimmed = content.trim()
     if (!trimmed || isSubmitting || imageProcessing) return
-    onSubmit({ content: trimmed, topicId, imageDataUrls: images })
+    onSubmit({
+      content: trimmed,
+      imageDataUrls: images,
+      relatedNovelId: share?.kind === 'novel' ? share.novel.id : undefined,
+      sharedUserId: share?.kind === 'author' ? share.author.id : undefined,
+    })
     setContent('')
-    setTopicId(undefined)
     setImages([])
+    setShare(null)
     setOpen(false)
   }
 
   const editor = (
     <div className="flex min-h-0 flex-1 flex-col">
       <textarea
+        ref={textareaRef}
         // eslint-disable-next-line jsx-a11y/no-autofocus -- 全屏编辑页打开即输入
         autoFocus={isMobile}
         value={content}
         onChange={(event) => setContent(event.target.value)}
         rows={isMobile ? undefined : 7}
-        placeholder="把你的观察、追更感受或写作心得发出来。"
+        placeholder={share ? '说说你的推荐理由，让更多人看到它。' : '把你的观察、追更感受或写作心得发出来。'}
         className="min-h-0 flex-1 resize-none bg-transparent px-4 py-4 text-[15px] leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] md:px-5"
       />
+
+      {/* 分享卡片预览：不可点跳转，右上角可移除 */}
+      {share ? (
+        <div className="px-4 pb-3 md:px-5">
+          <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-3 pr-11">
+            {share.kind === 'novel' ? (
+              <>
+                {share.novel.coverUrl ? (
+                  <img
+                    src={share.novel.coverUrl}
+                    alt={share.novel.title}
+                    className="h-16 w-12 shrink-0 rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
+                  />
+                ) : (
+                  <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-tertiary)]">
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-[var(--text-tertiary)]">分享作品</p>
+                  <p className="mt-1 line-clamp-1 text-sm font-medium text-[var(--text-primary)]">
+                    {share.novel.title}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <Avatar name={share.author.nickname} src={share.author.avatarUrl} size="md" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-[var(--text-tertiary)]">推荐作者</p>
+                  <p className="mt-1 line-clamp-1 text-sm font-medium text-[var(--text-primary)]">
+                    {share.author.nickname}
+                  </p>
+                  {share.author.bio ? (
+                    <p className="mt-0.5 line-clamp-1 text-xs text-[var(--text-tertiary)]">{share.author.bio}</p>
+                  ) : null}
+                </div>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setShare(null)}
+              aria-label="移除分享卡片"
+              className="press-feedback absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* 配图预览：缩略图网格 + 虚线添加格 */}
       {images.length > 0 || imageProcessing ? (
@@ -138,35 +239,25 @@ export default function PostComposer({ topics, onSubmit, isSubmitting }: PostCom
       ) : null}
 
       <div className="border-t border-[var(--border-subtle)] px-4 py-3 md:px-5">
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setTopicId(undefined)}
-            className={cn(
-              'press-feedback rounded-[var(--radius-pill)] border px-3 py-1.5 text-xs transition-colors',
-              topicId === undefined
-                ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]'
-                : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]',
-            )}
-          >
-            不选话题
-          </button>
-          {selectableTopics.map((topic) => (
-            <button
-              key={topic.id}
-              type="button"
-              onClick={() => setTopicId(topic.id)}
-              className={cn(
-                'press-feedback rounded-[var(--radius-pill)] border px-3 py-1.5 text-xs transition-colors',
-                topicId === topic.id
-                  ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]'
-                  : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]',
-              )}
-            >
-              {topic.name}
-            </button>
-          ))}
-        </div>
+        {/* X 式话题引导：纯文本两行，无卡片无胶囊无边框（方案 18 §3.5） */}
+        <p className="text-xs leading-6 text-[var(--text-tertiary)]">
+          使用 <span className="font-medium text-[var(--color-brand)]">#</span> 可以引用或创建一个话题
+        </p>
+        {recommendedTopics.length > 0 ? (
+          <p className="mt-0.5 text-xs leading-6 text-[var(--text-tertiary)]">
+            推荐话题
+            {recommendedTopics.map((topic) => (
+              <button
+                key={topic.id}
+                type="button"
+                onClick={() => handleInsertTopic(topic.name)}
+                className="press-feedback ml-2.5 font-medium text-[var(--color-brand)] transition-opacity hover:opacity-80"
+              >
+                #{topic.name}
+              </button>
+            ))}
+          </p>
+        ) : null}
 
         {!content ? (
           <div className="mt-3 flex flex-wrap gap-2">

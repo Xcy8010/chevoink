@@ -750,6 +750,10 @@ export default function WritingAgentPanel({
     }
 
     const container = scrollContainerRef.current
+    // 用户上滑离开底部时不强制弹回，贴底（80px 内）才自动跟随新消息
+    if (container.scrollHeight - container.scrollTop - container.clientHeight >= 80) {
+      return
+    }
     requestAnimationFrame(() => {
       container.scrollTo({
         top: container.scrollHeight,

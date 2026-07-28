@@ -186,6 +186,9 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   const body: Record<string, unknown> = {
     model,
     temperature: params.temperature ?? 0.6,
+    // 显式拉满单轮输出上限：不传时 DeepSeek 默认仅 4096，
+    // Agent 写 3000+ 字长章时工具参数 JSON 会被 length 截断导致写入失败
+    max_tokens: env.aiTextMaxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
     messages: toProviderMessages(params.messages),

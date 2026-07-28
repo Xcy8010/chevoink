@@ -15,9 +15,11 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const pageSize = parsePositiveInt(req.query.pageSize, 10)
   const topicId = typeof req.query.topicId === 'string' ? req.query.topicId : undefined
   const authorId = typeof req.query.authorId === 'string' ? req.query.authorId : undefined
+  const sort = req.query.sort === 'recommended' ? ('recommended' as const) : ('latest' as const)
+  const snapshotAt = typeof req.query.snapshotAt === 'string' ? req.query.snapshotAt : undefined
 
   try {
-    const payload = await listPostsData(page, pageSize, topicId, getSessionUserId(req), authorId)
+    const payload = await listPostsData(page, pageSize, topicId, getSessionUserId(req), authorId, sort, snapshotAt)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -68,6 +70,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       topicId: body.topicId,
       imageUrls,
       relatedNovelId: body.relatedNovelId,
+      sharedUserId: body.sharedUserId,
     })
 
     res.status(201).json(buildSuccess(requestId, { post }))

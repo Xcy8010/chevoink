@@ -7,6 +7,8 @@ export type ReadingProgressEntry = {
   chapterTitle: string
   chapterOrder: number
   totalChapters: number
+  /** 章内滚动进度 0-1，用于重新进入时定位到上次读到的位置 */
+  scrollPercent?: number
   updatedAt: number
 }
 
@@ -41,10 +43,27 @@ export function getAllReadingProgress(): Record<string, ReadingProgressEntry> {
   return readStore()
 }
 
-export function saveReadingProgress(entry: Omit<ReadingProgressEntry, 'updatedAt'>) {
+export function saveReadingProgress(entry: Omit<ReadingProgressEntry, 'updatedAt' | 'scrollPercent'>) {
   if (typeof window === 'undefined') return
   const store = readStore()
-  store[entry.novelId] = { ...entry, updatedAt: Date.now() }
+  const previous = store[entry.novelId]
+  store[entry.novelId] = {
+    ...entry,
+    // 同章重写时保留章内滚动进度，切换新章节则从头开始
+    scrollPercent: previous?.chapterId === entry.chapterId ? previous.scrollPercent : 0,
+    updatedAt: Date.now(),
+  }
+  writeStore(store)
+}
+
+/** 只更新章内滚动进度（滚动防抖写回），章节不匹配时忽略 */
+export function updateReadingScrollPercent(novelId: string, chapterId: string, scrollPercent: number) {
+  if (typeof window === 'undefined') return
+  const store = readStore()
+  const entry = store[novelId]
+  if (!entry || entry.chapterId !== chapterId) return
+  entry.scrollPercent = Math.min(1, Math.max(0, scrollPercent))
+  entry.updatedAt = Date.now()
   writeStore(store)
 }
 

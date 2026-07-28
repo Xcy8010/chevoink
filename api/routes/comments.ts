@@ -60,6 +60,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       parentId: body.parentId,
       // 作品根评论的评星此前被路由层丢弃，导致已评星仍报「请先打分」
       rating: body.rating,
+      // 章节段评：透传段落序号，校验在 data-access 层
+      paragraphIndex: body.paragraphIndex,
     })
 
     res.status(201).json(buildSuccess(requestId, { comment }))

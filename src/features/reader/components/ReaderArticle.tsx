@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import Empty from '@/components/Empty'
@@ -27,7 +28,19 @@ export default function ReaderArticle({
   onOpenComments,
   className,
 }: ReaderArticleProps) {
-  const { reader, paragraphs, fontScaleOption, toneOption } = state
+  const { reader, paragraphs, fontScaleOption, toneOption, paragraphCommentCounts } = state
+
+  // 段评气泡默认隐藏：有鼠标的设备悬停段落时显示，触屏设备点击段落时显示
+  const supportsHover = useMemo(
+    () => typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches,
+    [],
+  )
+  const [revealedIndex, setRevealedIndex] = useState<number | null>(null)
+  const chapterId = reader?.currentChapter.id
+  useEffect(() => {
+    setRevealedIndex(null)
+  }, [chapterId])
+
   if (!reader) return null
 
   const textStyle = {
@@ -83,18 +96,54 @@ export default function ReaderArticle({
         ) : (
           paragraphs.map((paragraph, index) => {
             const isSpeaking = state.tts.activeParagraphIndex === index
+            const isFlashing = state.highlightParagraphIndex === index
+            const commentCount = paragraphCommentCounts.get(index) ?? 0
+            // 有评论的段落常驻显示数量气泡；无评论时悬停设备靠 CSS 显隐，触屏设备点击后才渲染
+            const renderBubble =
+              !state.fromStudio && (commentCount > 0 || supportsHover || revealedIndex === index)
             return (
               <p
                 key={`${reader.currentChapter.id}-${index}`}
                 data-tts-p={index}
-                className="indent-[2em] tracking-[0.01em] rounded-[10px] transition-colors [transition-duration:var(--duration-normal)]"
+                onClick={
+                  !state.fromStudio && !supportsHover
+                    ? () => setRevealedIndex((current) => (current === index ? null : index))
+                    : undefined
+                }
+                className="group indent-[2em] tracking-[0.01em] rounded-[10px] transition-colors [transition-duration:var(--duration-normal)]"
                 style={{
                   ...textStyle,
-                  // 听书跟读高亮：随阅读底色自适应，不引入新颜色 token
-                  background: isSpeaking ? 'color-mix(in srgb, currentColor 9%, transparent)' : undefined,
+                  // 听书跟读高亮；段评定位时用更重的底色闪一下，都随阅读底色自适应
+                  background: isFlashing
+                    ? 'color-mix(in srgb, currentColor 16%, transparent)'
+                    : isSpeaking
+                      ? 'color-mix(in srgb, currentColor 9%, transparent)'
+                      : undefined,
                 }}
               >
                 {paragraph}
+                {renderBubble ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      state.openParagraphComments(index)
+                    }}
+                    aria-label={`第 ${index + 1} 段评论${commentCount > 0 ? `，共 ${commentCount} 条` : ''}`}
+                    className={cn(
+                      'press-feedback ml-2 inline-flex h-[18px] min-w-[18px] items-center justify-center gap-0.5 rounded-full px-1 align-middle text-[11px] leading-none transition-opacity',
+                      commentCount > 0
+                        ? 'opacity-70'
+                        : supportsHover
+                          ? 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-60 hover:opacity-90'
+                          : 'opacity-60',
+                    )}
+                    style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+                  >
+                    <MessageSquare className="h-3 w-3" />
+                    {commentCount > 0 ? <span className="tabular-nums">{commentCount}</span> : null}
+                  </button>
+                ) : null}
               </p>
             )
           })

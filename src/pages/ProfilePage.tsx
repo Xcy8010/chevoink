@@ -18,7 +18,7 @@ import { getLocalShelf, updateShelfCover } from '@/features/home/local-shelf'
 import CreationPanel from '@/features/profile/components/CreationPanel'
 import ProfileHeader from '@/features/profile/components/ProfileHeader'
 import ShelfPanel, { type ShelfBook } from '@/features/profile/components/ShelfPanel'
-import { LikedPostsPanel, RepliesPanel } from '@/features/profile/components/UserContentPanels'
+import { BookmarkedPostsPanel, LikedPostsPanel, RepliesPanel } from '@/features/profile/components/UserContentPanels'
 import { useShellStore } from '@/store/useShellStore'
 import type { UpdateMyAvatarRequest, UpdateMyCoverRequest, UpdateMyProfileRequest, User } from '../../shared/contracts'
 
@@ -65,6 +65,8 @@ export default function ProfilePage() {
   const unreadNotificationCount = useShellStore((state) => state.unreadNotificationCount)
 
   const [activePanel, setActivePanel] = useState<ProfilePanel>('shelf')
+  // 收藏面板子栏：收藏的作品 / 收藏的帖子
+  const [favoritesTab, setFavoritesTab] = useState<'novels' | 'posts'>('novels')
   const [postRegisterPromptVisible, setPostRegisterPromptVisible] = useState(false)
   const [editDialogVisible, setEditDialogVisible] = useState(false)
   const [nicknameDraft, setNicknameDraft] = useState('')
@@ -514,25 +516,32 @@ export default function ProfilePage() {
         </section>
 
         <section ref={panelsSectionRef} className="scroll-mt-20">
-          <div className="flex flex-wrap gap-2">
+          {/* 分页入口：与作者页一致的 X 风格文字 + 活动下划线，无胶囊容器（方案 18 §4） */}
+          <div className="flex border-b border-[var(--border-subtle)]">
             {panels.map((panel) => {
               const count =
                 panel.id === 'shelf' ? mergedShelf.length : panel.id === 'creation' ? visibleAuthoredNovels.length : null
+              const active = activePanel === panel.id
 
               return (
                 <button
                   key={panel.id}
                   type="button"
                   onClick={() => setActivePanel(panel.id)}
-                  className={[
-                    'press-feedback inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-4 py-2 text-sm font-medium transition-colors',
-                    activePanel === panel.id
-                      ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
-                      : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
-                  ].join(' ')}
+                  className="press-feedback relative flex-1 whitespace-nowrap px-1 py-3 text-center transition-colors hover:bg-[var(--surface-muted)] sm:flex-none sm:px-6"
                 >
-                  {panel.label}
-                  {count !== null ? <span className="text-xs opacity-75">{count}</span> : null}
+                  <span
+                    className={[
+                      'inline-flex items-center gap-1.5 text-sm transition-colors sm:text-[15px]',
+                      active ? 'font-bold text-[var(--text-primary)]' : 'font-medium text-[var(--text-tertiary)]',
+                    ].join(' ')}
+                  >
+                    {panel.label}
+                    {count !== null ? <span className="text-xs font-normal opacity-75">{count}</span> : null}
+                  </span>
+                  {active ? (
+                    <span className="absolute inset-x-0 bottom-0 mx-auto h-1 w-12 rounded-full bg-[var(--color-brand)] sm:w-14" />
+                  ) : null}
                 </button>
               )
             })}
@@ -563,23 +572,56 @@ export default function ProfilePage() {
 
           {activePanel === 'favorites' ? (
             <div className="mt-5">
-              {favoriteNovelsQuery.isLoading ? (
-                <AppState tone="loading" title="正在加载收藏" className="min-h-[280px]" />
-              ) : favoriteItems.length > 0 ? (
-                <ShelfPanel
-                  items={favoriteItems}
-                  progressMap={progressMap}
-                  onOpenNovel={(novelId) => navigate(`/novel/${novelId}`)}
-                  onDiscover={() => navigate('/discover')}
-                />
+              {/* X 风格文字子栏：作品 / 帖子，不加胶囊容器 */}
+              <div className="flex items-center gap-5 border-b border-[var(--border-subtle)] pb-2">
+                {([
+                  { id: 'novels', label: '作品' },
+                  { id: 'posts', label: '帖子' },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setFavoritesTab(tab.id)}
+                    className={[
+                      'press-feedback relative pb-1 text-sm transition-colors',
+                      favoritesTab === tab.id
+                        ? 'font-bold text-[var(--text-primary)]'
+                        : 'font-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+                    ].join(' ')}
+                  >
+                    {tab.label}
+                    {favoritesTab === tab.id ? (
+                      <span className="absolute inset-x-0 -bottom-2 mx-auto h-1 w-8 rounded-full bg-[var(--color-brand)]" />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+
+              {favoritesTab === 'novels' ? (
+                <div className="mt-4">
+                  {favoriteNovelsQuery.isLoading ? (
+                    <AppState tone="loading" title="正在加载收藏" className="min-h-[280px]" />
+                  ) : favoriteItems.length > 0 ? (
+                    <ShelfPanel
+                      items={favoriteItems}
+                      progressMap={progressMap}
+                      onOpenNovel={(novelId) => navigate(`/novel/${novelId}`)}
+                      onDiscover={() => navigate('/discover')}
+                    />
+                  ) : (
+                    <AppState
+                      tone="empty"
+                      title="你还没有收藏内容"
+                      description="看到喜欢的作品后，把它们收进收藏，这里会慢慢变成你的私人精选。"
+                      primaryAction={{ label: '去发现', onClick: () => navigate('/discover') }}
+                      className="min-h-[280px]"
+                    />
+                  )}
+                </div>
               ) : (
-                <AppState
-                  tone="empty"
-                  title="你还没有收藏内容"
-                  description="看到喜欢的作品后，把它们收进收藏，这里会慢慢变成你的私人精选。"
-                  primaryAction={{ label: '去发现', onClick: () => navigate('/discover') }}
-                  className="min-h-[280px]"
-                />
+                <div className="mt-1">
+                  <BookmarkedPostsPanel userId={currentUser.id} />
+                </div>
               )}
             </div>
           ) : null}

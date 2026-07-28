@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
 import { PostListSkeleton } from '@/components/ui/Skeleton'
-import { listUserLikedPosts, listUserReplies } from '@/features/community/api'
+import { listUserBookmarkedPosts, listUserLikedPosts, listUserReplies } from '@/features/community/api'
 import PostCard from '@/features/community/components/PostCard'
 import { formatRelativeTime } from '@/features/community/utils'
 import type { UserReplyItem } from '../../../../shared/contracts'
@@ -66,6 +66,60 @@ export function LikedPostsPanel({ userId, isSelf = false }: { userId: string; is
         description={
           isSelf ? '在社区里给打动你的帖子点个赞，它们会被收进这里。' : '等 TA 开始点赞后，这里会展示喜欢过的帖子。'
         }
+        className="min-h-[240px] border-0 shadow-none"
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-3 pt-3">
+      {items.map((post) => (
+        <PostCard key={post.id} post={post} />
+      ))}
+    </div>
+  )
+}
+
+/** 收藏的帖子面板：个人中心收藏页的「帖子」子栏，仅本人可见 */
+export function BookmarkedPostsPanel({ userId }: { userId: string }) {
+  const query = useQuery({
+    queryKey: ['community', 'bookmarked-posts', userId],
+    queryFn: () => listUserBookmarkedPosts(userId),
+    enabled: Boolean(userId),
+  })
+
+  if (query.isLoading) {
+    return (
+      <div className="pt-3">
+        <PostListSkeleton count={2} />
+      </div>
+    )
+  }
+
+  if (query.isError) {
+    return (
+      <AppState
+        tone="error"
+        title="收藏的帖子暂时没有打开"
+        description={query.error instanceof Error ? query.error.message : '请稍后再试。'}
+        primaryAction={{ label: '重新加载', onClick: () => void query.refetch() }}
+        className="min-h-[240px] border-0 shadow-none"
+      />
+    )
+  }
+
+  if (query.data?.restricted) {
+    return <RestrictedState label="收藏列表" />
+  }
+
+  const items = query.data?.items ?? []
+
+  if (items.length === 0) {
+    return (
+      <AppState
+        tone="empty"
+        title="你还没有收藏帖子"
+        description="在社区里点亮帖子下方的星标，它们会被收进这里。"
         className="min-h-[240px] border-0 shadow-none"
       />
     )
@@ -201,7 +255,13 @@ export function RepliesPanel({ userId, isSelf = false }: { userId: string; isSel
 
             {item.likeCount > 0 ? (
               <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
-                <Heart className="h-3.5 w-3.5" />
+                <Heart
+                  className={
+                    item.likedByViewer
+                      ? 'h-3.5 w-3.5 fill-[var(--color-brand)] text-[var(--color-brand)]'
+                      : 'h-3.5 w-3.5'
+                  }
+                />
                 {item.likeCount}
               </p>
             ) : null}

@@ -20,6 +20,7 @@ import {
   listUserFollowersData,
   listUserFollowingData,
   listUserLikedPostsData,
+  listUserBookmarkedPostsData,
   listUserRepliesData,
   listReceivedLikesData,
   markInteractionSeenData,
@@ -374,6 +375,25 @@ router.get('/:userId/liked-posts', async (req: Request, res: Response): Promise<
     }
 
     const payload = await listUserLikedPostsData(targetUserId, viewerUserId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:userId/bookmarked-posts', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const viewerUserId = getSessionUserId(req)
+    const targetUserId = req.params.userId === 'me' ? viewerUserId : req.params.userId
+
+    if (!targetUserId) {
+      res.status(401).json(buildError(requestId, 'AUTH_REQUIRED', '请先登录后再继续。'))
+      return
+    }
+
+    const payload = await listUserBookmarkedPostsData(targetUserId, viewerUserId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

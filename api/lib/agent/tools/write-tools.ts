@@ -4,7 +4,7 @@ import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../../prisma.js'
 import { ALL_NOVEL_TAGS, MAX_NOVEL_TAGS } from '../../../../shared/contracts/novel-tags.js'
-import { getChapterBaseline, recordChapterBaseline } from '../baseline.js'
+import { getChapterBaseline, getLastTouchedChapter, recordChapterBaseline } from '../baseline.js'
 import { defineTool, type ToolContext, type ToolResult } from './types.js'
 
 const WRITE_PERMISSION = { plan: 'deny', build: 'allow', review: 'deny' } as const
@@ -14,6 +14,27 @@ async function findOwnedChapter(ctx: ToolContext, chapterId: string) {
   return prisma.chapter.findFirst({
     where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
   })
+}
+
+/** chapterId 兜底：模型写长正文时经常漏传 chapterId，与其打回重试（重发整章又贵又易错），
+ * 不如服务端直接补：优先本 run 最近读/写过的章节，其次作者当前打开的章节 */
+function resolveChapterId(ctx: ToolContext, chapterId: string | undefined): string | null {
+  const trimmed = chapterId?.trim()
+  if (trimmed) {
+    return trimmed
+  }
+  return getLastTouchedChapter(ctx.runId) ?? ctx.chapterId
+}
+
+const MISSING_CHAPTER_HINT =
+  '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId，或用 chapter_create 新建章节。'
+
+/** 章节不存在时附带当前章节提示，帮模型一次性纠错而不是盲猜 */
+function buildChapterNotFound(ctx: ToolContext, chapterId: string): ToolResult {
+  const hint = ctx.chapterId && ctx.chapterId !== chapterId ? `作者当前打开的章节是 chapterId=${ctx.chapterId}。` : ''
+  return {
+    output: `章节 ${chapterId} 不存在或不属于当前作品。${hint}请用 novel_get_context 查看章节列表确认后重试。`,
+  }
 }
 
 async function recalcNovelStats(novelId: string) {
@@ -58,7 +79,7 @@ async function writeChapterContent(
   const chapter = await findOwnedChapter(ctx, chapterId)
 
   if (!chapter) {
-    return { output: `章节 ${chapterId} 不存在或不属于当前作品。请先用 novel_get_context 查看章节列表。` }
+    return buildChapterNotFound(ctx, chapterId)
   }
 
   const baseline = getChapterBaseline(ctx.runId, chapter.id)
@@ -148,13 +169,17 @@ export const chapterWriteTool = defineTool({
   description:
     '用新内容整体覆盖指定章节的正文。需要已存在的 chapterId（新章节请先 chapter_create）。覆盖前建议先 chapter_read 了解现有内容；如只是接着写请用 chapter_append。',
   parameters: z.object({
-    chapterId: z.string().describe('目标章节 ID'),
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认写入最近操作/当前正在编辑的章节'),
     content: z.string().min(1).describe('完整的新正文'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    return writeChapterContent(ctx, args.chapterId, () => args.content, '覆盖写入')
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    return writeChapterContent(ctx, chapterId, () => args.content, '覆盖写入')
   },
 })
 
@@ -163,15 +188,19 @@ export const chapterAppendTool = defineTool({
   title: '追加章节正文',
   description: '把生成的内容追加到指定章节正文末尾（自动补一个空行分隔），用于续写场景。',
   parameters: z.object({
-    chapterId: z.string().describe('目标章节 ID'),
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认追加到最近操作/当前正在编辑的章节'),
     content: z.string().min(1).describe('要追加的内容'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
     return writeChapterContent(
       ctx,
-      args.chapterId,
+      chapterId,
       (current) => (current.trim() ? `${current.replace(/\s+$/, '')}\n\n${args.content}` : args.content),
       '追加',
     )
@@ -184,7 +213,7 @@ export const chapterEditRangeTool = defineTool({
   description:
     '按字符区间替换章节正文的一个片段（选区级改写/润色），避免整章覆盖。start/end 为字符下标（含头不含尾），与用户选中文本或 chapter_read 返回的定位一致。',
   parameters: z.object({
-    chapterId: z.string().describe('目标章节 ID'),
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
     start: z.number().int().min(0).describe('片段起始字符位置'),
     end: z.number().int().min(0).describe('片段结束字符位置（不含）'),
     newText: z.string().describe('替换后的新文本'),
@@ -192,10 +221,14 @@ export const chapterEditRangeTool = defineTool({
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const chapter = await findOwnedChapter(ctx, args.chapterId)
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    const chapter = await findOwnedChapter(ctx, chapterId)
 
     if (!chapter) {
-      return { output: `章节 ${args.chapterId} 不存在或不属于当前作品。` }
+      return buildChapterNotFound(ctx, chapterId)
     }
 
     if (args.end < args.start || args.start > chapter.content.length) {
@@ -225,9 +258,10 @@ export const chapterEditRangeTool = defineTool({
         kind: 'chapterDiff',
         chapterId: chapter.id,
         chapterTitle: chapter.title,
-        before: before.slice(Math.max(0, args.start - 200), Math.min(before.length, end + 200)),
-        after:
-          after.slice(Math.max(0, args.start - 200), Math.min(after.length, args.start + args.newText.length + 200)),
+        // 必须返回完整正文：前端审查态直接把 before/after 当整章内容构建 diff 视图与回滚快照，
+        // 若只截片段会导致审查视图缺失未修改部分、撤销时整章被错误替换成片段
+        before,
+        after,
         appliedDirectly: true,
       },
       snapshot: { target: 'chapter', targetId: chapter.id, field: 'content', previousValue: before },
@@ -240,16 +274,20 @@ export const chapterRenameTool = defineTool({
   title: '重命名章节',
   description: '修改指定章节的标题。',
   parameters: z.object({
-    chapterId: z.string().describe('目标章节 ID'),
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
     title: z.string().min(1).max(120).describe('新的章节标题'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const chapter = await findOwnedChapter(ctx, args.chapterId)
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    const chapter = await findOwnedChapter(ctx, chapterId)
 
     if (!chapter) {
-      return { output: `章节 ${args.chapterId} 不存在或不属于当前作品。` }
+      return buildChapterNotFound(ctx, chapterId)
     }
 
     const previousTitle = chapter.title

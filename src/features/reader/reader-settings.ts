@@ -67,33 +67,55 @@ export const ttsRateOptions = [0.75, 1, 1.25, 1.5, 2, 3] as const
 type PersistedSettings = {
   fontScale?: ReaderFontScale
   tone?: ReaderTone
+  /** 选择底色时的全局主题模式：显式选择只在同主题下生效，切主题后回到跟随默认 */
+  toneTheme?: 'light' | 'dark'
   /** 听书音色 id，空串 = 跟随服务端默认音色 */
   ttsVoice?: string
   ttsRate?: number
   ttsAutoNext?: boolean
 }
 
-const FALLBACK: Required<PersistedSettings> = {
+const FALLBACK: LoadedReaderSettings = {
   fontScale: 'comfortable',
-  tone: 'paper',
+  tone: null,
+  toneTheme: null,
   ttsVoice: '',
   ttsRate: 1,
   ttsAutoNext: true,
 }
 
-export function loadReaderSettings(): Required<PersistedSettings> {
+/** 读取后的设置：tone 为 null 表示用户未显式选择底色，默认跟随全局主题 */
+export type LoadedReaderSettings = Omit<Required<PersistedSettings>, 'tone' | 'toneTheme'> & {
+  tone: ReaderTone | null
+  toneTheme: 'light' | 'dark' | null
+}
+
+/** 默认底色跟随全局主题：深色→夜读，浅色→纸感 */
+export function getThemeDefaultTone(isDark?: boolean): ReaderTone {
+  const dark =
+    isDark ??
+    (typeof document !== 'undefined' && document.documentElement.classList.contains('dark'))
+  return dark ? 'night' : 'paper'
+}
+
+export function loadReaderSettings(): LoadedReaderSettings {
   if (typeof window === 'undefined') return FALLBACK
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return FALLBACK
     const parsed = JSON.parse(raw) as PersistedSettings
+    // 旧版本存的 tone 没有 toneTheme，视为未显式选择，回到跟随主题
+    const toneTheme = parsed.toneTheme === 'light' || parsed.toneTheme === 'dark' ? parsed.toneTheme : null
+    const tone =
+      toneTheme !== null && toneOptions.some((option) => option.id === parsed.tone)
+        ? (parsed.tone as ReaderTone)
+        : null
     return {
       fontScale: fontScaleOptions.some((option) => option.id === parsed.fontScale)
         ? (parsed.fontScale as ReaderFontScale)
         : FALLBACK.fontScale,
-      tone: toneOptions.some((option) => option.id === parsed.tone)
-        ? (parsed.tone as ReaderTone)
-        : FALLBACK.tone,
+      tone,
+      toneTheme: tone === null ? null : toneTheme,
       ttsVoice: typeof parsed.ttsVoice === 'string' ? parsed.ttsVoice : FALLBACK.ttsVoice,
       ttsRate: ttsRateOptions.some((option) => option === parsed.ttsRate)
         ? (parsed.ttsRate as number)

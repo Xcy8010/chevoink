@@ -19,6 +19,7 @@ import RankingsPage from '@/pages/RankingsPage'
 import ReaderPage from '@/pages/ReaderPage'
 import SearchPage from '@/pages/SearchPage'
 import StudioPage from '@/pages/StudioPage'
+import TopicPage from '@/pages/TopicPage'
 
 export type AppRouteDefinition = {
   path: string
@@ -96,6 +97,12 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '看看大家正在聊什么，也把你的想法发出来',
     description: '创作动态、读后讨论和作品话题都集中在这里，让交流更自然发生。',
     element: <CommunityPage />,
+  },
+  {
+    path: '/community/topic/:topicKey',
+    title: '围绕这个话题，看看大家聊出了什么',
+    description: '同一话题下的讨论都收在这里，按热门或最新继续浏览。',
+    element: <TopicPage />,
   },
   {
     path: '/messages',

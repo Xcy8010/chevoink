@@ -21,11 +21,17 @@ export default function NovelReferenceCard({ novel, className }: NovelReferenceC
         .filter(Boolean)
         .join(' ')}
     >
-      <img
-        src={novel.coverUrl ?? ''}
-        alt={novel.title}
-        className="h-16 w-12 rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
-      />
+      {novel.coverUrl ? (
+        <img
+          src={novel.coverUrl}
+          alt={novel.title}
+          className="h-16 w-12 shrink-0 rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
+        />
+      ) : (
+        <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-tertiary)]">
+          <BookOpen className="h-5 w-5" />
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
           <BookOpen className="h-3.5 w-3.5" />
@@ -33,7 +39,7 @@ export default function NovelReferenceCard({ novel, className }: NovelReferenceC
         </div>
         <p className="mt-1 line-clamp-1 text-sm font-medium text-[var(--text-primary)]">{novel.title}</p>
       </div>
-      <ChevronRight className="h-4 w-4 text-[var(--text-tertiary)]" />
+      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
     </Link>
   )
 }

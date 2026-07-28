@@ -98,8 +98,9 @@ export default function PlanChangeReview({
 
   return (
     <div className={cn('relative flex h-full min-h-0 flex-col', className)}>
-      <div className="min-h-0 flex-1 overflow-y-auto rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5 pb-24">
-        <div className="border-b border-[var(--border-subtle)] pb-4">
+      <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)]">
+        {/* 标题在滚动区外：与章节审查视图一致，滚动 diff 正文时不会从标题上方穿透 */}
+        <div className="border-b border-[var(--border-subtle)] px-5 pb-4 pt-5">
           <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
             {review.title.trim() || '未命名计划'}
           </p>
@@ -108,7 +109,8 @@ export default function PlanChangeReview({
           </p>
         </div>
 
-        <div className="mt-4 text-sm leading-8 text-[var(--text-primary)]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-24 pt-4">
+          <div className="text-sm leading-8 text-[var(--text-primary)]">
           {blocks.length > 0 ? (
             blocks.map((block, blockIndex) => {
               if (block.hunkIndex === null) {
@@ -179,9 +181,10 @@ export default function PlanChangeReview({
             })
           ) : (
             <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-3 text-sm leading-7 text-[var(--text-secondary)]">
-              本次没有内容差异，主要调整可能是计划标题。
+                本次没有内容差异，主要调整可能是计划标题。
             </div>
           )}
+          </div>
         </div>
       </div>
 

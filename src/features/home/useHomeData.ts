@@ -29,27 +29,6 @@ export type HomeData = {
 
 const FALLBACK_CATEGORIES = PRIMARY_CATEGORIES
 
-const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000
-
-/** 社区热议：只推两周内有动静的帖子，按互动热度加新鲜度排序；两周内无帖时回退到最新帖 */
-function rankHotPosts(posts: Post[]): Post[] {
-  const now = Date.now()
-  const recent = posts.filter((post) => {
-    const activeAt = new Date(post.updatedAt ?? post.createdAt).getTime()
-    return now - activeAt <= TWO_WEEKS_MS
-  })
-  const pool = recent.length > 0 ? recent : posts
-
-  const score = (post: Post) => {
-    const activeAt = new Date(post.updatedAt ?? post.createdAt).getTime()
-    const freshDays = Math.max(0, (now - activeAt) / (24 * 60 * 60 * 1000))
-    // 评论权重最高（代表讨论度），其次点赞收藏，再叠加时间衰减
-    return post.commentCount * 4 + post.likeCount * 3 + post.favoriteCount * 3 + Math.max(0, 14 - freshDays)
-  }
-
-  return [...pool].sort((left, right) => score(right) - score(left))
-}
-
 function dedupeNovels(novels: NovelCard[]): NovelCard[] {
   return novels.filter((novel, index, list) => list.findIndex((item) => item.id === novel.id) === index)
 }
@@ -101,7 +80,8 @@ export function useHomeData() {
     const serverHot = asArray(query.data.rankingHot as NovelCard[] | undefined).filter(notDraft)
     const serverNew = asArray(query.data.rankingNew as NovelCard[] | undefined).filter(notDraft)
     const serverFinished = asArray(query.data.rankingFinished as NovelCard[] | undefined).filter(notDraft)
-    const hotPosts = rankHotPosts(asArray(query.data.hotPosts))
+    // 热门讨论：服务端已按推荐分排好序（方案 18 §2.3），前端不再二次重排
+    const hotPosts = asArray(query.data.hotPosts)
     const hotTopics = asArray(query.data.hotTopics)
 
     const all = dedupeNovels([...recommended, ...serverHot, ...serverNew, ...latest, ...continueReading])

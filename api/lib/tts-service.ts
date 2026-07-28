@@ -19,10 +19,10 @@ import { DataAccessError, prisma } from './prisma.js'
 
 /** 精选中文神经音色白名单（v1 定案，见方案 3.2） */
 const TTS_VOICE_WHITELIST: TtsVoice[] = [
-  { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 温柔女声', gender: 'female', recommended: true },
+  { id: 'zh-CN-YunjianNeural', label: '云健 · 沉稳男声', gender: 'male', recommended: true },
   { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 活泼少女', gender: 'female' },
   { id: 'zh-CN-YunxiNeural', label: '云希 · 清朗青年', gender: 'male', recommended: true },
-  { id: 'zh-CN-YunjianNeural', label: '云健 · 沉稳男声', gender: 'male' },
+  { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 温柔女声', gender: 'female' },
   { id: 'zh-CN-YunyangNeural', label: '云扬 · 新闻男声', gender: 'male' },
   { id: 'zh-CN-XiaochenNeural', label: '晓辰 · 知性女声', gender: 'female' },
 ]

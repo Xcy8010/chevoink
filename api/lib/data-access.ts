@@ -44,7 +44,8 @@ import type {
   UserSummary,
   Visibility,
 } from '../../shared/contracts/index.js'
-import { ALL_NOVEL_TAGS } from '../../shared/contracts/novel-tags.js'
+import { ALL_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../shared/contracts/novel-tags.js'
+import { extractTopicNames } from '../../shared/contracts/topic-parse.js'
 import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, verifyPassword } from './password.js'
 import { paginate } from './http.js'
 import { storeNovelCoverDataUrl } from './novel-cover-storage.js'
@@ -65,6 +66,7 @@ const postInclude = {
       author: true,
     },
   },
+  sharedUser: true,
 } satisfies Prisma.PostInclude
 
 const commentInclude = {
@@ -291,6 +293,7 @@ function toComment(record: any): Comment {
     rootId: record.rootId ?? null,
     content: record.content,
     rating: record.rating ?? null,
+    paragraphIndex: record.paragraphIndex ?? null,
     likeCount: record.likeCount ?? 0,
     replyCount: record.replyCount ?? 0,
     auditStatus: record.auditStatus,
@@ -325,6 +328,14 @@ function toPost(record: any): Post {
           id: record.relatedNovel.id,
           title: record.relatedNovel.title,
           coverUrl: record.relatedNovel.coverAsset?.imageUrl ?? null,
+        }
+      : null,
+    sharedUser: record.sharedUser
+      ? {
+          id: record.sharedUser.id,
+          nickname: record.sharedUser.nickname,
+          avatarUrl: record.sharedUser.avatarUrl ?? null,
+          bio: record.sharedUser.bio ?? null,
         }
       : null,
     likeCount: record.likeCount ?? 0,
@@ -567,8 +578,46 @@ export async function listTopicsData(): Promise<{ items: TopicSummary[] }> {
   }
 }
 
-export async function getHomePayloadData() {
-  const [novelPool, hotTopics, hotPosts] = await prisma.$transaction([
+/** 推荐话题（方案 18 §3.4）：trendScore = 近7天帖数*3 + log2(1+总帖数)，取前 3 个 */
+export async function listRecommendedTopicsData(): Promise<{ items: TopicSummary[] }> {
+  const since = new Date(Date.now() - 7 * 86_400_000)
+  const [topics, recentLinks] = await Promise.all([
+    prisma.topic.findMany({
+      orderBy: [{ postCount: 'desc' }, { name: 'asc' }],
+      take: 50,
+    }),
+    prisma.postTopic.groupBy({
+      by: ['topicId'],
+      where: { createdAt: { gte: since } },
+      _count: { topicId: true },
+    }),
+  ])
+
+  const recentCountMap = new Map(recentLinks.map((entry) => [entry.topicId, entry._count.topicId]))
+  const items = topics
+    .map((topic) => ({
+      topic,
+      score: (recentCountMap.get(topic.id) ?? 0) * 3 + Math.log2(1 + topic.postCount),
+    }))
+    .sort((a, b) => b.score - a.score || b.topic.postCount - a.topic.postCount)
+    .slice(0, 3)
+    .map((entry) => toTopic(entry.topic))
+
+  return { items }
+}
+
+/** 按 slug/name/id 依次解析话题：话题详情页入口 */
+export async function resolveTopicData(key: string): Promise<TopicSummary | null> {
+  const topic =
+    (await prisma.topic.findUnique({ where: { slug: key } })) ??
+    (await prisma.topic.findUnique({ where: { name: key } })) ??
+    (await prisma.topic.findUnique({ where: { id: key } }))
+
+  return topic ? toTopic(topic) : null
+}
+
+async function buildHomePayload() {
+  const [novelPool, hotTopics, hotPostRecords] = await prisma.$transaction([
     // 候选池：只取公开且已发布/已完结、且至少有一个公开章节的作品，榜单在内存中加权计算
     prisma.novel.findMany({
       include: novelInclude,
@@ -583,7 +632,7 @@ export async function getHomePayloadData() {
     prisma.post.findMany({
       include: postInclude,
       orderBy: [{ createdAt: 'desc' }],
-      take: 8,
+      take: 100,
     }),
   ])
 
@@ -621,6 +670,13 @@ export async function getHomePayloadData() {
     )
     .slice(0, 8)
 
+  // 热门讨论：与社区推荐流同一套打分，服务端即唯一排序来源（方案 18 §2.3）
+  const hotPosts = hotPostRecords
+    .map((record) => ({ record, score: computePostRecommendScore(record, now) }))
+    .sort((a, b) => b.score - a.score || b.record.createdAt.getTime() - a.record.createdAt.getTime())
+    .slice(0, 8)
+    .map((entry) => toPost(entry.record))
+
   return {
     continueReading: latestUpdated.slice(0, 1),
     recommendedNovels: rankingHot.slice(0, 8),
@@ -629,7 +685,29 @@ export async function getHomePayloadData() {
     rankingNew,
     rankingFinished,
     hotTopics: hotTopics.map(toTopic),
-    hotPosts: hotPosts.map(toPost),
+    hotPosts,
+  }
+}
+
+/** 首页榜单 60s 内存缓存：只缓存与 viewer 无关的基础 payload，viewer flags 每请求另行附加 */
+const HOME_PAYLOAD_CACHE_TTL_MS = 60_000
+let homePayloadCache: { payload: Awaited<ReturnType<typeof buildHomePayload>>; expiresAt: number } | null = null
+
+export async function getHomePayloadData(viewerUserId?: string | null) {
+  const nowMs = Date.now()
+  if (!homePayloadCache || homePayloadCache.expiresAt <= nowMs) {
+    homePayloadCache = { payload: await buildHomePayload(), expiresAt: nowMs + HOME_PAYLOAD_CACHE_TTL_MS }
+  }
+
+  const payload = homePayloadCache.payload
+  const flags = await getViewerPostFlags(
+    viewerUserId,
+    payload.hotPosts.map((post) => post.id),
+  )
+
+  return {
+    ...payload,
+    hotPosts: payload.hotPosts.map((post) => attachPostViewerFlags(post, flags)),
   }
 }
 
@@ -829,6 +907,95 @@ export async function publishNovelData(
   }
 }
 
+/** 标签 → 所属分组下标：用于「相似标签」（同组不同名）判定 */
+const NOVEL_TAG_GROUP_INDEX = new Map<string, number>()
+NOVEL_TAG_GROUPS.forEach((group, index) => {
+  for (const tag of group.tags) {
+    if (!NOVEL_TAG_GROUP_INDEX.has(tag)) {
+      NOVEL_TAG_GROUP_INDEX.set(tag, index)
+    }
+  }
+})
+
+const RELATED_CANDIDATE_LIMIT = 200
+const RELATED_NOVEL_COUNT = 4
+
+type RelatedNovelSignals = {
+  authorId: string
+  categoryName: string | null
+  tagNames: string[]
+  likeCount: number
+  commentCount: number
+  favoriteCount: number
+  viewCount: number
+  chapterCount: number
+  wordCount: number
+  lastPublishedAt: Date | null
+  updatedAt: Date
+}
+
+/** 与首页热度榜同口径的热度分：互动加权（阅读1/点赞3/评论4/收藏5）+ 内容规模，除以更新时间衰减 */
+function computeNovelHotScore(novel: RelatedNovelSignals, nowMs: number): number {
+  const engagement = novel.viewCount + novel.likeCount * 3 + novel.commentCount * 4 + novel.favoriteCount * 5
+  const substance = Math.min(novel.chapterCount, 50) * 2 + Math.min(novel.wordCount / 10000, 30)
+  const lastActive = (novel.lastPublishedAt ?? novel.updatedAt).getTime()
+  const ageDays = Math.max(0, (nowMs - lastActive) / 86_400_000)
+  return (engagement + substance) / Math.pow(ageDays + 2, 1.4)
+}
+
+/** 标签亲和分：同名标签 3 分/个、同分类 2 分、同组相似标签 1 分/个 */
+function computeTagAffinity(source: RelatedNovelSignals, candidate: RelatedNovelSignals): number {
+  const sourceTags = new Set(source.tagNames)
+  const sourceGroups = new Set(
+    source.tagNames
+      .map((tag) => NOVEL_TAG_GROUP_INDEX.get(tag))
+      .filter((index): index is number => index !== undefined),
+  )
+
+  let score = 0
+
+  if (source.categoryName && candidate.categoryName && source.categoryName === candidate.categoryName) {
+    score += 2
+  }
+
+  for (const tag of new Set(candidate.tagNames)) {
+    if (sourceTags.has(tag)) {
+      score += 3
+      continue
+    }
+
+    const group = NOVEL_TAG_GROUP_INDEX.get(tag)
+    if (group !== undefined && sourceGroups.has(group)) {
+      score += 1
+    }
+  }
+
+  return score
+}
+
+/** 相关推荐排序：标签相同/相似且热门 > 标签相同/相似 > 同作者 > 其它，各档内按热度降序 */
+function rankRelatedNovels<T extends RelatedNovelSignals & { id: string }>(
+  source: RelatedNovelSignals,
+  candidates: T[],
+): T[] {
+  const nowMs = Date.now()
+
+  const scored = candidates.map((candidate) => {
+    const affinity = computeTagAffinity(source, candidate)
+    const tier = affinity > 0 ? 0 : candidate.authorId === source.authorId ? 1 : 2
+    return { candidate, affinity, tier, hot: computeNovelHotScore(candidate, nowMs) }
+  })
+
+  return scored
+    .sort((left, right) => {
+      if (left.tier !== right.tier) return left.tier - right.tier
+      if (right.hot !== left.hot) return right.hot - left.hot
+      return right.affinity - left.affinity
+    })
+    .slice(0, RELATED_NOVEL_COUNT)
+    .map((item) => item.candidate)
+}
+
 export async function getNovelDetailData(
   novelId: string,
   viewerUserId?: string | null,
@@ -858,7 +1025,7 @@ export async function getNovelDetailData(
         OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }],
       }
 
-  const [chapterRecords, commentRecords, relatedRecords, authorPublicNovelCount, ratingAggregate] = await prisma.$transaction([
+  const [chapterRecords, commentRecords, relatedPoolRecords, authorNovelRecords, authorPublicNovelCount, ratingAggregate] = await prisma.$transaction([
     prisma.chapter.findMany({
       where: chapterWhere,
       select: chapterListItemSelect,
@@ -873,6 +1040,7 @@ export async function getNovelDetailData(
       orderBy: { createdAt: 'desc' },
       take: 10,
     }),
+    // 相关推荐候选池：按更新时间取近期作品，内存中按标签亲和/热度/同作者分档排序
     prisma.novel.findMany({
       where: {
         id: { not: novelId },
@@ -880,7 +1048,18 @@ export async function getNovelDetailData(
       },
       include: novelInclude,
       orderBy: [{ updatedAt: 'desc' }],
-      take: 4,
+      take: RELATED_CANDIDATE_LIMIT,
+    }),
+    // 同作者作品单独兜底取一份，避免候选池按更新时间截断后漏掉
+    prisma.novel.findMany({
+      where: {
+        id: { not: novelId },
+        authorId: novel.authorId,
+        ...searchableNovelWhere,
+      },
+      include: novelInclude,
+      orderBy: [{ updatedAt: 'desc' }],
+      take: 20,
     }),
     // 作者卡片的「X 部作品」只统计对外可见的作品，与作者主页口径一致
     prisma.novel.count({
@@ -900,6 +1079,13 @@ export async function getNovelDetailData(
         select: { id: true },
       })
     : null
+
+  // 合并候选池与同作者兜底后去重，再按分档策略排序取前 4 本
+  const relatedCandidates = new Map<string, (typeof relatedPoolRecords)[number]>()
+  for (const record of [...relatedPoolRecords, ...authorNovelRecords]) {
+    relatedCandidates.set(record.id, record)
+  }
+  const relatedRecords = rankRelatedNovels(novel, [...relatedCandidates.values()])
 
   const novelPayload = toNovel(novel, viewerUserId)
   novelPayload.author.novelCount = authorPublicNovelCount
@@ -1226,6 +1412,85 @@ export async function deleteNovelData(userId: string, novelId: string): Promise<
   return true
 }
 
+/** 评论排序候选集上限：单目标评论百千级，内存线程化排序足够 */
+const COMMENT_RANK_FETCH_LIMIT = 1000
+
+/** 评论打分（方案 18 §2）：
+ * - 帖子评论/章评/段评：热门优先 like*2 + reply + 新鲜加成
+ * - 书评（novel）：优质优先 like*3 + reply*2 + 新鲜加成
+ * 新鲜加成 = max(0, 48 - ageHours) / 48 * 2，保证新评论 48 小时内有冒头机会 */
+function computeCommentRankScore(
+  record: { likeCount: number; replyCount: number; createdAt: Date },
+  targetType: CommentTargetType,
+  nowMs: number,
+): number {
+  const ageHours = Math.max(0, (nowMs - record.createdAt.getTime()) / 3_600_000)
+  const freshBonus = (Math.max(0, 48 - ageHours) / 48) * 2
+
+  if (targetType === 'novel') {
+    return record.likeCount * 3 + record.replyCount * 2 + freshBonus
+  }
+
+  return record.likeCount * 2 + record.replyCount + freshBonus
+}
+
+/** 线程扁平化排序：根评论按策略分降序，各自楼中楼回复按时间正序紧随其后，
+ * 前端 buildThreads 按 parent 链归并时直接继承此顺序，无需前端改动 */
+function rankCommentRecords<
+  T extends { id: string; parentId: string | null; rootId: string | null; likeCount: number; replyCount: number; createdAt: Date },
+>(records: T[], targetType: CommentTargetType): T[] {
+  const nowMs = Date.now()
+  const roots = records.filter((record) => !record.parentId)
+  const replies = records.filter((record) => Boolean(record.parentId))
+
+  roots.sort((a, b) => {
+    const scoreDiff = computeCommentRankScore(b, targetType, nowMs) - computeCommentRankScore(a, targetType, nowMs)
+    if (scoreDiff !== 0) {
+      return scoreDiff
+    }
+    const timeDiff = b.createdAt.getTime() - a.createdAt.getTime()
+    if (timeDiff !== 0) {
+      return timeDiff
+    }
+    return b.id.localeCompare(a.id)
+  })
+
+  const rootIds = new Set(roots.map((record) => record.id))
+  const byRoot = new Map<string, T[]>()
+  const orphans: T[] = []
+
+  for (const reply of replies) {
+    const key =
+      reply.rootId && rootIds.has(reply.rootId)
+        ? reply.rootId
+        : reply.parentId && rootIds.has(reply.parentId)
+          ? reply.parentId
+          : null
+    if (!key) {
+      orphans.push(reply)
+      continue
+    }
+    const bucket = byRoot.get(key)
+    if (bucket) {
+      bucket.push(reply)
+    } else {
+      byRoot.set(key, [reply])
+    }
+  }
+
+  for (const bucket of byRoot.values()) {
+    bucket.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+  }
+  orphans.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+
+  const flattened: T[] = []
+  for (const root of roots) {
+    flattened.push(root, ...(byRoot.get(root.id) ?? []))
+  }
+  flattened.push(...orphans)
+  return flattened
+}
+
 export async function listCommentsData(
   targetType: CommentTargetType,
   targetId: string,
@@ -1233,24 +1498,20 @@ export async function listCommentsData(
   pageSize: number,
   viewerUserId?: string | null,
 ) {
-  const [items, total] = await prisma.$transaction([
+  const where: Prisma.CommentWhereInput = { targetType, targetId }
+  const [records, total] = await prisma.$transaction([
     prisma.comment.findMany({
-      where: {
-        targetType,
-        targetId,
-      },
+      where,
       include: commentInclude,
       orderBy: [{ createdAt: 'desc' }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      take: COMMENT_RANK_FETCH_LIMIT,
     }),
-    prisma.comment.count({
-      where: {
-        targetType,
-        targetId,
-      },
-    }),
+    prisma.comment.count({ where }),
   ])
+
+  const ranked = rankCommentRecords(records, targetType)
+  const start = (page - 1) * pageSize
+  const items = ranked.slice(start, start + pageSize)
 
   const likedCommentIds = await getViewerLikedCommentIds(
     viewerUserId,
@@ -1275,6 +1536,15 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
   }
   const rating = isNovelRootComment ? input.rating! : null
 
+  // 章节段评：仅章节根评论记录段落序号，非法值一律归为章评
+  const paragraphIndex =
+    input.targetType === 'chapter' &&
+    !input.parentId &&
+    Number.isInteger(input.paragraphIndex) &&
+    (input.paragraphIndex as number) >= 0
+      ? (input.paragraphIndex as number)
+      : null
+
   // 作品根评论一人只能发一条，重复发表引导去编辑/删除
   if (isNovelRootComment) {
     const existing = await prisma.comment.findFirst({
@@ -1296,6 +1566,7 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
         rootId: input.parentId ?? null,
         content: input.content,
         rating,
+        paragraphIndex,
         auditStatus: 'pending',
         ...targetIds,
       },
@@ -1634,17 +1905,78 @@ export async function setCommentLikeData(
   })
 }
 
+export type PostFeedSort = 'recommended' | 'latest'
+
+/** 推荐流单轮候选集上限：千级帖子规模内存打分足够，避免全表扫描 */
+const RECOMMEND_CANDIDATE_LIMIT = 500
+
+/** 帖子推荐分（方案 18 §1.2）：对数压缩互动量 + 时间衰减；
+ * age 以快照时间为基准，保证同一轮浏览翻页打分一致不跳位 */
+function computePostRecommendScore(
+  post: { likeCount: number; commentCount: number; favoriteCount: number; createdAt: Date },
+  referenceMs: number,
+): number {
+  const ageHours = Math.max(0, (referenceMs - post.createdAt.getTime()) / 3_600_000)
+  const engagement = post.likeCount * 3 + post.commentCount * 4 + post.favoriteCount * 5
+  return Math.log2(1 + engagement) / Math.pow(ageHours + 2, 1.3)
+}
+
 export async function listPostsData(
   page: number,
   pageSize: number,
   topicId?: string,
   viewerUserId?: string | null,
   authorUserId?: string,
+  sort: PostFeedSort = 'latest',
+  snapshotAt?: string,
 ) {
   const where: Prisma.PostWhereInput = {
-    ...(topicId ? { topicId } : {}),
+    // 话题过滤同时兼容旧单外键与新多对多关联（方案 18 §3）
+    ...(topicId ? { OR: [{ topicId }, { topicLinks: { some: { topicId } } }] } : {}),
     ...(authorUserId ? { userId: authorUserId } : {}),
   }
+
+  if (sort === 'recommended') {
+    // 快照式游标：首页生成快照时间，翻页回传；快照后新帖不进本轮榜单，刷新重算
+    const parsed = snapshotAt ? new Date(snapshotAt) : null
+    const snapshot = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date()
+
+    const candidates = await prisma.post.findMany({
+      where: { ...where, createdAt: { lte: snapshot } },
+      include: postInclude,
+      orderBy: [{ createdAt: 'desc' }],
+      take: RECOMMEND_CANDIDATE_LIMIT,
+    })
+
+    const referenceMs = snapshot.getTime()
+    const ranked = candidates
+      .map((item) => ({ item, score: computePostRecommendScore(item, referenceMs) }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score
+        }
+        const timeDiff = b.item.createdAt.getTime() - a.item.createdAt.getTime()
+        if (timeDiff !== 0) {
+          return timeDiff
+        }
+        return b.item.id.localeCompare(a.item.id)
+      })
+
+    const start = (page - 1) * pageSize
+    const pageItems = ranked.slice(start, start + pageSize).map((entry) => entry.item)
+
+    const pageFlags = await getViewerPostFlags(
+      viewerUserId,
+      pageItems.map((item) => item.id),
+    )
+
+    return {
+      items: pageItems.map((item) => attachPostViewerFlags(toPost(item), pageFlags)),
+      pagination: buildPagination(page, pageSize, ranked.length),
+      snapshotAt: snapshot.toISOString(),
+    }
+  }
+
   const [items, total] = await prisma.$transaction([
     prisma.post.findMany({
       where,
@@ -1870,6 +2202,7 @@ export async function getPostDetailData(postId: string, viewerUserId?: string | 
       },
       include: commentInclude,
       orderBy: [{ createdAt: 'desc' }],
+      take: COMMENT_RANK_FETCH_LIMIT,
     }),
     prisma.post.findMany({
       where: {
@@ -1881,17 +2214,20 @@ export async function getPostDetailData(postId: string, viewerUserId?: string | 
     }),
   ])
 
+  // 帖子详情评论与列表接口同一套排序策略（热门优先 + 楼中楼正序）
+  const rankedComments = rankCommentRecords(commentRecords, 'post')
+
   const [flags, likedCommentIds] = await Promise.all([
     getViewerPostFlags(viewerUserId, [postId, ...relatedPosts.map((item) => item.id)]),
     getViewerLikedCommentIds(
       viewerUserId,
-      commentRecords.map((item) => item.id),
+      rankedComments.map((item) => item.id),
     ),
   ])
 
   return {
     post: attachPostViewerFlags(toPost(post), flags),
-    comments: commentRecords.map((item) => ({ ...toComment(item), likedByViewer: likedCommentIds.has(item.id) })),
+    comments: rankedComments.map((item) => ({ ...toComment(item), likedByViewer: likedCommentIds.has(item.id) })),
     relatedPosts: relatedPosts.map((item) => attachPostViewerFlags(toPost(item), flags)),
   }
 }
@@ -1900,12 +2236,49 @@ export async function createPostData(userId: string, input: CreatePostRequest): 
   await ensureUserExists(userId)
   ensureNonEmptyText(input.content, 'content')
 
+  // 分享作者卡片：先校验目标用户存在，避免外键报错变成 500
+  if (input.sharedUserId) {
+    const sharedUser = await prisma.user.findUnique({ where: { id: input.sharedUserId } })
+    if (!sharedUser) {
+      throw new DataAccessError(404, 'USER_NOT_FOUND', '未找到要分享的作者。')
+    }
+  }
+
+  // 服务端解析 # 为准（方案 18 §3.2）：自动创建缺失话题，单帖上限 5 个
+  const topicNames = extractTopicNames(input.content)
+
   const post = await prisma.$transaction(async (tx) => {
+    const topicIds: string[] = []
+    for (const name of topicNames) {
+      const existing = await tx.topic.findUnique({ where: { name } })
+      if (existing) {
+        topicIds.push(existing.id)
+        continue
+      }
+      // slug 碰撞时加时间后缀兼容，保证创建不因唯一约束失败
+      const baseSlug = buildSlug(name)
+      const slugTaken = await tx.topic.findUnique({ where: { slug: baseSlug } })
+      const createdTopic = await tx.topic.create({
+        data: { name, slug: slugTaken ? `${baseSlug}-${Date.now().toString(36)}` : baseSlug },
+      })
+      topicIds.push(createdTopic.id)
+    }
+
+    // 旧客户端仍可能直传 topicId：正文无 # 时作为兑底话题
+    if (topicIds.length === 0 && input.topicId) {
+      const legacyTopic = await tx.topic.findUnique({ where: { id: input.topicId } })
+      if (legacyTopic) {
+        topicIds.push(legacyTopic.id)
+      }
+    }
+
     const created = await tx.post.create({
       data: {
         userId,
-        topicId: input.topicId ?? null,
+        // 主话题写回单外键，兼容话题频道栏等旧链路
+        topicId: topicIds[0] ?? null,
         relatedNovelId: input.relatedNovelId ?? null,
+        sharedUserId: input.sharedUserId ?? null,
         content: input.content,
         excerpt: excerptContent(input.content),
         imageUrls: input.imageUrls ?? [],
@@ -1914,9 +2287,13 @@ export async function createPostData(userId: string, input: CreatePostRequest): 
       include: postInclude,
     })
 
-    if (input.topicId) {
-      await tx.topic.update({
-        where: { id: input.topicId },
+    if (topicIds.length > 0) {
+      await tx.postTopic.createMany({
+        data: topicIds.map((topicId) => ({ postId: created.id, topicId })),
+        skipDuplicates: true,
+      })
+      await tx.topic.updateMany({
+        where: { id: { in: topicIds } },
         data: {
           postCount: {
             increment: 1,
@@ -2330,7 +2707,34 @@ export async function listUserLikedPostsData(
     take: 100,
   })
 
-  const items = records.map((record) => toPost(record.post))
+  const flags = await getViewerPostFlags(viewerUserId, records.map((record) => record.post.id))
+  const items = records.map((record) => attachPostViewerFlags(toPost(record.post), flags))
+  return { items, total: items.length }
+}
+
+/** 收藏的帖子列表：个人收藏夹性质，仅本人可见 */
+export async function listUserBookmarkedPostsData(
+  userId: string,
+  viewerUserId: string | null,
+): Promise<{ items: Post[]; total: number; restricted?: boolean }> {
+  const target = await prisma.user.findUnique({ where: { id: userId } })
+  if (!target) {
+    throw new DataAccessError(404, 'USER_NOT_FOUND', '未找到用户。')
+  }
+
+  if (!viewerUserId || viewerUserId !== userId) {
+    return { items: [], total: 0, restricted: true }
+  }
+
+  const records = await prisma.postBookmark.findMany({
+    where: { userId },
+    include: { post: { include: postInclude } },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+
+  const flags = await getViewerPostFlags(viewerUserId, records.map((record) => record.post.id))
+  const items = records.map((record) => attachPostViewerFlags(toPost(record.post), flags))
   return { items, total: items.length }
 }
 
@@ -2367,6 +2771,8 @@ export async function listUserRepliesData(
     take: 100,
   })
 
+  const likedCommentIds = await getViewerLikedCommentIds(viewerUserId, records.map((record) => record.id))
+
   const items: UserReplyItem[] = records.map((record) => {
     const novel = record.novel ?? record.chapter?.novel ?? null
 
@@ -2376,6 +2782,7 @@ export async function listUserRepliesData(
       content: record.content,
       rating: record.rating ?? null,
       likeCount: record.likeCount ?? 0,
+      likedByViewer: likedCommentIds.has(record.id),
       postId: record.postId ?? null,
       novelId: record.novelId ?? record.chapter?.novelId ?? null,
       novelTitle: novel ? resolveEffectiveNovelTitle(novel.title, novel.displayTitle) : null,

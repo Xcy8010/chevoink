@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { findFirstReadableChapterId, getNovelDetailPayload } from '@/features/discover/api'
+import { asArray, findFirstReadableChapterId, getNovelDetailPayload, isPublicReadableChapter } from '@/features/discover/api'
+import { getReadingProgress } from '@/features/home/reading-progress'
 
 export function useStartReading() {
   const navigate = useNavigate()
@@ -14,9 +15,16 @@ export function useStartReading() {
         queryFn: () => getNovelDetailPayload(novelId),
       })
 
+      // 读过的书优先回到上次读到的章节（章内位置由阅读器恢复）
+      const progress = getReadingProgress(novelId)
+      const chapters = asArray(detail.chapters)
+      const progressChapter = progress
+        ? chapters.find((chapter) => chapter.id === progress.chapterId && isPublicReadableChapter(chapter))
+        : null
+
       return {
         novelId,
-        chapterId: findFirstReadableChapterId(detail.chapters),
+        chapterId: progressChapter?.id ?? findFirstReadableChapterId(chapters),
       }
     },
     onSuccess: ({ novelId, chapterId }) => {

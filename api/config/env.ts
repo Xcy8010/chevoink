@@ -68,12 +68,16 @@ export const env = {
     950000,
   ),
   aiTextTimeoutMs: parsePositiveNumber(process.env.AI_TEXT_TIMEOUT_MS, 180000),
+  // 单轮 LLM 调用的最大输出 token：不传时 DeepSeek 默认仅 4096，写长章节时工具参数会被截断；
+  // deepseek-chat 输出上限 8192，默认拉满，换更强模型时可通过环境变量上调
+  aiTextMaxOutputTokens: parsePositiveNumber(process.env.AI_TEXT_MAX_OUTPUT_TOKENS, 8192),
   // Agent Loop 引擎：loop = 新内核；legacy = 旧链路；Vercel serverless 不支持长循环，强制 legacy
   agentEngine: process.env.VERCEL ? 'legacy' : (process.env.AGENT_ENGINE ?? 'loop'),
   agentModel: process.env.AI_AGENT_MODEL ?? process.env.AI_TEXT_MODEL ?? 'deepseek-chat',
-  // 长任务（如连写六章）需要更多轮次与 token 预算，配合待办机制保证连续执行不早停
-  agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 40),
-  agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 600000),
+  // 长任务（如连写六章）需要更多轮次与 token 预算，配合待办机制保证连续执行不早停；
+  // 对齐主流 Agent 单任务消耗量级（百轮/百万 token），配合循环内的上下文瘦身机制防爆窗
+  agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 100),
+  agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 2000000),
   agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),
   agentUserMaxConcurrent: parsePositiveNumber(process.env.AGENT_USER_MAX_CONCURRENT, 2),
   aiImageProvider: process.env.AI_IMAGE_PROVIDER ?? 'openai-compatible',
@@ -86,7 +90,7 @@ export const env = {
   aiImageDefaultCount: parsePositiveNumber(process.env.AI_IMAGE_DEFAULT_COUNT, 1),
   // 听书 TTS（方案 17）：edge = 免费 Edge 神经音色；disabled = 全端隐藏听书入口
   ttsProvider: process.env.TTS_PROVIDER ?? 'edge',
-  ttsDefaultVoice: process.env.TTS_DEFAULT_VOICE ?? 'zh-CN-XiaoxiaoNeural',
+  ttsDefaultVoice: process.env.TTS_DEFAULT_VOICE ?? 'zh-CN-YunjianNeural',
   ttsCacheDir: process.env.TTS_CACHE_DIR ?? '',
   ttsCacheMaxMb: parsePositiveNumber(process.env.TTS_CACHE_MAX_MB, 2048),
   ttsTimeoutMs: parsePositiveNumber(process.env.TTS_TIMEOUT_MS, 30000),

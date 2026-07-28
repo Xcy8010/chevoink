@@ -104,8 +104,9 @@ export default function ChapterChangeReview({
 
   return (
     <div className={cn('relative flex h-full min-h-0 flex-col', className)}>
-      <div className="min-h-0 flex-1 overflow-y-auto rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5 pb-24">
-        <div className="border-b border-[var(--border-subtle)] pb-4">
+      <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)]">
+        {/* 标题在滚动区外：与正常编辑态一致，滚动 diff 正文时不会从标题上方穿透 */}
+        <div className="border-b border-[var(--border-subtle)] px-5 pb-4 pt-5">
           <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
             {review.after.title.trim() || `第 ${review.after.orderIndex} 章`}
           </p>
@@ -114,7 +115,8 @@ export default function ChapterChangeReview({
           </p>
         </div>
 
-        <div className="mt-4 text-sm leading-8 text-[var(--text-primary)]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-24 pt-4">
+          <div className="text-sm leading-8 text-[var(--text-primary)]">
           {blocks.map((block, blockIndex) => {
             if (block.hunkIndex === null) {
               return (
@@ -182,6 +184,7 @@ export default function ChapterChangeReview({
               </div>
             )
           })}
+          </div>
         </div>
       </div>
 

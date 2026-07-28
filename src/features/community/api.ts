@@ -10,12 +10,15 @@ import type {
   GetInteractionBadgesResponse,
   GetPostDetailResponse,
   GetTopicsResponse,
+  GetRecommendedTopicsResponse,
+  GetTopicResponse,
   ListCommentsResponse,
   ListConversationsResponse,
   ListFollowUsersResponse,
   ListInteractionsResponse,
   ListFavoriteNovelsResponse,
   ListLikedPostsResponse,
+  ListBookmarkedPostsResponse,
   ListMessagesResponse,
   ListNovelsResponse,
   ListPostsResponse,
@@ -121,7 +124,17 @@ export function listNovels(pageSize = 20, options?: { authorId?: string; publish
   return requestData<ListNovelsResponse['data']>(`/api/novels?${search.toString()}`)
 }
 
-export function listPosts(pageSize = 20, options?: { page?: number; topicId?: string; authorId?: string }) {
+export function listPosts(
+  pageSize = 20,
+  options?: {
+    page?: number
+    topicId?: string
+    authorId?: string
+    sort?: 'recommended' | 'latest'
+    /** 推荐流快照时间：翻页时回传首页返回的 snapshotAt */
+    snapshotAt?: string
+  },
+) {
   const search = new URLSearchParams({
     page: `${options?.page ?? 1}`,
     pageSize: `${pageSize}`,
@@ -135,11 +148,30 @@ export function listPosts(pageSize = 20, options?: { page?: number; topicId?: st
     search.set('authorId', options.authorId)
   }
 
+  if (options?.sort) {
+    search.set('sort', options.sort)
+  }
+
+  if (options?.snapshotAt) {
+    search.set('snapshotAt', options.snapshotAt)
+  }
+
   return requestData<ListPostsResponse['data']>(`/api/posts?${search.toString()}`)
 }
 
 export function listTopics() {
   return requestData<GetTopicsResponse['data']>('/api/topics')
+}
+
+/** 推荐话题：发帖区引导用，按近 7 天趋势分取前 3 个 */
+export function listRecommendedTopics() {
+  return requestData<GetRecommendedTopicsResponse['data']>('/api/topics/recommended')
+}
+
+/** 话题详情：按 slug/name/id 解析 */
+export async function resolveTopic(topicKey: string) {
+  const data = await requestData<GetTopicResponse['data']>(`/api/topics/${encodeURIComponent(topicKey)}`)
+  return data.topic
 }
 
 export function setPostLike(postId: string, liked: boolean) {
@@ -177,6 +209,11 @@ export function listUserFollowing(userId: string) {
 /** 喜欢列表：用户赞过的帖子 */
 export function listUserLikedPosts(userId: string) {
   return requestData<ListLikedPostsResponse['data']>(`/api/users/${userId}/liked-posts`)
+}
+
+/** 收藏的帖子列表（仅本人可见） */
+export function listUserBookmarkedPosts(userId: string) {
+  return requestData<ListBookmarkedPostsResponse['data']>(`/api/users/${userId}/bookmarked-posts`)
 }
 
 /** 已回复列表：用户发出的各类评论 */

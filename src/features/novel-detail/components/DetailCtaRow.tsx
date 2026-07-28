@@ -1,7 +1,9 @@
-import { BookOpen, Bookmark, BookmarkCheck, ChevronLeft, Heart, MoreHorizontal, PenLine, Share2 } from 'lucide-react'
+import { BookOpen, Bookmark, BookmarkCheck, ChevronLeft, Heart, Link2, MoreHorizontal, PenLine, Send, Share2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import ShareMenu from '@/features/community/components/ShareMenu'
+import type { CommunityShareDraft } from '@/features/community/share'
 import type { NovelDetailState } from '../useNovelDetailState'
 
 type DetailCtaRowProps = {
@@ -18,6 +20,10 @@ const secondaryButtonClass =
 export default function DetailCtaRow({ state, compact = false }: DetailCtaRowProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const {
+    novelId,
+    navigate,
+    detailTitle,
+    detailCoverUrl,
     fromStudio,
     backHref,
     canEditNovelPage,
@@ -32,6 +38,11 @@ export default function DetailCtaRow({ state, compact = false }: DetailCtaRowPro
     handleToggleFavorite,
     handleShare,
   } = state
+
+  // 分享草稿：跳社区发帖时自动附上作品卡片
+  const shareDraft: CommunityShareDraft | null = novelId
+    ? { kind: 'novel', novel: { id: novelId, title: detailTitle, coverUrl: detailCoverUrl } }
+    : null
 
   const primaryLabel = !firstPublishedChapter
     ? '暂未开放阅读'
@@ -121,6 +132,19 @@ export default function DetailCtaRow({ state, compact = false }: DetailCtaRowPro
                   />
                   {favoritedByViewer ? '取消收藏' : '收藏作品'}
                 </button>
+                {shareDraft ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      navigate('/community', { state: { share: shareDraft } })
+                    }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+                  >
+                    <Send className="h-4 w-4 text-[var(--text-secondary)]" />
+                    分享到社区
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -129,13 +153,23 @@ export default function DetailCtaRow({ state, compact = false }: DetailCtaRowPro
                   }}
                   className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
                 >
-                  <Share2 className="h-4 w-4 text-[var(--text-secondary)]" />
-                  分享这本书
+                  <Link2 className="h-4 w-4 text-[var(--text-secondary)]" />
+                  复制链接
                 </button>
               </div>
             </>
           ) : null}
         </div>
+      ) : shareDraft ? (
+        <ShareMenu
+          share={shareDraft}
+          url={`${window.location.origin}/novel/${novelId}`}
+          wrapperClassName="flex-none"
+          placement="down"
+          triggerClassName="press-feedback inline-flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+          triggerContent={<Share2 className="h-4 w-4" />}
+          ariaLabel="分享这本书"
+        />
       ) : (
         <button
           type="button"

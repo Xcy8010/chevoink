@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, Flame } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
@@ -10,6 +11,7 @@ import { createPost, listPosts, listTopics } from '@/features/community/api'
 import PostCard from '@/features/community/components/PostCard'
 import PostComposer from '@/features/community/components/PostComposer'
 import TopicChannelBar, { type CommunityTopic } from '@/features/community/components/TopicChannelBar'
+import { readShareDraftFromState, type CommunityShareDraft } from '@/features/community/share'
 import { formatRelativeTime } from '@/features/community/utils'
 import { cn } from '@/lib/utils'
 
@@ -28,19 +30,37 @@ export default function CommunityPage() {
   const { isMobile, isTablet, isDesktop } = useDevice()
   const queryClient = useQueryClient()
   const toast = useToast()
+  const location = useLocation()
+  const navigate = useNavigate()
   const [activeTopicId, setActiveTopicId] = useState('all')
   const [activeFeedMode, setActiveFeedMode] = useState<(typeof feedModes)[number]['id']>('recommended')
+  // 从作品页/作者页带入的分享草稿：捕获后立即清掉 history state，避免刷新/返回重复弹出
+  const [shareDraft, setShareDraft] = useState<CommunityShareDraft | null>(() =>
+    readShareDraftFromState(location.state),
+  )
 
-  // 话题筛选走后端 topicId 过滤 + hasMore 翻页（方案 6.2）
+  useEffect(() => {
+    const draft = readShareDraftFromState(location.state)
+    if (draft) {
+      setShareDraft(draft)
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [location.pathname, location.state, navigate])
+
+  // 话题筛选走后端 topicId 过滤 + hasMore 翻页（方案 6.2）；
+  // 排序服务端化（方案 18 §1）：推荐流用快照式游标，同一轮浏览榜单冻结不跳位，刷新重算
   const postsQuery = useInfiniteQuery({
-    queryKey: ['community', 'posts', activeTopicId],
+    queryKey: ['community', 'posts', activeTopicId, activeFeedMode],
     queryFn: ({ pageParam }) =>
       listPosts(30, {
-        page: pageParam,
+        page: pageParam.page,
         topicId: activeTopicId === 'all' ? undefined : activeTopicId,
+        sort: activeFeedMode,
+        snapshotAt: pageParam.snapshotAt,
       }),
-    initialPageParam: 1,
-    getNextPageParam: (lastPage, allPages) => (lastPage.pagination.hasMore ? allPages.length + 1 : undefined),
+    initialPageParam: { page: 1 } as { page: number; snapshotAt?: string },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.pagination.hasMore ? { page: allPages.length + 1, snapshotAt: lastPage.snapshotAt } : undefined,
   })
 
   const topicsQuery = useQuery({
@@ -52,6 +72,10 @@ export default function CommunityPage() {
     mutationFn: createPost,
     onSuccess: async () => {
       toast.success('发布成功，你的讨论已上线')
+      setShareDraft(null)
+      // 发帖后切到「最新」并回顶：自己的新帖立刻可见，推荐流不做假置顶（方案 18 §1.4）
+      setActiveFeedMode('latest')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
       await queryClient.invalidateQueries({ queryKey: ['community', 'posts'] })
     },
     onError: (error) => {
@@ -77,16 +101,8 @@ export default function CommunityPage() {
     [topics],
   )
 
-  const posts = useMemo(() => {
-    if (activeFeedMode === 'latest') {
-      return [...rawPosts].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    }
-
-    return [...rawPosts].sort(
-      (a, b) =>
-        b.commentCount + b.likeCount + b.favoriteCount - (a.commentCount + a.likeCount + a.favoriteCount),
-    )
-  }, [activeFeedMode, rawPosts])
+  // 排序已全部服务端化，前端直接按服务端顺序展示，不再二次重排
+  const posts = rawPosts
 
   const communityStats = useMemo(
     () => [
@@ -171,8 +187,8 @@ export default function CommunityPage() {
 
   const composer = (
     <PostComposer
-      topics={topics}
       isSubmitting={createPostMutation.isPending}
+      initialShare={shareDraft}
       onSubmit={(payload) => createPostMutation.mutate(payload)}
     />
   )

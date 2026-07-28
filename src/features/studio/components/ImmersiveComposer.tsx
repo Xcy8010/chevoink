@@ -566,11 +566,11 @@ export default function ImmersiveComposer({
                           })
                         }
                         rows={24}
-                        className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-base leading-9 text-[var(--text-primary)] outline-none md:text-[1.04rem]"
+                        className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
                         placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
                       />
                     ) : (
-                      <div className="mt-5 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-base leading-9 text-[var(--text-primary)] md:text-[1.04rem]">
+                      <div className="mt-5 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-sm leading-8 text-[var(--text-primary)]">
                         {workspaceDocument.content}
                       </div>
                     )}
@@ -654,7 +654,7 @@ export default function ImmersiveComposer({
                           onKeyUp={(event) => emitSelection(event.currentTarget)}
                           onBlur={(event) => emitSelection(event.currentTarget)}
                           rows={24}
-                          className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-base leading-9 text-[var(--text-primary)] outline-none md:text-[1.04rem]"
+                          className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
                           placeholder="继续写这一章的正文。"
                         />
                         {onGoToNextReviewFile ? (

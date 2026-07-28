@@ -9,7 +9,7 @@ import {
   PanelLeftOpen,
   Settings2,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
@@ -49,6 +49,19 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
   const [ttsSheetOpen, setTtsSheetOpen] = useState(false)
 
   const tone = state.toneOption
+  const { activePanel, activeParagraphIndex } = state
+
+  // 段评气泡打开评论时同步打开对应方向的评论面板
+  useEffect(() => {
+    if (activePanel !== 'comments') return
+    if (orientation === 'landscape') {
+      setSideTab('comments')
+      setSideOpen(true)
+    } else {
+      setSheetPanel('comments')
+    }
+  }, [activePanel, activeParagraphIndex, orientation])
+
   const gestures = useChapterGestures({
     onSwipeLeft: () => {
       if (state.nextHref) navigate(state.nextHref)
@@ -132,7 +145,11 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setSideTab(tab.id)}
+                  onClick={() => {
+                    // 切回目录时重置段评筛选
+                    if (tab.id === 'directory') state.setActivePanel(null)
+                    setSideTab(tab.id)
+                  }}
                   className={cn(
                     'inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius-md)] text-sm transition-colors press-feedback',
                     sideTab === tab.id
@@ -291,7 +308,15 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
       <BottomSheet open={sheetPanel === 'directory'} onClose={() => setSheetPanel(null)} title="目录">
         <ReaderDirectory state={state} onNavigate={() => setSheetPanel(null)} />
       </BottomSheet>
-      <BottomSheet open={sheetPanel === 'comments'} onClose={() => setSheetPanel(null)} title="章节评论">
+      <BottomSheet
+        open={sheetPanel === 'comments'}
+        onClose={() => {
+          // 关闭评论抽屉时重置段评筛选
+          state.setActivePanel(null)
+          setSheetPanel(null)
+        }}
+        title="章节评论"
+      >
         <ReaderCommentsPanel state={state} />
       </BottomSheet>
       <BottomSheet open={sheetPanel === 'settings'} onClose={() => setSheetPanel(null)} title="阅读设置">

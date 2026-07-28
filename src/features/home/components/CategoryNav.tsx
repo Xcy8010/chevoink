@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronUp, LayoutGrid } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { PRIMARY_CATEGORIES } from '../../../../shared/contracts/novel-tags'
 
 type CategoryNavProps = {
   categories: string[]
@@ -15,10 +16,11 @@ type CategoryNavProps = {
 const MAINSTREAM_CATEGORIES = ['玄幻', '都市', '仙侠', '奇幻', '科幻', '悬疑', '历史', '游戏', '古代言情', '现代言情']
 
 /** 分类快捷导航：默认展示主流频道，点击末尾按钮展开全部分类；点击分类在首页内筛选作品 */
-export default function CategoryNav({ categories, activeCategory, onSelect }: CategoryNavProps) {
+export default function CategoryNav({ activeCategory, onSelect }: CategoryNavProps) {
   const [expanded, setExpanded] = useState(false)
 
-  if (categories.length === 0) return null
+  // 分类内容与创作区作品设置保持同源：男频 + 女频全部主分类（shared/contracts/novel-tags）
+  const categories = PRIMARY_CATEGORIES
 
   const mainstream = categories.filter((category) => MAINSTREAM_CATEGORIES.includes(category))
   const collapsedCategories = mainstream.length > 0 ? mainstream : categories.slice(0, 10)
