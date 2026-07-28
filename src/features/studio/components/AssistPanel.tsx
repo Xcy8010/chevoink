@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronRight, Copy, LoaderCircle, RefreshCcw, SendHorizonal } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 
 import {
@@ -80,13 +81,12 @@ export default function AssistPanel({
   }, [focusSignal])
 
   async function handleCopyMessage(messageId: string, content: string) {
-    try {
-      await navigator.clipboard.writeText(content)
+    if (await copyToClipboard(content)) {
       setCopiedMessageId(messageId)
       window.setTimeout(() => {
         setCopiedMessageId((current) => (current === messageId ? null : current))
       }, 1500)
-    } catch {
+    } else {
       setCopiedMessageId(null)
     }
   }

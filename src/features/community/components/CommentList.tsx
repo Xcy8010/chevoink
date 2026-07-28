@@ -1,4 +1,4 @@
-import { Heart, MessageSquareMore, Trash2 } from 'lucide-react'
+import { Heart, MessageSquareMore, Share2, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -6,6 +6,7 @@ import type { Comment } from '../../../../shared/contracts/index.js'
 import { useToast } from '@/components/ui/Toast'
 import { createComment, deleteComment, setCommentLike } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
+import ShareToFriendSheet from '@/features/community/components/ShareToFriendSheet'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
 import { useShellStore } from '@/store/useShellStore'
 import { cn } from '@/lib/utils'
@@ -78,6 +79,8 @@ export default function CommentList({ comments, onReplied }: CommentListProps) {
   const [replyDraft, setReplyDraft] = useState('')
   const [isReplying, setIsReplying] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // 分享评论给好友：选中的目标评论，非空时弹出好友选择弹层
+  const [shareTarget, setShareTarget] = useState<Comment | null>(null)
 
   const { threads, byId } = useMemo(() => buildThreads(comments), [comments])
 
@@ -211,6 +214,14 @@ export default function CommentList({ comments, onReplied }: CommentListProps) {
               <MessageSquareMore className="h-3.5 w-3.5" />
               {formatCompactCount(comment.replyCount)}
             </button>
+            <button
+              type="button"
+              onClick={() => setShareTarget(comment)}
+              className="press-feedback inline-flex items-center gap-1 transition-colors hover:text-[var(--text-primary)]"
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              分享
+            </button>
             {sessionUser?.id === comment.author.id ? (
               <button
                 type="button"
@@ -267,6 +278,17 @@ export default function CommentList({ comments, onReplied }: CommentListProps) {
           )}
         </article>
       ))}
+
+      {shareTarget ? (
+        <ShareToFriendSheet
+          message={{
+            type: 'commentCard',
+            content: `分享评论：${shareTarget.content.replace(/\s+/g, ' ').slice(0, 60)}`,
+            relatedId: String(shareTarget.id),
+          }}
+          onClose={() => setShareTarget(null)}
+        />
+      ) : null}
     </div>
   )
 }

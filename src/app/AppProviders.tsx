@@ -5,6 +5,7 @@ import { ApiClientError, requestJson } from '@/app/api-client'
 import { DeviceProvider } from '@/components/layout/DeviceProvider'
 import { ToastProvider } from '@/components/ui/Toast'
 import UpdateBanner from '@/components/ui/UpdateBanner'
+import { hydrateReadingSync } from '@/features/home/reading-sync'
 import { syncNativeSystemBars } from '@/lib/native-app'
 import { useShellStore } from '@/store/useShellStore'
 import type { UserMePayload } from '../../shared/contracts'
@@ -59,6 +60,13 @@ export default function AppProviders({ children }: PropsWithChildren) {
             user: payload.user,
             unreadMessageCount: payload.unreadMessageCount,
             unreadNotificationCount: payload.unreadNotificationCount,
+          })
+
+          // 登录后水合书架/阅读进度：拉取云端并合并本地，变更后刷新 /me 让书架列表重算
+          void hydrateReadingSync().then((changed) => {
+            if (changed && !disposed) {
+              void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+            }
           })
         }
       } catch (error) {

@@ -26,6 +26,7 @@ import { useToast } from '@/components/ui/Toast'
 import Avatar from '@/features/community/components/Avatar'
 import { getMe, updateMyPrivacy } from '@/features/community/api'
 import { useShellStore } from '@/store/useShellStore'
+import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import type {
   PrivacyLevel,
@@ -533,35 +534,38 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3.5 py-3.5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-secondary)]">
-          <Maximize className="h-[18px] w-[18px]" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[15px] font-medium text-[var(--text-primary)]">全屏模式</span>
-          <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">开启后点击页面任意位置自动进入沉浸全屏</span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={fullscreenEnabled}
-          aria-label="全屏模式开关"
-          onClick={() => setFullscreenEnabled(!fullscreenEnabled)}
-          className={cn(
-            'relative h-7 w-12 shrink-0 rounded-full border transition-colors',
-            fullscreenEnabled
-              ? 'border-[var(--color-brand)] bg-[var(--color-brand)]'
-              : 'border-[var(--border-strong)] bg-[var(--surface-muted)]',
-          )}
-        >
-          <span
+      {/* 全屏模式：仅网页版提供；APP 壳内天生全屏，隐藏此项 */}
+      {!isNativeApp() && (
+        <div className="flex items-center gap-3.5 py-3.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-secondary)]">
+            <Maximize className="h-[18px] w-[18px]" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium text-[var(--text-primary)]">全屏模式</span>
+            <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">开启后点击页面任意位置自动进入沉浸全屏</span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={fullscreenEnabled}
+            aria-label="全屏模式开关"
+            onClick={() => setFullscreenEnabled(!fullscreenEnabled)}
             className={cn(
-              'absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-[left] duration-200',
-              fullscreenEnabled ? 'left-[calc(100%-24px)]' : 'left-1',
+              'relative h-7 w-12 shrink-0 rounded-full border transition-colors',
+              fullscreenEnabled
+                ? 'border-[var(--color-brand)] bg-[var(--color-brand)]'
+                : 'border-[var(--border-strong)] bg-[var(--surface-muted)]',
             )}
-          />
-        </button>
-      </div>
+          >
+            <span
+              className={cn(
+                'absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow transition-[left] duration-200',
+                fullscreenEnabled ? 'left-[calc(100%-24px)]' : 'left-1',
+              )}
+            />
+          </button>
+        </div>
+      )}
     </div>
   )
 

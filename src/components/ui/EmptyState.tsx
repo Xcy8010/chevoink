@@ -60,7 +60,8 @@ export default function EmptyState({ scene = 'generic', title, description, acti
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center gap-3 rounded-[var(--radius-lg)] border border-dashed border-[var(--border-strong)] px-6 py-12 text-center',
+        // 空态不再画虚线边框容器，图标+文案直接融入页面背景
+        'flex flex-col items-center justify-center gap-3 px-6 py-12 text-center',
         className,
       )}
     >

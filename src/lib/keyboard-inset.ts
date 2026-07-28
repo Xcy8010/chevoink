@@ -54,11 +54,36 @@ export function setupKeyboardInsetWatcher() {
     root.classList.toggle(KEYBOARD_OPEN_CLASS, inset > 0 || focusOpen)
   }
 
+  // Android resizes-content 模式下键盘只缩小布局视口、不改 visualViewport 偏移，
+  // 且用键盘自带「收起」按钮关闭键盘时输入框仍保持焦点（不触发 focusout），
+  // 单靠焦点信号会让 keyboard-open 类一直挂着（底部导航被永久隐藏）。
+  // 这里用布局高度回升作为补充信号：确认过键盘把高度压低后，一旦高度回到接近基线，
+  // 就判定键盘已收起并清除 focusOpen。iOS 键盘为纯覆盖、innerHeight 不变，此路自然不触发。
+  let baselineHeight = window.innerHeight
+  let sawKeyboardShrink = false
+  const syncFocusOpenByLayout = () => {
+    const height = window.innerHeight
+    if (!focusOpen) {
+      // 无键盘时持续校准完整高度基线（涵盖地址栏收放、横竖屏切换）
+      baselineHeight = height
+      sawKeyboardShrink = false
+      return
+    }
+    if (baselineHeight - height >= MIN_KEYBOARD_INSET) {
+      sawKeyboardShrink = true
+    } else if (sawKeyboardShrink) {
+      focusOpen = false
+      sawKeyboardShrink = false
+      applyInset()
+    }
+  }
+
   const viewport = window.visualViewport
   if (viewport) {
     const update = () => {
       const raw = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
       viewportInset = raw < MIN_KEYBOARD_INSET ? 0 : Math.round(raw)
+      syncFocusOpenByLayout()
       applyInset()
     }
 
@@ -66,6 +91,12 @@ export function setupKeyboardInsetWatcher() {
     viewport.addEventListener('resize', update)
     viewport.addEventListener('scroll', update)
   }
+
+  // visualViewport 缺失的环境（及双保险）：窗口 resize 时同步布局键盘信号
+  window.addEventListener('resize', () => {
+    syncFocusOpenByLayout()
+    applyInset()
+  })
 
   const virtualKeyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
     .virtualKeyboard
@@ -100,6 +131,7 @@ export function setupKeyboardInsetWatcher() {
 
     window.clearTimeout(focusOutTimer)
     focusOpen = true
+    sawKeyboardShrink = false
     applyInset()
 
     window.setTimeout(() => {

@@ -33,35 +33,25 @@ const CONTENT_MAX_WIDTH = 'max-w-[680px] md:max-w-[840px] lg:max-w-[1080px] xl:m
  * headerContent（封面/资料/tab）与 children（列表）在同一滚动流里整页一起滚动。
  */
 function PageChrome({
-  headerTitle,
   onBack,
   headerContent,
   children,
 }: {
-  headerTitle?: string
   onBack: () => void
   headerContent?: ReactNode
   children: ReactNode
 }) {
   return (
-    <div className="app-main-scroll h-dvh overflow-y-auto">
-      <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[color:var(--app-bg)]/85 backdrop-blur">
-        <div className={cn('mx-auto flex h-12 w-full items-center gap-2 px-2 sm:px-4', CONTENT_MAX_WIDTH)}>
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label="返回上一页"
-            className="touch-target press-feedback inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
-              {headerTitle ?? '作者主页'}
-            </p>
-          </div>
-        </div>
-      </header>
+    <div className="app-main-scroll relative h-dvh overflow-y-auto">
+      {/* X 风格：返回按钮以浮层圆钮压在封面左上角，随封面一起滚动 */}
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label="返回上一页"
+        className="press-feedback absolute left-3 top-3 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
+      >
+        <ChevronLeft className="h-5 w-5" />
+      </button>
       <div className={cn('mx-auto w-full px-4 pb-16', CONTENT_MAX_WIDTH)}>
         {headerContent}
         {children}
@@ -292,25 +282,19 @@ export default function AuthorPage() {
   // 头部：封面 + 资料（头像/昵称/简介/数据行）+ tab 栏，与下方列表整页一起滚动
   const headerContent = (
     <>
-      {/* 封面：与上传裁切比例（3:1）一致，避免 object-cover 把手机端封面裁掉；
-          小屏全出血、sm 起圆角；lg 宽屏压扁比例避免过高；无封面用与个人中心一致的渐变 */}
-      <div className="relative -mx-4 aspect-[3/1] overflow-hidden sm:mx-0 sm:mt-3 sm:rounded-[var(--radius-xl)] lg:aspect-[4/1]">
-        {author.profileCoverUrl ? (
-          <img src={author.profileCoverUrl} alt="作者封面" className="absolute inset-0 h-full w-full object-cover" />
-        ) : (
-          <div className="absolute inset-0 bg-[linear-gradient(135deg,#28435f_0%,#16233a_58%,#1f2f47_100%)]" />
-        )}
-      </div>
-
-      {/* 头像压住封面下缘，操作按钮右对齐——同一行 */}
-      <div className="flex items-start justify-between px-1 sm:px-2">
-        <Avatar
-          name={author.nickname}
-          src={author.avatarUrl}
-          size="lg"
-          className="relative z-10 -mt-9 h-[76px] w-[76px] border-4 border-[var(--app-bg)] bg-[var(--surface-muted)] sm:-mt-12 sm:h-24 sm:w-24"
-        />
-        <div className="mt-3 flex shrink-0 items-center gap-2">
+      {/* 封面占顶部区域：与上传裁切比例（3:1）一致，避免 object-cover 把手机端封面裁掉；
+          小屏全出血、sm 起圆角；lg 宽屏压扁比例避免过高；无封面用与个人中心一致的渐变。
+          外层 relative 不裁剪，供右上角分享浮层按钮的下拉菜单不被封面 overflow-hidden 截断 */}
+      <div className="relative -mx-4 sm:mx-0 sm:mt-3">
+        <div className="relative aspect-[3/1] overflow-hidden sm:rounded-[var(--radius-xl)] lg:aspect-[4/1]">
+          {author.profileCoverUrl ? (
+            <img src={author.profileCoverUrl} alt="作者封面" className="absolute inset-0 h-full w-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,#28435f_0%,#16233a_58%,#1f2f47_100%)]" />
+          )}
+        </div>
+        {/* 分享按钮：X 风格浮层圆钮，压在封面右上角 */}
+        <div className="absolute right-3 top-3 z-10">
           <ShareMenu
             share={{
               kind: 'author',
@@ -323,10 +307,22 @@ export default function AuthorPage() {
             }}
             url={`${window.location.origin}/author/${author.id}`}
             placement="down"
-            triggerClassName="press-feedback inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+            triggerClassName="press-feedback inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
             triggerContent={<Share2 className="h-4 w-4" />}
             ariaLabel="分享作者主页"
           />
+        </div>
+      </div>
+
+      {/* 头像压住封面下缘，操作按钮右对齐——同一行 */}
+      <div className="flex items-start justify-between px-1 sm:px-2">
+        <Avatar
+          name={author.nickname}
+          src={author.avatarUrl}
+          size="lg"
+          className="relative z-10 -mt-9 h-[76px] w-[76px] border-4 border-[var(--app-bg)] bg-[var(--surface-muted)] sm:-mt-12 sm:h-24 sm:w-24"
+        />
+        <div className="mt-3 flex shrink-0 items-center gap-2">
           {isOwnProfile ? (
             <Button variant="secondary" size="sm" onClick={() => navigate('/studio')}>
               继续创作
@@ -424,7 +420,7 @@ export default function AuthorPage() {
   )
 
   return (
-    <PageChrome headerTitle={author.nickname} onBack={handleBack} headerContent={headerContent}>
+    <PageChrome onBack={handleBack} headerContent={headerContent}>
       <div className="pt-2">
         {activeTab === 'novels' ? (
           novelsQuery.isLoading ? (

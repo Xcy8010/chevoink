@@ -19,6 +19,7 @@ import type {
   InteractionBadges,
   InteractionItem,
   Message,
+  MessageCard,
   Novel,
   NovelCard,
   NovelDetailPayload,
@@ -29,7 +30,9 @@ import type {
   PrivacySettings,
   ProfileVisibility,
   ReaderPayload,
+  ReadingProgressItem,
   ReceivedLikeItem,
+  SaveReadingProgressRequest,
   SearchResultPayload,
   SearchSuggestItem,
   SearchSuggestPayload,
@@ -48,6 +51,7 @@ import { ALL_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../shared/contracts/novel-t
 import { extractTopicNames } from '../../shared/contracts/topic-parse.js'
 import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, verifyPassword } from './password.js'
 import { paginate } from './http.js'
+import { storeMessageImageDataUrl } from './message-image-storage.js'
 import { storeNovelCoverDataUrl } from './novel-cover-storage.js'
 import { normalizePhoneNumber } from './phone.js'
 import { DataAccessError, prisma } from './prisma.js'
@@ -357,6 +361,8 @@ function toConversation(record: any, viewerUserId: string): Conversation {
     id: member.user.id,
     nickname: member.user.nickname,
     avatarUrl: member.user.avatarUrl ?? null,
+    // 成员维度的会话已读时间：前端据此判断自己发的消息对方是否已读
+    lastReadAt: toIso(member.lastReadAt),
   }))
   const counterpart = members.find((member: any) => member.id !== viewerUserId) ?? members[0] ?? null
 
@@ -428,6 +434,135 @@ function toMessage(record: any): Message {
     relatedId: record.relatedId ?? null,
     createdAt: toIso(record.createdAt) ?? nowIso(),
   }
+}
+
+/** 给卡片消息批量回填富数据（封面/标题/简介等）；源内容已删除时 card 保持 null，前端降级为文本气泡 */
+async function attachMessageCards(messages: Message[]): Promise<Message[]> {
+  const novelIds = new Set<string>()
+  const postIds = new Set<string>()
+  const authorIds = new Set<string>()
+  const commentIds = new Set<string>()
+
+  for (const message of messages) {
+    if (!message.relatedId) continue
+    if (message.type === 'novelCard') novelIds.add(message.relatedId)
+    else if (message.type === 'postCard') postIds.add(message.relatedId)
+    else if (message.type === 'authorCard') authorIds.add(message.relatedId)
+    else if (message.type === 'commentCard') commentIds.add(message.relatedId)
+  }
+
+  if (novelIds.size === 0 && postIds.size === 0 && authorIds.size === 0 && commentIds.size === 0) {
+    return messages
+  }
+
+  const [novels, posts, authors, comments] = await Promise.all([
+    novelIds.size
+      ? prisma.novel.findMany({
+          where: { id: { in: [...novelIds] } },
+          select: {
+            id: true,
+            title: true,
+            displayTitle: true,
+            summary: true,
+            coverAsset: { select: { imageUrl: true } },
+            author: { select: { nickname: true } },
+          },
+        })
+      : Promise.resolve([]),
+    postIds.size
+      ? prisma.post.findMany({
+          where: { id: { in: [...postIds] } },
+          select: {
+            id: true,
+            excerpt: true,
+            content: true,
+            imageUrls: true,
+            author: { select: { nickname: true, avatarUrl: true } },
+          },
+        })
+      : Promise.resolve([]),
+    authorIds.size
+      ? prisma.user.findMany({
+          where: { id: { in: [...authorIds] } },
+          select: {
+            id: true,
+            nickname: true,
+            avatarUrl: true,
+            bio: true,
+            followerCount: true,
+            novelCount: true,
+          },
+        })
+      : Promise.resolve([]),
+    commentIds.size
+      ? prisma.comment.findMany({
+          where: { id: { in: [...commentIds] } },
+          select: {
+            id: true,
+            content: true,
+            postId: true,
+            novelId: true,
+            author: { select: { nickname: true, avatarUrl: true } },
+          },
+        })
+      : Promise.resolve([]),
+  ])
+
+  const cardByRelatedId = new Map<string, MessageCard>()
+  for (const novel of novels) {
+    cardByRelatedId.set(novel.id, {
+      kind: 'novel',
+      id: novel.id,
+      title: resolveEffectiveNovelTitle(novel.title, novel.displayTitle),
+      coverUrl: novel.coverAsset?.imageUrl ?? null,
+      summary: novel.summary,
+      authorName: novel.author.nickname,
+    })
+  }
+  for (const post of posts) {
+    cardByRelatedId.set(post.id, {
+      kind: 'post',
+      id: post.id,
+      excerpt: post.excerpt || post.content.slice(0, 120),
+      imageUrl: post.imageUrls[0] ?? null,
+      authorName: post.author.nickname,
+      authorAvatarUrl: post.author.avatarUrl ?? null,
+    })
+  }
+  for (const author of authors) {
+    cardByRelatedId.set(author.id, {
+      kind: 'author',
+      id: author.id,
+      nickname: author.nickname,
+      avatarUrl: author.avatarUrl ?? null,
+      bio: author.bio ?? null,
+      followerCount: author.followerCount ?? 0,
+      novelCount: author.novelCount ?? 0,
+    })
+  }
+  for (const comment of comments) {
+    cardByRelatedId.set(comment.id, {
+      kind: 'comment',
+      id: comment.id,
+      content: comment.content,
+      authorName: comment.author.nickname,
+      authorAvatarUrl: comment.author.avatarUrl ?? null,
+      postId: comment.postId ?? null,
+      novelId: comment.novelId ?? null,
+    })
+  }
+
+  return messages.map((message) => {
+    if (
+      message.type !== 'novelCard' &&
+      message.type !== 'postCard' &&
+      message.type !== 'authorCard' &&
+      message.type !== 'commentCard'
+    ) {
+      return message
+    }
+    return { ...message, card: (message.relatedId && cardByRelatedId.get(message.relatedId)) || null }
+  })
 }
 
 function toCoverAsset(record: any): CoverAsset {
@@ -1873,6 +2008,140 @@ export async function listFavoriteNovelsData(userId: string): Promise<NovelCard[
   return favorites.map((item) => toNovelCard(item.novel, userId))
 }
 
+// ---- 云端书架 + 阅读进度（多设备同步） ----
+
+type ReadingProgressRow = {
+  novelId: string
+  novelTitle: string
+  coverUrl: string | null
+  chapterId: string | null
+  chapterTitle: string | null
+  chapterOrder: number
+  totalChapters: number
+  scrollPercent: number
+  addedAt: Date
+  updatedAt: Date
+}
+
+function clampPercent(value: number | undefined | null): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0
+  return Math.min(1, Math.max(0, value))
+}
+
+function toReadingProgressItem(row: ReadingProgressRow): ReadingProgressItem {
+  return {
+    novelId: row.novelId,
+    novelTitle: row.novelTitle,
+    coverUrl: row.coverUrl,
+    chapterId: row.chapterId,
+    chapterTitle: row.chapterTitle,
+    chapterOrder: row.chapterOrder,
+    totalChapters: row.totalChapters,
+    scrollPercent: row.scrollPercent,
+    addedAt: toIso(row.addedAt) ?? nowIso(),
+    updatedAt: toIso(row.updatedAt) ?? nowIso(),
+  }
+}
+
+/** 我的书架 + 阅读进度列表（按最近更新倒序） */
+export async function listReadingProgressData(userId: string): Promise<ReadingProgressItem[]> {
+  const rows = await prisma.readingProgress.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+    take: 200,
+  })
+  return rows.map(toReadingProgressItem)
+}
+
+/**
+ * 保存书架/阅读进度（按 userId+novelId upsert）。
+ * - scrollOnly：仅更新章内滚动位置，章节不匹配或无记录则忽略；
+ * - shelfOnly：仅加入书架，已存在则保留原有进度不重置；
+ * - 否则完整写入章节信息：同章重写保留章内进度，切换新章则从头（与本地语义一致）。
+ * 作品不存在返回 null（路由据此回 404）。
+ */
+export async function saveReadingProgressData(
+  userId: string,
+  input: SaveReadingProgressRequest,
+): Promise<ReadingProgressItem | null> {
+  await ensureUserExists(userId)
+  const novel = await prisma.novel.findUnique({ where: { id: input.novelId }, select: { id: true } })
+  if (!novel) {
+    return null
+  }
+
+  const existing = await prisma.readingProgress.findUnique({
+    where: { userId_novelId: { userId, novelId: input.novelId } },
+  })
+
+  if (input.scrollOnly) {
+    if (!existing || !input.chapterId || existing.chapterId !== input.chapterId) {
+      return existing ? toReadingProgressItem(existing) : null
+    }
+    const updated = await prisma.readingProgress.update({
+      where: { userId_novelId: { userId, novelId: input.novelId } },
+      data: { scrollPercent: clampPercent(input.scrollPercent ?? existing.scrollPercent) },
+    })
+    return toReadingProgressItem(updated)
+  }
+
+  if (input.shelfOnly) {
+    const saved = await prisma.readingProgress.upsert({
+      where: { userId_novelId: { userId, novelId: input.novelId } },
+      create: {
+        userId,
+        novelId: input.novelId,
+        novelTitle: input.novelTitle,
+        coverUrl: input.coverUrl ?? null,
+      },
+      update: {
+        novelTitle: input.novelTitle,
+        ...(input.coverUrl ? { coverUrl: input.coverUrl } : {}),
+      },
+    })
+    return toReadingProgressItem(saved)
+  }
+
+  const sameChapter = Boolean(existing && input.chapterId && existing.chapterId === input.chapterId)
+  const nextScroll =
+    input.scrollPercent !== undefined
+      ? clampPercent(input.scrollPercent)
+      : sameChapter
+        ? existing?.scrollPercent ?? 0
+        : 0
+
+  const saved = await prisma.readingProgress.upsert({
+    where: { userId_novelId: { userId, novelId: input.novelId } },
+    create: {
+      userId,
+      novelId: input.novelId,
+      novelTitle: input.novelTitle,
+      coverUrl: input.coverUrl ?? null,
+      chapterId: input.chapterId ?? null,
+      chapterTitle: input.chapterTitle ?? null,
+      chapterOrder: input.chapterOrder ?? 0,
+      totalChapters: input.totalChapters ?? 0,
+      scrollPercent: nextScroll,
+    },
+    update: {
+      novelTitle: input.novelTitle,
+      ...(input.coverUrl ? { coverUrl: input.coverUrl } : {}),
+      chapterId: input.chapterId ?? null,
+      chapterTitle: input.chapterTitle ?? null,
+      chapterOrder: input.chapterOrder ?? 0,
+      totalChapters: input.totalChapters ?? 0,
+      scrollPercent: nextScroll,
+    },
+  })
+  return toReadingProgressItem(saved)
+}
+
+/** 从书架移除（删除该书的进度行） */
+export async function removeReadingProgressData(userId: string, novelId: string): Promise<boolean> {
+  const deleted = await prisma.readingProgress.deleteMany({ where: { userId, novelId } })
+  return deleted.count > 0
+}
+
 export async function setCommentLikeData(
   userId: string,
   commentId: string,
@@ -3302,7 +3571,7 @@ export async function listMessagesData(userId: string, conversationId: string, p
 
   return {
     conversation: conversationPayload,
-    ...paginate(items.map(toMessage), page, pageSize),
+    ...paginate(await attachMessageCards(items.map(toMessage)), page, pageSize),
     pagination: buildPagination(page, pageSize, total),
   }
 }
@@ -3342,12 +3611,14 @@ export async function sendMessageData(userId: string, conversationId: string, in
   }
 
   const message = await prisma.$transaction(async (tx) => {
+    // 图片消息：前端传 base64 数据 URL，落盘后正文只存图片地址，避免数据库膨胀
+    const content = input.type === 'image' ? await storeMessageImageDataUrl(input.content) : input.content
     const created = await tx.message.create({
       data: {
         conversationId,
         senderId: userId,
         type: input.type,
-        content: input.content,
+        content,
         relatedId: input.relatedId ?? null,
       },
     })
@@ -3355,7 +3626,8 @@ export async function sendMessageData(userId: string, conversationId: string, in
     await tx.conversation.update({
       where: { id: conversationId },
       data: {
-        lastMessagePreview: input.content,
+        // 预览列为 VarChar(240)：图片用占位文案，长文本截断防溢出
+        lastMessagePreview: input.type === 'image' ? '[图片]' : input.content.slice(0, 200),
         lastMessageAt: created.createdAt,
       },
     })
@@ -3363,7 +3635,9 @@ export async function sendMessageData(userId: string, conversationId: string, in
     return created
   })
 
-  return toMessage(message)
+  // 回填卡片富数据：发送方乐观替换 pending 消息时直接拿到可渲染的卡片
+  const [withCard] = await attachMessageCards([toMessage(message)])
+  return withCard
 }
 
 export async function createCoverAssetsData(input: {

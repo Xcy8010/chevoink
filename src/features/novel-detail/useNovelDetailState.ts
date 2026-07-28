@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useToast } from '@/components/ui/Toast'
 import { requestJson } from '@/app/api-client'
+import { copyToClipboard } from '@/lib/clipboard'
 import { deleteComment, setNovelFavorite, updateComment } from '@/features/community/api'
 import {
   asArray,
@@ -19,6 +20,7 @@ import {
 import { useStartReading } from '@/features/discover/useStartReading'
 import { getReadingProgress } from '@/features/home/reading-progress'
 import { isInShelf, toggleShelf } from '@/features/home/local-shelf'
+import { pushShelfAdd, pushShelfRemove } from '@/features/home/reading-sync'
 import { getStudioPayload, updateNovelMeta, uploadNovelCover } from '@/features/studio/api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from '@/features/studio/cover-image'
 import { useShellStore } from '@/store/useShellStore'
@@ -411,9 +413,12 @@ export function useNovelDetailState() {
       coverUrl: detailCoverUrl,
     })
     setShelfVersion((version) => version + 1)
+    // 写穿服务端，保证不同设备书架内的书一致
     if (added) {
+      pushShelfAdd(detail.novel.id, detailTitle, detailCoverUrl)
       toast.success('已加入书架')
     } else {
+      pushShelfRemove(detail.novel.id)
       toast.info('已从书架移除')
     }
   }
@@ -421,10 +426,9 @@ export function useNovelDetailState() {
   async function handleShare() {
     const shareUrl = `${window.location.origin}/novel/${novelId}`
 
-    try {
-      await navigator.clipboard.writeText(shareUrl)
+    if (await copyToClipboard(shareUrl)) {
       toast.success('链接已复制，去分享给朋友吧')
-    } catch {
+    } else {
       toast.error('复制失败，请手动复制地址栏链接')
     }
   }

@@ -1,8 +1,9 @@
-import { BookOpen, Bookmark, BookmarkCheck, ChevronLeft, Heart, Link2, MoreHorizontal, PenLine, Send, Share2 } from 'lucide-react'
+import { BookOpen, Bookmark, BookmarkCheck, ChevronLeft, Heart, Link2, MoreHorizontal, PenLine, Send, Share2, UserRoundPlus } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import ShareMenu from '@/features/community/components/ShareMenu'
+import ShareToFriendSheet from '@/features/community/components/ShareToFriendSheet'
 import type { CommunityShareDraft } from '@/features/community/share'
 import type { NovelDetailState } from '../useNovelDetailState'
 
@@ -19,6 +20,7 @@ const secondaryButtonClass =
  * compact 模式下收藏与分享收进右侧 … 菜单，底栏只保留核心动作 */
 export default function DetailCtaRow({ state, compact = false }: DetailCtaRowProps) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [friendSheetOpen, setFriendSheetOpen] = useState(false)
   const {
     novelId,
     navigate,
@@ -137,6 +139,19 @@ export default function DetailCtaRow({ state, compact = false }: DetailCtaRowPro
                     type="button"
                     onClick={() => {
                       setMenuOpen(false)
+                      setFriendSheetOpen(true)
+                    }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+                  >
+                    <UserRoundPlus className="h-4 w-4 text-[var(--text-secondary)]" />
+                    发给好友
+                  </button>
+                ) : null}
+                {shareDraft ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
                       navigate('/community', { state: { share: shareDraft } })
                     }}
                     className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
@@ -180,6 +195,13 @@ export default function DetailCtaRow({ state, compact = false }: DetailCtaRowPro
           <Share2 className="h-4 w-4" />
         </button>
       )}
+
+      {friendSheetOpen && novelId ? (
+        <ShareToFriendSheet
+          message={{ type: 'novelCard', content: `分享作品《${detailTitle}》`, relatedId: String(novelId) }}
+          onClose={() => setFriendSheetOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

@@ -38,6 +38,7 @@ import type {
   Post,
   ProjectMemoryEntry,
   ReaderPayload,
+  ReadingProgressItem,
   ReceivedLikeItem,
   StatCardItem,
   StudioPayload,
@@ -314,6 +315,30 @@ export type SetPostBookmarkResponse = ApiSuccess<{ bookmarked: boolean; favorite
 
 /** 作品收藏：POST/DELETE /api/novels/:novelId/favorite */
 export type SetNovelFavoriteResponse = ApiSuccess<{ favorited: boolean; favoriteCount: number }>
+
+/** 云端书架+阅读进度列表：GET /api/users/me/reading-progress（按 updatedAt 倒序） */
+export type ListReadingProgressResponse = ApiSuccess<{ items: ReadingProgressItem[] }>
+
+/** 保存书架/阅读进度：POST /api/users/me/reading-progress */
+export type SaveReadingProgressRequest = {
+  novelId: string
+  novelTitle: string
+  coverUrl?: string | null
+  chapterId?: string | null
+  chapterTitle?: string | null
+  chapterOrder?: number
+  totalChapters?: number
+  scrollPercent?: number
+  /** 仅更新章内滚动位置时置 true：章节不匹配则忽略，不新建行 */
+  scrollOnly?: boolean
+  /** 仅加入书架（未开始阅读）时置 true：已存在则保留原有进度不重置 */
+  shelfOnly?: boolean
+}
+
+export type SaveReadingProgressResponse = ApiSuccess<{ item: ReadingProgressItem }>
+
+/** 从书架移除（删除该书的进度行）：DELETE /api/users/me/reading-progress/:novelId */
+export type RemoveReadingProgressResponse = ApiSuccess<{ removed: boolean }>
 
 /** 评论点赞：POST/DELETE /api/comments/:commentId/like */
 export type SetCommentLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>

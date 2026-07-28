@@ -22,11 +22,15 @@ import type {
   ListMessagesResponse,
   ListNovelsResponse,
   ListPostsResponse,
+  ListReadingProgressResponse,
   ListReceivedLikesResponse,
   ListUserRepliesResponse,
   MarkConversationReadResponse,
   MarkInteractionSeenRequest,
   MarkInteractionSeenResponse,
+  RemoveReadingProgressResponse,
+  SaveReadingProgressRequest,
+  SaveReadingProgressResponse,
   SendMessageRequest,
   SendMessageResponse,
   SetCommentLikeResponse,
@@ -261,6 +265,26 @@ export function setNovelFavorite(novelId: string, favorited: boolean) {
 /** 我收藏的作品列表（按收藏时间倒序） */
 export function listFavoriteNovels() {
   return requestData<ListFavoriteNovelsResponse['data']>('/api/users/me/favorite-novels')
+}
+
+/** 拉取跨设备同步的书架 + 阅读进度（按更新时间倒序） */
+export function listReadingProgress() {
+  return requestData<ListReadingProgressResponse['data']>('/api/users/me/reading-progress')
+}
+
+/** 写回书架成员身份 / 阅读进度（章节 + 章内滚动位置） */
+export function saveReadingProgress(body: SaveReadingProgressRequest) {
+  return requestData<SaveReadingProgressResponse['data']>('/api/users/me/reading-progress', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** 移出书架（同时清除该作品的阅读进度） */
+export function removeReadingProgress(novelId: string) {
+  return requestData<RemoveReadingProgressResponse['data']>(`/api/users/me/reading-progress/${novelId}`, {
+    method: 'DELETE',
+  })
 }
 
 /** 创建或复用与目标用户的双人直聊会话 */

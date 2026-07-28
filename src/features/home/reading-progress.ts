@@ -72,3 +72,20 @@ export function getProgressPercent(entry: ReadingProgressEntry): number {
   if (entry.totalChapters <= 0) return 0
   return Math.min(100, Math.max(1, Math.round(((entry.chapterOrder + 1) / entry.totalChapters) * 100)))
 }
+
+/** 水合注入：直接写入一条进度记录（服务端数据回填本地缓存，不改动 updatedAt） */
+export function upsertReadingProgressRaw(entry: ReadingProgressEntry) {
+  if (typeof window === 'undefined') return
+  const store = readStore()
+  store[entry.novelId] = entry
+  writeStore(store)
+}
+
+/** 水合注入：删除一条本地进度（服务端已移出书架时同步清理） */
+export function removeReadingProgressRaw(novelId: string) {
+  if (typeof window === 'undefined') return
+  const store = readStore()
+  if (!(novelId in store)) return
+  delete store[novelId]
+  writeStore(store)
+}

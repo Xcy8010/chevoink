@@ -1,4 +1,4 @@
-import { Heart, MessageSquareMore, Share2, Star } from 'lucide-react'
+import { Heart, Link2, MessageSquareMore, Share2, Star, UserRoundPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
@@ -10,7 +10,9 @@ import Avatar from '@/features/community/components/Avatar'
 import AuthorReferenceCard from '@/features/community/components/AuthorReferenceCard'
 import NovelReferenceCard from '@/features/community/components/NovelReferenceCard'
 import PostImageViewer from '@/features/community/components/PostImageViewer'
+import ShareToFriendSheet from '@/features/community/components/ShareToFriendSheet'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { splitContentByTopics } from '../../../../shared/contracts/index.js'
 import type { Post } from '../../../../shared/contracts/index.js'
@@ -33,6 +35,8 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
   const [liked, setLiked] = useState(Boolean(post.likedByViewer))
   const [favorited, setFavorited] = useState(Boolean(post.bookmarkedByViewer))
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  const [shareMenuOpen, setShareMenuOpen] = useState(false)
+  const [shareSheetOpen, setShareSheetOpen] = useState(false)
 
   // 服务端 viewer 状态刷新后同步本地状态
   useEffect(() => {
@@ -85,11 +89,11 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
 
   const handleShare = async (event: React.MouseEvent) => {
     event.stopPropagation()
+    setShareMenuOpen(false)
     const url = `${window.location.origin}/post/${post.id}`
-    try {
-      await navigator.clipboard.writeText(url)
+    if (await copyToClipboard(url)) {
       toast.success('链接已复制，去分享给朋友吧')
-    } catch {
+    } else {
       toast.error('复制失败，请手动复制地址栏链接')
     }
   }
@@ -275,11 +279,71 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
             {formatCompactCount(favoriteCount)}
           </button>
         </div>
-        <button type="button" aria-label="分享" onClick={handleShare} className={actionButtonClass(false)}>
-          <Share2 className="h-4 w-4" />
-          分享
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="分享"
+            aria-expanded={shareMenuOpen}
+            onClick={(event) => {
+              event.stopPropagation()
+              setShareMenuOpen((value) => !value)
+            }}
+            className={actionButtonClass(false)}
+          >
+            <Share2 className="h-4 w-4" />
+            分享
+          </button>
+
+          {shareMenuOpen ? (
+            <>
+              {/* 透明遮罩：点菜单外任意处收起 */}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setShareMenuOpen(false)
+                }}
+                aria-hidden
+              />
+              <div className="absolute bottom-[42px] right-0 z-50 w-44 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1.5 shadow-[var(--shadow-modal)]">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setShareMenuOpen(false)
+                    setShareSheetOpen(true)
+                  }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+                >
+                  <UserRoundPlus className="h-4 w-4 text-[var(--text-secondary)]" />
+                  发给好友
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShare}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+                >
+                  <Link2 className="h-4 w-4 text-[var(--text-secondary)]" />
+                  复制链接
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
+
+      {shareSheetOpen ? (
+        <span onClick={(event) => event.stopPropagation()}>
+          <ShareToFriendSheet
+            message={{
+              type: 'postCard',
+              content: `分享帖子：${(post.excerpt || post.content).replace(/\s+/g, ' ').slice(0, 60)}`,
+              relatedId: String(post.id),
+            }}
+            onClose={() => setShareSheetOpen(false)}
+          />
+        </span>
+      ) : null}
 
       {previewIndex !== null && imageUrls.length > 0 ? (
         <PostImageViewer images={imageUrls} initialIndex={previewIndex} onClose={() => setPreviewIndex(null)} />

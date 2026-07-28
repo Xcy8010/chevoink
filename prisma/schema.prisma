@@ -40,8 +40,11 @@ enum CommentTargetType {
 
 enum MessageType {
   text
+  image
   novelCard
   postCard
+  authorCard
+  commentCard
   system
 }
 
@@ -184,6 +187,7 @@ model User {
   postBookmarks           PostBookmark[]
   commentLikes            CommentLike[]
   novelFavorites          NovelFavorite[]
+  readingProgress         ReadingProgress[]
   following               UserFollow[]         @relation("UserFollowFollower")
   followers               UserFollow[]         @relation("UserFollowFollowing")
 
@@ -247,6 +251,7 @@ model Novel {
   agentSessions   AgentSession[]
   agentRuns       AgentRun[]
   projectMemoryEntries ProjectMemoryEntry[]
+  readingProgress ReadingProgress[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -424,6 +429,30 @@ model NovelFavorite {
   @@unique([novelId, userId])
   @@index([userId])
   @@map("novel_favorites")
+}
+
+// 云端书架 + 阅读进度（每个用户对每本书一行）：
+// 有记录即在书架中；chapterId 非空表示已开始阅读，scrollPercent 记录章内位置。
+// 取代原来仅存 localStorage 的本地书架/进度，实现多设备同步。
+model ReadingProgress {
+  id            String   @id @default(cuid()) @db.VarChar(64)
+  userId        String   @map("user_id") @db.VarChar(64)
+  novelId       String   @map("novel_id") @db.VarChar(64)
+  novelTitle    String   @map("novel_title") @db.VarChar(128)
+  coverUrl      String?  @map("cover_url")
+  chapterId     String?  @map("chapter_id") @db.VarChar(64)
+  chapterTitle  String?  @map("chapter_title") @db.VarChar(128)
+  chapterOrder  Int      @default(0) @map("chapter_order")
+  totalChapters Int      @default(0) @map("total_chapters")
+  scrollPercent Float    @default(0) @map("scroll_percent")
+  addedAt       DateTime @default(now()) @map("added_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel         Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, novelId])
+  @@index([userId])
+  @@map("reading_progress")
 }
 
 model CommentLike {

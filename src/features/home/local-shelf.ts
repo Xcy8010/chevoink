@@ -70,3 +70,11 @@ export function toggleShelf(entry: Omit<LocalShelfEntry, 'addedAt'>): boolean {
   addToShelf(entry)
   return true
 }
+
+/** 水合注入：按指定 addedAt 直接写入一条书架记录（服务端数据回填本地缓存） */
+export function upsertShelfRaw(entry: LocalShelfEntry) {
+  if (typeof window === 'undefined') return
+  const entries = readStore().filter((item) => item.novelId !== entry.novelId)
+  entries.unshift(entry)
+  writeStore(entries)
+}

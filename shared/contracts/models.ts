@@ -17,7 +17,7 @@ export type NovelStatus = 'draft' | 'published' | 'archived'
 export type ChapterStatus = 'draft' | 'published' | 'scheduled' | 'archived'
 export type Visibility = 'public' | 'followers' | 'private'
 export type CommentTargetType = 'novel' | 'chapter' | 'post'
-export type MessageType = 'text' | 'novelCard' | 'postCard' | 'system'
+export type MessageType = 'text' | 'image' | 'novelCard' | 'postCard' | 'authorCard' | 'commentCard' | 'system'
 export type ConversationType = 'direct' | 'system'
 export type CoverSourceType = 'upload' | 'ai_generated'
 export type ContentAuditStatus = 'pending' | 'approved' | 'rejected'
@@ -409,6 +409,8 @@ export interface ConversationMemberSummary {
   id: EntityId
   nickname: string
   avatarUrl: string | null
+  /** 该成员对本会话的最后已读时间：用于判断自己发的消息对方是否已读 */
+  lastReadAt?: string | null
   [key: string]: unknown
 }
 
@@ -434,6 +436,43 @@ export interface Conversation {
   [key: string]: unknown
 }
 
+/** 私信卡片消息的富数据：后端按 relatedId 批量回填；源内容被删除时为 null，前端降级为文本气泡 */
+export type MessageCard =
+  | {
+      kind: 'novel'
+      id: EntityId
+      title: string
+      coverUrl: string | null
+      summary: string
+      authorName: string
+    }
+  | {
+      kind: 'author'
+      id: EntityId
+      nickname: string
+      avatarUrl: string | null
+      bio: string | null
+      followerCount: number
+      novelCount: number
+    }
+  | {
+      kind: 'post'
+      id: EntityId
+      excerpt: string
+      imageUrl: string | null
+      authorName: string
+      authorAvatarUrl: string | null
+    }
+  | {
+      kind: 'comment'
+      id: EntityId
+      content: string
+      authorName: string
+      authorAvatarUrl: string | null
+      postId: EntityId | null
+      novelId: EntityId | null
+    }
+
 export interface Message {
   id: EntityId
   conversationId: EntityId
@@ -441,6 +480,8 @@ export interface Message {
   type: MessageType
   content: string
   relatedId: EntityId | null
+  /** 卡片消息（novelCard/postCard/authorCard/commentCard）的富数据 */
+  card?: MessageCard | null
   createdAt: string
   [key: string]: unknown
 }
@@ -496,6 +537,24 @@ export interface ProfileShelfItem {
   summary?: string | null
   updatedAt: string
   [key: string]: unknown
+}
+
+/**
+ * 云端书架 + 阅读进度条目：每个用户对每本书一条。
+ * chapterId 为空表示已加入书架但还未开始读；非空则携带当前章节与章内位置。
+ */
+export interface ReadingProgressItem {
+  novelId: EntityId
+  novelTitle: string
+  coverUrl?: string | null
+  chapterId?: string | null
+  chapterTitle?: string | null
+  chapterOrder: number
+  totalChapters: number
+  /** 章内滚动进度 0-1，用于重新进入时定位到上次读到的位置 */
+  scrollPercent: number
+  addedAt: string
+  updatedAt: string
 }
 
 export interface ProfileDraftItem {

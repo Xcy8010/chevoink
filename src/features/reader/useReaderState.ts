@@ -10,6 +10,7 @@ import {
   splitReaderParagraphs,
 } from '@/features/discover/api'
 import { getReadingProgress, saveReadingProgress, updateReadingScrollPercent } from '@/features/home/reading-progress'
+import { pushProgress, pushScrollProgress } from '@/features/home/reading-sync'
 import { getChapterContent, getStudioPayload } from '@/features/studio/api'
 import type { ReaderPayload } from '../../../shared/contracts/index.js'
 import {
@@ -278,6 +279,8 @@ export function useReaderState() {
     if (scrollSaveTimerRef.current) window.clearTimeout(scrollSaveTimerRef.current)
     scrollSaveTimerRef.current = window.setTimeout(() => {
       updateReadingScrollPercent(novelId, chapterId, percent)
+      // 章内滚动位置写穿服务端，供跨设备恢复到上次读到的位置
+      pushScrollProgress(novelId, novelTitle, chapterId, percent)
     }, 400)
   }
 
@@ -317,6 +320,16 @@ export function useReaderState() {
     saveReadingProgress({
       novelId,
       novelTitle,
+      chapterId,
+      chapterTitle,
+      chapterOrder: Math.max(0, currentIndex),
+      totalChapters,
+    })
+    // 写穿服务端：书架成员身份 + 当前章节，跨设备点击阅读跳到一致章节
+    pushProgress({
+      novelId,
+      novelTitle,
+      coverUrl: reader.novel.coverUrl ?? null,
       chapterId,
       chapterTitle,
       chapterOrder: Math.max(0, currentIndex),

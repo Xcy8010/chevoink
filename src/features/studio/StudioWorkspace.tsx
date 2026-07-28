@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Upload, Users, WandSparkles, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -10,7 +10,7 @@ import Tag from '@/components/ui/Tag'
 import TextInput from '@/components/ui/TextInput'
 import { useToast } from '@/components/ui/Toast'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
-import { useKeyboardInset } from '@/hooks/useMobileComposer'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type {
@@ -2779,7 +2779,6 @@ export default function StudioWorkspace() {
   const [novelMessage, setNovelMessage] = useState('作品设置支持自动保存，也可以手动点击保存。')
   const [mobileView, setMobileView] = useState<MobileView>('assistant')
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
-  const keyboardInset = useKeyboardInset()
   // 创作区（含沉浸创作/弹层 portal）内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
   const { panelWidths, beginPanelResize } = useStudioPanelWidths()
@@ -7094,14 +7093,13 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       return
     }
 
-    try {
-      setActiveAgentArtifactId(targetArtifact.id)
-      await navigator.clipboard.writeText(copyText)
+    setActiveAgentArtifactId(targetArtifact.id)
+    if (await copyToClipboard(copyText)) {
       setAgentRunState((current) => ({
         ...current,
         statusText: '已复制这条用户对话。',
       }))
-    } catch {
+    } else {
       setWorkspaceDialog({
         title: '复制失败',
         description: '当前环境暂时无法直接复制，请稍后重试。',
@@ -7472,14 +7470,13 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       return
     }
 
-    try {
-      setActiveAgentArtifactId(targetArtifact.id)
-      await navigator.clipboard.writeText(copyText)
+    setActiveAgentArtifactId(targetArtifact.id)
+    if (await copyToClipboard(copyText)) {
       setAgentRunState((current) => ({
         ...current,
         statusText: '已复制当前结果。',
       }))
-    } catch {
+    } else {
       setWorkspaceDialog({
         title: '复制失败',
         description: '当前环境暂时无法直接复制，请稍后重试。',
@@ -9076,8 +9073,9 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
             ) : null}
           </div>
 
-          {keyboardInset === 0 ? (
-            <nav className="flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1">
+          {/* 软键盘打开时由 index.css 的 html.keyboard-open .studio-bottom-nav 规则隐藏，
+              让 Agent 输入框自然落到收缩视口底部（键盘上方），底栏不再被顶起占位 */}
+          <nav className="studio-bottom-nav flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1">
               <button
                 type="button"
                 onClick={() => {
@@ -9127,8 +9125,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                 <MoreHorizontal className="h-5 w-5" />
                 更多
               </button>
-            </nav>
-          ) : null}
+          </nav>
 
           <BottomSheet
             open={mobileMoreOpen}

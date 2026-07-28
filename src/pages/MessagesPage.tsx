@@ -37,7 +37,11 @@ export default function MessagesPage() {
   const queryClient = useQueryClient()
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [selectedConversationId, setSelectedConversationId] = useState(searchParams.get('conversationId') ?? '')
+  // 选中会话直接从 URL 派生，URL 是唯一数据源：
+  // 之前用本地 state + effect 与路由参数双向同步，但 react-router v7 的 setSearchParams
+  // 走 startTransition 延迟提交，本地 state 先行提交会产生「列表↔聊天」来回翻转的中间帧，
+  // 手机端表现为进入/退出聊天时各闪一下；派生后页面切换与壳层底栏隐藏在同一次提交内完成
+  const routeConversationId = searchParams.get('conversationId') ?? ''
   const [openingFriendId, setOpeningFriendId] = useState<string | null>(null)
   const [draftByConversationId, setDraftByConversationId] = useState<Record<string, string>>({})
   const [pendingByConversation, setPendingByConversation] = useState<Record<string, PendingMessage[]>>({})
@@ -89,25 +93,11 @@ export default function MessagesPage() {
   const interactionsUnseen = badgesQuery.data?.interactionsUnseen ?? 0
   const followersUnseen = badgesQuery.data?.followersUnseen ?? 0
 
-  useEffect(() => {
-    const routeConversationId = searchParams.get('conversationId')
-
-    // 直接信任路由参数：新建会话可能还不在缓存列表里（staleTime 内不会重拉），
-    // 聊天区已有 messagesQuery.data.conversation 兑底，选中不依赖列表包含该会话
-    if (routeConversationId) {
-      setSelectedConversationId(routeConversationId)
-      return
-    }
-
-    if (isSplitLayout) {
-      if (!allConversations.some((item) => item.id === selectedConversationId)) {
-        setSelectedConversationId(allConversations[0]?.id ?? '')
-      }
-      return
-    }
-
-    setSelectedConversationId('')
-  }, [allConversations, isSplitLayout, searchParams, selectedConversationId])
+  // 直接信任路由参数：新建会话可能还不在缓存列表里（staleTime 内不会重拉），
+  // 聊天区已有 messagesQuery.data.conversation 兑底，选中不依赖列表包含该会话；
+  // 平板/桌面分栏无参数时兜底选中第一条会话，手机端无参数即回到列表
+  const selectedConversationId =
+    routeConversationId || (isSplitLayout ? (allConversations[0]?.id ?? '') : '')
 
   const messagesQuery = useQuery({
     queryKey: ['community', 'messages', selectedConversationId],
@@ -116,7 +106,9 @@ export default function MessagesPage() {
     refetchInterval: 15_000,
   })
 
-  // 进入会话即标记已读：本地未读数归零 + 刷新全局未读统计
+  // 进入会话即标记已读：本地未读数归零 + 刷新全局未读统计；
+  // 依赖最新消息 id，停留在聊天中收到新消息时也持续上报已读，对方的「已读」状态才能半实时刷新
+  const latestMessageId = messagesQuery.data?.items?.at(-1)?.id ?? ''
   useEffect(() => {
     if (!selectedConversationId) return
 
@@ -141,7 +133,7 @@ export default function MessagesPage() {
       .catch(() => {
         // 已读标记失败不阻断聊天，下次轮询会重新对齐
       })
-  }, [queryClient, selectedConversationId])
+  }, [queryClient, selectedConversationId, latestMessageId])
 
   const removePending = (conversationId: string, tempId: string) => {
     setPendingByConversation((current) => ({
@@ -154,11 +146,13 @@ export default function MessagesPage() {
     mutationFn: ({
       conversationId,
       content,
+      type,
     }: {
       conversationId: string
       content: string
+      type: 'text' | 'image'
       tempId: string
-    }) => sendMessage(conversationId, { type: 'text', content }),
+    }) => sendMessage(conversationId, { type, content }),
     onSuccess: async (message, variables) => {
       removePending(variables.conversationId, variables.tempId)
       queryClient.setQueryData<{ conversation: Conversation | null; items: Message[] } | undefined>(
@@ -178,7 +172,7 @@ export default function MessagesPage() {
               conversation.id === variables.conversationId
                 ? {
                     ...conversation,
-                    lastMessagePreview: message.content,
+                    lastMessagePreview: message.type === 'image' ? '[图片]' : message.content,
                     lastMessageAt: message.createdAt,
                     unreadCount: 0,
                   }
@@ -212,6 +206,11 @@ export default function MessagesPage() {
   const activePending = selectedConversationId ? (pendingByConversation[selectedConversationId] ?? []) : []
   const activeDraft = selectedConversation ? (draftByConversationId[selectedConversation.id] ?? '') : ''
   const currentUserId = meQuery.data?.user?.id ?? ''
+  // 对方最近读到会话的时间：从消息接口返回的会话成员里取（用于「已读」状态）
+  const counterpartLastReadAt = useMemo(() => {
+    const members = messagesQuery.data?.conversation?.members ?? []
+    return members.find((member) => member.id && String(member.id) !== currentUserId)?.lastReadAt ?? null
+  }, [messagesQuery.data, currentUserId])
   const totalUnread = allConversations.reduce((sum, item) => sum + item.unreadCount, 0)
   const shouldShowListPane = isSplitLayout || !selectedConversation
   const shouldShowConversationPane = isSplitLayout || Boolean(selectedConversation)
@@ -237,14 +236,19 @@ export default function MessagesPage() {
     }
   }, [selectedConversationId, activeMessages.length, activePending.length])
 
-  const dispatchMessage = (conversationId: string, content: string, tempId?: string) => {
+  const dispatchMessage = (
+    conversationId: string,
+    content: string,
+    type: 'text' | 'image' = 'text',
+    tempId?: string,
+  ) => {
     const finalTempId = tempId ?? `pending-${Date.now()}-${Math.round(Math.random() * 1000)}`
     if (!tempId) {
       setPendingByConversation((current) => ({
         ...current,
         [conversationId]: [
           ...(current[conversationId] ?? []),
-          { tempId: finalTempId, content, createdAt: new Date().toISOString(), status: 'sending' },
+          { tempId: finalTempId, content, createdAt: new Date().toISOString(), status: 'sending', type },
         ],
       }))
     } else {
@@ -255,7 +259,7 @@ export default function MessagesPage() {
         ),
       }))
     }
-    sendMessageMutation.mutate({ conversationId, content, tempId: finalTempId })
+    sendMessageMutation.mutate({ conversationId, content, type, tempId: finalTempId })
   }
 
   const handleSend = () => {
@@ -272,16 +276,43 @@ export default function MessagesPage() {
   const handleRetryPending = (tempId: string) => {
     const pending = activePending.find((item) => item.tempId === tempId)
     if (!pending || !selectedConversationId) return
-    dispatchMessage(selectedConversationId, pending.content, tempId)
+    dispatchMessage(selectedConversationId, pending.content, pending.type ?? 'text', tempId)
+  }
+
+  // 加号发图片：校验格式与大小后转 dataURL 走同一发送链路（后端落盘并替换为图片地址）
+  const handlePickImage = (file: File) => {
+    if (!selectedConversationId) return
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+      toast.error('仅支持 PNG、JPG 或 WebP 图片。')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('图片不能超过 5MB。')
+      return
+    }
+    if (isStrangerConversation && strangerQuotaLeft <= 0) {
+      toast.info('你们还没有互相关注，最多只能发送 3 条陌生消息。')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : ''
+      if (!dataUrl) {
+        toast.error('图片读取失败，请重试。')
+        return
+      }
+      dispatchMessage(selectedConversationId, dataUrl, 'image')
+    }
+    reader.onerror = () => toast.error('图片读取失败，请重试。')
+    reader.readAsDataURL(file)
   }
 
   const handleSelectConversation = (conversationId: string) => {
-    setSelectedConversationId(conversationId)
     setSearchParams({ conversationId })
   }
 
   const handleBackToList = () => {
-    setSelectedConversationId('')
     setSearchParams({})
   }
 
@@ -463,6 +494,7 @@ export default function MessagesPage() {
                     messages={activeMessages}
                     pendingMessages={activePending}
                     currentUserId={currentUserId}
+                    counterpartLastReadAt={counterpartLastReadAt}
                     onRetryPending={handleRetryPending}
                   />
                 </div>
@@ -498,6 +530,7 @@ export default function MessagesPage() {
                       }))
                     }
                     onSend={handleSend}
+                    onPickImage={handlePickImage}
                     isSending={sendMessageMutation.isPending}
                   />
                 </>

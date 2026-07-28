@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 
 import type {
+  SaveReadingProgressRequest,
   UpdateMyAvatarRequest,
   UpdateMyCoverRequest,
   UpdateMyPasswordRequest,
@@ -17,6 +18,7 @@ import {
   getUserCredentialData,
   listInteractionsData,
   listFavoriteNovelsData,
+  listReadingProgressData,
   listUserFollowersData,
   listUserFollowingData,
   listUserLikedPostsData,
@@ -24,6 +26,8 @@ import {
   listUserRepliesData,
   listReceivedLikesData,
   markInteractionSeenData,
+  removeReadingProgressData,
+  saveReadingProgressData,
   setUserFollowData,
   updateMyAvatarData,
   updateMyPasswordData,
@@ -257,6 +261,55 @@ router.get('/me/favorite-novels', async (req: Request, res: Response): Promise<v
     const userId = requireSessionUserId(req)
     const items = await listFavoriteNovelsData(userId)
     res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 云端书架 + 阅读进度：多设备同步的书架列表与阅读位置
+router.get('/me/reading-progress', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const items = await listReadingProgressData(userId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/me/reading-progress', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as Partial<SaveReadingProgressRequest>
+
+  try {
+    const userId = requireSessionUserId(req)
+
+    if (!body.novelId?.trim() || !body.novelTitle?.trim()) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '缺少作品信息。'))
+      return
+    }
+
+    const item = await saveReadingProgressData(userId, body as SaveReadingProgressRequest)
+    if (!item) {
+      res.status(404).json(buildError(requestId, 'NOVEL_NOT_FOUND', '未找到作品。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, { item }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/me/reading-progress/:novelId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const removed = await removeReadingProgressData(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { removed }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 import { AlertCircle, LoaderCircle, SearchX } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import Surface from '@/components/ui/Surface'
 import { cn } from '@/lib/utils'
 
 type AppStateTone = 'loading' | 'empty' | 'error'
@@ -43,10 +42,9 @@ export default function AppState({
   const Icon = toneIconMap[tone]
 
   return (
-    <Surface
-      as="section"
-      padding="md"
-      className={cn('flex min-h-[220px] items-center justify-center text-center md:min-h-[280px]', className)}
+    // 空态/加载/错误提示不再套卡片容器：无边框无底色，直接融入页面背景
+    <section
+      className={cn('flex min-h-[220px] items-center justify-center p-4 text-center md:min-h-[280px] md:p-5', className)}
     >
       <div className="mx-auto flex max-w-xl flex-col items-center">
         <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-tertiary)]">
@@ -91,6 +89,6 @@ export default function AppState({
           </div>
         ) : null}
       </div>
-    </Surface>
+    </section>
   )
 }

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import type {
   AgentExecutionMode,
@@ -376,14 +377,13 @@ export function AgentPanel({
   const combinedError = actionError ?? errorMessage
 
   const handleCopyText = useCallback(async (id: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
+    if (await copyToClipboard(text)) {
       setCopiedId(id)
       if (copyResetTimerRef.current) {
         window.clearTimeout(copyResetTimerRef.current)
       }
       copyResetTimerRef.current = window.setTimeout(() => setCopiedId(null), 1500)
-    } catch {
+    } else {
       setActionError('复制失败，请手动选择文本复制。')
     }
   }, [])

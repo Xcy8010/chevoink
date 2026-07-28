@@ -1,4 +1,4 @@
-import { ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
+import { CSSProperties, ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users } from 'lucide-react'
@@ -12,6 +12,7 @@ import { getInteractionBadges, listConversations } from '@/features/community/ap
 import GlobalSearchBox from '@/features/search/GlobalSearchBox'
 import { brandMeta } from '@/lib/theme/tokens'
 import { enterImmersiveFullscreen } from '@/lib/immersive-fullscreen'
+import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
 import { desktopNavItems, mobileNavItems, workspaceLinks } from '@/types/app'
@@ -37,6 +38,10 @@ export default function AppShell({ title, description, children }: AppShellProps
   const sessionUser = useShellStore((state) => state.sessionUser)
   const setGuest = useShellStore((state) => state.setGuest)
   const isHome = location.pathname === '/'
+  const isDiscoverRoute = location.pathname === '/discover'
+  const isSearchRoute = location.pathname === '/search'
+  // 社区页信息流自身已足够明确，壳层大标题占空间，隐藏页头
+  const isCommunityRoute = location.pathname === '/community'
   const isStudioRoute = location.pathname === '/studio' || location.pathname.startsWith('/studio/')
   const isReaderRoute = /^\/novel\/[^/]+\/read\/[^/]+$/.test(location.pathname)
   // 作品详情页自带书名主标题，壳层引导文案反而冗余，隐藏页头
@@ -45,8 +50,14 @@ export default function AppShell({ title, description, children }: AppShellProps
   const isPostDetailRoute = /^\/post\/[^/]+$/.test(location.pathname)
   // 消息页自带列表标题，壳层页头只会占掉聊天区高度，隐藏；主容器改为固定不滚动
   const isMessagesRoute = location.pathname === '/messages'
+  // 聊天详情态（URL 带 conversationId）：手机端隐藏底部导航，让输入框贴底全屏聊天
+  const isMessagesChatRoute = isMessagesRoute && new URLSearchParams(location.search).has('conversationId')
+  // 手机端仅首页/发现/搜索保留顶部导航栏，其余页面隐藏并让内容顶上去
+  const hideMobileHeader = !(isHome || isDiscoverRoute || isSearchRoute)
   // 关注粉丝/获赞明细页自带紧凑标题，壳层大标题多余，隐藏
   const isMeListRoute = location.pathname === '/me/follows' || location.pathname === '/me/likes'
+  // 个人中心页自带头部卡片，壳层大标题多余，隐藏
+  const isProfileRoute = location.pathname === '/me'
   const isAuthRoute = location.pathname === '/login' || location.pathname === '/register'
   const isAuthenticated = authStatus === 'authenticated' && !!sessionUser
   const accountRoute = authStatus === 'guest' ? '/login?redirect=%2Fme' : '/me'
@@ -54,6 +65,11 @@ export default function AppShell({ title, description, children }: AppShellProps
   const headerRef = useRef<HTMLElement | null>(null)
   const desktopAccountMenuRef = useRef<HTMLDivElement | null>(null)
   const [isScrolled, setIsScrolled] = useState(false)
+  // 滚动态同步到 ref：折叠动画进行中冻结 header 高度测量，避免内容 padding 跟着跳动
+  const isScrolledRef = useRef(false)
+  // 展开动画期间的测量冻结截止时间 + 测量函数引用：动画结束后一次性对齐，避免逐帧回写 padding 造成展开卡顿
+  const measureFreezeUntilRef = useRef(0)
+  const measureHeaderRef = useRef<() => void>(() => {})
   // 默认折叠，保证内容区最大宽度；展开状态仅影响桌面端(lg)，平板端常驻收起导航轨
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const [desktopAccountMenuOpen, setDesktopAccountMenuOpen] = useState(false)
@@ -89,6 +105,8 @@ export default function AppShell({ title, description, children }: AppShellProps
   // 加载时自动全屏，故开启后在用户每次点击/触摸时进入并持续保持；关闭开关后立即
   // 退出全屏且不再自动进入；不支持的环境静默降级（进入逻辑见 lib/immersive-fullscreen）
   useEffect(() => {
+    // APP 壳内天生全屏，不使用网页 Fullscreen API（避免与原生全屏打架、强制横屏等）
+    if (isNativeApp()) return
     if (!fullscreenEnabled) {
       if (document.fullscreenElement) {
         document.exitFullscreen?.().catch(() => {})
@@ -108,9 +126,13 @@ export default function AppShell({ title, description, children }: AppShellProps
     }
 
     const updateHeaderHeight = () => {
+      // 折叠（滚动）期间 header 是 fixed 浮层，高度变化不回写内容 padding；展开动画进行中同样冻结，
+      // 由 handleMainScroll 排的一次性测量在动画结束后对齐，避免 ResizeObserver 逐帧触发整页重排
+      if (isScrolledRef.current || Date.now() < measureFreezeUntilRef.current) return
       setHeaderHeight(Math.ceil(headerEl.getBoundingClientRect().height))
     }
 
+    measureHeaderRef.current = updateHeaderHeight
     updateHeaderHeight()
 
     const observer = new ResizeObserver(updateHeaderHeight)
@@ -130,6 +152,7 @@ export default function AppShell({ title, description, children }: AppShellProps
       nextScrollRoot.scrollTo({ top: 0, behavior: 'auto' })
     }
 
+    isScrolledRef.current = false
     setIsScrolled(false)
     setDesktopAccountMenuOpen(false)
   }, [location.pathname])
@@ -161,8 +184,18 @@ export default function AppShell({ title, description, children }: AppShellProps
   }, [desktopAccountMenuOpen])
 
   const handleMainScroll = (event: UIEvent<HTMLDivElement>) => {
-    setIsScrolled(event.currentTarget.scrollTop > 12)
+    const next = event.currentTarget.scrollTop > 12
+    if (!next && isScrolledRef.current) {
+      // 折叠转向展开：动画期间继续冻结 header 高度测量，结束后一次性对齐，展开过程不再逐帧重排
+      measureFreezeUntilRef.current = Date.now() + 360
+      window.setTimeout(() => measureHeaderRef.current(), 380)
+    }
+    isScrolledRef.current = next
+    setIsScrolled(next)
   }
+
+  // 手机端 header 折叠态（只剩搜索框）：首页/发现页滚动时挤压，搜索页常驻折叠
+  const mobileHeaderCollapsed = isScrolled || isSearchRoute
 
   async function handleLogout() {
     try {
@@ -543,20 +576,34 @@ export default function AppShell({ title, description, children }: AppShellProps
                 !isAuthRoute && 'md:left-[64px]',
                 !isAuthRoute && sidebarExpanded && 'lg:left-[284px]',
                 isStudioRoute && 'hidden lg:block',
+                // 手机端仅首页/发现/搜索显示顶部导航栏（studio 已有自己的隐藏规则，不叠加）
+                hideMobileHeader && !isStudioRoute && 'hidden md:block',
               )}
             >
           <div className="mx-auto max-w-[var(--shell-max-width)]">
             <div
               className={cn(
-                'pointer-events-auto relative rounded-[28px] border transition-[background-color,border-color,box-shadow,padding,transform] duration-200 ease-out',
+                'pointer-events-auto relative rounded-[28px] border transition-[background-color,border-color,box-shadow,padding,transform] duration-300 ease-out',
                 'border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 shadow-[0_10px_28px_rgba(17,24,39,0.06)] backdrop-blur',
                 isScrolled
                   ? 'px-3 py-3 shadow-[0_14px_32px_rgba(17,24,39,0.08)]'
                   : 'px-3 py-3 md:px-4',
+                // 手机端折叠后外层卡片壳退场：只剩搜索框自身的胶囊，不再一层套一层
+                mobileHeaderCollapsed &&
+                  'mobile:border-transparent mobile:bg-transparent mobile:p-0 mobile:shadow-none mobile:backdrop-blur-none',
               )}
             >
               <div className="relative">
-            <div className="flex items-center gap-3 md:gap-4">
+            <div
+              className={cn(
+                // 手机端挤压动画：折叠时 logo 行用 max-height+透明度+上移自然收起，只留搜索框；
+                // overflow-hidden 常驻手机端，展开起步瞬间内容不会先溢出再被裁切
+                'flex items-center gap-3 transition-[max-height,opacity,transform] duration-300 ease-out mobile:overflow-hidden md:gap-4',
+                mobileHeaderCollapsed
+                  ? 'mobile:max-h-0 mobile:-translate-y-2 mobile:opacity-0'
+                  : 'mobile:max-h-14 mobile:translate-y-0 mobile:opacity-100',
+              )}
+            >
                   <Link to="/" className="flex min-w-0 items-center gap-3">
                     <span className="inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 md:h-11 md:w-11">
                       <img
@@ -618,8 +665,10 @@ export default function AppShell({ title, description, children }: AppShellProps
 
                 <div
                   className={cn(
-                    'grid gap-2 transition-[margin,transform,opacity] duration-200 ease-out md:grid-cols-[minmax(0,1fr)_auto] md:items-center',
+                    'grid gap-2 transition-[margin,transform,opacity] duration-300 ease-out md:grid-cols-[minmax(0,1fr)_auto] md:items-center',
                     isScrolled ? 'mt-2' : 'mt-3',
+                    // 折叠后搜索框顶格，与 logo 行的收起动画同步过渡
+                    mobileHeaderCollapsed && 'mobile:mt-0',
                   )}
                 >
                   <GlobalSearchBox />
@@ -650,14 +699,18 @@ export default function AppShell({ title, description, children }: AppShellProps
           >
             <div
               className={cn(
-                'space-y-4 pb-[calc(88px+var(--safe-bottom))] pr-0.5 md:space-y-6 md:pb-8',
+                'space-y-4 pb-[calc(88px+var(--safe-bottom))] pr-0.5 pt-[calc(var(--app-header-height)+12px)] md:space-y-6 md:pb-8',
+                // 手机端隐藏顶部导航栏的页面：内容顶上去，只留安全区间距（studio 保持原行为）
+                hideMobileHeader && !isStudioRoute && 'mobile:pt-[calc(var(--safe-top)+12px)]',
                 isReaderRoute && 'flex h-full min-h-0 flex-col space-y-4 pb-0 md:pb-0',
                 // 创作区手机端由自己的底部导航接管，不再为全局底栏留白
                 isStudioRoute && 'flex h-full min-h-0 flex-col space-y-4 md:space-y-4 pb-0 md:pb-0',
                 // 消息页：列式铺满剩余高度，手机端避让底部导航，桌面端留少量底边距；app-messages-main 供键盘打开时收紧底部留白
                 isMessagesRoute && 'app-messages-main flex h-full min-h-0 flex-col space-y-0 pb-[calc(76px+var(--safe-bottom))] md:pb-6',
+                // 聊天详情态：底栏已隐藏，手机端只留安全区，输入框贴底
+                isMessagesChatRoute && 'mobile:pb-[var(--safe-bottom)]',
               )}
-              style={{ paddingTop: headerHeight + 12 }}
+              style={{ '--app-header-height': `${headerHeight}px` } as CSSProperties}
             >
               {!isHome ? (
                 <section
@@ -669,7 +722,10 @@ export default function AppShell({ title, description, children }: AppShellProps
                     isPostDetailRoute && 'hidden',
                     isMessagesRoute && 'hidden',
                     isMeListRoute && 'hidden',
-                    isAuthRoute && 'pt-3 md:pt-4',
+                    isProfileRoute && 'hidden',
+                    isCommunityRoute && 'hidden',
+                    // 登录/注册页自带页面标题，壳层大标题隐藏
+                    isAuthRoute && 'hidden',
                   )}
                 >
                   <h1 className="max-w-4xl text-[1.625rem] font-semibold tracking-tight text-[var(--text-primary)] md:text-[2rem]">
@@ -694,6 +750,8 @@ export default function AppShell({ title, description, children }: AppShellProps
           isReaderRoute && 'hidden',
           // 创作区有自己的底部导航（对话/写作/章节/更多），隐藏全局底栏
           isStudioRoute && 'hidden',
+          // 聊天详情态：隐藏底栏让输入框贴底，返回会话列表后恢复
+          isMessagesChatRoute && 'hidden',
         )}
       >
         <div className="mx-auto grid max-w-lg grid-cols-[1fr_1fr_auto_1fr_1fr] items-center gap-2">
@@ -723,8 +781,8 @@ export default function AppShell({ title, description, children }: AppShellProps
       <QuickCreateSheet open={quickCreateOpen} onClose={closeQuickCreate} />
 
       {/* 首次进入网站的全屏选择弹窗：默认不开启全屏，由用户自己选；选择后不再弹出，
-          「开启」按钮点击本身就是用户手势，可直接进入全屏 */}
-      {!fullscreenPromptSeen ? (
+          「开启」按钮点击本身就是用户手势，可直接进入全屏；APP 壳内天生全屏，不弹 */}
+      {!fullscreenPromptSeen && !isNativeApp() ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4">
           <div className="w-full max-w-[380px] rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-xl">
             <h3 className="text-lg font-semibold text-[var(--text-primary)]">选择浏览方式</h3>

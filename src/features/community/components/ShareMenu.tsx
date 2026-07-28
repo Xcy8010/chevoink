@@ -1,9 +1,11 @@
-import { Link2, Send } from 'lucide-react'
+import { Link2, Send, UserRoundPlus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useToast } from '@/components/ui/Toast'
+import ShareToFriendSheet, { type FriendShareMessage } from '@/features/community/components/ShareToFriendSheet'
 import type { CommunityShareDraft } from '@/features/community/share'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 
 type ShareMenuProps = {
@@ -22,7 +24,15 @@ type ShareMenuProps = {
 const menuItemClass =
   'flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]'
 
-/** 分享弹出菜单（任务7）：分享到社区 + 复制链接，作品页/作者页共用 */
+/** 分享菜单里「发给好友」的私信载荷：作品/作者都走专属卡片消息 */
+function toFriendShareMessage(share: CommunityShareDraft): FriendShareMessage {
+  if (share.kind === 'novel') {
+    return { type: 'novelCard', content: `分享作品《${share.novel.title}》`, relatedId: String(share.novel.id) }
+  }
+  return { type: 'authorCard', content: `推荐作者：${share.author.nickname}`, relatedId: String(share.author.id) }
+}
+
+/** 分享弹出菜单（任务7）：发给好友 + 分享到社区 + 复制链接，作品页/作者页共用 */
 export default function ShareMenu({
   share,
   url,
@@ -35,6 +45,7 @@ export default function ShareMenu({
   const navigate = useNavigate()
   const toast = useToast()
   const [open, setOpen] = useState(false)
+  const [friendSheetOpen, setFriendSheetOpen] = useState(false)
 
   const handleShareToCommunity = () => {
     setOpen(false)
@@ -43,10 +54,9 @@ export default function ShareMenu({
 
   const handleCopyLink = async () => {
     setOpen(false)
-    try {
-      await navigator.clipboard.writeText(url)
+    if (await copyToClipboard(url)) {
       toast.success('链接已复制，去分享给朋友吧')
-    } catch {
+    } else {
       toast.error('复制失败，请手动复制地址栏链接')
     }
   }
@@ -73,6 +83,17 @@ export default function ShareMenu({
               placement === 'up' ? 'bottom-[52px]' : 'top-[48px]',
             )}
           >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setFriendSheetOpen(true)
+              }}
+              className={menuItemClass}
+            >
+              <UserRoundPlus className="h-4 w-4 text-[var(--text-secondary)]" />
+              发给好友
+            </button>
             <button type="button" onClick={handleShareToCommunity} className={menuItemClass}>
               <Send className="h-4 w-4 text-[var(--text-secondary)]" />
               分享到社区
@@ -83,6 +104,10 @@ export default function ShareMenu({
             </button>
           </div>
         </>
+      ) : null}
+
+      {friendSheetOpen ? (
+        <ShareToFriendSheet message={toFriendShareMessage(share)} onClose={() => setFriendSheetOpen(false)} />
       ) : null}
     </div>
   )

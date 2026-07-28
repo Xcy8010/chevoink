@@ -1,10 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { Eye, EyeOff, Lock, MessageSquareText, Smartphone, UserRound } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import Button from '@/components/ui/Button'
-import Surface from '@/components/ui/Surface'
 import TextInput from '@/components/ui/TextInput'
+import { brandMeta } from '@/lib/theme/tokens'
+import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
 import type {
   AuthSessionPayload,
@@ -77,6 +79,12 @@ function normalizeRedirectPath(input: string | null): string {
   return input
 }
 
+/**
+ * 登录/注册页（未登录的「个人中心」入口）：
+ * - 手机端全出血单列，顶部品牌头像 +「点击登录/注册」式问候，参考主流阅读/社交 App
+ * - 平板/电脑端居中卡片（max-w 420px），同一套表单自适应
+ * - 密码框带眼睛按钮切换明文，默认隐藏
+ */
 export default function AuthPage({ mode }: AuthPageProps) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -89,6 +97,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const [loginMethod, setLoginMethod] = useState<LoginMethod>(isRegisterPage ? 'sms' : 'password')
   const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
   const [captchaId, setCaptchaId] = useState('')
@@ -253,190 +262,207 @@ export default function AuthPage({ mode }: AuthPageProps) {
 
   if (isAuthenticated) {
     return (
-      <Surface as="section" padding="lg" className="mx-auto max-w-[680px]">
-        <div className="space-y-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-[var(--text-tertiary)]">账户状态</p>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">你已经登录</h2>
-          <p className="text-sm leading-7 text-[var(--text-secondary)]">可以直接回到个人中心，继续查看书架、草稿和互动记录。</p>
-          <div className="flex flex-wrap gap-3">
-            <Button variant="primary" onClick={() => navigate(redirectPath, { replace: true })}>
-              继续前往
-            </Button>
-            <Button variant="secondary" onClick={() => navigate('/settings')}>
-              打开设置
-            </Button>
-          </div>
+      <section className="mx-auto flex w-full max-w-[420px] flex-col items-center px-4 pt-10 text-center md:pt-16">
+        <span className="inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+          <img src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full object-cover" />
+        </span>
+        <h1 className="mt-5 text-xl font-semibold tracking-tight text-[var(--text-primary)]">你已经登录</h1>
+        <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+          可以直接回到个人中心，继续查看书架、草稿和互动记录。
+        </p>
+        <div className="mt-6 w-full space-y-3">
+          <Button variant="primary" className="h-11 w-full" onClick={() => navigate(redirectPath, { replace: true })}>
+            继续前往
+          </Button>
+          <Button variant="secondary" className="h-11 w-full" onClick={() => navigate('/settings')}>
+            打开设置
+          </Button>
         </div>
-      </Surface>
+      </section>
     )
   }
 
+  const segTabClass = (active: boolean) =>
+    cn(
+      'press-feedback relative flex-1 pb-2.5 text-center text-sm font-medium transition-colors',
+      active ? 'font-semibold text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+    )
+
   return (
-    <Surface as="section" padding="lg" className="mx-auto max-w-[680px]">
-      <div className="space-y-8">
-        <div className="space-y-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-[var(--text-tertiary)]">
-            {isRegisterPage ? '手机号注册' : '欢迎回来'}
-          </p>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
-            {isSmsFlow ? '手机号验证码登录与注册' : '登录后继续阅读与创作'}
-          </h2>
-          <p className="text-sm leading-7 text-[var(--text-secondary)]">
-            {isSmsFlow
-              ? '先完成人机验证并获取验证码。若手机号已存在，将直接登录；若手机号未注册，会继续提示你填写个人信息完成注册。'
-              : '请输入手机号和登录密码继续访问你的账户。'}
-          </p>
+    <div className="flex justify-center">
+      {/* 手机端全出血；md 起收成一张居中卡片，宽度对手机/平板/电脑分别自适应 */}
+      <section className="w-full max-w-[420px] px-1 pt-6 md:rounded-[28px] md:border md:border-[var(--border-subtle)] md:bg-[var(--surface-default)] md:px-8 md:py-9 md:shadow-[var(--shadow-card)]">
+        {/* 品牌问候区：头像 + 点击登录/注册（参考主流阅读 App 未登录个人中心） */}
+        <div className="flex items-center gap-4">
+          <span className="relative inline-flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--surface-muted)]">
+            <img src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full object-cover" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
+              {isRegisterPage ? '创建账户' : '点击登录/注册'}
+            </h1>
+            <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+              {isRegisterPage
+                ? '注册后即可收藏作品、发布内容和创作小说'
+                : '登录后书架、草稿和互动记录都会同步保留'}
+            </p>
+          </div>
         </div>
 
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          {!isRegisterPage ? (
-            <div className="flex gap-2 rounded-[var(--radius-md)] bg-[var(--surface-muted)] p-1">
-              <button
-                type="button"
-                className={`flex-1 rounded-[calc(var(--radius-md)-4px)] px-3 py-2 text-sm font-medium transition ${
-                  loginMethod === 'password'
-                    ? 'bg-black text-white shadow-sm'
-                    : 'text-[var(--text-secondary)]'
-                }`}
-                onClick={() => {
-                  setLoginMethod('password')
-                  setErrorMessage('')
-                  setHintMessage('')
-                }}
-              >
-                密码登录
-              </button>
-              <button
-                type="button"
-                className={`flex-1 rounded-[calc(var(--radius-md)-4px)] px-3 py-2 text-sm font-medium transition ${
-                  loginMethod === 'sms'
-                    ? 'bg-black text-white shadow-sm'
-                    : 'text-[var(--text-secondary)]'
-                }`}
-                onClick={() => {
-                  setLoginMethod('sms')
-                  setErrorMessage('')
-                  setHintMessage('')
-                }}
-              >
-                手机验证码
-              </button>
-            </div>
-          ) : null}
+        {/* 登录方式切换：X 风格文字 Tab + 下划线，注册页固定验证码流程 */}
+        {!isRegisterPage ? (
+          <div className="mt-7 flex border-b border-[var(--border-subtle)]">
+            <button
+              type="button"
+              className={segTabClass(loginMethod === 'password')}
+              onClick={() => {
+                setLoginMethod('password')
+                setErrorMessage('')
+                setHintMessage('')
+              }}
+            >
+              密码登录
+              {loginMethod === 'password' ? (
+                <span className="absolute inset-x-0 bottom-0 mx-auto h-1 w-10 rounded-full bg-[var(--color-brand)]" />
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className={segTabClass(loginMethod === 'sms')}
+              onClick={() => {
+                setLoginMethod('sms')
+                setErrorMessage('')
+                setHintMessage('')
+              }}
+            >
+              验证码登录
+              {loginMethod === 'sms' ? (
+                <span className="absolute inset-x-0 bottom-0 mx-auto h-1 w-10 rounded-full bg-[var(--color-brand)]" />
+              ) : null}
+            </button>
+          </div>
+        ) : null}
 
+        <form className={cn('space-y-4', isRegisterPage ? 'mt-7' : 'mt-6')} onSubmit={handleSubmit}>
           {!isSmsFlow ? (
             <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="account">
-                  手机号
-                </label>
-                <TextInput
-                  id="account"
-                  value={account}
-                  onChange={(event) => setAccount(normalizePhoneInputValue(event.target.value))}
-                  placeholder="输入手机号"
-                  autoComplete="tel"
-                  inputMode="tel"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="password">
-                  密码
-                </label>
-                <TextInput
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="输入当前密码"
-                  autoComplete="current-password"
-                  required
-                />
-              </div>
+              <TextInput
+                id="account"
+                value={account}
+                onChange={(event) => setAccount(normalizePhoneInputValue(event.target.value))}
+                placeholder="手机号"
+                autoComplete="tel"
+                inputMode="tel"
+                required
+                className="h-12 md:h-12"
+                leading={<Smartphone className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+              />
+              <TextInput
+                id="password"
+                type={passwordVisible ? 'text' : 'password'}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="密码"
+                autoComplete="current-password"
+                required
+                className="h-12 md:h-12"
+                leading={<Lock className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+                trailing={
+                  <button
+                    type="button"
+                    onClick={() => setPasswordVisible((visible) => !visible)}
+                    aria-label={passwordVisible ? '隐藏密码' : '显示密码'}
+                    className="press-feedback -mr-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                  >
+                    {passwordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                }
+              />
             </>
           ) : (
             <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="phone">
-                  手机号
-                </label>
-                <TextInput
-                  id="phone"
-                  value={phone}
-                  onChange={(event) => setPhone(normalizePhoneInputValue(event.target.value))}
-                  placeholder="输入手机号"
-                  autoComplete="tel"
-                  inputMode="tel"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="code">
-                  短信验证码
-                </label>
-                <div className="flex gap-3">
-                  <div className="min-w-0 flex-1">
-                    <TextInput
-                      id="code"
-                      value={code}
-                      onChange={(event) => setCode(event.target.value)}
-                      placeholder="输入 6 位验证码"
-                      autoComplete="one-time-code"
-                      required
-                    />
-                  </div>
-                  <Button type="button" variant="secondary" disabled={sendingCode || cooldownSeconds > 0} onClick={openCaptchaDialog}>
+              <TextInput
+                id="phone"
+                value={phone}
+                onChange={(event) => setPhone(normalizePhoneInputValue(event.target.value))}
+                placeholder="手机号"
+                autoComplete="tel"
+                inputMode="tel"
+                required
+                className="h-12 md:h-12"
+                leading={<Smartphone className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+              />
+              <TextInput
+                id="code"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                placeholder="6 位验证码"
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                required
+                className="h-12 md:h-12"
+                leading={<MessageSquareText className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+                trailing={
+                  <button
+                    type="button"
+                    disabled={sendingCode || cooldownSeconds > 0}
+                    onClick={openCaptchaDialog}
+                    className="press-feedback shrink-0 whitespace-nowrap text-sm font-medium text-[var(--color-brand)] transition-opacity disabled:opacity-50"
+                  >
                     {sendingCode ? '发送中…' : cooldownSeconds > 0 ? `${cooldownSeconds}s 后重发` : '获取验证码'}
-                  </Button>
-                </div>
-              </div>
-
+                  </button>
+                }
+              />
             </>
           )}
 
           {hintMessage ? (
-            <p className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+            <p className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
               {hintMessage}
             </p>
           ) : null}
 
           {errorMessage ? (
-            <p className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+            <p className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
               {errorMessage}
             </p>
           ) : null}
 
-          <div className="flex flex-wrap gap-3">
-            <Button type="submit" variant="primary" disabled={submitting}>
-              {submitting ? '提交中…' : !isSmsFlow ? '登录' : shouldCollectProfile ? '完成注册' : '验证后直接登录'}
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => navigate('/')}>
-              返回首页
-            </Button>
-            {/* 未登录也能调整基础设置（全屏与主题颜色） */}
-            <Button type="button" variant="ghost" onClick={() => navigate('/settings')}>
-              前往设置
-            </Button>
-          </div>
+          <Button type="submit" variant="primary" disabled={submitting} className="h-12 w-full text-base">
+            {submitting ? '提交中…' : !isSmsFlow ? '登录' : shouldCollectProfile ? '完成注册' : '验证后直接登录'}
+          </Button>
         </form>
 
-        <p className="text-sm text-[var(--text-secondary)]">
+        <p className="mt-6 text-center text-sm text-[var(--text-secondary)]">
           {isRegisterPage ? '已经有账户？' : '还没有账户？'}{' '}
           <Link
             to={isRegisterPage ? `/login?redirect=${encodeURIComponent(redirectPath)}` : `/register?redirect=${encodeURIComponent(redirectPath)}`}
-            className="font-medium text-[var(--text-primary)]"
+            className="font-semibold text-[var(--color-brand)]"
           >
             {isRegisterPage ? '去登录' : '创建账户'}
           </Link>
         </p>
-      </div>
+
+        {/* 次要入口：先逛逛 / 未登录也能调整基础设置 */}
+        <div className="mt-4 flex items-center justify-center gap-4 text-sm text-[var(--text-tertiary)]">
+          <button type="button" className="transition-colors hover:text-[var(--text-primary)]" onClick={() => navigate('/')}>
+            先逛逛首页
+          </button>
+          <span className="h-3 w-px bg-[var(--border-subtle)]" />
+          <button type="button" className="transition-colors hover:text-[var(--text-primary)]" onClick={() => navigate('/settings')}>
+            前往设置
+          </button>
+        </div>
+
+        <p className="mt-8 flex items-center justify-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+          <UserRound className="h-3.5 w-3.5" />
+          {brandMeta.productName} · 阅读与创作，从这里开始
+        </p>
+      </section>
 
       {captchaDialogVisible ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-          <div className="w-full max-w-[440px] rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-white p-5 shadow-xl dark:bg-[#111827]">
+          <div className="w-full max-w-[440px] rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-5 shadow-xl">
             <div className="space-y-2">
               <h3 className="text-lg font-semibold text-[var(--text-primary)]">完成人机验证</h3>
               <p className="text-sm leading-6 text-[var(--text-secondary)]">请输入图片中的数字和字母，验证通过后才会发送短信验证码。</p>
@@ -471,6 +497,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
               <Button
                 type="button"
                 variant="secondary"
+                className="flex-1"
                 onClick={() => {
                   setCaptchaDialogVisible(false)
                   setCaptchaAnswer('')
@@ -478,14 +505,19 @@ export default function AuthPage({ mode }: AuthPageProps) {
               >
                 取消
               </Button>
-              <Button type="button" variant="primary" disabled={sendingCode || !captchaId || !captchaAnswer.trim()} onClick={handleSendCode}>
+              <Button
+                type="button"
+                variant="primary"
+                className="flex-1"
+                disabled={sendingCode || !captchaId || !captchaAnswer.trim()}
+                onClick={handleSendCode}
+              >
                 {sendingCode ? '发送中…' : '确认并发送'}
               </Button>
             </div>
           </div>
         </div>
       ) : null}
-
-    </Surface>
+    </div>
   )
 }

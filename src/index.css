@@ -145,6 +145,13 @@ html.keyboard-open .app-messages-main {
   padding-bottom: 12px;
 }
 
+/* 创作区移动端底部导航（退出/对话/写作/章节/更多）：
+   键盘弹起时隐藏，避免在 Android resizes-content 模式下被顶到键盘上方占位，
+   让 Agent 输入框直接落在键盘上方 */
+html.keyboard-open .studio-bottom-nav {
+  display: none;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -280,11 +287,11 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 @keyframes toast-slide-down {
   from {
     opacity: 0;
-    transform: translate(-50%, -16px);
+    transform: translateY(-16px);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
   }
 }
 

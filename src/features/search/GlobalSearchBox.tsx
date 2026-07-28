@@ -147,7 +147,7 @@ export default function GlobalSearchBox({ className }: { className?: string }) {
     <div ref={containerRef} className={cn('relative', className)}>
       <label
         className={cn(
-          'flex h-10 w-full items-center gap-3 rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 text-sm transition-colors md:h-11',
+          'flex h-10 w-full items-center gap-3 rounded-[var(--radius-pill)] border border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 text-sm backdrop-blur transition-colors md:h-11',
           'focus-within:border-[var(--accent-border)] focus-within:ring-2 focus-within:ring-[var(--focus-ring)]',
         )}
       >

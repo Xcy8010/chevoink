@@ -1,10 +1,10 @@
 import { BookOpen, ImagePlus, PenSquare, X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
 import { useDevice } from '@/components/layout/DeviceProvider'
+import AuthPromptDialog from '@/components/ui/AuthPromptDialog'
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
 import { listRecommendedTopics } from '@/features/community/api'
@@ -36,11 +36,11 @@ type PostComposerProps = {
  */
 export default function PostComposer({ onSubmit, isSubmitting, initialShare }: PostComposerProps) {
   const { isMobile } = useDevice()
-  const navigate = useNavigate()
   const toast = useToast()
   const authStatus = useShellStore((state) => state.authStatus)
   const sessionUser = useShellStore((state) => state.sessionUser)
   const [open, setOpen] = useState(false)
+  const [authPromptOpen, setAuthPromptOpen] = useState(false)
   const [content, setContent] = useState('')
   const [images, setImages] = useState<string[]>([])
   const [imageProcessing, setImageProcessing] = useState(false)
@@ -68,7 +68,8 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
 
   const handleOpen = () => {
     if (authStatus !== 'authenticated') {
-      navigate('/auth')
+      // 未登录不再生硬跳页，弹窗引导去登录/注册，关掉后留在社区继续浏览
+      setAuthPromptOpen(true)
       return
     }
     setOpen(true)
@@ -331,6 +332,13 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
           <PenSquare className="h-4 w-4" />
         </span>
       </button>
+
+      {/* 未登录发帖拦截弹窗 */}
+      <AuthPromptDialog
+        open={authPromptOpen}
+        description="登录或注册后，就可以发布讨论、参与话题并和大家互动。"
+        onClose={() => setAuthPromptOpen(false)}
+      />
 
       {/* 手机端：全屏编辑页（底边随软键盘上移，操作栏始终在键盘上方） */}
       {open && isMobile ? (
