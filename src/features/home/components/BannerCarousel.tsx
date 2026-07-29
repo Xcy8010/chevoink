@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BookOpen, ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import {
   getAuthorName,
   getCoverUrl,
@@ -86,7 +87,8 @@ export default function BannerCarousel({ novels, heightClassName }: BannerCarous
             )}
           >
             {cover ? (
-              <img src={cover} alt="" className="h-full w-full scale-105 object-cover blur-[3px] brightness-[0.78]" />
+              // 首屏横幅背景为关键图，关闭懒加载
+              <AppImage src={cover} alt="" priority className="h-full w-full" imgClassName="scale-105 blur-[3px] brightness-[0.78]" />
             ) : (
               <div className="h-full w-full bg-[linear-gradient(135deg,#28435f_0%,#17212d_60%,#0f1622_100%)]" />
             )}
@@ -98,10 +100,11 @@ export default function BannerCarousel({ novels, heightClassName }: BannerCarous
       {/* 内容层 */}
       <div className="relative z-10 flex h-full items-center gap-4 px-4 md:gap-8 md:px-8">
         {getCoverUrl(active.coverUrl) ? (
-          <img
+          <AppImage
             src={getCoverUrl(active.coverUrl) ?? ''}
             alt={getDisplayTitle(active)}
-            className="hidden h-[78%] w-auto shrink-0 rounded-[var(--radius-md)] border border-white/20 object-cover shadow-[var(--shadow-elevated)] min-[420px]:block"
+            priority
+            className="hidden aspect-[3/4] h-[78%] shrink-0 rounded-[var(--radius-md)] border border-white/20 shadow-[var(--shadow-elevated)] min-[420px]:block"
           />
         ) : null}
 

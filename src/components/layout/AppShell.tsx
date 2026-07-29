@@ -1,10 +1,11 @@
-import { CSSProperties, ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
+import { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LoaderCircle, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import Button from '@/components/ui/Button'
+import AppImage from '@/components/ui/AppImage'
 import Surface from '@/components/ui/Surface'
 import QuickCreateSheet from '@/components/layout/QuickCreateSheet'
 import Avatar from '@/features/community/components/Avatar'
@@ -22,6 +23,17 @@ type AppShellProps = {
   description: string
   children: ReactNode
 }
+
+// 底栏重复点击时需要刷新的 React Query key（按路由配置，未配置的路由仅回顶不刷新）
+const bottomNavRefreshKeys: Record<string, readonly (readonly string[])[]> = {
+  '/': [['home']],
+  '/community': [
+    ['community', 'posts'],
+    ['community', 'topics'],
+  ],
+}
+// 刷新冷却：冷却期内重复点击仅回顶，防止连点打爆接口
+const NAV_REFRESH_COOLDOWN_MS = 3_000
 
 export default function AppShell({ title, description, children }: AppShellProps) {
   const navigate = useNavigate()
@@ -62,6 +74,12 @@ export default function AppShell({ title, description, children }: AppShellProps
   const isAuthenticated = authStatus === 'authenticated' && !!sessionUser
   const accountRoute = authStatus === 'guest' ? '/login?redirect=%2Fme' : '/me'
   const mainScrollRef = useRef<HTMLDivElement | null>(null)
+  // 各路由离开时的滚动位置：目前仅社区页返回时恢复上次浏览位置，其余页面仍回顶
+  const scrollPositionsRef = useRef(new Map<string, number>())
+  const queryClient = useQueryClient()
+  // 底栏重复点击刷新：按路由记录上次刷新时间戳 + 顶部 spinner 展示态
+  const navRefreshAtRef = useRef(new Map<string, number>())
+  const [bottomNavRefreshing, setBottomNavRefreshing] = useState(false)
   const headerRef = useRef<HTMLElement | null>(null)
   const desktopAccountMenuRef = useRef<HTMLDivElement | null>(null)
   const [isScrolled, setIsScrolled] = useState(false)
@@ -147,13 +165,26 @@ export default function AppShell({ title, description, children }: AppShellProps
 
   useEffect(() => {
     const nextScrollRoot = mainScrollRef.current
+    // 社区信息流返回时恢复离开前的滚动位置（数据在 React Query 缓存里可同步重建），其余路由回顶
+    const savedTop =
+      location.pathname === '/community' ? scrollPositionsRef.current.get('/community') ?? 0 : 0
 
     if (nextScrollRoot) {
-      nextScrollRoot.scrollTo({ top: 0, behavior: 'auto' })
+      nextScrollRoot.scrollTo({ top: savedTop, behavior: 'auto' })
+      if (savedTop > 0) {
+        // 列表可能还没撑开高度，下一帧再对齐一次，避免恢复位置被截断
+        requestAnimationFrame(() => {
+          const scrollRoot = mainScrollRef.current
+          if (scrollRoot && Math.abs(scrollRoot.scrollTop - savedTop) > 1) {
+            scrollRoot.scrollTo({ top: savedTop, behavior: 'auto' })
+          }
+        })
+      }
     }
 
-    isScrolledRef.current = false
-    setIsScrolled(false)
+    const scrolled = savedTop > 12
+    isScrolledRef.current = scrolled
+    setIsScrolled(scrolled)
     setDesktopAccountMenuOpen(false)
   }, [location.pathname])
 
@@ -184,6 +215,8 @@ export default function AppShell({ title, description, children }: AppShellProps
   }, [desktopAccountMenuOpen])
 
   const handleMainScroll = (event: UIEvent<HTMLDivElement>) => {
+    // 持续记录当前路由的滚动位置，供社区页返回时恢复
+    scrollPositionsRef.current.set(location.pathname, event.currentTarget.scrollTop)
     const next = event.currentTarget.scrollTop > 12
     if (!next && isScrolledRef.current) {
       // 折叠转向展开：动画期间继续冻结 header 高度测量，结束后一次性对齐，展开过程不再逐帧重排
@@ -192,6 +225,34 @@ export default function AppShell({ title, description, children }: AppShellProps
     }
     isScrolledRef.current = next
     setIsScrolled(next)
+  }
+
+  // 底栏重复点击当前路由：回顶 + 清滚动记忆；配置了刷新 key 的路由（发现/社区）再触发数据刷新
+  const handleBottomNavClick = (event: ReactMouseEvent<HTMLAnchorElement>, target: string) => {
+    if (location.pathname !== target) {
+      return
+    }
+
+    event.preventDefault()
+    // 清掉滚动记忆，避免刷新完又跳回旧位置
+    scrollPositionsRef.current.delete(target)
+    mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+
+    const refreshKeys = bottomNavRefreshKeys[target]
+    if (!refreshKeys) {
+      return
+    }
+
+    const now = Date.now()
+    if (now - (navRefreshAtRef.current.get(target) ?? 0) < NAV_REFRESH_COOLDOWN_MS) {
+      return
+    }
+
+    navRefreshAtRef.current.set(target, now)
+    setBottomNavRefreshing(true)
+    Promise.all(refreshKeys.map((queryKey) => queryClient.invalidateQueries({ queryKey })))
+      .catch(() => undefined)
+      .finally(() => setBottomNavRefreshing(false))
   }
 
   // 手机端 header 折叠态（只剩搜索框）：首页/发现页滚动时挤压，搜索页常驻折叠
@@ -568,7 +629,13 @@ export default function AppShell({ title, description, children }: AppShellProps
         </aside>
 
         <div className="min-w-0 flex-1">
-          <div className="mx-auto flex h-full max-w-[var(--shell-max-width)] flex-col px-4 md:px-6 xl:px-8">
+          {/* 聊天详情态手机端全出血：去掉壳层水平留白，返回键/输入栏贴近屏幕边缘（气泡与输入框有自身内边距兜底） */}
+          <div
+            className={cn(
+              'mx-auto flex h-full max-w-[var(--shell-max-width)] flex-col px-4 md:px-6 xl:px-8',
+              isMessagesChatRoute && 'mobile:px-0',
+            )}
+          >
             <header
               ref={headerRef}
               className={cn(
@@ -606,10 +673,11 @@ export default function AppShell({ title, description, children }: AppShellProps
             >
                   <Link to="/" className="flex min-w-0 items-center gap-3">
                     <span className="inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 md:h-11 md:w-11">
-                      <img
+                      <AppImage
                         src="/favicon.png"
                         alt="启创墨域 Logo"
-                        className="h-full w-full object-cover"
+                        className="h-full w-full"
+                        priority
                       />
                     </span>
                     <span className="min-w-0">
@@ -756,7 +824,12 @@ export default function AppShell({ title, description, children }: AppShellProps
       >
         <div className="mx-auto grid max-w-lg grid-cols-[1fr_1fr_auto_1fr_1fr] items-center gap-2">
           {mobileNavItems.slice(0, 2).map((item) => (
-            <NavLink key={item.href} to={item.href === '/me' ? accountRoute : item.href} className={bottomNavClass}>
+            <NavLink
+              key={item.href}
+              to={item.href === '/me' ? accountRoute : item.href}
+              onClick={(event) => handleBottomNavClick(event, item.href === '/me' ? accountRoute : item.href)}
+              className={bottomNavClass}
+            >
               <span className="relative">
                 {item.label}
                 {item.href === '/messages' && totalUnread > 0 ? (
@@ -771,12 +844,26 @@ export default function AppShell({ title, description, children }: AppShellProps
             <Plus className="h-4 w-4" />
           </Button>
           {mobileNavItems.slice(2).map((item) => (
-            <NavLink key={item.href} to={item.href === '/me' ? accountRoute : item.href} className={bottomNavClass}>
+            <NavLink
+              key={item.href}
+              to={item.href === '/me' ? accountRoute : item.href}
+              onClick={(event) => handleBottomNavClick(event, item.href === '/me' ? accountRoute : item.href)}
+              className={bottomNavClass}
+            >
               {item.label}
             </NavLink>
           ))}
         </div>
       </nav>
+
+      {/* 底栏重复点击刷新时的顶部 spinner，与下拉刷新视觉一致 */}
+      {bottomNavRefreshing ? (
+        <div className="pointer-events-none fixed inset-x-0 top-[calc(var(--safe-top)+56px)] z-[60] flex justify-center md:hidden">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[var(--shadow-card)]">
+            <LoaderCircle className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+          </span>
+        </div>
+      ) : null}
 
       <QuickCreateSheet open={quickCreateOpen} onClose={closeQuickCreate} />
 

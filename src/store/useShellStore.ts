@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+import { setSessionToken } from '@/lib/auth-token'
 import type { ThemeMode } from '@/types/app'
 import type { AuthTokenPair, User } from '../../shared/contracts'
 
@@ -74,14 +75,17 @@ export const useShellStore = create<ShellState>()(
           unreadMessageCount: 0,
           unreadNotificationCount: 0,
         }),
-      setAuthenticated: ({ user, tokens = null, unreadMessageCount, unreadNotificationCount }) =>
+      setAuthenticated: ({ user, tokens = null, unreadMessageCount, unreadNotificationCount }) => {
+        // 登录令牌落盘：安卓壳 cookie 未及时刷盘时以 Authorization 头做备选通道，避免杀后台丢登录态
+        setSessionToken(tokens?.accessToken ?? null)
         set({
           authStatus: 'authenticated',
           sessionUser: user,
           authTokens: tokens,
           unreadMessageCount: unreadMessageCount ?? user.unreadMessageCount ?? 0,
           unreadNotificationCount: unreadNotificationCount ?? user.unreadNotificationCount ?? 0,
-        }),
+        })
+      },
       syncSessionUser: ({ user, unreadMessageCount, unreadNotificationCount }) =>
         set((state) => ({
           authStatus: 'authenticated',
@@ -90,14 +94,17 @@ export const useShellStore = create<ShellState>()(
           unreadMessageCount: unreadMessageCount ?? user.unreadMessageCount ?? 0,
           unreadNotificationCount: unreadNotificationCount ?? user.unreadNotificationCount ?? 0,
         })),
-      setGuest: () =>
+      setGuest: () => {
+        // 会话已确认无效或主动退出：同步清掉本地备选令牌
+        setSessionToken(null)
         set({
           authStatus: 'guest',
           sessionUser: null,
           authTokens: null,
           unreadMessageCount: 0,
           unreadNotificationCount: 0,
-        }),
+        })
+      },
     }),
     {
       name: 'chevoink-shell',

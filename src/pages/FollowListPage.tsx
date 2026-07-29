@@ -121,6 +121,27 @@ export default function FollowListPage() {
       })
   }, [queryClient, shouldMarkFollowersSeen])
 
+  /**
+   * 关注状态写回 React Query 列表缓存：离开页面后本地 overrides 会丢失，
+   * 不写缓存的话 30s 内再进来仍是旧状态（回关后按钮不变「发消息」）
+   */
+  function syncFollowCaches(userId: string, following: boolean) {
+    const updateList = (data: { items: FollowUserItem[] } | undefined) =>
+      data
+        ? {
+            ...data,
+            items: data.items.map((item) =>
+              item.id === userId ? { ...item, followedByViewer: following } : item,
+            ),
+          }
+        : data
+    queryClient.setQueryData(['community', 'following', targetId], updateList)
+    queryClient.setQueryData(['community', 'followers', targetId], updateList)
+    // 消息页互关好友栏与个人信息（关注数）共用的缓存一并刷新
+    void queryClient.invalidateQueries({ queryKey: ['community', 'followers', 'me'] })
+    void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+  }
+
   async function handleToggleFollow(item: FollowUserItem, currentFollowing: boolean) {
     if (submittingId) {
       return
@@ -139,6 +160,7 @@ export default function FollowListPage() {
     try {
       const payload = await setUserFollow(item.id, next)
       setFollowOverrides((current) => ({ ...current, [item.id]: payload.following }))
+      syncFollowCaches(item.id, payload.following)
     } catch {
       setFollowOverrides((current) => ({ ...current, [item.id]: currentFollowing }))
     } finally {
@@ -279,7 +301,12 @@ export default function FollowListPage() {
                     isNewFollower ? 'animate-unseen-flash' : null,
                   )}
                 >
-                  <Avatar name={item.nickname} src={item.avatarUrl} size="md" className="shrink-0" />
+                  <span className="relative shrink-0">
+                    <Avatar name={item.nickname} src={item.avatarUrl} size="md" />
+                    {item.presence === 'online' ? (
+                      <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--surface-default)] bg-emerald-500" />
+                    ) : null}
+                  </span>
                   <div className="min-w-0 flex-1">
                     <p className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate text-sm font-medium text-[var(--text-primary)]">{item.nickname}</span>

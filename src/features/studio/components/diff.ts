@@ -228,6 +228,14 @@ export function buildReviewDiff(beforeText: string, afterText: string): {
   return { segments, hunkCount }
 }
 
+/** 审查视图单次渲染的行数上限：超过后默认截断并提供「展开完整对比」，避免单次渲染超大 DOM */
+export const REVIEW_DIFF_LINE_LIMIT = 2000
+
+/** 统计 diff 片段总行数（供截断渲染判定） */
+export function countReviewDiffLines(segments: ReviewDiffSegment[]): number {
+  return segments.reduce((total, segment) => total + segment.text.split('\n').length, 0)
+}
+
 /**
  * 按用户对第 hunkIndex 个变更块的定夺重建基线与结果：
  * - accept（采纳）：把该块的新内容写进基线 before，结果 after 不变

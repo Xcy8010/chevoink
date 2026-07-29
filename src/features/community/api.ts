@@ -46,6 +46,7 @@ import type {
   User,
 } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
+import { buildAuthHeader } from '@/lib/auth-token'
 
 type RequestDataOptions = RequestInit & {
   timeoutMs?: number
@@ -72,6 +73,7 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
     const response = await fetch(buildApiUrl(path), {
       headers: {
         'Content-Type': 'application/json',
+        ...buildAuthHeader(),
         ...(options?.headers ?? {}),
       },
       ...options,

@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import { getCoverUrl, getDisplayTitle } from '@/features/discover/api'
 import { useStartReading } from '@/features/discover/useStartReading'
 import {
@@ -47,11 +48,10 @@ export default function ContinueReadingRail({ novels, progressMap }: ContinueRea
               className="press-feedback w-[104px] shrink-0 text-left md:w-[128px]"
             >
               {cover ? (
-                <img
+                <AppImage
                   src={cover}
                   alt={getDisplayTitle(novel)}
-                  loading="lazy"
-                  className="h-[136px] w-[104px] rounded-[var(--radius-md)] object-cover md:h-[168px] md:w-[128px]"
+                  className="h-[136px] w-[104px] rounded-[var(--radius-md)] md:h-[168px] md:w-[128px]"
                 />
               ) : (
                 <span className="flex h-[136px] w-[104px] items-end rounded-[var(--radius-md)] bg-[var(--surface-muted)] p-2 md:h-[168px] md:w-[128px]">

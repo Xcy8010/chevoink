@@ -122,7 +122,7 @@ export async function buildFixedNovelCoverDataUrl(
   context.clearRect(0, 0, canvas.width, canvas.height)
   context.drawImage(image, drawX, drawY, metrics.drawWidth, metrics.drawHeight)
 
-  return canvas.toDataURL('image/jpeg', 0.92)
+  return canvas.toDataURL('image/jpeg', 0.85)
 }
 
 export async function downloadCoverAssetImage(imageUrl: string, filename: string) {

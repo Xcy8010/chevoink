@@ -1,10 +1,13 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Lock, MessageSquareText, Smartphone, UserRound } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import Button from '@/components/ui/Button'
+import AppImage from '@/components/ui/AppImage'
 import TextInput from '@/components/ui/TextInput'
+import { hydrateReadingSync } from '@/features/home/reading-sync'
 import { brandMeta } from '@/lib/theme/tokens'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
@@ -88,6 +91,7 @@ function normalizeRedirectPath(input: string | null): string {
 export default function AuthPage({ mode }: AuthPageProps) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const queryClient = useQueryClient()
   const setAuthenticated = useShellStore((state) => state.setAuthenticated)
   const isAuthenticated = useShellStore((state) => state.authStatus === 'authenticated' && !!state.sessionUser)
 
@@ -242,6 +246,15 @@ export default function AuthPage({ mode }: AuthPageProps) {
         unreadNotificationCount: payload.user.unreadNotificationCount,
       })
 
+      // 重新登录后：游客期的 /me 等缓存全部作废，并立即水合云端书架/阅读进度，
+      // 避免个人中心的书架短暂为空（启动时的水合在游客态下已静默失败过）
+      void queryClient.invalidateQueries()
+      void hydrateReadingSync().then((changed) => {
+        if (changed) {
+          void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+        }
+      })
+
       if (isSmsFlow && shouldCollectProfile) {
         navigate('/me', {
           replace: true,
@@ -264,7 +277,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
     return (
       <section className="mx-auto flex w-full max-w-[420px] flex-col items-center px-4 pt-10 text-center md:pt-16">
         <span className="inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)]">
-          <img src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full object-cover" />
+          <AppImage src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full" priority />
         </span>
         <h1 className="mt-5 text-xl font-semibold tracking-tight text-[var(--text-primary)]">你已经登录</h1>
         <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
@@ -295,7 +308,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
         {/* 品牌问候区：头像 + 点击登录/注册（参考主流阅读 App 未登录个人中心） */}
         <div className="flex items-center gap-4">
           <span className="relative inline-flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--surface-muted)]">
-            <img src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full object-cover" />
+            <AppImage src="/favicon.png" alt={`${brandMeta.productName} Logo`} className="h-full w-full" priority />
           </span>
           <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">

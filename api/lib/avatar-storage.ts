@@ -3,6 +3,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
+import { transcodeAvatarImage } from './image-transcode.js'
 import { DataAccessError } from './prisma.js'
 
 const MANAGED_AVATAR_PREFIX = '/api/uploads/avatars/'
@@ -55,10 +56,20 @@ export function getUploadsStaticDirectory() {
 export async function storeAvatarDataUrl(dataUrl: string): Promise<string> {
   const { mimeType, buffer } = parseAvatarDataUrl(dataUrl)
   const avatarDirectory = getAvatarDirectory()
-  const extension = MIME_TO_EXTENSION[mimeType]
-  const filename = `${randomUUID()}.${extension}`
 
   await mkdir(avatarDirectory, { recursive: true })
+
+  // 优先 sharp 转 WebP（trim+flatten+缩放）+ 缩略图；失败时降级原样落盘
+  const transcoded = await transcodeAvatarImage(buffer)
+  if (transcoded) {
+    const filename = `${randomUUID()}.webp`
+    await writeFile(path.join(avatarDirectory, filename), transcoded.main)
+    await writeFile(path.join(avatarDirectory, filename.replace(/\.webp$/, '.thumb.webp')), transcoded.thumb)
+    return `${MANAGED_AVATAR_PREFIX}${filename}`
+  }
+
+  const extension = MIME_TO_EXTENSION[mimeType]
+  const filename = `${randomUUID()}.${extension}`
   await writeFile(path.join(avatarDirectory, filename), buffer)
 
   return `${MANAGED_AVATAR_PREFIX}${filename}`
@@ -79,6 +90,11 @@ export async function removeManagedAvatar(avatarUrl: string | null | undefined):
 
   const filename = path.basename(pathname)
   const avatarFilePath = path.join(getAvatarDirectory(), filename)
+
+  // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
+  if (filename.endsWith('.webp')) {
+    await unlink(path.join(getAvatarDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch(() => undefined)
+  }
 
   try {
     await unlink(avatarFilePath)

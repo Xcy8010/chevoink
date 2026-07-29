@@ -95,7 +95,7 @@ export default function ConversationList({
         type="button"
         onClick={() => onSelect(conversation.id)}
         className={cn(
-          'press-feedback relative flex w-full items-center gap-3 rounded-[var(--radius-md)] py-2.5 pl-4 pr-3 text-left transition-colors',
+          'press-feedback relative flex w-full items-center gap-3 rounded-[var(--radius-md)] py-2.5 pl-2 pr-3 text-left transition-colors',
           isActive ? 'bg-[var(--color-brand-soft)]' : 'hover:bg-[var(--surface-muted)]',
         )}
       >
@@ -118,7 +118,7 @@ export default function ConversationList({
         >
           <Avatar name={displayTitle} src={conversation.avatarUrl ?? conversation.counterpart?.avatarUrl ?? null} size="md" />
           {isOnline ? (
-            <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface-default)] bg-emerald-500" />
+            <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--surface-default)] bg-emerald-500" />
           ) : null}
         </span>
 
@@ -191,9 +191,9 @@ export default function ConversationList({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* 互关好友横向栏：点击头像直接发起/进入私聊 */}
         {mutualFriends.length > 0 ? (
-          <div className="border-b border-[var(--border-subtle)] py-3">
+          <div className="border-b border-[var(--border-subtle)] py-2">
             <p className="px-4 text-xs font-medium text-[var(--text-tertiary)]">互关好友</p>
-            <div className="rail-scroll mt-2.5 flex gap-3 overflow-x-auto px-4 pb-1">
+            <div className="rail-scroll mt-1.5 flex gap-2.5 overflow-x-auto px-4 pb-1">
               {mutualFriends.map((friend) => (
                 <button
                   key={friend.id}
@@ -201,12 +201,17 @@ export default function ConversationList({
                   onClick={() => onOpenFriend(friend.id)}
                   disabled={openingFriendId !== null}
                   className={cn(
-                    'press-feedback flex w-14 shrink-0 flex-col items-center gap-1.5',
+                    'press-feedback flex w-12 shrink-0 flex-col items-center gap-1',
                     openingFriendId === friend.id ? 'opacity-60' : null,
                   )}
                   aria-label={`给 ${friend.nickname} 发消息`}
                 >
-                  <Avatar name={friend.nickname} src={friend.avatarUrl} size="lg" />
+                  <span className="relative">
+                    <Avatar name={friend.nickname} src={friend.avatarUrl} size="md" />
+                    {friend.presence === 'online' ? (
+                      <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--surface-default)] bg-emerald-500" />
+                    ) : null}
+                  </span>
                   <span className="w-full truncate text-center text-[11px] text-[var(--text-secondary)]">
                     {friend.nickname}
                   </span>
@@ -223,7 +228,7 @@ export default function ConversationList({
             onClick={() => navigate('/me/follows?tab=followers')}
             className="press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2 py-2.5 text-left transition-colors hover:bg-[var(--surface-muted)]"
           >
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-sky-500">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-500">
               <UserPlus className="h-5 w-5 text-white" />
             </span>
             <span className="min-w-0 flex-1">
@@ -251,7 +256,7 @@ export default function ConversationList({
             onClick={() => navigate('/me/likes')}
             className="press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2 py-2.5 text-left transition-colors hover:bg-[var(--surface-muted)]"
           >
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-rose-500">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-rose-500">
               <Heart className="h-5 w-5 text-white" />
             </span>
             <span className="min-w-0 flex-1">
@@ -289,7 +294,7 @@ export default function ConversationList({
                   isActive ? 'bg-[var(--color-brand-soft)]' : 'hover:bg-[var(--surface-muted)]',
                 )}
               >
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-indigo-500">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-indigo-500">
                   <BellRing className="h-5 w-5 text-white" />
                 </span>
                 <span className="min-w-0 flex-1">
@@ -324,7 +329,7 @@ export default function ConversationList({
               onClick={() => setView('strangers')}
               className="press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2 py-2.5 text-left transition-colors hover:bg-[var(--surface-muted)]"
             >
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-500">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-500">
                 <User className="h-5 w-5 text-white" />
               </span>
               <span className="min-w-0 flex-1">

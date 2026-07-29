@@ -20,6 +20,7 @@ import {
   getNovelDetailData,
   getReaderPayloadData,
   getStudioPayloadData,
+  listNovelCardsByIdsData,
   listNovelsData,
   publishNovelData,
   setNovelFavoriteData,
@@ -94,6 +95,20 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
 router.get('/:novelId/detail', async (req: Request, res: Response): Promise<void> => {
   await handleNovelDetailRequest(req, res, req.params.novelId)
+})
+
+// 批量轻量卡片（首页继续阅读，方案 20 §2.5）：必须先于 /:novelId 注册，避免被动态段吞掉
+router.get('/cards', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const idsParam = typeof req.query.ids === 'string' ? req.query.ids : ''
+  const ids = idsParam.split(',').map((id) => id.trim()).filter(Boolean)
+
+  try {
+    const items = await listNovelCardsByIdsData(ids, getSessionUserId(req))
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
 })
 
 router.get('/:novelId', async (req: Request, res: Response): Promise<void> => {

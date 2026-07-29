@@ -96,12 +96,27 @@ export function clearSession(res: Response) {
 }
 
 export function getSessionUserId(req: Request): string | null {
-  const cookieValue = parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME]
-  if (!cookieValue) {
+  const fromCookie = verifySessionToken(parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME])
+  if (fromCookie) {
+    return fromCookie
+  }
+
+  // 安卓 WebView 的 CookieManager 懒刷盘，登录后立刻杀进程会丢会话 cookie；
+  // 登录响应里的令牌与 cookie 同值，这里接受 Bearer 头作为备选方式恢复会话
+  const authHeader = req.headers.authorization
+  if (authHeader?.startsWith('Bearer ')) {
+    return verifySessionToken(authHeader.slice('Bearer '.length).trim())
+  }
+
+  return null
+}
+
+function verifySessionToken(token: string | undefined | null): string | null {
+  if (!token) {
     return null
   }
 
-  const [userId, expiresAtRaw, signature] = cookieValue.split('.')
+  const [userId, expiresAtRaw, signature] = token.split('.')
   if (!userId || !expiresAtRaw || !signature) {
     return null
   }

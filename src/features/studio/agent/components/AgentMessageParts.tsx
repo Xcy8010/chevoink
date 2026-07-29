@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   Brain,
   Check,
@@ -18,9 +18,10 @@ import type {
 } from '../../../../../shared/contracts/index.js'
 
 /**
- * 消息 Parts 渲染器（plan/13 §5.3）：
+ * 消息 Parts 渲染器（plan/13 §5.3 + plan/20 §3.3）：
  * - text / reasoning / tool-call 三类 part 按 type 分发
  * - tool-call 的 display 负载再按 kind 渲染 diff / plan / 封面等结构化卡片
+ * - part 级组件全部 memo：store 保证未变更 part 引用稳定，流式期间只有正在输出的最后一个 part 重渲染
  */
 
 type DiffLine = {
@@ -292,7 +293,7 @@ function formatToolDuration(durationMs: number | undefined): string | null {
   return `${Math.floor(durationMs / 60_000)}m${Math.round((durationMs % 60_000) / 1000)}s`
 }
 
-function ToolCallCard({
+const ToolCallCard = memo(function ToolCallCard({
   part,
 }: {
   part: Extract<AgentMessagePart, { type: 'tool-call' }>
@@ -368,9 +369,9 @@ function ToolCallCard({
       ) : null}
     </div>
   )
-}
+})
 
-function ReasoningPart({
+const ReasoningPart = memo(function ReasoningPart({
   part,
   streaming,
 }: {
@@ -409,7 +410,7 @@ function ReasoningPart({
       ) : null}
     </div>
   )
-}
+})
 
 /** 兼容历史消息里残留的 Markdown 记号与模型误输出的工具轨迹标记，保持纯文本阅读体验 */
 function sanitizePlainText(text: string): string {
@@ -421,7 +422,30 @@ function sanitizePlainText(text: string): string {
     .replace(/\n{3,}/g, '\n\n')
 }
 
-export function AgentMessageParts({
+/** 文本段：清洗结果按 part.text 缓存，避免流式期间历史段落反复正则清洗 */
+const TextPart = memo(function TextPart({
+  text,
+  streamingCursor,
+}: {
+  text: string
+  streamingCursor: boolean
+}) {
+  const cleanText = useMemo(() => sanitizePlainText(text), [text])
+  // 整段都是脏标记时清洗后为空，避免渲染空段落（流式尾部保留光标）
+  if (!cleanText.trim() && !streamingCursor) {
+    return null
+  }
+  return (
+    <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]">
+      {cleanText}
+      {streamingCursor ? (
+        <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-[var(--text-primary)] align-middle" />
+      ) : null}
+    </p>
+  )
+})
+
+export const AgentMessageParts = memo(function AgentMessageParts({
   parts,
   streaming,
 }: {
@@ -434,22 +458,7 @@ export function AgentMessageParts({
         const isLast = index === parts.length - 1
 
         if (part.type === 'text') {
-          const cleanText = sanitizePlainText(part.text)
-          // 整段都是脏标记时清洗后为空，避免渲染空段落（流式尾部保留光标）
-          if (!cleanText.trim() && !(streaming && isLast)) {
-            return null
-          }
-          return (
-            <p
-              key={index}
-              className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]"
-            >
-              {cleanText}
-              {streaming && isLast ? (
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-[var(--text-primary)] align-middle" />
-              ) : null}
-            </p>
-          )
+          return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast} />
         }
 
         if (part.type === 'reasoning') {
@@ -460,4 +469,4 @@ export function AgentMessageParts({
       })}
     </div>
   )
-}
+})

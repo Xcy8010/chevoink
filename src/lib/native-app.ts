@@ -23,6 +23,22 @@ export function getNativeAppVersion(): string | null {
   return match ? match[1] : null
 }
 
+/**
+ * 在系统浏览器中打开链接（用于 APK 下载等必须离开壳内 WebView 的场景）。
+ *
+ * Capacitor 壳只会把「非同源」导航交给系统浏览器（比对 host + scheme），
+ * 与站点同域的下载链接会被 WebView 当作站内导航吞掉；这里把 https 换成 http
+ * 制造 scheme 差异强制外跳系统浏览器，再由 nginx 80 端口 301 回 https 完成下载。
+ * 壳内外跳后当前页面不会导航，APP 停留在原处；普通浏览器下直接新开标签页。
+ */
+export function openExternalUrl(url: string): void {
+  if (isNativeApp()) {
+    window.location.href = url.replace(/^https:\/\//, 'http://')
+    return
+  }
+  window.open(url, '_blank', 'noopener')
+}
+
 type StatusBarPlugin = {
   setBackgroundColor?: (options: { color: string }) => Promise<void>
   setStyle?: (options: { style: 'DARK' | 'LIGHT' | 'DEFAULT' }) => Promise<void>

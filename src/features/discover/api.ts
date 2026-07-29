@@ -16,6 +16,7 @@ import type {
 } from '../../../shared/contracts/index.js'
 import { splitTtsParagraphs } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
+import { buildAuthHeader } from '@/lib/auth-token'
 
 type RequestDataOptions = RequestInit & {
   timeoutMs?: number
@@ -56,6 +57,7 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        ...buildAuthHeader(),
         ...(options?.headers ?? {}),
       },
       ...options,
@@ -104,6 +106,13 @@ export function listNovels(options?: ListNovelOptions): Promise<ListNovelsRespon
 
 export function getNovelDetailPayload(novelId: string): Promise<GetNovelDetailResponse['data']> {
   return requestData<GetNovelDetailResponse['data']>(`/api/novels/${novelId}/detail`)
+}
+
+/** 批量拉取作品卡片（首页继续阅读，方案 20 §2.5）：一次请求代替逐本拉完整详情 */
+export function listNovelCardsByIds(novelIds: string[]): Promise<NovelCard[]> {
+  return requestData<{ items: NovelCard[] }>(
+    `/api/novels/cards?ids=${novelIds.map(encodeURIComponent).join(',')}`,
+  ).then((data) => asArray(data.items))
 }
 
 export function getReaderPayload(

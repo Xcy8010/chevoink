@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { useToast } from '@/components/ui/Toast'
+import AppImage from '@/components/ui/AppImage'
 import { setPostBookmark, setPostLike } from '@/features/community/api'
 import { patchPostInCaches } from '@/features/community/post-cache'
 import Avatar from '@/features/community/components/Avatar'
@@ -190,11 +191,12 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
           }}
           className="mt-3 block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
         >
-          <img
+          <AppImage
             src={imageUrls[0]}
             alt="配图 1"
-            loading="lazy"
-            className="block h-auto max-h-[340px] w-auto max-w-full"
+            natural
+            placeholderClassName="aspect-[4/3] h-auto max-h-[340px] w-[260px] max-w-full"
+            imgClassName="h-auto max-h-[340px] w-auto max-w-full"
           />
         </button>
       ) : imageUrls.length > 1 ? (
@@ -217,7 +219,7 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
               }}
               className="block cursor-zoom-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
             >
-              <img src={url} alt={`配图 ${index + 1}`} loading="lazy" className="aspect-square h-full w-full object-cover" />
+              <AppImage src={url} alt={`配图 ${index + 1}`} className="aspect-square h-full w-full" />
             </button>
           ))}
         </div>

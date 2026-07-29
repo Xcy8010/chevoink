@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import ImageLightbox from '@/features/studio/components/ImageLightbox'
 import DetailCtaRow from '../components/DetailCtaRow'
 import DetailStatsRow from '../components/DetailStatsRow'
@@ -42,10 +43,11 @@ export default function NovelDetailTablet({ state }: NovelDetailTabletProps) {
               className="block cursor-zoom-in"
               aria-label="查看封面大图"
             >
-              <img
+              <AppImage
                 src={detailCoverUrl}
                 alt={detailTitle}
-                className="aspect-[20/27] w-[168px] rounded-[var(--radius-lg)] object-cover shadow-[0_14px_32px_rgba(17,24,39,0.16)]"
+                priority
+                className="aspect-[20/27] w-[168px] rounded-[var(--radius-lg)] shadow-[0_14px_32px_rgba(17,24,39,0.16)]"
               />
             </button>
           ) : (

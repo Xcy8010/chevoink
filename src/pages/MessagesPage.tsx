@@ -402,8 +402,8 @@ export default function MessagesPage() {
         <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           {selectedConversation ? (
             <>
-              {/* 聊天头部 */}
-              <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-3">
+              {/* 聊天头部：手机端收紧左边距与间距，让返回键+头像+昵称整体靠左 */}
+              <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-3 mobile:gap-2 mobile:px-1.5">
                 {!isSplitLayout ? (
                   <button
                     type="button"

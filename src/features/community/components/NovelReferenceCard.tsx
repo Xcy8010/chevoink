@@ -1,6 +1,8 @@
 import { BookOpen, ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
+
 type NovelReferenceCardProps = {
   novel: {
     id: string
@@ -22,10 +24,10 @@ export default function NovelReferenceCard({ novel, className }: NovelReferenceC
         .join(' ')}
     >
       {novel.coverUrl ? (
-        <img
+        <AppImage
           src={novel.coverUrl}
           alt={novel.title}
-          className="h-16 w-12 shrink-0 rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover"
+          className="h-16 w-12 shrink-0 rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
         />
       ) : (
         <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-tertiary)]">

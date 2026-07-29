@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
+import AppImage from '@/components/ui/AppImage'
 import { DiscoverSkeleton } from '@/components/ui/Skeleton'
 import {
   asArray,
@@ -209,11 +210,10 @@ export default function DiscoverPage() {
                   <article key={novel.id} className="group flex gap-4">
                     <Link to={`/novel/${novel.id}`} className="shrink-0">
                       {cover ? (
-                        <img
+                        <AppImage
                           src={cover}
                           alt={getDisplayTitle(novel)}
-                          loading="lazy"
-                          className="h-[128px] w-[96px] rounded-[var(--radius-md)] object-cover"
+                          className="h-[128px] w-[96px] rounded-[var(--radius-md)]"
                         />
                       ) : (
                         <span className="flex h-[128px] w-[96px] items-end rounded-[var(--radius-md)] bg-[var(--surface-muted)] p-2">
@@ -314,10 +314,10 @@ export default function DiscoverPage() {
                 className="grid gap-4 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4 sm:grid-cols-[88px_minmax(0,1fr)]"
               >
                 {getCoverUrl(novel.coverUrl) ? (
-                  <img
+                  <AppImage
                     src={getCoverUrl(novel.coverUrl) ?? ''}
                     alt={getDisplayTitle(novel)}
-                    className="aspect-[3/4] w-full rounded-[var(--radius-lg)] border border-[var(--border-subtle)] object-cover"
+                    className="aspect-[3/4] w-full rounded-[var(--radius-lg)] border border-[var(--border-subtle)]"
                   />
                 ) : (
                   <div className="flex aspect-[3/4] w-full items-end rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4">
@@ -398,11 +398,10 @@ export default function DiscoverPage() {
                                 {rank}
                               </span>
                               {cover ? (
-                                <img
+                                <AppImage
                                   src={cover}
                                   alt={getDisplayTitle(novel)}
-                                  loading="lazy"
-                                  className="h-14 w-[42px] shrink-0 rounded-[var(--radius-sm)] object-cover"
+                                  className="h-14 w-[42px] shrink-0 rounded-[var(--radius-sm)]"
                                 />
                               ) : (
                                 <span className="flex h-14 w-[42px] shrink-0 items-end rounded-[var(--radius-sm)] bg-[var(--surface-muted)] p-1">
@@ -465,11 +464,10 @@ export default function DiscoverPage() {
                 return (
                   <Link key={novel.id} to={`/novel/${novel.id}`} className="group min-w-0">
                     {cover ? (
-                      <img
+                      <AppImage
                         src={cover}
                         alt={getDisplayTitle(novel)}
-                        loading="lazy"
-                        className="aspect-[3/4] w-full rounded-[var(--radius-md)] object-cover transition-transform duration-200 group-hover:-translate-y-0.5"
+                        className="aspect-[3/4] w-full rounded-[var(--radius-md)] transition-transform duration-200 group-hover:-translate-y-0.5"
                       />
                     ) : (
                       <span className="flex aspect-[3/4] w-full items-end rounded-[var(--radius-md)] bg-[var(--surface-muted)] p-2">

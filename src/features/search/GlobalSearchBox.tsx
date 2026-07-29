@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BookOpen, Clock3, Flame, MessageSquareText, Search, TrendingUp, UserRound, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import { getHotSearchKeywords, searchSuggest } from '@/features/search/api'
 import {
   addSearchHistory,
@@ -201,11 +202,11 @@ export default function GlobalSearchBox({ className }: { className?: string }) {
                   )}
                 >
                   {item.imageUrl ? (
-                    <img
+                    <AppImage
                       src={item.imageUrl}
                       alt=""
                       className={cn(
-                        'shrink-0 object-cover',
+                        'shrink-0',
                         item.type === 'author' ? 'h-8 w-8 rounded-full' : 'h-10 w-8 rounded-[4px]',
                       )}
                     />

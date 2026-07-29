@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   asArray,
   getHomePayload,
-  getNovelDetailPayload,
+  listNovelCardsByIds,
 } from '@/features/discover/api'
 import { getAllReadingProgress, type ReadingProgressEntry } from '@/features/home/reading-progress'
 import { readContinueCards, writeContinueCards } from '@/features/home/continue-cache'
@@ -60,11 +60,8 @@ export function useHomeData() {
       return cached.sort((left, right) => recentNovelIds.indexOf(left.id) - recentNovelIds.indexOf(right.id))
     },
     queryFn: async () => {
-      // 逐本拉取详情拿到完整卡片（进度里的书不一定在首页榜单池内），已下架/无权限的静默跳过
-      const results = await Promise.allSettled(recentNovelIds.map((id) => getNovelDetailPayload(id)))
-      const cards = results
-        .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof getNovelDetailPayload>>> => result.status === 'fulfilled')
-        .map((result) => result.value.novel as NovelCard)
+      // 批量轻量卡片接口一次拉齐（方案 20 §2.5），已下架/无权限的书服务端静默过滤
+      const cards = await listNovelCardsByIds(recentNovelIds)
       writeContinueCards(cards)
       return cards
     },

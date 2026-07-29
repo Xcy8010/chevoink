@@ -3,54 +3,30 @@ import { createPortal } from 'react-dom'
 import { Download, X } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import { getNativeAppVersion, isNativeApp } from '@/lib/native-app'
+import { checkAppUpdate, type VersionManifest } from '@/lib/app-update'
+import { openExternalUrl } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
-
-type VersionManifest = {
-  latestVersionName?: string
-  url?: string
-  notes?: string
-  mandatory?: boolean
-}
-
-// 比较形如 1.0.0 的版本号：a>b 返回正数，a<b 返回负数，相等返回 0
-function compareVersion(a: string, b: string): number {
-  const pa = a.split('.').map((n) => parseInt(n, 10) || 0)
-  const pb = b.split('.').map((n) => parseInt(n, 10) || 0)
-  const len = Math.max(pa.length, pb.length)
-  for (let i = 0; i < len; i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
-    if (diff !== 0) return diff
-  }
-  return 0
-}
 
 const DISMISS_KEY_PREFIX = 'chevoink:update-dismissed:'
 
 /**
  * APP 内轻量更新提示条幅：仅在原生壳（Capacitor WebView）内生效。
  * 启动时拉取 /download/version.json，与 UA 中的当前壳版本（ChevoinkApp/x.y.z）比对，
- * 发现更高版本则在顶部弹出条幅，点击跳浏览器下载新 APK（安卓不允许非商店 App 静默自升级）。
- * 普通浏览器下 isNativeApp() 恒为 false，整段逻辑为空操作，网页版零影响。
+ * 发现更高版本则在顶部弹出条幅，点击跳系统浏览器下载新 APK（安卓不允许非商店 App 静默自升级）。
+ * 关闭按钮只在本次运行内生效（sessionStorage），重启 APP 后会再次提示，避免用户永久错过新版本。
+ * 普通浏览器下整段逻辑为空操作，网页版零影响。
  */
 export default function UpdateBanner() {
   const [manifest, setManifest] = useState<VersionManifest | null>(null)
 
   useEffect(() => {
-    if (!isNativeApp()) return
-    const installed = getNativeAppVersion()
-    if (!installed) return
-
     let cancelled = false
     void (async () => {
       try {
-        const res = await fetch('/download/version.json', { cache: 'no-store' })
-        if (!res.ok) return
-        const data = (await res.json()) as VersionManifest
-        if (cancelled || !data.latestVersionName || !data.url) return
-        if (compareVersion(data.latestVersionName, installed) <= 0) return
-        if (localStorage.getItem(DISMISS_KEY_PREFIX + data.latestVersionName)) return
-        setManifest(data)
+        const result = await checkAppUpdate()
+        if (cancelled || result.status !== 'update') return
+        if (sessionStorage.getItem(DISMISS_KEY_PREFIX + result.manifest.latestVersionName)) return
+        setManifest(result.manifest)
       } catch {
         // 弱网/离线静默忽略，下次打开再试
       }
@@ -66,7 +42,8 @@ export default function UpdateBanner() {
   const dismiss = () => {
     if (manifest.latestVersionName) {
       try {
-        localStorage.setItem(DISMISS_KEY_PREFIX + manifest.latestVersionName, '1')
+        // 只记在本次运行：重启 APP 后若仍未升级会再次提醒
+        sessionStorage.setItem(DISMISS_KEY_PREFIX + manifest.latestVersionName, '1')
       } catch {
         // 忽略隐私模式等写入失败
       }
@@ -97,7 +74,7 @@ export default function UpdateBanner() {
           size="sm"
           className="shrink-0"
           onClick={() => {
-            window.open(manifest.url, '_blank')
+            if (manifest.url) openExternalUrl(manifest.url)
           }}
         >
           更新

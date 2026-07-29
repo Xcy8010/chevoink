@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { getAuthorName, getCoverUrl, getDisplayTitle } from '@/features/discover/api'
+import AppImage from '@/components/ui/AppImage'
 import { formatWordCount } from '@/features/home/utils'
 import { cn } from '@/lib/utils'
 import type { NovelCard } from '../../../../shared/contracts/index.js'
@@ -48,11 +49,10 @@ function RankingList({ novels, visibleCount }: { novels: NovelCard[]; visibleCou
                 {rank}
               </span>
               {cover ? (
-                <img
+                <AppImage
                   src={cover}
                   alt={getDisplayTitle(novel)}
-                  loading="lazy"
-                  className="h-16 w-12 shrink-0 rounded-[var(--radius-sm)] object-cover"
+                  className="h-16 w-12 shrink-0 rounded-[var(--radius-sm)]"
                 />
               ) : (
                 <span className="flex h-16 w-12 shrink-0 items-end rounded-[var(--radius-sm)] bg-[var(--surface-muted)] p-1">

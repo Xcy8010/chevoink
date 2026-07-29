@@ -1,6 +1,7 @@
 import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import {
   getAuthorName,
   getCoverUrl,
@@ -30,11 +31,10 @@ function NovelCover({ novel, className }: { novel: NovelCard; className?: string
 
   if (cover) {
     return (
-      <img
+      <AppImage
         src={cover}
         alt={getDisplayTitle(novel)}
-        loading="lazy"
-        className={cn('aspect-[3/4] w-full rounded-[var(--radius-md)] object-cover', className)}
+        className={cn('aspect-[3/4] w-full rounded-[var(--radius-md)]', className)}
       />
     )
   }

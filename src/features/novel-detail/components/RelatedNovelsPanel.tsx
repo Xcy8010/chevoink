@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 
 import Empty from '@/components/Empty'
+import AppImage from '@/components/ui/AppImage'
 import { getAuthorName, getCoverUrl, getDisplayTitle, getNovelSummary } from '@/features/discover/api'
 import type { NovelCard } from '../../../../shared/contracts'
 
@@ -16,10 +17,10 @@ function RelatedCover({ novel, className }: { novel: NovelCard; className?: stri
 
   if (coverUrl) {
     return (
-      <img
+      <AppImage
         src={coverUrl}
         alt={title}
-        className={['aspect-[3/4] self-start rounded-[var(--radius-md)] border border-[var(--border-subtle)] object-cover', className ?? ''].join(' ')}
+        className={['aspect-[3/4] self-start rounded-[var(--radius-md)] border border-[var(--border-subtle)]', className ?? ''].join(' ')}
       />
     )
   }

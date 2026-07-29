@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, X } from 'lucide-
 import { cn } from '@/lib/utils'
 
 import type { ChapterPendingReview } from '../types'
-import { buildReviewDiff, type ReviewDiffSegment } from './diff'
+import { REVIEW_DIFF_LINE_LIMIT, buildReviewDiff, countReviewDiffLines, type ReviewDiffSegment } from './diff'
 
 type ChapterChangeReviewProps = {
   review: ChapterPendingReview
@@ -60,6 +60,24 @@ export default function ChapterChangeReview({
     [review.after.content, review.before?.content],
   )
   const blocks = useMemo(() => groupSegments(segments), [segments])
+
+  // 超大 diff 截断渲染：默认只渲染前 REVIEW_DIFF_LINE_LIMIT 行，点「展开完整对比」后全量渲染
+  const totalLines = useMemo(() => countReviewDiffLines(segments), [segments])
+  const [expanded, setExpanded] = useState(false)
+  const truncated = !expanded && totalLines > REVIEW_DIFF_LINE_LIMIT
+  const visibleBlocks = useMemo(() => {
+    if (!truncated) {
+      return blocks
+    }
+    const result: RenderBlock[] = []
+    let lineBudget = REVIEW_DIFF_LINE_LIMIT
+    for (const block of blocks) {
+      if (lineBudget <= 0) break
+      result.push(block)
+      lineBudget -= countReviewDiffLines(block.segments)
+    }
+    return result
+  }, [blocks, truncated])
 
   const [activeHunk, setActiveHunk] = useState(0)
   const hunkRefs = useRef<Array<HTMLDivElement | null>>([])
@@ -117,7 +135,7 @@ export default function ChapterChangeReview({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-24 pt-4">
           <div className="text-sm leading-8 text-[var(--text-primary)]">
-          {blocks.map((block, blockIndex) => {
+          {visibleBlocks.map((block, blockIndex) => {
             if (block.hunkIndex === null) {
               return (
                 <div key={`plain-${blockIndex}`} className="whitespace-pre-wrap break-words">
@@ -184,6 +202,15 @@ export default function ChapterChangeReview({
               </div>
             )
           })}
+          {truncated ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="mt-3 w-full rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-2.5 text-sm text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)]"
+            >
+              对比内容较长，已截断展示前 {REVIEW_DIFF_LINE_LIMIT} 行 · 点击展开完整对比（共 {totalLines} 行）
+            </button>
+          ) : null}
           </div>
         </div>
       </div>

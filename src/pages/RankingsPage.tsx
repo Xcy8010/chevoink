@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
+import AppImage from '@/components/ui/AppImage'
 import { DiscoverSkeleton } from '@/components/ui/Skeleton'
 import {
   asArray,
@@ -229,11 +230,10 @@ export default function RankingsPage() {
                       </span>
                       <Link to={`/novel/${novel.id}`} className="shrink-0">
                         {cover ? (
-                          <img
+                          <AppImage
                             src={cover}
                             alt={getDisplayTitle(novel)}
-                            loading="lazy"
-                            className="h-[104px] w-[78px] rounded-[var(--radius-sm)] object-cover"
+                            className="h-[104px] w-[78px] rounded-[var(--radius-sm)]"
                           />
                         ) : (
                           <span className="flex h-[104px] w-[78px] items-end rounded-[var(--radius-sm)] bg-[var(--surface-muted)] p-1.5">

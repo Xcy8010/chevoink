@@ -30,6 +30,8 @@ export default function AppProviders({ children }: PropsWithChildren) {
   useEffect(() => {
     document.documentElement.classList.remove('light', 'dark')
     document.documentElement.classList.add(theme)
+    // 清掉 index.html 引导脚本预置的内联背景色，交还给 CSS 变量接管，避免运行时切主题后残留旧色
+    document.documentElement.style.backgroundColor = ''
     // APP 壳内：把原生状态栏/导航栏染成当前主题背景色，使上下安全区跟随主题（浏览器为空操作）
     const appBg = getComputedStyle(document.documentElement).getPropertyValue('--app-bg').trim()
     syncNativeSystemBars(appBg, theme === 'dark')

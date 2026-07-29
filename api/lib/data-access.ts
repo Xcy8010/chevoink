@@ -89,6 +89,16 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+// 在线判定：最近 5 分钟内有过带登录态请求（app 层中间件刷新 lastActiveAt）即视为在线
+const ONLINE_WINDOW_MS = 5 * 60 * 1000
+
+function isUserOnline(lastActiveAt: Date | string | null | undefined): boolean {
+  if (!lastActiveAt) {
+    return false
+  }
+  return Date.now() - new Date(lastActiveAt).getTime() <= ONLINE_WINDOW_MS
+}
+
 function toIso(value: Date | string | null | undefined): string | null {
   if (!value) {
     return null
@@ -365,6 +375,9 @@ function toConversation(record: any, viewerUserId: string): Conversation {
     lastReadAt: toIso(member.lastReadAt),
   }))
   const counterpart = members.find((member: any) => member.id !== viewerUserId) ?? members[0] ?? null
+  // 直聊会话的在线状态取自对方的最近活跃时间
+  const counterpartUser =
+    (record.members ?? []).find((member: any) => member.user.id !== viewerUserId)?.user ?? null
 
   return {
     id: record.id,
@@ -377,7 +390,7 @@ function toConversation(record: any, viewerUserId: string): Conversation {
     lastMessageAt: toIso(record.lastMessageAt),
     members,
     counterpart,
-    presence: 'offline',
+    presence: record.type === 'direct' && isUserOnline(counterpartUser?.lastActiveAt) ? 'online' : 'offline',
     createdAt: toIso(record.createdAt) ?? nowIso(),
     updatedAt: toIso(record.updatedAt) ?? nowIso(),
   }
@@ -844,6 +857,34 @@ export async function getHomePayloadData(viewerUserId?: string | null) {
     ...payload,
     hotPosts: payload.hotPosts.map((post) => attachPostViewerFlags(post, flags)),
   }
+}
+
+/**
+ * 批量拉取作品卡片（首页继续阅读等轻量场景，方案 20 §2.5）：
+ * 一次查询代替逐本拉完整详情；可见性口径与详情页一致（公开作品或 viewer 自己的作品），
+ * 已下架/无权限的静默过滤，返回顺序与传入 id 顺序一致。
+ */
+export async function listNovelCardsByIdsData(
+  novelIds: string[],
+  viewerUserId?: string | null,
+): Promise<NovelCard[]> {
+  const ids = [...new Set(novelIds.filter(Boolean))].slice(0, 20)
+  if (ids.length === 0) {
+    return []
+  }
+
+  const records = await prisma.novel.findMany({
+    where: {
+      id: { in: ids },
+      OR: [searchableNovelWhere, ...(viewerUserId ? [{ authorId: viewerUserId }] : [])],
+    },
+    include: novelInclude,
+  })
+
+  const cardById = new Map(records.map((record) => [record.id, toNovelCard(record, viewerUserId)]))
+  return ids
+    .map((id) => cardById.get(id))
+    .filter((card): card is NovelCard => Boolean(card))
 }
 
 export async function listNovelsData(
@@ -2858,6 +2899,7 @@ async function toFollowUserItems(
     followedByViewer: followedIds.has(record.user.id),
     followsViewer: followerIds.has(record.user.id),
     followedAt: toIso(record.createdAt) ?? nowIso(),
+    presence: isUserOnline(record.user.lastActiveAt) ? ('online' as const) : ('offline' as const),
   }))
 }
 

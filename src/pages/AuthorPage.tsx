@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, MessageSquareMore, Share2, UserCheck2, UserP
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import AppState from '@/components/ui/AppState'
 import Button from '@/components/ui/Button'
 import { PostListSkeleton, Skeleton } from '@/components/ui/Skeleton'
@@ -288,7 +289,7 @@ export default function AuthorPage() {
       <div className="relative -mx-4 sm:mx-0 sm:mt-3">
         <div className="relative aspect-[3/1] overflow-hidden sm:rounded-[var(--radius-xl)] lg:aspect-[4/1]">
           {author.profileCoverUrl ? (
-            <img src={author.profileCoverUrl} alt="作者封面" className="absolute inset-0 h-full w-full object-cover" />
+            <AppImage src={author.profileCoverUrl} alt="作者封面" className="absolute inset-0 h-full w-full" />
           ) : (
             <div className="absolute inset-0 bg-[linear-gradient(135deg,#28435f_0%,#16233a_58%,#1f2f47_100%)]" />
           )}
@@ -440,10 +441,10 @@ export default function AuthorPage() {
                   className="group flex items-center gap-3.5 px-1 py-3.5 transition-colors hover:bg-[var(--surface-muted)] sm:rounded-[var(--radius-lg)] sm:px-2"
                 >
                   {coverUrl ? (
-                    <img
+                    <AppImage
                       src={coverUrl}
                       alt={getDisplayTitle(novel)}
-                      className="aspect-[20/27] w-[64px] shrink-0 rounded-[8px] border border-[var(--border-subtle)] object-cover"
+                      className="aspect-[20/27] w-[64px] shrink-0 rounded-[8px] border border-[var(--border-subtle)]"
                     />
                   ) : (
                     <div className="flex aspect-[20/27] w-[64px] shrink-0 items-end rounded-[8px] bg-[var(--surface-muted)] p-1.5">

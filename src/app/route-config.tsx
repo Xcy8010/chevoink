@@ -1,25 +1,57 @@
-import type { ReactElement } from 'react'
+import { lazy, type ComponentType, type ReactElement } from 'react'
 import { Navigate } from 'react-router-dom'
 
 import AuthPage from '@/app/routes/AuthPage'
 import NotFoundPage from '@/app/routes/NotFoundPage'
 import RequireAuthRoute from '@/app/routes/RequireAuthRoute'
-import SettingsPage from '@/app/routes/SettingsPage'
-import AuthorPage from '@/pages/AuthorPage'
-import CommunityPage from '@/pages/CommunityPage'
-import DiscoverPage from '@/pages/DiscoverPage'
-import FollowListPage from '@/pages/FollowListPage'
-import LikesListPage from '@/pages/LikesListPage'
+import {
+  AuthorSkeleton,
+  ConversationSkeleton,
+  DiscoverSkeleton,
+  PostDetailSkeleton,
+  PostListSkeleton,
+  ProfileSkeleton,
+  ReaderSkeleton,
+  SettingsSkeleton,
+  StudioSkeleton,
+} from '@/components/ui/Skeleton'
 import Home from '@/pages/Home'
-import MessagesPage from '@/pages/MessagesPage'
-import NovelDetailPage from '@/pages/NovelDetailPage'
-import PostDetailPage from '@/pages/PostDetailPage'
-import ProfilePage from '@/pages/ProfilePage'
-import RankingsPage from '@/pages/RankingsPage'
-import ReaderPage from '@/pages/ReaderPage'
-import SearchPage from '@/pages/SearchPage'
-import StudioPage from '@/pages/StudioPage'
-import TopicPage from '@/pages/TopicPage'
+
+const CHUNK_RELOAD_KEY = 'chevoink:chunk-reload-at'
+
+/**
+ * 懒加载页面 chunk：发版后旧 chunk 被清理导致 404 时，
+ * 3 分钟内只自动刷新一次拿新版本，避免刷新死循环。
+ */
+function lazyPage(load: () => Promise<{ default: ComponentType }>) {
+  return lazy(() =>
+    load().catch((error) => {
+      const lastReload = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? 0)
+      if (Date.now() - lastReload > 180_000) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))
+        window.location.reload()
+      }
+      throw error
+    }),
+  )
+}
+
+// 首页/登录/404 保持同步导入保障首屏，其余页面按路由拆包懒加载
+const SettingsPage = lazyPage(() => import('@/app/routes/SettingsPage'))
+const AuthorPage = lazyPage(() => import('@/pages/AuthorPage'))
+const CommunityPage = lazyPage(() => import('@/pages/CommunityPage'))
+const DiscoverPage = lazyPage(() => import('@/pages/DiscoverPage'))
+const FollowListPage = lazyPage(() => import('@/pages/FollowListPage'))
+const LikesListPage = lazyPage(() => import('@/pages/LikesListPage'))
+const MessagesPage = lazyPage(() => import('@/pages/MessagesPage'))
+const NovelDetailPage = lazyPage(() => import('@/pages/NovelDetailPage'))
+const PostDetailPage = lazyPage(() => import('@/pages/PostDetailPage'))
+const ProfilePage = lazyPage(() => import('@/pages/ProfilePage'))
+const RankingsPage = lazyPage(() => import('@/pages/RankingsPage'))
+const ReaderPage = lazyPage(() => import('@/pages/ReaderPage'))
+const SearchPage = lazyPage(() => import('@/pages/SearchPage'))
+const StudioPage = lazyPage(() => import('@/pages/StudioPage'))
+const TopicPage = lazyPage(() => import('@/pages/TopicPage'))
 
 export type AppRouteDefinition = {
   path: string
@@ -27,6 +59,8 @@ export type AppRouteDefinition = {
   description: string
   element: ReactElement
   useShell?: boolean
+  /** 懒加载 chunk 拉取期间的 Suspense 骨架，不配则用通用骨架 */
+  fallback?: ReactElement
 }
 
 export const appRoutes: AppRouteDefinition[] = [
@@ -41,12 +75,14 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '按题材、节奏和口味找到下一本想读的书',
     description: '从分类、榜单和书单里快速缩小范围，把更多时间留给正文。',
     element: <DiscoverPage />,
+    fallback: <DiscoverSkeleton />,
   },
   {
     path: '/rankings',
     title: '完整榜单：看看大家都在读什么',
     description: '热读、人气、新书、更新、长篇、完结六大榜单，再加玄幻、科幻等分类榜，按排名挑下一本想读的书。',
     element: <RankingsPage />,
+    fallback: <DiscoverSkeleton />,
   },
   {
     path: '/search',
@@ -65,6 +101,7 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '沉下心，把这一章安静读完',
     description: '正文始终保持在视觉中心，让切换章节、目录和评论都更自然。',
     element: <ReaderPage />,
+    fallback: <ReaderSkeleton />,
   },
   {
     path: '/studio',
@@ -78,6 +115,7 @@ export const appRoutes: AppRouteDefinition[] = [
         <StudioPage />
       </RequireAuthRoute>
     ),
+    fallback: <StudioSkeleton />,
   },
   {
     path: '/studio/novel/:novelId',
@@ -91,24 +129,28 @@ export const appRoutes: AppRouteDefinition[] = [
         <StudioPage />
       </RequireAuthRoute>
     ),
+    fallback: <StudioSkeleton />,
   },
   {
     path: '/community',
     title: '看看大家正在聊什么，也把你的想法发出来',
     description: '创作动态、读后讨论和作品话题都集中在这里，让交流更自然发生。',
     element: <CommunityPage />,
+    fallback: <PostListSkeleton />,
   },
   {
     path: '/community/topic/:topicKey',
     title: '围绕这个话题，看看大家聊出了什么',
     description: '同一话题下的讨论都收在这里，按热门或最新继续浏览。',
     element: <TopicPage />,
+    fallback: <PostListSkeleton />,
   },
   {
     path: '/messages',
     title: '消息中心',
     description: '在这里查看私聊、互动提醒和更新通知，不错过与你有关的内容。',
     element: <MessagesPage />,
+    fallback: <ConversationSkeleton />,
   },
   {
     path: '/me',
@@ -122,6 +164,7 @@ export const appRoutes: AppRouteDefinition[] = [
         <ProfilePage />
       </RequireAuthRoute>
     ),
+    fallback: <ProfileSkeleton />,
   },
   {
     path: '/me/follows',
@@ -155,6 +198,7 @@ export const appRoutes: AppRouteDefinition[] = [
     description: '在作者主页里集中浏览简介、作品和最近动态，决定要不要继续关注。',
     element: <AuthorPage />,
     useShell: false,
+    fallback: <AuthorSkeleton />,
   },
   {
     path: '/author/:authorId/follows',
@@ -168,12 +212,14 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '继续读完这条讨论，看看大家都在回应什么',
     description: '帖子正文、上下文和互动内容会被收在一起，阅读讨论更连贯。',
     element: <PostDetailPage />,
+    fallback: <PostDetailSkeleton />,
   },
   {
     path: '/settings',
     title: '调整显示方式、阅读偏好与账户设置',
     description: '把常用偏好整理在一起，让阅读和创作始终保持熟悉的手感。',
     element: <SettingsPage />,
+    fallback: <SettingsSkeleton />,
   },
   {
     path: '/login',

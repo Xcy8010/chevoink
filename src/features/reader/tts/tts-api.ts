@@ -1,6 +1,7 @@
 import type { TtsSynthesizeRequest, TtsVoicesPayload } from '../../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
 import { requestJson } from '@/app/api-client'
+import { buildAuthHeader } from '@/lib/auth-token'
 
 /** 音色清单（服务端白名单），available=false 时前端隐藏听书入口 */
 export function fetchTtsVoices(): Promise<TtsVoicesPayload> {
@@ -18,7 +19,7 @@ export async function fetchTtsBatchAudio(
   const response = await fetch(buildApiUrl('/api/ai/tts/synthesize'), {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...buildAuthHeader() },
     body: JSON.stringify(request),
     signal,
   })

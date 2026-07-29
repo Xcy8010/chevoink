@@ -23,6 +23,14 @@ cookies.txt
 *.tgz
 *.tar.gz
 
+# 内部资料与敏感文件（不上传 GitHub）
+plan/
+cert/
+*.pem
+*.keystore
+keystore.properties
+*.apk
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

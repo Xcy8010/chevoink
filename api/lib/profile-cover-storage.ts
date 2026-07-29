@@ -3,6 +3,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
+import { transcodeCoverImage } from './image-transcode.js'
 import { DataAccessError } from './prisma.js'
 
 const MANAGED_PROFILE_COVER_PREFIX = '/api/uploads/profile-covers/'
@@ -54,10 +55,20 @@ function parseProfileCoverDataUrl(dataUrl: string): {
 export async function storeProfileCoverDataUrl(dataUrl: string): Promise<string> {
   const { mimeType, buffer } = parseProfileCoverDataUrl(dataUrl)
   const profileCoverDirectory = getProfileCoverDirectory()
-  const extension = MIME_TO_EXTENSION[mimeType]
-  const filename = `${randomUUID()}.${extension}`
 
   await mkdir(profileCoverDirectory, { recursive: true })
+
+  // 优先 sharp 转 WebP + 缩略图；失败时降级原样落盘
+  const transcoded = await transcodeCoverImage(buffer)
+  if (transcoded) {
+    const filename = `${randomUUID()}.webp`
+    await writeFile(path.join(profileCoverDirectory, filename), transcoded.main)
+    await writeFile(path.join(profileCoverDirectory, filename.replace(/\.webp$/, '.thumb.webp')), transcoded.thumb)
+    return `${MANAGED_PROFILE_COVER_PREFIX}${filename}`
+  }
+
+  const extension = MIME_TO_EXTENSION[mimeType]
+  const filename = `${randomUUID()}.${extension}`
   await writeFile(path.join(profileCoverDirectory, filename), buffer)
 
   return `${MANAGED_PROFILE_COVER_PREFIX}${filename}`
@@ -78,6 +89,11 @@ export async function removeManagedProfileCover(profileCoverUrl: string | null |
 
   const filename = path.basename(pathname)
   const profileCoverFilePath = path.join(getProfileCoverDirectory(), filename)
+
+  // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
+  if (filename.endsWith('.webp')) {
+    await unlink(path.join(getProfileCoverDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch(() => undefined)
+  }
 
   try {
     await unlink(profileCoverFilePath)

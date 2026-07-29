@@ -2,6 +2,7 @@ import { ChevronRight, PenLine } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import Avatar from '@/features/community/components/Avatar'
 import ImageLightbox from '@/features/studio/components/ImageLightbox'
 import DetailCtaRow from '../components/DetailCtaRow'
@@ -70,10 +71,11 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
               className="block shrink-0 self-start cursor-zoom-in"
               aria-label="查看封面大图"
             >
-              <img
+              <AppImage
                 src={detailCoverUrl}
                 alt={detailTitle}
-                className="aspect-[20/27] w-[108px] rounded-[10px] object-cover shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
+                priority
+                className="aspect-[20/27] w-[108px] rounded-[10px] shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
               />
             </button>
           ) : (

@@ -349,6 +349,12 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Agent 消息流轻量虚拟化：视口外的历史消息跳过渲染与布局，长会话不再拖垮主线程 */
+.agent-msg-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}
+
 /* 按钮/卡片微交互 */
 .press-feedback {
   transition: transform var(--duration-fast) var(--easing-default);

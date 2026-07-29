@@ -164,6 +164,7 @@ model User {
   unreadNotificationCount Int                  @default(0) @map("unread_notification_count")
   interactionsSeenAt      DateTime?            @map("interactions_seen_at")
   followersSeenAt         DateTime?            @map("followers_seen_at")
+  lastActiveAt            DateTime?            @map("last_active_at")
   privacyFollowers        PrivacyLevel         @default(public) @map("privacy_followers")
   privacyFollowing        PrivacyLevel         @default(public) @map("privacy_following")
   privacyLikes            PrivacyLevel         @default(public) @map("privacy_likes")

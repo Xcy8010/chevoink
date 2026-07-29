@@ -1,4 +1,5 @@
 import { buildApiUrl } from '@/app/api-base'
+import { buildAuthHeader } from '@/lib/auth-token'
 import type {
   AgentSession,
   AgentUIMessage,
@@ -30,6 +31,7 @@ async function requestData<T>(path: string, options?: RequestInit): Promise<T> {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...buildAuthHeader(),
       ...(options?.headers ?? {}),
     },
   })

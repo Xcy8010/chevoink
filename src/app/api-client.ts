@@ -1,4 +1,5 @@
 import type { ApiFailure, ApiResponse } from '../../shared/contracts'
+import { buildAuthHeader } from '@/lib/auth-token'
 import { buildApiUrl } from './api-base'
 
 export class ApiClientError extends Error {
@@ -19,6 +20,7 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...buildAuthHeader(),
       ...(init?.headers ?? {}),
     },
   })

@@ -9,6 +9,7 @@ import {
   LogOut,
   Maximize,
   Moon,
+  RefreshCw,
   Smartphone,
   Sun,
   UserRound,
@@ -26,7 +27,9 @@ import { useToast } from '@/components/ui/Toast'
 import Avatar from '@/features/community/components/Avatar'
 import { getMe, updateMyPrivacy } from '@/features/community/api'
 import { useShellStore } from '@/store/useShellStore'
-import { isNativeApp } from '@/lib/native-app'
+import { prepareAvatarImage } from '@/lib/image-compress'
+import { checkAppUpdate, type VersionManifest } from '@/lib/app-update'
+import { getNativeAppVersion, isNativeApp, openExternalUrl } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import type {
   PrivacyLevel,
@@ -175,6 +178,9 @@ export default function SettingsPage() {
   const [smsCooldown, setSmsCooldown] = useState(0)
   const [privacy, setPrivacy] = useState<PrivacySettings>(DEFAULT_PRIVACY)
   const [privacySubmittingKey, setPrivacySubmittingKey] = useState<keyof PrivacySettings | null>(null)
+  /** 检测更新：仅 APP 壳内使用 */
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [availableUpdate, setAvailableUpdate] = useState<VersionManifest | null>(null)
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
@@ -227,6 +233,25 @@ export default function SettingsPage() {
 
   function toggleRow(rowId: string) {
     setExpandedRow((current) => (current === rowId ? null : rowId))
+  }
+
+  /** 手动检测 APP 更新：已是最新给 toast，有新版本展开更新入口 */
+  async function handleCheckUpdate() {
+    if (updateChecking) return
+    setUpdateChecking(true)
+    try {
+      const result = await checkAppUpdate()
+      if (result.status === 'update') {
+        setAvailableUpdate(result.manifest)
+      } else {
+        setAvailableUpdate(null)
+        toast.success('当前已是最新版本')
+      }
+    } catch {
+      toast.error('检测更新失败，请检查网络后重试')
+    } finally {
+      setUpdateChecking(false)
+    }
   }
 
   async function handleLogout() {
@@ -330,7 +355,7 @@ export default function SettingsPage() {
     setAvatarSubmitting(true)
 
     try {
-      await uploadAvatar(await readImageAsDataUrl(file))
+      await uploadAvatar(await prepareAvatarImage(file))
       toast.success('头像已更新')
     } catch (error) {
       toast.error(error instanceof ApiClientError ? error.message : '暂时无法上传头像，请稍后再试。')
@@ -569,6 +594,48 @@ export default function SettingsPage() {
     </div>
   )
 
+  /** 关于分组：仅 APP 壳内展示，提供手动检测更新入口；登录/未登录都可用 */
+  const aboutSection = isNativeApp() ? (
+    <section>
+      <SectionTitle>关于</SectionTitle>
+      <div className="divide-y divide-[var(--border-subtle)]">
+        <div>
+          <SettingsRow
+            icon={<RefreshCw className={cn('h-[18px] w-[18px]', updateChecking && 'animate-spin')} />}
+            title="检测更新"
+            caption={`当前版本 ${getNativeAppVersion() ?? '未知'}`}
+            value={
+              updateChecking
+                ? '检测中…'
+                : availableUpdate
+                  ? `发现新版本 ${availableUpdate.latestVersionName}`
+                  : undefined
+            }
+            onClick={() => void handleCheckUpdate()}
+          />
+          {availableUpdate ? (
+            <div className="flex items-center gap-3 pb-4 pl-[50px] pr-1">
+              <p className="min-w-0 flex-1 text-xs text-[var(--text-tertiary)]">
+                {availableUpdate.notes?.trim() || '点击更新以获取最新功能与修复'}
+              </p>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  if (availableUpdate.url) openExternalUrl(availableUpdate.url)
+                }}
+              >
+                立即更新
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  ) : null
+
   if (authStatus === 'unavailable') {
     return (
       <AppState
@@ -588,6 +655,8 @@ export default function SettingsPage() {
           <SectionTitle>显示</SectionTitle>
           {appearanceRows}
         </section>
+
+        {aboutSection}
 
         <AppState
           title="登录后可管理完整的账户设置"
@@ -936,6 +1005,9 @@ export default function SettingsPage() {
           />
         </div>
       </section>
+
+      {/* 分组六：关于（仅 APP 壳内） */}
+      {aboutSection}
 
       {/* 封面裁剪弹窗：选完文件后进入，确认才真正上传 */}
       <ImageCropperDialog

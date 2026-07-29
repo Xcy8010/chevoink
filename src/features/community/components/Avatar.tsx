@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react'
+
 import { cn } from '@/lib/utils'
 
 type AvatarProps = {
@@ -29,16 +31,48 @@ function DefaultAvatarGraphic() {
 }
 
 export default function Avatar({ name, src, size = 'md', className }: AvatarProps) {
+  // 三态：加载中骨架 shimmer → 整张淡入 → 失败回退默认图形，不出现半张图或破图
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading')
+  // 命中浏览器缓存的头像直接显示，不播放淡入过渡
+  const instantRef = useRef(false)
+
+  useEffect(() => {
+    instantRef.current = false
+    setStatus('loading')
+  }, [src])
+
   return (
     <div
       className={cn(
-        'inline-flex aspect-square shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--surface-muted)] font-medium text-[var(--text-secondary)]',
+        // 不加描边：头像外圈的灰色圈圈容易被误认为在线状态，在线统一用头像下方小绿点表达
+        'relative inline-flex aspect-square shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--surface-muted)] font-medium text-[var(--text-secondary)]',
         sizeClasses[size],
         className,
       )}
     >
-      {src ? (
-        <img src={src} alt={name} className="h-full w-full aspect-square object-cover" />
+      {src && status !== 'error' ? (
+        <>
+          {status === 'loading' ? <span aria-hidden className="skeleton-shimmer absolute inset-0 rounded-full" /> : null}
+          <img
+            ref={(node) => {
+              // 命中浏览器缓存时 onLoad 可能不触发，直接检查完成态避免骨架闪烁
+              if (node && node.complete && node.naturalWidth > 0) {
+                instantRef.current = true
+                setStatus('loaded')
+              }
+            }}
+            src={src}
+            alt={name}
+            decoding="async"
+            onLoad={() => setStatus('loaded')}
+            onError={() => setStatus('error')}
+            className={cn(
+              'h-full w-full aspect-square object-cover',
+              !instantRef.current && 'transition-opacity duration-200',
+              status === 'loaded' ? 'opacity-100' : 'opacity-0',
+            )}
+          />
+        </>
       ) : (
         <DefaultAvatarGraphic />
       )}

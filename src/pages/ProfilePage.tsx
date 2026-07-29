@@ -15,6 +15,7 @@ import Avatar from '@/features/community/components/Avatar'
 import { getCoverUrl, getNovelDetailPayload } from '@/features/discover/api'
 import { getAllReadingProgress } from '@/features/home/reading-progress'
 import { getLocalShelf, updateShelfCover } from '@/features/home/local-shelf'
+import { prepareAvatarImage } from '@/lib/image-compress'
 import CreationPanel from '@/features/profile/components/CreationPanel'
 import ProfileHeader from '@/features/profile/components/ProfileHeader'
 import ShelfPanel, { type ShelfBook } from '@/features/profile/components/ShelfPanel'
@@ -352,7 +353,7 @@ export default function ProfilePage() {
     setAvatarSubmitting(true)
 
     try {
-      await uploadAvatar(await readImageAsDataUrl(file))
+      await uploadAvatar(await prepareAvatarImage(file))
     } catch (error) {
       setAvatarError(error instanceof ApiClientError ? error.message : '暂时无法上传头像，请稍后再试。')
     } finally {

@@ -8,6 +8,17 @@ export default defineConfig({
     react(),
     tsconfigPaths(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // 把体积大且极少变化的基础库拆成独立 chunk，发版后用户可继续命中缓存
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'query-vendor': ['@tanstack/react-query', 'zustand'],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {

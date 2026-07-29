@@ -135,6 +135,8 @@ export interface FollowUserItem extends UserSummary {
   /** 该用户是否关注了当前登录用户（用于互相关注标记） */
   followsViewer: boolean
   followedAt: string
+  /** 在线状态：最近 5 分钟内活跃为 online，前端据此在头像下方显示小绿点 */
+  presence?: 'online' | 'offline'
 }
 
 /** 获赞明细条目：谁赞了你的什么内容 */

@@ -5,11 +5,12 @@ import type {
   SearchSuggestPayload,
 } from '../../../shared/contracts/index.js'
 import { buildApiUrl } from '@/app/api-base'
+import { buildAuthHeader } from '@/lib/auth-token'
 
 async function requestData<T>(path: string): Promise<T> {
   const response = await fetch(buildApiUrl(path), {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...buildAuthHeader() },
   })
 
   const rawText = await response.text()

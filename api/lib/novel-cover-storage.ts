@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
+import { transcodeCoverImage } from './image-transcode.js'
 import { DataAccessError } from './prisma.js'
 
 const MANAGED_NOVEL_COVER_PREFIX = '/api/uploads/novel-covers/'
@@ -54,10 +55,20 @@ function parseNovelCoverDataUrl(dataUrl: string): {
 export async function storeNovelCoverDataUrl(dataUrl: string): Promise<string> {
   const { mimeType, buffer } = parseNovelCoverDataUrl(dataUrl)
   const coverDirectory = getNovelCoverDirectory()
-  const extension = MIME_TO_EXTENSION[mimeType]
-  const filename = `${randomUUID()}.${extension}`
 
   await mkdir(coverDirectory, { recursive: true })
+
+  // 优先 sharp 转 WebP + 缩略图；失败时降级原样落盘
+  const transcoded = await transcodeCoverImage(buffer)
+  if (transcoded) {
+    const filename = `${randomUUID()}.webp`
+    await writeFile(path.join(coverDirectory, filename), transcoded.main)
+    await writeFile(path.join(coverDirectory, filename.replace(/\.webp$/, '.thumb.webp')), transcoded.thumb)
+    return `${MANAGED_NOVEL_COVER_PREFIX}${filename}`
+  }
+
+  const extension = MIME_TO_EXTENSION[mimeType]
+  const filename = `${randomUUID()}.${extension}`
   await writeFile(path.join(coverDirectory, filename), buffer)
 
   return `${MANAGED_NOVEL_COVER_PREFIX}${filename}`

@@ -1,4 +1,5 @@
 import { buildApiUrl, apiBaseUrl } from '@/app/api-base'
+import { buildAuthHeader } from '@/lib/auth-token'
 import type {
   AgentActionHandoff,
   AgentActionResultPayload,
@@ -182,6 +183,7 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        ...buildAuthHeader(),
         ...(options?.headers ?? {}),
       },
       ...(timeoutMs > 0 ? { signal: controller.signal } : {}),
@@ -1069,6 +1071,7 @@ async function tryRunAgentAction(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json, text/event-stream',
+        ...buildAuthHeader(),
       },
       body: JSON.stringify(buildAgentActionBody(request)),
       signal: controller.signal,

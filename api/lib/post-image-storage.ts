@@ -3,6 +3,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
+import { transcodePostImage } from './image-transcode.js'
 import { DataAccessError } from './prisma.js'
 
 const MANAGED_POST_IMAGE_PREFIX = '/api/uploads/post-images/'
@@ -59,6 +60,11 @@ async function removeStoredPostImage(imageUrl: string): Promise<void> {
 
   const filePath = path.join(getPostImageDirectory(), path.basename(imageUrl))
 
+  // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
+  if (filePath.endsWith('.webp')) {
+    await unlink(filePath.replace(/\.webp$/, '.thumb.webp')).catch(() => undefined)
+  }
+
   try {
     await unlink(filePath)
   } catch (error) {
@@ -83,8 +89,18 @@ export async function storePostImageDataUrls(dataUrls: string[]): Promise<string
   try {
     for (const dataUrl of dataUrls) {
       const { mimeType, buffer } = parsePostImageDataUrl(dataUrl)
-      const filename = `${randomUUID()}.${MIME_TO_EXTENSION[mimeType]}`
 
+      // 优先 sharp 转 WebP + 缩略图；失败时降级原样落盘
+      const transcoded = await transcodePostImage(buffer)
+      if (transcoded) {
+        const filename = `${randomUUID()}.webp`
+        await writeFile(path.join(imageDirectory, filename), transcoded.main)
+        await writeFile(path.join(imageDirectory, filename.replace(/\.webp$/, '.thumb.webp')), transcoded.thumb)
+        storedUrls.push(`${MANAGED_POST_IMAGE_PREFIX}${filename}`)
+        continue
+      }
+
+      const filename = `${randomUUID()}.${MIME_TO_EXTENSION[mimeType]}`
       await writeFile(path.join(imageDirectory, filename), buffer)
       storedUrls.push(`${MANAGED_POST_IMAGE_PREFIX}${filename}`)
     }

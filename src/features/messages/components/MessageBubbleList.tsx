@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { BookOpen, LoaderCircle, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import AppImage from '@/components/ui/AppImage'
 import AppState from '@/components/ui/AppState'
 import Avatar from '@/features/community/components/Avatar'
 import PostImageViewer from '@/features/community/components/PostImageViewer'
@@ -75,11 +76,10 @@ function MessageCardView({ card }: { card: MessageCard }) {
     card.kind === 'novel' ? (
       <div className="flex gap-3">
         {card.coverUrl ? (
-          <img
+          <AppImage
             src={card.coverUrl}
             alt={card.title}
-            loading="lazy"
-            className="h-[76px] w-[57px] shrink-0 rounded-[8px] bg-[var(--surface-muted)] object-cover"
+            className="h-[76px] w-[57px] shrink-0 rounded-[8px]"
           />
         ) : (
           <span className="flex h-[76px] w-[57px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-muted)]">
@@ -118,11 +118,10 @@ function MessageCardView({ card }: { card: MessageCard }) {
             {card.excerpt}
           </p>
           {card.imageUrl ? (
-            <img
+            <AppImage
               src={card.imageUrl}
               alt="帖子配图"
-              loading="lazy"
-              className="h-[56px] w-[56px] shrink-0 rounded-[8px] bg-[var(--surface-muted)] object-cover"
+              className="h-[56px] w-[56px] shrink-0 rounded-[8px]"
             />
           ) : null}
         </div>
@@ -301,14 +300,16 @@ export default function MessageBubbleList({
                 className="max-w-[70%] overflow-hidden"
                 aria-label="查看图片"
               >
-                <img
+                <AppImage
                   src={message.content}
                   alt="图片消息"
-                  loading="lazy"
+                  natural
                   className={cn(
-                    'max-h-[280px] w-auto rounded-[18px] object-cover',
+                    'rounded-[18px]',
                     isSelf ? 'rounded-br-[6px]' : 'rounded-bl-[6px]',
                   )}
+                  imgClassName="max-h-[280px] w-auto"
+                  placeholderClassName="aspect-[3/4] w-[180px] max-w-full"
                 />
               </button>
               {showStatus ? (

@@ -5,6 +5,8 @@ export const MAX_POST_IMAGE_COUNT = 9
 const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 const MAX_SOURCE_IMAGE_BYTES = 8 * 1024 * 1024
 const MAX_OUTPUT_IMAGE_BYTES = 3 * 1024 * 1024
+/** 目标体积：超过则重新编码压缩，避免 MB 级原图直传 */
+const TARGET_OUTPUT_IMAGE_BYTES = 300 * 1024
 const MAX_EDGE_PX = 1600
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -33,7 +35,7 @@ function estimateDataUrlBytes(dataUrl: string): number {
 
 /**
  * 校验并压缩一张发帖配图，返回 base64 data URL。
- * 超过 1600px 的长边会被等比缩小，最终二进制不超过 3MB。
+ * 超过 1600px 的长边会被等比缩小，体积超 300KB 时重编码压缩。
  */
 export async function preparePostImage(file: File): Promise<string> {
   if (!SUPPORTED_IMAGE_TYPES.includes(file.type)) {
@@ -48,8 +50,8 @@ export async function preparePostImage(file: File): Promise<string> {
   const image = await loadImage(sourceDataUrl)
   const longEdge = Math.max(image.naturalWidth, image.naturalHeight)
 
-  // 尺寸和体积都在限制内时直接用原图，保留原始格式
-  if (longEdge <= MAX_EDGE_PX && estimateDataUrlBytes(sourceDataUrl) <= MAX_OUTPUT_IMAGE_BYTES) {
+  // 尺寸和体积都在目标内时直接用原图，保留原始格式
+  if (longEdge <= MAX_EDGE_PX && estimateDataUrlBytes(sourceDataUrl) <= TARGET_OUTPUT_IMAGE_BYTES) {
     return sourceDataUrl
   }
 
@@ -68,11 +70,18 @@ export async function preparePostImage(file: File): Promise<string> {
   context.fillRect(0, 0, canvas.width, canvas.height)
   context.drawImage(image, 0, 0, canvas.width, canvas.height)
 
-  for (const quality of [0.85, 0.7, 0.55]) {
+  let fallback = ''
+  for (const quality of [0.82, 0.7, 0.58]) {
     const output = canvas.toDataURL('image/jpeg', quality)
-    if (estimateDataUrlBytes(output) <= MAX_OUTPUT_IMAGE_BYTES) {
+    if (estimateDataUrlBytes(output) <= TARGET_OUTPUT_IMAGE_BYTES) {
       return output
     }
+    fallback = output
+  }
+
+  // 降到最低档仍超目标体积时，只要不超硬上限就接受（避免超高细节图无法发布）
+  if (fallback && estimateDataUrlBytes(fallback) <= MAX_OUTPUT_IMAGE_BYTES) {
+    return fallback
   }
 
   throw new Error('这张图片压缩后仍然过大，请换一张再试。')

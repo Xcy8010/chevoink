@@ -4,13 +4,76 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <!-- interactive-widget=resizes-content：Android Chrome 108+ 软键盘弹出时直接缩小布局视口，输入栏自动被顶起；iOS 由 lib/keyboard-inset.ts 兼容 -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- maximum-scale=1 + user-scalable=no：APP/手机端按原生应用体验禁用双指缩放与双击放大 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#f4f0e8" />
     <meta
       name="description"
       content="启创墨域是一个面向创作者与读者的 AI 小说创作与阅读社区。"
     />
     <title>启创墨域 - AI 小说创作与阅读社区</title>
+    <!-- 启动前置：同步读取持久化主题并预置 html class 与背景色，避免暗色用户冷启动白闪 -->
+    <script>
+      ;(function () {
+        var theme = 'light'
+        try {
+          var raw = localStorage.getItem('chevoink-shell')
+          if (raw) {
+            var saved = JSON.parse(raw)
+            if (saved && saved.state && saved.state.theme === 'dark') theme = 'dark'
+          }
+        } catch (_) {}
+        var root = document.documentElement
+        root.classList.add(theme)
+        var bg = theme === 'dark' ? '#111318' : '#f4f0e8'
+        root.style.backgroundColor = bg
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', bg)
+      })()
+    </script>
+    <!-- 启动占位屏：HTML 一到达就先展示品牌画面，React 挂载时 createRoot 会自动清掉 #root 内容 -->
+    <style>
+      .boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #f4f0e8;
+        color: #111827;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .dark .boot-splash { background: #111318; color: #f3f5f7; }
+      .boot-splash-name { font-size: 22px; font-weight: 600; letter-spacing: 0.35em; text-indent: 0.35em; }
+      .boot-splash-en { font-size: 11px; font-weight: 500; letter-spacing: 0.3em; text-indent: 0.3em; opacity: 0.45; text-transform: uppercase; }
+      .boot-splash-bar {
+        margin-top: 10px;
+        width: 96px;
+        height: 3px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(128, 128, 128, 0.18);
+        position: relative;
+      }
+      .boot-splash-bar::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -40%;
+        width: 40%;
+        height: 100%;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.55;
+        animation: boot-splash-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes boot-splash-slide {
+        0% { left: -40%; }
+        100% { left: 100%; }
+      }
+    </style>
     <script type="module">
       if (import.meta.hot?.on) {
         import.meta.hot.on('vite:error', (error) => {
@@ -24,7 +87,13 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-splash" aria-hidden="true">
+        <div class="boot-splash-name">启创墨域</div>
+        <div class="boot-splash-en">Chevoink</div>
+        <div class="boot-splash-bar"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

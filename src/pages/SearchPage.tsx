@@ -4,6 +4,7 @@ import { BookOpen, MessageSquareText, UserRound } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
+import AppImage from '@/components/ui/AppImage'
 import {
   getAuthorName,
   getCoverUrl,
@@ -30,7 +31,7 @@ function NovelResultRow({ novel }: { novel: NovelCard }) {
   return (
     <Link to={`/novel/${novel.id}`} className="group flex gap-4 py-4">
       {cover ? (
-        <img src={cover} alt={getDisplayTitle(novel)} className="h-[112px] w-[84px] shrink-0 rounded-md object-cover" />
+        <AppImage src={cover} alt={getDisplayTitle(novel)} className="h-[112px] w-[84px] shrink-0 rounded-md" />
       ) : (
         <div className="flex h-[112px] w-[84px] shrink-0 items-end rounded-md bg-[var(--surface-muted)] p-2">
           <p className="line-clamp-3 text-xs font-medium text-[var(--text-secondary)]">{getDisplayTitle(novel)}</p>

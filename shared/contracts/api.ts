@@ -177,6 +177,11 @@ export type ListNovelsResponse = ApiSuccess<{
   pagination: Pagination
 }>
 
+/** 批量拉取作品卡片（首页继续阅读等轻量场景，方案 20 §2.5） */
+export type ListNovelCardsResponse = ApiSuccess<{
+  items: NovelCard[]
+}>
+
 /** 我收藏的作品列表（按收藏时间倒序） */
 export type ListFavoriteNovelsResponse = ApiSuccess<{
   items: NovelCard[]

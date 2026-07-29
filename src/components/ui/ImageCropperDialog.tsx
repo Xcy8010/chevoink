@@ -148,7 +148,7 @@ export default function ImageCropperDialog({
     }
 
     context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height)
-    onConfirm(canvas.toDataURL('image/jpeg', 0.9))
+    onConfirm(canvas.toDataURL('image/jpeg', 0.85))
   }
 
   if (!open || !imageDataUrl) {
