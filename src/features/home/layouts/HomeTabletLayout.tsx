@@ -1,0 +1,43 @@
+import BannerCarousel from '@/features/home/components/BannerCarousel'
+import CategoryNav from '@/features/home/components/CategoryNav'
+import CategoryNovelSection from '@/features/home/components/CategoryNovelSection'
+import ContinueReadingRail from '@/features/home/components/ContinueReadingRail'
+import FeaturedNovelList from '@/features/home/components/FeaturedNovelList'
+import HotPostsRail from '@/features/home/components/HotPostsRail'
+import LatestUpdatesList from '@/features/home/components/LatestUpdatesList'
+import RankingBoard from '@/features/home/components/RankingBoard'
+import type { HomeData } from '@/features/home/useHomeData'
+
+/** 平板端首页：单列扁平排版，书封网格 + 双列榜单 */
+export default function HomeTabletLayout({
+  data,
+  activeCategory,
+  onSelectCategory,
+}: {
+  data: HomeData
+  activeCategory: string
+  onSelectCategory: (category: string) => void
+}) {
+  return (
+    <div className="animate-fade-in-up space-y-9">
+      <div className="space-y-4">
+        <BannerCarousel novels={data.bannerNovels} heightClassName="h-[240px]" />
+        <CategoryNav categories={data.categories} activeCategory={activeCategory} onSelect={onSelectCategory} />
+      </div>
+      {data.continueReading.length > 0 ? (
+        <ContinueReadingRail novels={data.continueReading} progressMap={data.progressMap} />
+      ) : null}
+      <FeaturedNovelList novels={data.featuredNovels} variant="grid" maxItems={4} />
+      <RankingBoard
+        hot={data.rankingHot}
+        fresh={data.rankingNew}
+        finished={data.rankingFinished}
+        visibleCount={5}
+        variant="columns"
+      />
+      <LatestUpdatesList novels={data.latestUpdated} maxItems={5} />
+      <HotPostsRail posts={data.hotPosts} />
+      {activeCategory ? <CategoryNovelSection category={activeCategory} /> : null}
+    </div>
+  )
+}

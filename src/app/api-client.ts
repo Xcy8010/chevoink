@@ -1,0 +1,39 @@
+import type { ApiFailure, ApiResponse } from '../../shared/contracts'
+import { buildApiUrl } from './api-base'
+
+export class ApiClientError extends Error {
+  status: number
+  fieldErrors?: Record<string, string>
+
+  constructor(message: string, status: number, fieldErrors?: Record<string, string>) {
+    super(message)
+    this.name = 'ApiClientError'
+    this.status = status
+    this.fieldErrors = fieldErrors
+  }
+}
+
+export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(buildApiUrl(path), {
+    credentials: 'include',
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  })
+
+  const payload = (await response.json()) as ApiResponse<T>
+
+  if (!response.ok || !payload.success) {
+    const errorPayload = payload as ApiFailure
+
+    throw new ApiClientError(
+      payload.success ? '请求失败' : errorPayload.error.message,
+      response.status,
+      payload.success ? undefined : errorPayload.error.fieldErrors,
+    )
+  }
+
+  return payload.data
+}
