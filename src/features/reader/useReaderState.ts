@@ -20,6 +20,7 @@ import {
   loadReaderSettings,
   saveReaderSettings,
   type ReaderFontScale,
+  type ReaderPageTurnMode,
   type ReaderTone,
 } from './reader-settings'
 import { useTtsPlayer } from './tts/useTtsPlayer'
@@ -93,6 +94,7 @@ export function useReaderState() {
 
   const initialSettings = useMemo(() => loadReaderSettings(), [])
   const [fontScale, setFontScaleState] = useState<ReaderFontScale>(initialSettings.fontScale)
+  const [pageTurnMode, setPageTurnModeState] = useState<ReaderPageTurnMode>(initialSettings.pageTurnMode)
   // 全局主题模式：监听 html.dark 变化，阅读中切主题也能实时响应
   const [isDarkTheme, setIsDarkTheme] = useState(
     () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
@@ -125,6 +127,8 @@ export function useReaderState() {
   const highlightTimerRef = useRef<number | null>(null)
   const [scrollPercent, setScrollPercent] = useState(0)
   const contentScrollRef = useRef<HTMLDivElement | null>(null)
+  // 分页阅读布局注册的段落定位器：返回 true 表示已接管定位（翻页）
+  const paragraphLocatorRef = useRef<((index: number) => boolean) | null>(null)
   const queryClient = useQueryClient()
 
   const readerQuery = useQuery({
@@ -206,6 +210,10 @@ export function useReaderState() {
     setToneOverride({ tone: next, theme: currentTheme })
     saveReaderSettings({ tone: next, toneTheme: currentTheme })
   }
+  const setPageTurnMode = (next: ReaderPageTurnMode) => {
+    setPageTurnModeState(next)
+    saveReaderSettings({ pageTurnMode: next })
+  }
 
   const backHref = reader ? (fromStudio && returnTo ? returnTo : `/novel/${reader.novel.id}`) : '/discover'
   const backLabel = fromStudio ? '返回创作区' : '返回详情'
@@ -228,15 +236,31 @@ export function useReaderState() {
   const locateParagraph = (index: number) => {
     setActiveParagraphIndex(null)
     setActivePanelState(null)
+
+    const flashHighlight = () => {
+      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+      setHighlightParagraphIndex(index)
+      highlightTimerRef.current = window.setTimeout(() => setHighlightParagraphIndex(null), 1600)
+    }
+
+    // 分页模式由布局层注册定位器（翻到该段所在页），滚动模式走原滚动定位
+    if (paragraphLocatorRef.current?.(index)) {
+      flashHighlight()
+      return
+    }
+
     requestAnimationFrame(() => {
       const element = contentScrollRef.current?.querySelector<HTMLElement>(`[data-tts-p="${index}"]`)
       if (!element) return
       element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-      setHighlightParagraphIndex(index)
-      highlightTimerRef.current = window.setTimeout(() => setHighlightParagraphIndex(null), 1600)
+      flashHighlight()
     })
   }
+  /** 分页阅读布局注册段落定位器（传 null 注销，回到滚动定位） */
+  const registerParagraphLocator = (locator: ((index: number) => boolean) | null) => {
+    paragraphLocatorRef.current = locator
+  }
+
   const previewSearch = fromStudio
     ? `?from=studio${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ''}`
     : ''
@@ -265,23 +289,27 @@ export function useReaderState() {
     initialAutoNext: initialSettings.ttsAutoNext,
   })
 
-  /** 绑定到各布局的正文滚动容器 */
+  /** 章内进度写回（防抖）：滚动模式 = 滚动百分比，分页模式 = 当前页/本章总页 */
   const scrollSaveTimerRef = useRef<number | null>(null)
+  const commitScrollPercent = (percent: number, delayMs = 800) => {
+    setScrollPercent(percent)
+
+    if (fromStudio || !novelId || !chapterId) return
+    if (scrollSaveTimerRef.current) window.clearTimeout(scrollSaveTimerRef.current)
+    scrollSaveTimerRef.current = window.setTimeout(() => {
+      updateReadingScrollPercent(novelId, chapterId, percent)
+      // 章内位置写穿服务端，供跳设备恢复到上次读到的位置
+      pushScrollProgress(novelId, novelTitle, chapterId, percent)
+    }, delayMs)
+  }
+
+  /** 绑定到各布局的正文滚动容器 */
   const handleContentScroll = () => {
     const element = contentScrollRef.current
     if (!element) return
     const max = element.scrollHeight - element.clientHeight
     const percent = max > 0 ? Math.min(1, element.scrollTop / max) : 1
-    setScrollPercent(percent)
-
-    // 防抖写回章内滚动进度，供下次进入时定位到上次读到的位置
-    if (fromStudio || !novelId || !chapterId) return
-    if (scrollSaveTimerRef.current) window.clearTimeout(scrollSaveTimerRef.current)
-    scrollSaveTimerRef.current = window.setTimeout(() => {
-      updateReadingScrollPercent(novelId, chapterId, percent)
-      // 章内滚动位置写穿服务端，供跨设备恢复到上次读到的位置
-      pushScrollProgress(novelId, novelTitle, chapterId, percent)
-    }, 400)
+    commitScrollPercent(percent, 400)
   }
 
   // 章节切换后回到顶部并重置章内进度与段评状态
@@ -356,6 +384,8 @@ export function useReaderState() {
     fontScale,
     fontScaleOption,
     setFontScale,
+    pageTurnMode,
+    setPageTurnMode,
     tone,
     toneOption,
     setTone,
@@ -366,8 +396,17 @@ export function useReaderState() {
     paragraphCommentCounts,
     openParagraphComments,
     locateParagraph,
+    registerParagraphLocator,
     contentScrollRef,
     handleContentScroll,
+    commitScrollPercent,
+    scrollPercent,
+    getSavedScrollPercent: () => {
+      if (fromStudio || !novelId || !chapterId) return 0
+      const entry = getReadingProgress(novelId)
+      if (!entry || entry.chapterId !== chapterId) return 0
+      return Math.min(1, Math.max(0, entry.scrollPercent ?? 0))
+    },
     backHref,
     backLabel,
     buildReadHref,

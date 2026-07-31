@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { FilePenLine, LoaderCircle, MoreHorizontal, RefreshCcw, Save, Settings2, Upload, WandSparkles } from 'lucide-react'
 
+import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
-import { useAutoGrowTextarea } from '@/hooks/useMobileComposer'
 import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 
 import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingReview, type SaveState, type WorkspaceDocumentView } from '../types'
@@ -102,11 +102,6 @@ export default function EditorCanvas({
 }: EditorCanvasProps) {
   const isMobile = variant === 'mobile'
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  // 移动端 textarea 自动增高：正文与工作区文档两处 textarea 不会同时渲染，共用同一 ref
-  const mobileTextareaRef = useAutoGrowTextarea(
-    workspaceDocument ? workspaceDocument.content : chapterDraft?.content ?? '',
-    isMobile,
-  )
   const sectionClassName = embedded
     ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-default)]'
     : 'flex h-full min-h-0 flex-col overflow-hidden pb-2'
@@ -151,8 +146,7 @@ export default function EditorCanvas({
               className="min-h-[50vh]"
             />
           ) : workspaceDocument.editableContent ? (
-            <textarea
-              ref={mobileTextareaRef}
+            <AutoGrowTextarea
               value={workspaceDocument.content}
               onChange={(event) =>
                 onWorkspaceDocumentChange?.({
@@ -160,8 +154,7 @@ export default function EditorCanvas({
                   content: event.target.value,
                 })
               }
-              rows={1}
-              className="w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+              className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
               placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
             />
           ) : (
@@ -385,8 +378,7 @@ export default function EditorCanvas({
               <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                 {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
               </p>
-              <textarea
-                ref={mobileTextareaRef}
+              <AutoGrowTextarea
                 value={chapterDraft.content}
                 onChange={(event) => {
                   onChange({ ...chapterDraft, content: event.target.value })
@@ -399,8 +391,8 @@ export default function EditorCanvas({
                   emitSelection(event.currentTarget)
                   onEditorBlur?.()
                 }}
-                rows={1}
-                className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                wrapperClassName="mt-3"
+                className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                 placeholder="继续写这一章的正文。"
               />
             </>

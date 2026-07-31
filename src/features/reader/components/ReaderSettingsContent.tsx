@@ -1,21 +1,33 @@
 import { Check } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { fontScaleOptions, toneOptions, type ReaderFontScale, type ReaderTone } from '../reader-settings'
+import {
+  fontScaleOptions,
+  pageTurnModeOptions,
+  toneOptions,
+  type ReaderFontScale,
+  type ReaderPageTurnMode,
+  type ReaderTone,
+} from '../reader-settings'
 
 type ReaderSettingsContentProps = {
   fontScale: ReaderFontScale
   tone: ReaderTone
   onFontScaleChange: (next: ReaderFontScale) => void
   onToneChange: (next: ReaderTone) => void
+  /** 翻页方式：仅手机端分页阅读传入，不传则不显示该组 */
+  pageTurnMode?: ReaderPageTurnMode
+  onPageTurnModeChange?: (next: ReaderPageTurnMode) => void
 }
 
-/** 阅读设置内容：字号 4 档 + 背景色 4 模式（三端共用，外层容器决定承载形态） */
+/** 阅读设置内容：字号 4 档 + 背景色 4 模式（+ 手机端翻页方式），三端共用 */
 export default function ReaderSettingsContent({
   fontScale,
   tone,
   onFontScaleChange,
   onToneChange,
+  pageTurnMode,
+  onPageTurnModeChange,
 }: ReaderSettingsContentProps) {
   return (
     <div className="space-y-6 p-4">
@@ -72,6 +84,30 @@ export default function ReaderSettingsContent({
           })}
         </div>
       </div>
+
+      {pageTurnMode && onPageTurnModeChange ? (
+        <div>
+          <p className="text-sm font-medium text-[var(--text-primary)]">翻页方式</p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {pageTurnModeOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onPageTurnModeChange(option.id)}
+                className={cn(
+                  'flex flex-col items-center gap-1 rounded-[var(--radius-md)] border px-2 py-2.5 transition-colors press-feedback',
+                  pageTurnMode === option.id
+                    ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]'
+                    : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]',
+                )}
+              >
+                <span className="text-sm font-medium">{option.label}</span>
+                <span className="text-[11px] opacity-70">{option.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

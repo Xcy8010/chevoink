@@ -23,12 +23,16 @@ import type {
   ListNovelsResponse,
   ListPostsResponse,
   ListReadingProgressResponse,
+  ListParagraphUnderlinesResponse,
   ListReceivedLikesResponse,
   ListUserRepliesResponse,
   MarkConversationReadResponse,
   MarkInteractionSeenRequest,
   MarkInteractionSeenResponse,
+  RemoveParagraphUnderlineResponse,
   RemoveReadingProgressResponse,
+  SaveParagraphUnderlineRequest,
+  SaveParagraphUnderlineResponse,
   SaveReadingProgressRequest,
   SaveReadingProgressResponse,
   SendMessageRequest,
@@ -287,6 +291,29 @@ export function removeReadingProgress(novelId: string) {
   return requestData<RemoveReadingProgressResponse['data']>(`/api/users/me/reading-progress/${novelId}`, {
     method: 'DELETE',
   })
+}
+
+/** 本章已划线的段落序号（方案 20 §2.7） */
+export function listParagraphUnderlines(chapterId: string) {
+  return requestData<ListParagraphUnderlinesResponse['data']>(
+    `/api/users/me/underlines?chapterId=${encodeURIComponent(chapterId)}`,
+  )
+}
+
+/** 新增段落划线（同段重复提交幂等） */
+export function saveParagraphUnderline(body: SaveParagraphUnderlineRequest) {
+  return requestData<SaveParagraphUnderlineResponse['data']>('/api/users/me/underlines', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** 取消段落划线 */
+export function removeParagraphUnderline(chapterId: string, paragraphIndex: number) {
+  return requestData<RemoveParagraphUnderlineResponse['data']>(
+    `/api/users/me/underlines?chapterId=${encodeURIComponent(chapterId)}&paragraphIndex=${paragraphIndex}`,
+    { method: 'DELETE' },
+  )
 }
 
 /** 创建或复用与目标用户的双人直聊会话 */

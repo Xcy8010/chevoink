@@ -13,12 +13,14 @@ import {
   PanelBottomOpen,
   Save,
   Settings2,
+  Trash2,
   Upload,
 } from 'lucide-react'
 
+import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
 import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
-import { useAutoGrowTextarea, useKeyboardInset } from '@/hooks/useMobileComposer'
+import { useKeyboardInset } from '@/hooks/useMobileComposer'
 import { cn } from '@/lib/utils'
 import type { ChapterStatus, Novel, StudioPayload, Visibility } from '../../../../shared/contracts/index.js'
 import type {
@@ -100,6 +102,7 @@ type ImmersiveComposerProps = {
   onOpenCover?: () => void
   onOpenMeta?: () => void
   onPublishNovel?: () => void
+  onDeleteNovel?: () => void
   novelPublished?: boolean
   novelSaving?: boolean
   agentPanel: ReactNode
@@ -164,6 +167,7 @@ export default function ImmersiveComposer({
   onOpenCover,
   onOpenMeta,
   onPublishNovel,
+  onDeleteNovel,
   novelPublished = false,
   novelSaving = false,
   agentPanel,
@@ -184,11 +188,6 @@ export default function ImmersiveComposer({
   const [sheetOpen, setSheetOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const keyboardInset = useKeyboardInset()
-  // 手机端正文/工作区文档 textarea 自动增高（两处不会同时渲染，共用同一 ref）
-  const mobileTextareaRef = useAutoGrowTextarea(
-    workspaceDocument ? workspaceDocument.content : chapterDraft?.content ?? '',
-    !isDesktop,
-  )
   const [showChapterSettings, setShowChapterSettings] = useState(false)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -727,8 +726,7 @@ export default function ImmersiveComposer({
                         <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
                       </div>
                       {workspaceDocument.editableContent ? (
-                        <textarea
-                          ref={mobileTextareaRef}
+                        <AutoGrowTextarea
                           value={workspaceDocument.content}
                           onChange={(event) =>
                             onWorkspaceDocumentChange?.({
@@ -736,8 +734,8 @@ export default function ImmersiveComposer({
                               content: event.target.value,
                             })
                           }
-                          rows={1}
-                          className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                          wrapperClassName="mt-3"
+                          className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                           placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
                         />
                       ) : (
@@ -766,8 +764,7 @@ export default function ImmersiveComposer({
                       <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                         {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
                       </p>
-                      <textarea
-                        ref={mobileTextareaRef}
+                      <AutoGrowTextarea
                         value={chapterDraft.content}
                         onChange={(event) => {
                           onChange({ ...chapterDraft, content: event.target.value })
@@ -777,8 +774,8 @@ export default function ImmersiveComposer({
                         onClick={(event) => emitSelection(event.currentTarget)}
                         onKeyUp={(event) => emitSelection(event.currentTarget)}
                         onBlur={(event) => emitSelection(event.currentTarget)}
-                        rows={1}
-                        className="mt-3 w-full resize-none overflow-hidden bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                        wrapperClassName="mt-3"
+                        className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                         placeholder="继续写这一章的正文。"
                       />
                     </>
@@ -923,6 +920,23 @@ export default function ImmersiveComposer({
                         <Upload className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
                         {novelPublished ? '更新发布' : '发布作品'}
                       </button>
+                    ) : null}
+                    {onDeleteNovel ? (
+                      <>
+                        <div className="my-1 border-t border-[var(--border-subtle)]" />
+                        <button
+                          type="button"
+                          disabled={novelSaving}
+                          onClick={() => {
+                            setMobileMenuOpen(false)
+                            onDeleteNovel()
+                          }}
+                          className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[rgb(153,27,27)] transition-colors active:bg-[rgba(127,29,29,0.08)] disabled:opacity-40"
+                        >
+                          <Trash2 className="h-4 w-4 shrink-0" />
+                          删除作品
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 </>

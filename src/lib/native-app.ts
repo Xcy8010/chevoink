@@ -42,16 +42,34 @@ export function openExternalUrl(url: string): void {
 type StatusBarPlugin = {
   setBackgroundColor?: (options: { color: string }) => Promise<void>
   setStyle?: (options: { style: 'DARK' | 'LIGHT' | 'DEFAULT' }) => Promise<void>
+  hide?: () => Promise<void>
+  show?: () => Promise<void>
 }
 type NavigationBarPlugin = {
   setNavigationBarColor?: (options: { color: string; darkButtons?: boolean }) => Promise<void>
 }
+/**
+ * 自定义原生插件（chevoink-android 的 ImmersiveModePlugin.java）：
+ * 官方 @capacitor/status-bar 的 setOverlaysWebView 用的是 SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+ * 这套 legacy flag，Android 15（targetSdk 35）已忽略——真机实测 overlay 静默失败、
+ * 只有 hide 生效，露出窗口黑底。自定义插件改用现代 API setDecorFitsSystemWindows，
+ * enter 返回沉浸态下页面需要避让的安全区（CSS px，含挖孔）。
+ */
+type ImmersiveModePlugin = {
+  enter?: () => Promise<{ top: number; bottom: number }>
+  exit?: () => Promise<void>
+}
+
+/** 沉浸态下页面需避让的安全区（CSS px） */
+export type ImmersiveInsets = { top: number; bottom: number }
 
 /** 取原生桥注入的插件集合；浏览器或桥未就绪时返回 undefined。 */
-function nativePlugins(): { StatusBar?: StatusBarPlugin; NavigationBar?: NavigationBarPlugin } | undefined {
+function nativePlugins():
+  | { StatusBar?: StatusBarPlugin; NavigationBar?: NavigationBarPlugin; ImmersiveMode?: ImmersiveModePlugin }
+  | undefined {
   if (typeof window === 'undefined') return undefined
   return (window as unknown as { Capacitor?: { Plugins?: Record<string, unknown> } }).Capacitor?.Plugins as
-    | { StatusBar?: StatusBarPlugin; NavigationBar?: NavigationBarPlugin }
+    | { StatusBar?: StatusBarPlugin; NavigationBar?: NavigationBarPlugin; ImmersiveMode?: ImmersiveModePlugin }
     | undefined
 }
 
@@ -59,8 +77,12 @@ function nativePlugins(): { StatusBar?: StatusBarPlugin; NavigationBar?: Navigat
  * 将原生状态栏（顶部）与导航栏（底部）染成与网页当前背景一致的颜色，使安全区跟随主题。
  * 仅在 APP 壳内生效；浏览器为空操作。
  *
+ * 注：安卓 15+ 默认强制 edge-to-edge 并禁用状态栏染色，本壳在主题里声明了
+ * windowOptOutEdgeToEdgeEnforcement，因此 setBackgroundColor 仍然生效，
+ * 且 WebView 天然被排布在状态栏下方（不需要 --safe-top 再避让一次）。
+ *
  * @param backgroundColor 背景色（#RRGGBB，通常取自 CSS 变量 --app-bg）
- * @param dark 是否深色主题：深色→浅色图标；浅色→深色图标
+ * @param dark 是否深色背景：深色→浅色图标；浅色→深色图标
  */
 export function syncNativeSystemBars(backgroundColor: string, dark: boolean): void {
   if (!isNativeApp() || !backgroundColor) return
@@ -70,4 +92,67 @@ export function syncNativeSystemBars(backgroundColor: string, dark: boolean): vo
   plugins.StatusBar?.setBackgroundColor?.({ color: backgroundColor }).catch(() => {})
   plugins.StatusBar?.setStyle?.({ style }).catch(() => {})
   plugins.NavigationBar?.setNavigationBarColor?.({ color: backgroundColor, darkButtons: !dark }).catch(() => {})
+}
+
+// 进入/退出沉浸走同一条串行队列：评论面板临时退出、路由卸载还原等场景可能交错触发，
+// 串行化后原生侧按调用顺序生效，最后一次调用胜出，不会出现 hide/show 乱序。
+let immersiveChain: Promise<unknown> = Promise.resolve()
+
+function enqueueImmersive<T>(step: () => Promise<T>): Promise<T | null> {
+  const next = immersiveChain.then(step, step).catch(() => null)
+  immersiveChain = next
+  return next
+}
+
+/** 当前壳是否具备真全屏沉浸能力（自定义 ImmersiveMode 插件，旧 APK 没有）。 */
+export function supportsNativeImmersive(): boolean {
+  return isNativeApp() && typeof nativePlugins()?.ImmersiveMode?.enter === 'function'
+}
+
+/**
+ * 进入全屏沉浸（方案 20）：原生侧 setDecorFitsSystemWindows(false) 让 WebView 铺满
+ * 整屏，再隐藏系统栏。成功返回页面需避让的安全区（CSS px）；能力缺失（旧 APK）或
+ * 失败返回 null，调用方保持既有「状态栏染色」形态，不做任何布局改动。
+ */
+export function enterNativeImmersive(): Promise<ImmersiveInsets | null> {
+  if (!supportsNativeImmersive()) return Promise.resolve(null)
+  return enqueueImmersive(async () => {
+    const immersive = nativePlugins()?.ImmersiveMode
+    if (!immersive?.enter) return null
+    const insets = await immersive.enter()
+    return typeof insets?.top === 'number' && typeof insets?.bottom === 'number' ? insets : null
+  })
+}
+
+/** 退出全屏沉浸并把系统栏配色交回当前主题。旧 APK 下为空操作。 */
+export function exitNativeImmersive(): Promise<void> {
+  if (!supportsNativeImmersive()) return Promise.resolve()
+  return enqueueImmersive(async () => {
+    await nativePlugins()?.ImmersiveMode?.exit?.()
+  }).then(() => {
+    restoreNativeSystemBarsToTheme()
+  })
+}
+
+/**
+ * 判断 `#RRGGBB` 是否为深色底，用于决定系统栏图标取浅色还是深色。
+ * 解析失败一律按浅色底处理（图标用深色，最坏情况仍可辨认）。
+ */
+export function isDarkColor(color: string): boolean {
+  const value = color.trim().replace(/^#/, '')
+  if (value.length !== 6) return false
+  const r = Number.parseInt(value.slice(0, 2), 16)
+  const g = Number.parseInt(value.slice(2, 4), 16)
+  const b = Number.parseInt(value.slice(4, 6), 16)
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return false
+  // sRGB 加权相对亮度
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
+}
+
+/** 把系统栏配色恢复成当前主题背景色（离开阅读区等自定义配色场景时调用） */
+export function restoreNativeSystemBarsToTheme(): void {
+  if (!isNativeApp() || typeof document === 'undefined') return
+  const appBg = getComputedStyle(document.documentElement).getPropertyValue('--app-bg').trim()
+  if (!appBg) return
+  syncNativeSystemBars(appBg, isDarkColor(appBg) || document.documentElement.classList.contains('dark'))
 }

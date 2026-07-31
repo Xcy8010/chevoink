@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { isImageLoaded, markImageLoaded } from '@/lib/image-cache'
 import { cn } from '@/lib/utils'
 
 type AvatarProps = {
@@ -31,15 +32,35 @@ function DefaultAvatarGraphic() {
 }
 
 export default function Avatar({ name, src, size = 'md', className }: AvatarProps) {
+  // 本次会话已加载过的头像（如反复进出消息/社区页）直接以完成态渲染，不显示骨架也不淡入
+  const cachedOnMount = isImageLoaded(src)
   // 三态：加载中骨架 shimmer → 整张淡入 → 失败回退默认图形，不出现半张图或破图
-  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading')
-  // 命中浏览器缓存的头像直接显示，不播放淡入过渡
-  const instantRef = useRef(false)
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>(
+    cachedOnMount ? 'loaded' : 'loading',
+  )
+  // 已加载过的头像直接显示，不播放淡入过渡
+  const instantRef = useRef(cachedOnMount)
+  // 记录上一次的 src：挂载时不能重置状态，否则会覆盖上面算好的完成态
+  const previousSrcRef = useRef(src)
 
   useEffect(() => {
-    instantRef.current = false
-    setStatus('loading')
+    if (previousSrcRef.current === src) {
+      return
+    }
+    previousSrcRef.current = src
+    // 换头像后若新地址本会话已加载过，同样保持直显
+    const cached = isImageLoaded(src)
+    instantRef.current = cached
+    setStatus(cached ? 'loaded' : 'loading')
   }, [src])
+
+  const handleLoaded = (instant: boolean) => {
+    markImageLoaded(src)
+    if (instant) {
+      instantRef.current = true
+    }
+    setStatus('loaded')
+  }
 
   return (
     <div
@@ -57,14 +78,13 @@ export default function Avatar({ name, src, size = 'md', className }: AvatarProp
             ref={(node) => {
               // 命中浏览器缓存时 onLoad 可能不触发，直接检查完成态避免骨架闪烁
               if (node && node.complete && node.naturalWidth > 0) {
-                instantRef.current = true
-                setStatus('loaded')
+                handleLoaded(true)
               }
             }}
             src={src}
             alt={name}
             decoding="async"
-            onLoad={() => setStatus('loaded')}
+            onLoad={() => handleLoaded(false)}
             onError={() => setStatus('error')}
             className={cn(
               'h-full w-full aspect-square object-cover',

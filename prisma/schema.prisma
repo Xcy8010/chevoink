@@ -189,6 +189,7 @@ model User {
   commentLikes            CommentLike[]
   novelFavorites          NovelFavorite[]
   readingProgress         ReadingProgress[]
+  paragraphUnderlines     ParagraphUnderline[]
   following               UserFollow[]         @relation("UserFollowFollower")
   followers               UserFollow[]         @relation("UserFollowFollowing")
 
@@ -281,6 +282,7 @@ model Chapter {
   aiUsageLogs  AiUsageLog[]
   agentRuns    AgentRun[]
   projectMemoryEntries ProjectMemoryEntry[]
+  paragraphUnderlines ParagraphUnderline[]
 
   @@unique([novelId, orderIndex])
   @@index([novelId, status])
@@ -454,6 +456,22 @@ model ReadingProgress {
   @@unique([userId, novelId])
   @@index([userId])
   @@map("reading_progress")
+}
+
+// 阅读器段落划线（方案 20 §2.7）：段级划线，userId+chapterId+paragraphIndex 幂等唯一
+model ParagraphUnderline {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  chapterId      String   @map("chapter_id") @db.VarChar(64)
+  paragraphIndex Int      @map("paragraph_index")
+  createdAt      DateTime @default(now()) @map("created_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chapter        Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chapterId, paragraphIndex])
+  @@index([userId, chapterId])
+  @@map("paragraph_underlines")
 }
 
 model CommentLike {

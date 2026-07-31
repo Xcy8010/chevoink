@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ImageOff } from 'lucide-react'
 
+import { isImageLoaded, markImageLoaded } from '@/lib/image-cache'
 import { cn } from '@/lib/utils'
 
 type AppImageProps = {
@@ -39,21 +40,39 @@ export default function AppImage({
   placeholderClassName,
   draggable,
 }: AppImageProps) {
-  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading')
-  // 命中浏览器缓存的图片直接显示，不播放淡入过渡
-  const instantRef = useRef(false)
+  // 本次会话已加载过的图直接以完成态渲染（SPA 重新挂载不再重复播放骨架与淡入）
+  const cachedOnMount = isImageLoaded(src)
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>(
+    cachedOnMount ? 'loaded' : 'loading',
+  )
+  // 已加载过的图片直接显示，不播放淡入过渡
+  const instantRef = useRef(cachedOnMount)
+  // 记录上一次的 src：挂载时不能重置状态，否则会覆盖上面算好的完成态
+  const previousSrcRef = useRef(src)
 
-  // src 变化（如封面更换）时回到骨架态重新加载
+  // src 真正变化（如封面更换）时回到骨架态重新加载；新地址已加载过则保持直显
   useEffect(() => {
-    instantRef.current = false
-    setStatus('loading')
+    if (previousSrcRef.current === src) {
+      return
+    }
+    previousSrcRef.current = src
+    const cached = isImageLoaded(src)
+    instantRef.current = cached
+    setStatus(cached ? 'loaded' : 'loading')
   }, [src])
+
+  const handleLoaded = (instant: boolean) => {
+    markImageLoaded(src)
+    if (instant) {
+      instantRef.current = true
+    }
+    setStatus('loaded')
+  }
 
   // 命中浏览器缓存时 onLoad 可能不触发，挂载时直接检查完成态避免骨架闪烁
   const handleImgRef = (node: HTMLImageElement | null) => {
     if (node && node.complete && node.naturalWidth > 0) {
-      instantRef.current = true
-      setStatus('loaded')
+      handleLoaded(true)
     }
   }
 
@@ -62,11 +81,12 @@ export default function AppImage({
       <img
         ref={handleImgRef}
         src={src}
+        // 已加载过的图不再懒加载：已按完成态渲染，懒加载会让空白多停留一帧
+        loading={priority || status === 'loaded' ? undefined : 'lazy'}
         alt={alt}
-        loading={priority ? undefined : 'lazy'}
         decoding="async"
         draggable={draggable}
-        onLoad={() => setStatus('loaded')}
+        onLoad={() => handleLoaded(false)}
         onError={() => setStatus('error')}
         className={cn(
           !instantRef.current && 'transition-opacity duration-200',

@@ -935,14 +935,20 @@ export async function getNovelByIdData(novelId: string): Promise<Novel | null> {
 export async function createNovelData(userId: string, input: CreateNovelRequest): Promise<Novel> {
   await ensureUserExists(userId)
   const baseSlug = buildSlug(input.title)
-  const slugCount = await prisma.novel.count({
-    where: {
-      slug: {
-        startsWith: baseSlug,
-      },
-    },
-  })
-  const slug = slugCount > 0 ? `${baseSlug}-${slugCount + 1}` : baseSlug
+  // 靠 count 推算后缀会撞车：删过中间的作品后，count+1 可能正好是还存在的 slug（唯一约束报错）。
+  // 这里把同前缀的已占用 slug 全拿回来，逐个试到第一个空位为止。
+  const occupiedSlugs = new Set(
+    (
+      await prisma.novel.findMany({
+        where: { slug: { startsWith: baseSlug } },
+        select: { slug: true },
+      })
+    ).map((item) => item.slug),
+  )
+  let slug = baseSlug
+  for (let suffix = 2; occupiedSlugs.has(slug); suffix += 1) {
+    slug = `${baseSlug}-${suffix}`
+  }
 
   const novel = await prisma.$transaction(async (tx) => {
     const created = await tx.novel.create({
@@ -2180,6 +2186,62 @@ export async function saveReadingProgressData(
 /** 从书架移除（删除该书的进度行） */
 export async function removeReadingProgressData(userId: string, novelId: string): Promise<boolean> {
   const deleted = await prisma.readingProgress.deleteMany({ where: { userId, novelId } })
+  return deleted.count > 0
+}
+
+// ── 阅读器段落划线（方案 20 §2.7） ────────────────────────────────────
+
+/** 本章已划线的段落序号列表 */
+export async function listParagraphUnderlinesData(userId: string, chapterId: string): Promise<number[]> {
+  const rows = await prisma.paragraphUnderline.findMany({
+    where: { userId, chapterId },
+    select: { paragraphIndex: true },
+    orderBy: { paragraphIndex: 'asc' },
+  })
+  return rows.map((row) => row.paragraphIndex)
+}
+
+/** 新增划线（幂等：已存在时直接返回成功） */
+export async function saveParagraphUnderlineData(
+  userId: string,
+  input: { novelId: string; chapterId: string; paragraphIndex: number },
+): Promise<boolean> {
+  const chapter = await prisma.chapter.findUnique({
+    where: { id: input.chapterId },
+    select: { id: true, novelId: true },
+  })
+  if (!chapter || chapter.novelId !== input.novelId) {
+    return false
+  }
+
+  await prisma.paragraphUnderline.upsert({
+    where: {
+      userId_chapterId_paragraphIndex: {
+        userId,
+        chapterId: input.chapterId,
+        paragraphIndex: input.paragraphIndex,
+      },
+    },
+    create: {
+      userId,
+      novelId: input.novelId,
+      chapterId: input.chapterId,
+      paragraphIndex: input.paragraphIndex,
+    },
+    update: {},
+  })
+  return true
+}
+
+/** 取消划线（幂等） */
+export async function removeParagraphUnderlineData(
+  userId: string,
+  chapterId: string,
+  paragraphIndex: number,
+): Promise<boolean> {
+  const deleted = await prisma.paragraphUnderline.deleteMany({
+    where: { userId, chapterId, paragraphIndex },
+  })
   return deleted.count > 0
 }
 

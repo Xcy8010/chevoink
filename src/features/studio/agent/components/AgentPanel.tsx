@@ -174,6 +174,7 @@ export function AgentPanel({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // 自动跟随开关：用户上滑离开底部后暂停自动滚底（避免运行中回看历史被强制弹回），滚回底部附近自动恢复
   const pinnedToBottomRef = useRef(true)
+  const lastScrollTopRef = useRef(0)
   const active = isRunActive(phase)
 
   useEffect(
@@ -264,14 +265,23 @@ export function AgentPanel({
     }
     const frame = requestAnimationFrame(() => {
       node.scrollTop = node.scrollHeight
+      lastScrollTopRef.current = node.scrollTop
     })
     return () => cancelAnimationFrame(frame)
   }, [messages, pendingApproval, pendingQuestion, historyLoading])
 
-  // 跟踪用户是否贴底：距底部 80px 内视为贴底；程序自动滚底时本就在底部，不会误关
+  // 跟踪用户是否贴底。只要出现一次「向上滚动」就立刻脱离贴底：
+  // 流式输出时每个增量都会触发自动滚底，若只用「距底 80px」判定，用户手指刚上滑十几像素
+  // 就会被下一个增量拽回底部、并把贴底标记重新置回 true，表现为整个对话根本滑不动。
   const handleMessagesScroll = useCallback(() => {
     const node = scrollRef.current
     if (!node) {
+      return
+    }
+    const previousTop = lastScrollTopRef.current
+    lastScrollTopRef.current = node.scrollTop
+    if (node.scrollTop < previousTop - 2) {
+      pinnedToBottomRef.current = false
       return
     }
     pinnedToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80
@@ -280,6 +290,8 @@ export function AgentPanel({
   const handleSend = useCallback(
     async (prompt: string) => {
       setActionError(null)
+      // 用户主动发言视为回到对话最新处，重新开启自动跟随
+      pinnedToBottomRef.current = true
       try {
         let ensuredSessionId = sessionId
         if (!ensuredSessionId) {

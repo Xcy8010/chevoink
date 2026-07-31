@@ -1,6 +1,6 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Upload, Users, WandSparkles, X } from 'lucide-react'
+import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, Users, WandSparkles, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -2964,6 +2964,12 @@ export default function StudioWorkspace() {
       void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
       navigate(`/studio/novel/${novel.id}`)
     },
+    onError: (error: Error) => {
+      // 失败必须把「正在打开作品...」收掉，否则 loading 文案会永远挂着
+      setChapterSaveState('error')
+      setChapterSaveMessage(error.message || '新建作品失败，请稍后重试。')
+      toast.error(error.message || '新建作品失败，请稍后重试。')
+    },
   })
   const voiceInputSupported =
     typeof window !== 'undefined' &&
@@ -5494,17 +5500,43 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       await deleteNovelWorkspace(activeNovelId)
     },
     onSuccess: async () => {
+      const deletedNovelId = activeNovelId
       setWorkspaceDialog(null)
+      // 沉浸层是覆盖全屏的独立层，作品已经不存在了要先退出，否则会停留在空作品的写作界面
+      setIsImmersive(false)
       setNovelMessage('作品已删除。')
       if (typeof window !== 'undefined') {
         const lastNovelId = window.localStorage.getItem(STUDIO_LAST_NOVEL_STORAGE_KEY)
-        if (lastNovelId === activeNovelId) {
+        if (lastNovelId === deletedNovelId) {
           window.localStorage.removeItem(STUDIO_LAST_NOVEL_STORAGE_KEY)
         }
       }
+
+      // 先把已删作品从共享缓存里清掉再导航：/studio 会按 ['community','me'] 挑入口作品，
+      // 只做 invalidate 的话首帧拿到的还是旧数据，会把用户直接送回刚删掉的那部作品
+      queryClient.setQueryData<UserMePayload>(['community', 'me'], (current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          authoredNovels: (current.authoredNovels ?? []).filter((item) => item.id !== deletedNovelId),
+          drafts: (current.drafts ?? []).filter((item) => item.novelId !== deletedNovelId),
+        }
+      })
+      queryClient.setQueryData<Novel[]>(['studio', 'my-novels'], (current) =>
+        Array.isArray(current) ? current.filter((item) => item.id !== deletedNovelId) : current,
+      )
+      // 这部作品自己的各级缓存已经没有意义，直接丢弃，避开重新渲染旧快照或回头请求 404
+      queryClient.removeQueries({ queryKey: ['studio', deletedNovelId] })
+      queryClient.removeQueries({ queryKey: ['studio-chapter', deletedNovelId] })
+      queryClient.removeQueries({ queryKey: ['novel-detail', deletedNovelId] })
+      queryClient.removeQueries({ queryKey: ['reader', deletedNovelId] })
+
+      navigate('/studio', { replace: true })
       await queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
       await queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
-      navigate('/studio', { replace: true })
     },
     onError: (error: Error) => {
       setNovelSaveState('error')
@@ -5677,13 +5709,8 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     }
 
     if (novelForm.status === 'published') {
-      setWorkspaceDialog({
-        title: '当前作品暂时不能删除',
-        description: '已发布作品需要先下架，或切回草稿状态后，才允许执行删除。',
-        confirmLabel: '我知道了',
-        cancelLabel: '关闭',
-        onConfirm: () => undefined,
-      })
+      // 不把入口置灰：允许点击并用 toast 说清该去哪里下架，比一个不可点的按钮更易理解
+      toast.error('已发布作品不能直接删除，请先去「作品设置」将作品下架，之后再执行删除。')
       return
     }
 
@@ -8939,19 +8966,32 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
               </>
             ) : (
               <>
-                <WorkspaceNovelSwitcher
-                  currentNovelId={currentNovel.id}
-                  currentNovelTitle={novelTitle}
-                  novels={novelOptions}
-                  busy={createNovelMutation.isPending}
-                  loading={myNovelsQuery.isLoading}
-                  onSelectNovel={handleSelectWorkspaceNovel}
-                  onCreateNovel={handleCreateWorkspaceNovel}
-                />
-                <div className="min-w-0 flex-1" aria-hidden />
+                {/* 作品选择器占满剩余宽度，作品名尽量完整显示；右侧保存状态保持短标签 */}
+                <div className="min-w-0 flex-1">
+                  <WorkspaceNovelSwitcher
+                    currentNovelId={currentNovel.id}
+                    currentNovelTitle={novelTitle}
+                    novels={novelOptions}
+                    busy={createNovelMutation.isPending}
+                    loading={myNovelsQuery.isLoading}
+                    onSelectNovel={handleSelectWorkspaceNovel}
+                    onCreateNovel={handleCreateWorkspaceNovel}
+                    fullWidth
+                  />
+                </div>
               </>
             )}
-            <SaveStatusPill state={chapterSaveState} message={saveDisplayMessage} onRetry={handleRetrySave} compact />
+            {/* 保存状态不参与压缩；已保存时只显示短文案，具体时间点击后用 toast 告知 */}
+            <div className="shrink-0">
+              <SaveStatusPill
+                state={chapterSaveState}
+                message={saveDisplayMessage}
+                onRetry={handleRetrySave}
+                compact
+                shortMessage={chapterSaveState === 'saved' ? '已自动保存' : undefined}
+                onPress={() => toast.info(saveDisplayMessage)}
+              />
+            </div>
           </div>
 
           <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
@@ -9076,15 +9116,10 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           {/* 软键盘打开时由 index.css 的 html.keyboard-open .studio-bottom-nav 规则隐藏，
               让 Agent 输入框自然落到收缩视口底部（键盘上方），底栏不再被顶起占位 */}
           <nav className="studio-bottom-nav flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1">
+              {/* 退出创作区固定回首页：创作区常常是从章节/详情等多级页面进来的，回退一步会落回中间页 */}
               <button
                 type="button"
-                onClick={() => {
-                  if (window.history.length > 1) {
-                    navigate(-1)
-                  } else {
-                    navigate('/')
-                  }
-                }}
+                onClick={() => navigate('/')}
                 className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 text-[var(--text-tertiary)] transition-colors active:text-[var(--text-primary)]"
               >
                 <LogOut className="h-5 w-5 rotate-180" />
@@ -9144,20 +9179,49 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                     ? [{ key: 'preview', label: '预览阅读', icon: BookOpen, action: () => navigate(previewHref) }]
                     : []),
                   { key: 'create-chapter', label: '新建章节', icon: FileText, action: () => handleRequestCreateChapter() },
-                ] as Array<{ key: string; label: string; icon: typeof PenLine; action: () => void }>
-              ).map(({ key, label, icon: Icon, action }) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => {
-                    setMobileMoreOpen(false)
-                    action()
-                  }}
-                  className="flex min-h-[48px] w-full items-center gap-3 rounded-[16px] px-3 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
-                >
-                  <Icon className="h-5 w-5 shrink-0 text-[var(--text-secondary)]" />
-                  {label}
-                </button>
+                  // 删除条件与电脑端一致：仅草稿或已下架可删，已发布时仍可点击但只给 toast 提示
+                  {
+                    key: 'delete-novel',
+                    label: '删除作品',
+                    icon: Trash2,
+                    action: () => handleRequestDeleteNovel(),
+                    danger: true,
+                    disabled: deleteNovelMutation.isPending,
+                  },
+                ] as Array<{
+                  key: string
+                  label: string
+                  icon: typeof PenLine
+                  action: () => void
+                  danger?: boolean
+                  disabled?: boolean
+                }>
+              ).map(({ key, label, icon: Icon, action, danger, disabled }) => (
+                <Fragment key={key}>
+                  {danger ? <div className="my-1 border-t border-[var(--border-subtle)]" /> : null}
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      setMobileMoreOpen(false)
+                      action()
+                    }}
+                    className={cn(
+                      'flex min-h-[48px] w-full items-center gap-3 rounded-[16px] px-3 text-left text-[15px] transition-colors disabled:opacity-45',
+                      danger
+                        ? 'text-[rgb(153,27,27)] active:bg-[rgba(127,29,29,0.08)]'
+                        : 'text-[var(--text-primary)] active:bg-[var(--surface-muted)]',
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        'h-5 w-5 shrink-0',
+                        danger ? 'text-[rgb(153,27,27)]' : 'text-[var(--text-secondary)]',
+                      )}
+                    />
+                    {label}
+                  </button>
+                </Fragment>
               ))}
             </div>
           </BottomSheet>
@@ -9193,7 +9257,6 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
             novelSaving={saveNovelMutation.isPending || deleteNovelMutation.isPending}
             novelDirty={novelDirty}
             novelPublished={novelForm?.status === 'published'}
-            novelDeleteDisabled={novelForm?.status === 'published'}
           />
 
           <div className="mt-4 min-h-0 flex-1 overflow-hidden pb-2">
@@ -9388,6 +9451,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
             setActiveToolPanel((current) => (current === 'meta' ? null : 'meta'))
           }}
           onPublishNovel={handlePublishNovel}
+          onDeleteNovel={handleRequestDeleteNovel}
           novelPublished={novelForm?.status === 'published'}
           novelSaving={saveNovelMutation.isPending || deleteNovelMutation.isPending}
           agentPanel={renderWritingAgent(undefined, false)}

@@ -345,6 +345,21 @@ export type SaveReadingProgressResponse = ApiSuccess<{ item: ReadingProgressItem
 /** 从书架移除（删除该书的进度行）：DELETE /api/users/me/reading-progress/:novelId */
 export type RemoveReadingProgressResponse = ApiSuccess<{ removed: boolean }>
 
+/** 本章划线段落列表：GET /api/users/me/underlines?chapterId= */
+export type ListParagraphUnderlinesResponse = ApiSuccess<{ paragraphIndexes: number[] }>
+
+/** 新增划线（幂等）：PUT /api/users/me/underlines */
+export type SaveParagraphUnderlineRequest = {
+  novelId: string
+  chapterId: string
+  paragraphIndex: number
+}
+
+export type SaveParagraphUnderlineResponse = ApiSuccess<{ saved: boolean }>
+
+/** 取消划线：DELETE /api/users/me/underlines?chapterId=&paragraphIndex= */
+export type RemoveParagraphUnderlineResponse = ApiSuccess<{ removed: boolean }>
+
 /** 评论点赞：POST/DELETE /api/comments/:commentId/like */
 export type SetCommentLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>
 

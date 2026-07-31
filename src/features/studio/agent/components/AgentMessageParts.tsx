@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Brain,
   Check,
@@ -378,14 +378,57 @@ const ReasoningPart = memo(function ReasoningPart({
   part: Extract<AgentMessagePart, { type: 'reasoning' }>
   streaming: boolean
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const showBody = expanded || streaming
+  // null = 跟随默认（思考中展开、思考结束收起）；true/false = 用户本轮手动指定，思考中也能收起
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null)
+  const showBody = manualOpen ?? streaming
+  const bodyRef = useRef<HTMLParagraphElement | null>(null)
+  // 是否跟随最新思考文本：默认跟随，用户在思考区内往上翻即暂停，重新滑回底部即恢复
+  const followRef = useRef(true)
+
+  // 思考结束时清掉手动状态，恢复「自动收起 + 之后可手动展开回看」的默认行为
+  useEffect(() => {
+    if (!streaming) {
+      setManualOpen(null)
+    }
+  }, [streaming])
+
+  useEffect(() => {
+    // 只在思考中跟随；思考结束后用户手动展开回看时，从头开始读而不是跳到末尾
+    if (!streaming || !showBody) {
+      return
+    }
+    const node = bodyRef.current
+    if (!node || !followRef.current) {
+      return
+    }
+    node.scrollTop = node.scrollHeight
+  }, [part.text, streaming, showBody])
+
+  const handleBodyScroll = useCallback(() => {
+    const node = bodyRef.current
+    if (!node) {
+      return
+    }
+    // 程序自动滚底后本就贴底，不会被误判成用户干预；内容没溢出时差值为 0，同样保持跟随
+    followRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 12
+  }, [])
+
+  const handleToggle = useCallback(() => {
+    setManualOpen((current) => {
+      const nextOpen = !(current ?? streaming)
+      // 收起时重置跟随，再次展开直接看最新思考
+      if (!nextOpen) {
+        followRef.current = true
+      }
+      return nextOpen
+    })
+  }, [streaming])
 
   return (
     <div className="rounded-[14px] border border-dashed border-[var(--border-subtle)] px-3 py-2">
       <button
         type="button"
-        onClick={() => setExpanded((value) => !value)}
+        onClick={handleToggle}
         className="flex w-full items-center gap-2 text-left"
       >
         <Brain
@@ -404,7 +447,13 @@ const ReasoningPart = memo(function ReasoningPart({
         )}
       </button>
       {showBody ? (
-        <p className="mt-1.5 max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)]">
+        /* 这里刻意不加 overscroll-contain：思考区滚到边界后手势要能继续传给外层对话列表，
+           否则手指落在思考区上时整个对话就滑不动了 */
+        <p
+          ref={bodyRef}
+          onScroll={handleBodyScroll}
+          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)] [-webkit-overflow-scrolling:auto]"
+        >
           {part.text}
         </p>
       ) : null}

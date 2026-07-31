@@ -38,7 +38,6 @@ type StudioToolbarProps = {
   novelSaving?: boolean
   novelDirty?: boolean
   novelPublished?: boolean
-  novelDeleteDisabled?: boolean
 }
 
 export default function StudioToolbar({
@@ -70,7 +69,6 @@ export default function StudioToolbar({
   novelSaving = false,
   novelDirty = false,
   novelPublished = false,
-  novelDeleteDisabled = false,
 }: StudioToolbarProps) {
   // 低频操作（封面/设置/作品页/删除）收进“更多”菜单，保持工具栏精简
   const [moreOpen, setMoreOpen] = useState(false)
@@ -204,7 +202,7 @@ export default function StudioToolbar({
                   <div className="my-1 border-t border-[var(--border-subtle)]" />
                   <button
                     type="button"
-                    disabled={novelSaving || novelDeleteDisabled}
+                    disabled={novelSaving}
                     className={`${moreItemClass} text-[rgb(153,27,27)] hover:bg-[rgba(127,29,29,0.08)] hover:text-[rgb(127,29,29)]`}
                     onClick={() => {
                       setMoreOpen(false)

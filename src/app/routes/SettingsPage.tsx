@@ -1,9 +1,11 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   KeyRound,
   Lock,
   LogOut,
@@ -15,9 +17,11 @@ import {
   UserRound,
   UserRoundCheck,
   Users,
+  X,
 } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
+import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
 import { SettingsSkeleton } from '@/components/ui/Skeleton'
 import Button from '@/components/ui/Button'
@@ -26,6 +30,7 @@ import TextInput from '@/components/ui/TextInput'
 import { useToast } from '@/components/ui/Toast'
 import Avatar from '@/features/community/components/Avatar'
 import { getMe, updateMyPrivacy } from '@/features/community/api'
+import ConfirmDialog from '@/features/studio/components/ConfirmDialog'
 import { useShellStore } from '@/store/useShellStore'
 import { prepareAvatarImage } from '@/lib/image-compress'
 import { checkAppUpdate, type VersionManifest } from '@/lib/app-update'
@@ -79,6 +84,45 @@ const PRIVACY_LEVEL_META: Record<PrivacyLevel, { label: string; caption: string 
 }
 
 const PRIVACY_LEVEL_ORDER: PrivacyLevel[] = ['public', 'mutual', 'private']
+
+/** 安卓客户端 APK 下载地址（nginx /download/ 静态目录） */
+const ANDROID_APK_URL = 'https://chevoink.chevolink.com/download/chevoink.apk'
+
+/** 安卓品牌图标（Android 机器人天线头，官方标识形状） */
+function AndroidIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993.0001.5511-.4482.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.2439 13.8533 7.8508 12 7.8508s-3.5902.3931-5.1367 1.0989L4.841 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3435-4.1021-2.6892-7.5743-6.1185-9.4396" />
+    </svg>
+  )
+}
+
+/** 苹果品牌图标（Apple 咬痕苹果，官方标识形状） */
+function AppleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+    </svg>
+  )
+}
+
+/** 鸿蒙品牌图标（HarmonyOS 官方字标，simple-icons v16） */
+function HarmonyIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M1.861 0H3.59v3.548h3.861V0H9.19v8.883H7.458V5.136H3.59v3.746H1.858Zm8.248 8.883ZM13.854 0h1.706l2.809 4.7h.1L21.278 0h1.719v8.883h-1.719v-4.38l.1-1.489h-.1l-2.334 3.983h-1.039l-2.347-3.983h-.1l.1 1.489v4.38h-1.706Zm4.702 21.648a4.082 4.082 0 0 1-1.154-.161 3.417 3.417 0 0 1-1.01-.484 3.5 3.5 0 0 1-.8-.782 3.817 3.817 0 0 1-.538-1.092l1.666-.62a2.411 2.411 0 0 0 .643 1.116 1.683 1.683 0 0 0 1.207.434 2.173 2.173 0 0 0 .524-.062 1.749 1.749 0 0 0 .459-.2 1.02 1.02 0 0 0 .328-.335.88.88 0 0 0 .118-.459 1.052 1.052 0 0 0-.092-.447 1.031 1.031 0 0 0-.315-.373 2.538 2.538 0 0 0-.564-.335 8.135 8.135 0 0 0-.852-.335l-.577-.2a4.753 4.753 0 0 1-.774-.335 3.44 3.44 0 0 1-.7-.509 2.662 2.662 0 0 1-.525-.695 2.093 2.093 0 0 1-.2-.918 2.248 2.248 0 0 1 .21-.968 2.433 2.433 0 0 1 .616-.794 2.87 2.87 0 0 1 .957-.533 3.726 3.726 0 0 1 1.246-.2 3.57 3.57 0 0 1 1.22.186 2.783 2.783 0 0 1 .879.459 2.468 2.468 0 0 1 .59.608 2.9 2.9 0 0 1 .328.633l-1.56.62a1.55 1.55 0 0 0-.485-.67 1.387 1.387 0 0 0-.944-.3 1.655 1.655 0 0 0-.957.261.754.754 0 0 0-.38.658.843.843 0 0 0 .367.682 4.232 4.232 0 0 0 1.167.534l.59.186a6.271 6.271 0 0 1 1.023.434 2.948 2.948 0 0 1 .8.57 2.191 2.191 0 0 1 .511.769 2.44 2.44 0 0 1 .183.98 2.317 2.317 0 0 1-.3 1.2 2.559 2.559 0 0 1-.747.819 3.361 3.361 0 0 1-1.036.484 4.184 4.184 0 0 1-1.128.161Zm-13.028 0a4.441 4.441 0 0 1-3.23-1.34 4.757 4.757 0 0 1-.956-1.476 4.912 4.912 0 0 1-.339-1.824 4.813 4.813 0 0 1 .339-1.811 4.569 4.569 0 0 1 .956-1.477 4.38 4.38 0 0 1 1.427-.992 4.5 4.5 0 0 1 1.8-.36 4.417 4.417 0 0 1 1.79.36 4.343 4.343 0 0 1 1.44.992 4.418 4.418 0 0 1 .944 1.477 4.67 4.67 0 0 1 .351 1.811 4.765 4.765 0 0 1-.351 1.824 4.589 4.589 0 0 1-.944 1.476 4.495 4.495 0 0 1-3.23 1.34Zm0-1.588a2.822 2.822 0 0 0 1.125-.223 2.761 2.761 0 0 0 .92-.621 2.723 2.723 0 0 0 .617-.955 3.321 3.321 0 0 0 .23-1.253 3.227 3.227 0 0 0-.23-1.24 2.7 2.7 0 0 0-.617-.968 2.759 2.759 0 0 0-.92-.62 2.821 2.821 0 0 0-1.125-.223 2.856 2.856 0 0 0-2.057.844 2.946 2.946 0 0 0-.617.968 3.388 3.388 0 0 0-.218 1.24 3.488 3.488 0 0 0 .218 1.253 2.972 2.972 0 0 0 .617.955 2.856 2.856 0 0 0 2.057.843Zm4.972 1.389Zm-8.269 1.039h6.5V24h-6.5Z" />
+    </svg>
+  )
+}
+
+/** 客户端安装的系统选项：安卓可直接下载，其余展示占位提示 */
+const CLIENT_OS_OPTIONS = [
+  { key: 'android', label: '安卓', icon: AndroidIcon, iconClassName: 'text-[#3DDC84]' },
+  { key: 'ios', label: '苹果', icon: AppleIcon, iconClassName: 'text-[var(--text-primary)]' },
+  { key: 'harmony', label: '鸿蒙', icon: HarmonyIcon, iconClassName: 'text-[var(--text-primary)]' },
+] as const
+
+type ClientOsKey = (typeof CLIENT_OS_OPTIONS)[number]['key']
 
 /** 分组标题：扁平列表式设置页的分区抬头 */
 function SectionTitle({ children }: { children: string }) {
@@ -149,6 +193,7 @@ function SettingsRow({ icon, title, caption, value, chevron = 'none', onClick, d
 export default function SettingsPage() {
   const navigate = useNavigate()
   const toast = useToast()
+  const { isMobile } = useDevice()
   const theme = useShellStore((state) => state.theme)
   const setTheme = useShellStore((state) => state.setTheme)
   const fullscreenEnabled = useShellStore((state) => state.fullscreenEnabled)
@@ -181,6 +226,12 @@ export default function SettingsPage() {
   /** 检测更新：仅 APP 壳内使用 */
   const [updateChecking, setUpdateChecking] = useState(false)
   const [availableUpdate, setAvailableUpdate] = useState<VersionManifest | null>(null)
+  /** 客户端下载弹窗：仅手机浏览器使用 */
+  const [clientDialogOpen, setClientDialogOpen] = useState(false)
+  const [selectedClientOs, setSelectedClientOs] = useState<ClientOsKey | null>(null)
+  /** 退出登录二次确认弹窗 */
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
+  const [logoutSubmitting, setLogoutSubmitting] = useState(false)
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
@@ -254,7 +305,19 @@ export default function SettingsPage() {
     }
   }
 
+  /** 确认下载客户端：安卓直接前往下载 APK，苹果/鸿蒙暂未开发 */
+  function handleClientDownload(os: ClientOsKey) {
+    if (os === 'android') {
+      openExternalUrl(ANDROID_APK_URL)
+      setClientDialogOpen(false)
+      return
+    }
+    toast.info('暂未开发，敬请期待！')
+  }
+
   async function handleLogout() {
+    setLogoutSubmitting(true)
+
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
     } catch (error) {
@@ -262,6 +325,8 @@ export default function SettingsPage() {
         return
       }
     } finally {
+      setLogoutSubmitting(false)
+      setLogoutConfirmOpen(false)
       setGuest()
       navigate('/login', { replace: true })
     }
@@ -636,6 +701,101 @@ export default function SettingsPage() {
     </section>
   ) : null
 
+  /** 客户端分组：仅手机浏览器展示；点击弹出选择系统的下载弹窗 */
+  const clientSection =
+    !isNativeApp() && isMobile ? (
+      <section>
+        <SectionTitle>客户端</SectionTitle>
+        <div className="divide-y divide-[var(--border-subtle)]">
+          <SettingsRow
+            icon={<Download className="h-[18px] w-[18px]" />}
+            title="安装启创墨域客户端"
+            caption="安装 APP 获得更流畅的阅读与创作体验"
+            chevron="right"
+            onClick={() => {
+              setSelectedClientOs(null)
+              setClientDialogOpen(true)
+            }}
+          />
+        </div>
+      </section>
+    ) : null
+
+  /** 客户端下载弹窗：选中系统后出现「立即下载 xx 端」按钮 */
+  const clientDialog =
+    clientDialogOpen && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-[120] flex items-end justify-center bg-[rgba(15,23,42,0.28)] backdrop-blur-[2px] sm:items-center sm:px-4 sm:py-8"
+            onClick={() => setClientDialogOpen(false)}
+          >
+            <div
+              role="dialog"
+              aria-label="安装启创墨域客户端"
+              className="w-full rounded-t-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 pb-[calc(24px+var(--safe-bottom))] shadow-[0_24px_64px_rgba(15,23,42,0.18)] sm:max-w-[400px] sm:rounded-[28px] sm:pb-6"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-2">
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">安装启创墨域客户端</h3>
+                  <p className="text-sm leading-6 text-[var(--text-secondary)]">请选择你要下载的版本</p>
+                </div>
+                <Button
+                  onClick={() => setClientDialogOpen(false)}
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 w-9 shrink-0 px-0"
+                  aria-label="关闭"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="mt-6 grid grid-cols-3 gap-3">
+                {CLIENT_OS_OPTIONS.map((os) => {
+                  const selected = selectedClientOs === os.key
+
+                  return (
+                    <button
+                      key={os.key}
+                      type="button"
+                      onClick={() => setSelectedClientOs(os.key)}
+                      className={cn(
+                        'press-feedback flex flex-col items-center gap-2 rounded-[var(--radius-md)] border py-4 transition-colors',
+                        selected
+                          ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
+                          : 'border-[var(--border-subtle)] bg-[var(--surface-muted)] hover:bg-[var(--surface-default)]',
+                      )}
+                    >
+                      <os.icon className={cn('h-7 w-7', os.iconClassName)} />
+                      <span
+                        className={cn(
+                          'text-[13px] font-medium',
+                          selected ? 'text-[var(--color-brand)]' : 'text-[var(--text-primary)]',
+                        )}
+                      >
+                        {os.label}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {selectedClientOs ? (
+                <Button
+                  variant="primary"
+                  className="mt-6 h-11 w-full"
+                  onClick={() => handleClientDownload(selectedClientOs)}
+                >
+                  立即下载{CLIENT_OS_OPTIONS.find((os) => os.key === selectedClientOs)?.label}端
+                </Button>
+              ) : null}
+            </div>
+          </div>,
+          document.body,
+        )
+      : null
+
   if (authStatus === 'unavailable') {
     return (
       <AppState
@@ -664,6 +824,10 @@ export default function SettingsPage() {
           primaryAction={{ label: '去登录', href: '/login?redirect=%2Fsettings' }}
           secondaryAction={{ label: '创建账户', href: '/register?redirect=%2Fsettings' }}
         />
+
+        {clientSection}
+
+        {clientDialog}
       </div>
     )
   }
@@ -1000,7 +1164,7 @@ export default function SettingsPage() {
             icon={<LogOut className="h-[18px] w-[18px]" />}
             title="退出登录"
             caption="退出后可随时重新登录，继续管理你的书架和草稿"
-            onClick={() => void handleLogout()}
+            onClick={() => setLogoutConfirmOpen(true)}
             danger
           />
         </div>
@@ -1008,6 +1172,23 @@ export default function SettingsPage() {
 
       {/* 分组六：关于（仅 APP 壳内） */}
       {aboutSection}
+
+      {/* 分组七：客户端安装（仅手机浏览器） */}
+      {clientSection}
+
+      {clientDialog}
+
+      {/* 退出登录二次确认弹窗 */}
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="确认要退出登录吗？"
+        description="退出后可随时重新登录，继续管理你的书架和草稿。"
+        confirmLabel="退出登录"
+        tone="danger"
+        busy={logoutSubmitting}
+        onConfirm={() => void handleLogout()}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
 
       {/* 封面裁剪弹窗：选完文件后进入，确认才真正上传 */}
       <ImageCropperDialog

@@ -1,7 +1,9 @@
-/** 阅读器显示设置：字号 4 档 + 背景色 4 模式 + 听书偏好，localStorage 持久化 */
+/** 阅读器显示设置：字号 4 档 + 背景色 4 模式 + 翻页模式 + 听书偏好，localStorage 持久化 */
 
 export type ReaderFontScale = 'compact' | 'comfortable' | 'relaxed' | 'large'
 export type ReaderTone = 'paper' | 'mist' | 'green' | 'night'
+/** 手机端翻页模式：仿真翻书 / 覆盖滑动 / 上下滚动（逃生门，方案 20 §2.2） */
+export type ReaderPageTurnMode = 'simulate' | 'cover' | 'scroll'
 
 export type FontScaleOption = {
   id: ReaderFontScale
@@ -10,12 +12,25 @@ export type FontScaleOption = {
   lineHeight: number
 }
 
-/** 字号与行距绑定档位（方案 5.3.4） */
+/** 字号与行距绑定档位（方案 20 §2.5：整体上调让默认阅读更轻松，id 不变老用户不跳档） */
 export const fontScaleOptions: FontScaleOption[] = [
-  { id: 'compact', label: '紧凑', fontSize: 16, lineHeight: 1.9 },
-  { id: 'comfortable', label: '舒适', fontSize: 17, lineHeight: 2.1 },
-  { id: 'relaxed', label: '宽松', fontSize: 18, lineHeight: 2.3 },
-  { id: 'large', label: '特大', fontSize: 20, lineHeight: 2.5 },
+  { id: 'compact', label: '紧凑', fontSize: 17, lineHeight: 1.8 },
+  { id: 'comfortable', label: '舒适', fontSize: 19, lineHeight: 1.9 },
+  { id: 'relaxed', label: '宽松', fontSize: 21, lineHeight: 2 },
+  { id: 'large', label: '特大', fontSize: 23, lineHeight: 2 },
+]
+
+export type PageTurnModeOption = {
+  id: ReaderPageTurnMode
+  label: string
+  description: string
+}
+
+/** 翻页模式档位（仅手机端分页阅读使用） */
+export const pageTurnModeOptions: PageTurnModeOption[] = [
+  { id: 'simulate', label: '仿真', description: '真实翻书效果' },
+  { id: 'cover', label: '覆盖', description: '新页滑入覆盖' },
+  { id: 'scroll', label: '上下滑动', description: '传统滚动阅读' },
 ]
 
 export type ToneOption = {
@@ -23,6 +38,8 @@ export type ToneOption = {
   label: string
   background: string
   text: string
+  /** 章节标题等强调元素的颜色：跟随底色而非全局主题（全局深色 + 浅色底时 --color-brand 会翻成浅蓝，看不清） */
+  accent: string
   /** 设置面板中的色板预览色 */
   swatch: string
 }
@@ -34,6 +51,7 @@ export const toneOptions: ToneOption[] = [
     label: '纸感',
     background: 'var(--reader-bg-paper)',
     text: 'var(--reader-text-paper)',
+    accent: '#28435f',
     swatch: '#f8f4eb',
   },
   {
@@ -41,6 +59,7 @@ export const toneOptions: ToneOption[] = [
     label: '浅灰',
     background: 'var(--reader-bg-mist)',
     text: 'var(--reader-text-mist)',
+    accent: '#28435f',
     swatch: '#f5f5f5',
   },
   {
@@ -48,6 +67,7 @@ export const toneOptions: ToneOption[] = [
     label: '护眼',
     background: 'var(--reader-bg-green)',
     text: 'var(--reader-text-green)',
+    accent: '#2c5241',
     swatch: '#e8f0e8',
   },
   {
@@ -55,6 +75,7 @@ export const toneOptions: ToneOption[] = [
     label: '夜读',
     background: 'var(--reader-bg-night)',
     text: 'var(--reader-text-night)',
+    accent: '#c9d6e6',
     swatch: '#111318',
   },
 ]
@@ -67,6 +88,8 @@ export const ttsRateOptions = [0.75, 1, 1.25, 1.5, 2, 3] as const
 type PersistedSettings = {
   fontScale?: ReaderFontScale
   tone?: ReaderTone
+  /** 手机端翻页模式，默认仿真翻书 */
+  pageTurnMode?: ReaderPageTurnMode
   /** 选择底色时的全局主题模式：显式选择只在同主题下生效，切主题后回到跟随默认 */
   toneTheme?: 'light' | 'dark'
   /** 听书音色 id，空串 = 跟随服务端默认音色 */
@@ -79,6 +102,7 @@ const FALLBACK: LoadedReaderSettings = {
   fontScale: 'comfortable',
   tone: null,
   toneTheme: null,
+  pageTurnMode: 'simulate',
   ttsVoice: '',
   ttsRate: 1,
   ttsAutoNext: true,
@@ -116,6 +140,9 @@ export function loadReaderSettings(): LoadedReaderSettings {
         : FALLBACK.fontScale,
       tone,
       toneTheme: tone === null ? null : toneTheme,
+      pageTurnMode: pageTurnModeOptions.some((option) => option.id === parsed.pageTurnMode)
+        ? (parsed.pageTurnMode as ReaderPageTurnMode)
+        : FALLBACK.pageTurnMode,
       ttsVoice: typeof parsed.ttsVoice === 'string' ? parsed.ttsVoice : FALLBACK.ttsVoice,
       ttsRate: ttsRateOptions.some((option) => option === parsed.ttsRate)
         ? (parsed.ttsRate as number)

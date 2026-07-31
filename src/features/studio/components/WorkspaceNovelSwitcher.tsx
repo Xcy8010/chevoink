@@ -11,6 +11,8 @@ type WorkspaceNovelSwitcherProps = {
   novels: Novel[]
   busy?: boolean
   loading?: boolean
+  /** 手机端工具条用：按钮占满容器宽度，作品名押左、箭头押右 */
+  fullWidth?: boolean
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
 }
@@ -25,6 +27,7 @@ export default function WorkspaceNovelSwitcher({
   novels,
   busy = false,
   loading = false,
+  fullWidth = false,
   onSelectNovel,
   onCreateNovel,
 }: WorkspaceNovelSwitcherProps) {
@@ -47,21 +50,26 @@ export default function WorkspaceNovelSwitcher({
   }, [open])
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className={cn('relative min-w-0', fullWidth && 'w-full')}>
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-strong)]"
+        className={cn(
+          'inline-flex h-10 min-w-0 max-w-full items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-strong)]',
+          fullWidth && 'w-full',
+        )}
       >
-        <BookOpen className="h-4 w-4 text-[var(--text-secondary)]" />
-        <span className="max-w-[15rem] truncate">{currentNovelTitle}</span>
-        <ChevronDown className={cn('h-4 w-4 text-[var(--text-secondary)] transition', open && 'rotate-180')} />
+        <BookOpen className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+        <span className={cn('min-w-0 truncate', fullWidth ? 'flex-1 text-left' : 'max-w-[15rem]')}>{currentNovelTitle}</span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-[var(--text-secondary)] transition', open && 'rotate-180')} />
       </button>
 
       {open ? (
-        <div className="absolute left-0 top-full z-30 mt-2 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[0_20px_48px_rgba(15,23,42,0.16)]">
+        /* 面板锚在按钮左边缘，按钮外侧还有壳层水平留白，宽度上限需同时扣掉左右两侧留白，
+           否则窄屏机型上面板右侧会被壳层主区 overflow-hidden 裁掉 */
+        <div className="absolute left-0 top-full z-30 mt-2 w-[20rem] max-w-[calc(100vw-3rem)] overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[0_20px_48px_rgba(15,23,42,0.16)]">
           <div className="flex items-center justify-between gap-3 px-2 py-2">
-            <div>
+            <div className="min-w-0">
               <p className="text-xs tracking-[0.08em] text-[var(--text-secondary)]">我的作品</p>
               <p className="text-sm text-[var(--text-secondary)]">切换到你创建的其他作品，Agent 记录会一起恢复。</p>
             </div>
@@ -76,10 +84,10 @@ export default function WorkspaceNovelSwitcher({
             disabled={busy}
             className="flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left transition hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-[12px] bg-[var(--surface-muted)] text-[var(--text-primary)]">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[var(--surface-muted)] text-[var(--text-primary)]">
               <Plus className="h-4 w-4" />
             </span>
-            <span>
+            <span className="min-w-0">
               <span className="block text-sm font-medium text-[var(--text-primary)]">新建作品</span>
               <span className="block text-xs text-[var(--text-secondary)]">立即创建一部新的作品并进入创作台</span>
             </span>
@@ -105,7 +113,7 @@ export default function WorkspaceNovelSwitcher({
                     isActive ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]' : 'hover:bg-[var(--surface-muted)]',
                   )}
                 >
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-[12px] bg-[var(--surface-muted)] text-sm font-semibold text-[var(--text-primary)]">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[var(--surface-muted)] text-sm font-semibold text-[var(--text-primary)]">
                     {title.slice(0, 1)}
                   </span>
                   <span className="min-w-0 flex-1">

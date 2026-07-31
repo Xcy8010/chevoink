@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 
 import type {
+  SaveParagraphUnderlineRequest,
   SaveReadingProgressRequest,
   UpdateMyAvatarRequest,
   UpdateMyCoverRequest,
@@ -19,6 +20,7 @@ import {
   listInteractionsData,
   listFavoriteNovelsData,
   listReadingProgressData,
+  listParagraphUnderlinesData,
   listUserFollowersData,
   listUserFollowingData,
   listUserLikedPostsData,
@@ -27,7 +29,9 @@ import {
   listReceivedLikesData,
   markInteractionSeenData,
   removeReadingProgressData,
+  removeParagraphUnderlineData,
   saveReadingProgressData,
+  saveParagraphUnderlineData,
   setUserFollowData,
   updateMyAvatarData,
   updateMyPasswordData,
@@ -309,6 +313,78 @@ router.delete('/me/reading-progress/:novelId', async (req: Request, res: Respons
   try {
     const userId = requireSessionUserId(req)
     const removed = await removeReadingProgressData(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { removed }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 阅读器段落划线（方案 20 §2.7）：本章列表 / 幂等新增 / 取消
+router.get('/me/underlines', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const chapterId = String(req.query.chapterId ?? '').trim()
+    if (!chapterId) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '缺少章节信息。'))
+      return
+    }
+
+    const paragraphIndexes = await listParagraphUnderlinesData(userId, chapterId)
+    res.status(200).json(buildSuccess(requestId, { paragraphIndexes }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.put('/me/underlines', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as Partial<SaveParagraphUnderlineRequest>
+
+  try {
+    const userId = requireSessionUserId(req)
+
+    if (
+      !body.novelId?.trim() ||
+      !body.chapterId?.trim() ||
+      typeof body.paragraphIndex !== 'number' ||
+      !Number.isInteger(body.paragraphIndex) ||
+      body.paragraphIndex < 0
+    ) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '划线参数不完整。'))
+      return
+    }
+
+    const saved = await saveParagraphUnderlineData(userId, {
+      novelId: body.novelId,
+      chapterId: body.chapterId,
+      paragraphIndex: body.paragraphIndex,
+    })
+    if (!saved) {
+      res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, { saved }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/me/underlines', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const chapterId = String(req.query.chapterId ?? '').trim()
+    const paragraphIndex = Number(req.query.paragraphIndex)
+    if (!chapterId || !Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '划线参数不完整。'))
+      return
+    }
+
+    const removed = await removeParagraphUnderlineData(userId, chapterId, paragraphIndex)
     res.status(200).json(buildSuccess(requestId, { removed }))
   } catch (error) {
     sendRouteError(res, requestId, error)

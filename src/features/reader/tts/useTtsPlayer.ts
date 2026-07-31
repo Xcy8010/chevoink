@@ -31,6 +31,23 @@ const SILENT_WAV =
 /** 手动滚动后暂停自动跟随的时长 */
 const USER_SCROLL_HOLD_MS = 5000
 
+/** 等音频元信息就绪（拿到 duration 才能 seek），超时即放弃 seek 从批首播 */
+function waitForMetadata(audio: HTMLAudioElement): Promise<void> {
+  if (audio.readyState >= 1) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let timer = 0
+    const done = () => {
+      window.clearTimeout(timer)
+      audio.removeEventListener('loadedmetadata', done)
+      audio.removeEventListener('error', done)
+      resolve()
+    }
+    timer = window.setTimeout(done, 3000)
+    audio.addEventListener('loadedmetadata', done)
+    audio.addEventListener('error', done)
+  })
+}
+
 /**
  * 听书播放引擎（方案 17-4.2）：
  * - 批次队列 + objectURL 预取下一批，批间隙感知 <100ms
@@ -93,6 +110,8 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const blobUrlsRef = useRef(new Map<string, string>())
   const fetchingRef = useRef(new Map<string, Promise<string>>())
   const pendingResumeRef = useRef(false)
+  /** 当前朗读段落内的字符位置（近似，按批内字数占比折算） */
+  const charOffsetRef = useRef(0)
   const userScrollUntilRef = useRef(0)
   const programmaticScrollUntilRef = useRef(0)
   const stateRef = useRef({
@@ -165,15 +184,20 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     return audioRef.current
   }, [])
 
-  /** 播放指定批次（核心推进函数） */
+  /**
+   * 播放指定批次（核心推进函数）。
+   * 传 seekParagraph 时按段落在批内的字数占比跳到对应时间点（与 handleTimeUpdate 的映射同源），
+   * 避免「从本段听」/听书入口被拉回批首（一批可能横跨好几页）。
+   */
   const playBatch = useCallback(
-    async (batchIndex: number) => {
+    async (batchIndex: number, seekParagraph?: number) => {
       const session = sessionRef.current
       const audio = getAudio()
 
       setCurrentBatchIndex(batchIndex)
       setErrorMessage(null)
       setStatus('loading')
+      charOffsetRef.current = 0
 
       try {
         const url = await getBatchAudio(batchIndex)
@@ -181,6 +205,25 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
 
         audio.src = url
         audio.playbackRate = stateRef.current.rate
+
+        const batch = stateRef.current.batches[batchIndex]
+        if (batch && typeof seekParagraph === 'number' && seekParagraph > batch.paragraphStart) {
+          setActiveParagraphIndex(seekParagraph)
+          await waitForMetadata(audio)
+          if (sessionRef.current !== session) return
+
+          const duration = audio.duration
+          if (duration && Number.isFinite(duration)) {
+            const { paragraphs: allParagraphs } = stateRef.current
+            let ratio = 0
+            for (let i = batch.paragraphStart; i < seekParagraph; i += 1) {
+              ratio += (allParagraphs[i]?.length ?? 0) / Math.max(1, batch.charCount)
+            }
+            const target = Math.min(Math.max(0, duration * ratio), Math.max(0, duration - 0.3))
+            if (target > 0.1) audio.currentTime = target
+          }
+        }
+
         await audio.play()
         if (sessionRef.current !== session) return
 
@@ -230,7 +273,11 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     setActiveParagraphIndex(null)
   }, [navigate])
 
-  /** timeupdate：按批内各段字数占比把播放进度映射为段落下标 */
+  /**
+   * timeupdate：按批内各段字数占比把播放进度映射为段落下标，
+   * 同时算出段内朗读到的字符位置（跨页段落靠它判断该停在哪一页）。
+   * 段内位置放 ref 不进 state：timeupdate 每秒 4 次，进 state 会让整个阅读器跟着重渲染。
+   */
   const handleTimeUpdate = useCallback(() => {
     const audio = audioRef.current
     const { batches: allBatches, paragraphs: allParagraphs, currentBatchIndex: index, status: currentStatus } =
@@ -245,9 +292,15 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     let target = batch.paragraphStart
 
     for (let i = batch.paragraphStart; i <= batch.paragraphEnd; i += 1) {
-      cumulative += (allParagraphs[i]?.length ?? 0) / Math.max(1, batch.charCount)
+      const length = allParagraphs[i]?.length ?? 0
+      const share = length / Math.max(1, batch.charCount)
       target = i
-      if (progress < cumulative) break
+      if (progress < cumulative + share || i === batch.paragraphEnd) {
+        const within = share > 0 ? (progress - cumulative) / share : 0
+        charOffsetRef.current = Math.min(length, Math.max(0, Math.round(within * length)))
+        break
+      }
+      cumulative += share
     }
 
     setActiveParagraphIndex((previous) => (previous === target ? previous : target))
@@ -268,7 +321,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     }
   }, [getAudio, handleBatchEnded, handleTimeUpdate])
 
-  /** 从阅读视口内第一个可见段落所在批次开始播放（听书入口点击） */
+  /** 从阅读视口内第一个可见段落开始播放（听书入口点击） */
   const start = useCallback(() => {
     const audio = getAudio()
 
@@ -283,6 +336,8 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     if (allBatches.length === 0) return
 
     let startBatch = 0
+    // 没读过（滚动条在顶部）时取不到可见段落，就从开头第一段读起
+    let startParagraph = 0
     const container = contentScrollRef.current
     if (container) {
       const containerTop = container.getBoundingClientRect().top
@@ -293,15 +348,43 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
           const matched = allBatches.find(
             (batch) => paragraphIndex >= batch.paragraphStart && paragraphIndex <= batch.paragraphEnd,
           )
-          if (matched) startBatch = matched.index
+          if (matched) {
+            startBatch = matched.index
+            startParagraph = paragraphIndex
+          }
           break
         }
       }
     }
 
     sessionRef.current += 1
-    void playBatchRef.current(startBatch)
+    void playBatchRef.current(startBatch, startParagraph)
   }, [contentScrollRef, getAudio])
+
+  /** 从指定段落开始播放（分页模式听书入口 / 长按「从本段听」） */
+  const startFromParagraph = useCallback(
+    (paragraphIndex: number) => {
+      const audio = getAudio()
+
+      // iOS：首次 play 必须发生在用户手势调用栈内
+      if (!unlockedRef.current) {
+        audio.src = SILENT_WAV
+        void audio.play().catch(() => undefined)
+        unlockedRef.current = true
+      }
+
+      const { batches: allBatches } = stateRef.current
+      if (allBatches.length === 0) return
+
+      const matched = allBatches.find(
+        (batch) => paragraphIndex >= batch.paragraphStart && paragraphIndex <= batch.paragraphEnd,
+      )
+
+      sessionRef.current += 1
+      void playBatchRef.current(matched ? matched.index : 0, matched ? paragraphIndex : 0)
+    },
+    [getAudio],
+  )
 
   const pause = useCallback(() => {
     audioRef.current?.pause()
@@ -532,6 +615,8 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     currentBatchIndex,
     totalBatches: batches.length,
     activeParagraphIndex,
+    /** 当前朗读段落内的字符位置（跨页段落判定当前页用；读 ref，不参与渲染） */
+    getActiveCharOffset: () => charOffsetRef.current,
     rate,
     autoNext,
     timerOption,
@@ -540,6 +625,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     hasPrevBatch: currentBatchIndex > 0,
     hasNextBatch: currentBatchIndex + 1 < batches.length,
     start,
+    startFromParagraph,
     toggle,
     pause,
     resume,

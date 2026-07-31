@@ -119,28 +119,34 @@ export function SaveStatusPill({
   message,
   onRetry,
   compact = false,
+  shortMessage,
+  onPress,
 }: {
   state: SaveState
   message: string
   onRetry?: () => void
   compact?: boolean
+  /** 窄屏下只展示的短文案（如「已自动保存」），完整信息交给 onPress */
+  shortMessage?: string
+  /** 点击胶囊时回调（例如用 toast 展示完整保存时间） */
+  onPress?: () => void
 }) {
   const icon =
     state === 'saving' ? (
-      <LoaderCircle className="h-4 w-4 animate-spin" />
+      <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
     ) : state === 'saved' ? (
-      <Check className="h-4 w-4" />
+      <Check className="h-4 w-4 shrink-0" />
     ) : state === 'error' ? (
-      <RefreshCcw className="h-4 w-4" />
+      <RefreshCcw className="h-4 w-4 shrink-0" />
     ) : (
-      <Clock3 className="h-4 w-4" />
+      <Clock3 className="h-4 w-4 shrink-0" />
     )
 
   const content = (
     <>
       {icon}
       <span className={cn('min-w-0 truncate', compact ? 'max-w-[8rem]' : 'max-w-[16rem] md:max-w-[22rem]')}>
-        {message}
+        {shortMessage ?? message}
       </span>
     </>
   )
@@ -151,15 +157,27 @@ export function SaveStatusPill({
         variant="ghost"
         size="sm"
         onClick={onRetry}
-        className="inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 text-xs text-[var(--text-secondary)]"
+        className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 text-xs text-[var(--text-secondary)]"
       >
         {content}
       </Button>
     )
   }
 
+  if (onPress) {
+    return (
+      <button
+        type="button"
+        onClick={onPress}
+        className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors active:bg-[var(--surface-muted)]"
+      >
+        {content}
+      </button>
+    )
+  }
+
   return (
-    <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+    <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]">
       {content}
     </div>
   )
