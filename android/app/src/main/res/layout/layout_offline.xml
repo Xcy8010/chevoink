@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 断网兜底离线页（番茄式）：品牌纸色底 + 插画 + 文案 + 重试按钮 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/offlineRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/splashBackground"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="32dp">
+
+    <ImageView
+        android:id="@+id/offlineArt"
+        android:layout_width="180dp"
+        android:layout_height="180dp"
+        android:contentDescription="@string/offline_image_desc"
+        android:src="@drawable/ic_offline" />
+
+    <TextView
+        android:id="@+id/offlineTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/offline_title"
+        android:textColor="#3D362E"
+        android:textSize="16sp" />
+
+    <TextView
+        android:id="@+id/offlineHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/offline_hint"
+        android:textColor="#8A8177"
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/offlineRetry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:minWidth="140dp"
+        android:paddingStart="32dp"
+        android:paddingEnd="32dp"
+        android:backgroundTint="#3D362E"
+        android:text="@string/offline_retry"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp" />
+</LinearLayout>

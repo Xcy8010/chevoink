@@ -1,6 +1,6 @@
 apply plugin: 'com.android.application'
 
-// release 签名参数从 gitignore 的 keystore.properties 读取（密码/密钥绝不入库）
+// release signing config is read from gitignored keystore.properties (secrets never committed)
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
@@ -14,8 +14,8 @@ android {
         applicationId "com.chevoink.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
-        versionName "1.0.3"
+        versionCode 6
+        versionName "1.0.5"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -35,7 +35,7 @@ android {
     }
     buildTypes {
         release {
-            // 有 keystore.properties 时用 release 签名，否则回退 debug 签名（保证无密钥也能构建）
+            // fall back to debug signing when keystore.properties is absent so the build never blocks
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

@@ -4,4 +4,8 @@
     <string name="title_activity_main">启创墨域</string>
     <string name="package_name">com.chevoink.app</string>
     <string name="custom_url_scheme">com.chevoink.app</string>
+    <string name="offline_title">网络连接失败</string>
+    <string name="offline_hint">请检查网络设置，恢复后将自动加载</string>
+    <string name="offline_retry">重新加载</string>
+    <string name="offline_image_desc">离线插画</string>
 </resources>

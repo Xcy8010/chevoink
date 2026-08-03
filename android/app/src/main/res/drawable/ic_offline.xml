@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 离线插画：断开的 Wi-Fi（纸色底上的墨线风） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- 外圈 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#3D362E"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M20,42 A38,38 0 0,1 76,42" />
+    <!-- 中圈 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#3D362E"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M31,54 A24,24 0 0,1 65,54" />
+    <!-- 内圈 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#3D362E"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M41,65 A11,11 0 0,1 55,65" />
+    <!-- 圆点 -->
+    <path
+        android:fillColor="#3D362E"
+        android:pathData="M48,72 m-3.2,0 a3.2,3.2 0 1,1 6.4,0 a3.2,3.2 0 1,1 -6.4,0" />
+    <!-- 斜杠（断开） -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#B4552D"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:pathData="M26,74 L70,30" />
+</vector>
