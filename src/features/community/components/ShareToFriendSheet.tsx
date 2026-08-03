@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, LoaderCircle, X } from 'lucide-react'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/Toast'
 import { createDirectConversation, listUserFollowers, sendMessage } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { cn } from '@/lib/utils'
+import type { Conversation, Message } from '../../../../shared/contracts/index.js'
 
 /** 发给好友的消息载荷：作品/帖子/作者/评论都走专属卡片消息 */
 export type FriendShareMessage = {
@@ -26,6 +27,7 @@ type ShareToFriendSheetProps = {
  */
 export default function ShareToFriendSheet({ message, onClose }: ShareToFriendSheetProps) {
   const toast = useToast()
+  const queryClient = useQueryClient()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isSending, setIsSending] = useState(false)
 
@@ -61,15 +63,45 @@ export default function ShareToFriendSheet({ message, onClose }: ShareToFriendSh
     for (const friendId of selectedIds) {
       try {
         const conversation = await createDirectConversation(friendId)
-        await sendMessage(String(conversation.id), {
+        const conversationId = String(conversation.id)
+        const sent = await sendMessage(conversationId, {
           type: message.type,
           content: message.content,
           ...(message.relatedId ? { relatedId: message.relatedId } : {}),
         })
         successCount += 1
+        // 与私聊页发消息成功后的处理保持一致：把新消息立即写进该会话的消息缓存，
+        // 并同步会话列表的最后消息预览；否则跳回私聊界面时要等 15s 轮询才能看到刚分享的卡片
+        queryClient.setQueryData<{ conversation: Conversation | null; items: Message[] } | undefined>(
+          ['community', 'messages', conversationId],
+          (current) => {
+            if (!current) return current
+            return { ...current, items: [...current.items, sent] }
+          },
+        )
+        queryClient.setQueryData<{ items: Conversation[] } | undefined>(
+          ['community', 'conversations'],
+          (current) => {
+            if (!current) return current
+            return {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === conversationId
+                  ? { ...item, lastMessagePreview: sent.content, lastMessageAt: sent.createdAt }
+                  : item,
+              ),
+            }
+          },
+        )
+        // 兜底失效：新建的会话不在列表缓存里、或消息缓存尚未建立时，重新进入会话页会即时重拉
+        void queryClient.invalidateQueries({ queryKey: ['community', 'messages', conversationId] })
       } catch {
         failedCount += 1
       }
+    }
+
+    if (successCount > 0) {
+      void queryClient.invalidateQueries({ queryKey: ['community', 'conversations'] })
     }
 
     setIsSending(false)

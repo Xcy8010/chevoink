@@ -142,7 +142,7 @@ export default function ReaderCoverPage({
                 </span>
               ) : null}
               <span>{numberFormatter.format(novel.wordCount)} 字</span>
-              <span>{novel.status === 'archived' ? '已完结' : '连载中'}</span>
+              <span>{novel.status === 'completed' ? '已完结' : novel.status === 'archived' ? '已下架' : '连载中'}</span>
             </p>
           ) : null}
         </div>

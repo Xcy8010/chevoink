@@ -246,6 +246,31 @@ function appendDelta(
   return [...parts, { type, text: delta }]
 }
 
+/** 任务停止/结束后把仍处于「执行中」的工具卡片就地收尾：
+ * 被中止的工具永远收不到 tool.result 事件，不收尾会导致卡片无限转圈 */
+function settleRunningToolParts(messages: AgentUIMessage[], summary: string): AgentUIMessage[] {
+  return messages.map((message) => {
+    if (!message.parts.some((part) => part.type === 'tool-call' && part.status === 'running')) {
+      return message
+    }
+    return {
+      ...message,
+      parts: message.parts.map((part) =>
+        part.type === 'tool-call' && part.status === 'running'
+          ? { ...part, status: 'failed' as const, summary }
+          : part,
+      ),
+    }
+  })
+}
+
+/** 同步收尾变更区里还在转圈的写入活动 */
+function settleRunningActivities(activities: WorkspaceActivity[]): WorkspaceActivity[] {
+  return activities.map((activity) =>
+    activity.status === 'running' ? { ...activity, status: 'failed' as const } : activity,
+  )
+}
+
 export const useAgentStore = create<AgentStoreState>((set) => ({
   runId: null,
   phase: 'idle',
@@ -278,9 +303,11 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
-      // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空
+      // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空；
+      // 上一个任务若被停止后遗留了「执行中」的工具卡片（终态事件丢失时），开新任务前一并收尾
+      workspaceActivities: settleRunningActivities(state.workspaceActivities),
       messages: [
-        ...state.messages,
+        ...settleRunningToolParts(state.messages, '已停止'),
         {
           id: `local-${Date.now()}`,
           runId,
@@ -522,7 +549,15 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           }
 
         case 'run.paused':
-          return { ...base, phase: 'paused', pendingApproval: null, pendingQuestion: null }
+          // 停止时正在执行的工具永远等不到 tool.result，就地收尾避免卡片一直「执行中」
+          return {
+            ...base,
+            phase: 'paused',
+            pendingApproval: null,
+            pendingQuestion: null,
+            messages: settleRunningToolParts(state.messages, '已停止'),
+            workspaceActivities: settleRunningActivities(state.workspaceActivities),
+          }
 
         case 'run.finished':
           return {
@@ -532,13 +567,21 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             outputSummary: event.outputSummary,
             pendingApproval: null,
             pendingQuestion: null,
+            messages: settleRunningToolParts(state.messages, '已中断'),
+            workspaceActivities: settleRunningActivities(state.workspaceActivities),
           }
 
         case 'error':
           return {
             ...base,
             errorMessage: event.message,
-            ...(event.recoverable ? {} : { phase: 'failed' as const }),
+            ...(event.recoverable
+              ? {}
+              : {
+                  phase: 'failed' as const,
+                  messages: settleRunningToolParts(state.messages, '已中断'),
+                  workspaceActivities: settleRunningActivities(state.workspaceActivities),
+                }),
           }
 
         default:

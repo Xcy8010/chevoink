@@ -100,10 +100,8 @@ export function useHomeData() {
       : [...all]
           .sort((left, right) => new Date(right.lastPublishedAt ?? right.updatedAt).getTime() - new Date(left.lastPublishedAt ?? left.updatedAt).getTime())
           .slice(0, 10)
-    const finished = all.filter((novel) => novel.status === 'archived')
-    const rankingFinished = serverFinished.length > 0
-      ? serverFinished.slice(0, 10)
-      : (finished.length > 0 ? finished : [...all].sort((left, right) => right.wordCount - left.wordCount)).slice(0, 10)
+    const finished = all.filter((novel) => novel.status === 'completed')
+    const rankingFinished = serverFinished.length > 0 ? serverFinished.slice(0, 10) : finished.slice(0, 10)
 
     // 分类频道：统一标签体系全量覆盖，与作品设置可选标签保持一致
     const categories = FALLBACK_CATEGORIES

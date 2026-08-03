@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, FilePlus2, FileText, FolderTree, NotebookText, ScrollText, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FilePlus2, FileText, FolderTree, NotebookPen, NotebookText, ScrollText, Settings2 } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
@@ -37,9 +37,13 @@ type ChapterSidebarProps = {
   activeCoverLabel: string
   onSelectChapter: (chapterId: string) => void
   onSelectPlan: (planId: string) => void
-  onDeletePlan: (planId: string) => void
   onSelectCatalog: () => void
   onCreateChapter: () => void
+  onCreatePlan: () => void
+  /** 打开章节设置抽屉（会先切到该章） */
+  onOpenChapterSettings: (chapterId: string) => void
+  /** 打开计划设置抽屉（改名 / 删除） */
+  onOpenPlanSettings: (planId: string) => void
   embedded?: boolean
 }
 
@@ -52,9 +56,11 @@ export default function ChapterSidebar({
   chapterCountLabel,
   novelTitle,
   onCreateChapter,
+  onCreatePlan,
+  onOpenChapterSettings,
+  onOpenPlanSettings,
   onSelectCatalog,
   onSelectPlan,
-  onDeletePlan,
   onSelectChapter,
   embedded = false,
 }: ChapterSidebarProps) {
@@ -70,15 +76,22 @@ export default function ChapterSidebar({
           : 'rounded-[var(--radius-lg)] border border-[var(--border-subtle)] p-3 pb-4 shadow-[var(--shadow-soft)]',
       )}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-1 pb-3">
+      <div className="border-b border-[var(--border-subtle)] px-1 pb-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-[var(--text-primary)]">作品树</p>
           <span className="text-xs text-[var(--text-tertiary)]">{chapterCountLabel}</span>
         </div>
-        <Button onClick={onCreateChapter} variant="ghost" size="sm">
-          <FilePlus2 className="h-4 w-4" />
-          新建章节
-        </Button>
+        {/* 侧栏宽度有限，两个新建入口平分一行 */}
+        <div className="mt-2 flex items-center gap-1.5">
+          <Button onClick={onCreateChapter} variant="ghost" size="sm" className="flex-1 justify-center px-2">
+            <FilePlus2 className="h-4 w-4" />
+            新建章节
+          </Button>
+          <Button onClick={onCreatePlan} variant="ghost" size="sm" className="flex-1 justify-center px-2">
+            <NotebookPen className="h-4 w-4" />
+            新建计划
+          </Button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-3 pb-2">
@@ -155,23 +168,24 @@ export default function ChapterSidebar({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onDeletePlan(plan.id)}
+                          onClick={() => onOpenPlanSettings(plan.id)}
                           className={cn(
-                            'mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition',
+                            'mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)]',
+                            // 手机端无 hover，小屏常驻显示；桌面端仅选中或悬停时显示
                             selectedTreeItemId === `plan:${plan.id}`
-                              ? 'opacity-100 hover:bg-[var(--surface-default)] hover:text-[var(--danger-500)]'
-                              : 'opacity-0 hover:bg-[var(--surface-default)] hover:text-[var(--danger-500)] group-hover:opacity-100',
+                              ? 'opacity-100'
+                              : 'opacity-100 md:opacity-0 md:group-hover:opacity-100',
                           )}
-                          aria-label="删除这份计划"
-                          title="删除这份计划"
+                          aria-label="计划设置"
+                          title="计划设置"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Settings2 className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     ))
                   ) : (
                     <div className="px-2 py-2 text-xs leading-6 text-[var(--text-tertiary)]">
-                      当前作品还没存入计划，使用规划模式即可让 Agent 制定计划。
+                      当前作品还没存入计划，点上方「新建计划」自己写，或用规划模式让 Agent 制定。
                     </div>
                   )}
                 </div>
@@ -192,24 +206,51 @@ export default function ChapterSidebar({
 
               {chapterFolderExpanded ? (
                 <div className="ml-4 border-l border-[var(--border-subtle)] pl-2">
-                  {chapters.map((chapter) => (
-                    <button
-                      key={chapter.id}
-                      type="button"
-                      onClick={() => onSelectChapter(chapter.id)}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm transition',
-                        selectedTreeItemId === `chapter:${chapter.id}` || (!selectedTreeItemId && selectedChapterId === chapter.id)
-                          ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
-                      )}
-                    >
-                      <FileText className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
-                      <span className="truncate">
-                        {formatChapterTreeLabel(chapter)}
-                      </span>
-                    </button>
-                  ))}
+                  {chapters.map((chapter) => {
+                    const chapterActive =
+                      selectedTreeItemId === `chapter:${chapter.id}` ||
+                      (!selectedTreeItemId && selectedChapterId === chapter.id)
+
+                    return (
+                      <div
+                        key={chapter.id}
+                        className={cn(
+                          'group flex items-center gap-1 rounded-[10px] transition',
+                          chapterActive ? 'bg-[var(--surface-muted)]' : 'hover:bg-[var(--surface-muted)]',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onSelectChapter(chapter.id)}
+                          className={cn(
+                            'flex min-w-0 flex-1 items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm transition',
+                            chapterActive
+                              ? 'text-[var(--text-primary)]'
+                              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                          )}
+                        >
+                          <FileText className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+                          <span className="truncate">
+                            {formatChapterTreeLabel(chapter)}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenChapterSettings(chapter.id)}
+                          className={cn(
+                            'mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)]',
+                            chapterActive
+                              ? 'opacity-100'
+                              : 'opacity-100 md:opacity-0 md:group-hover:opacity-100',
+                          )}
+                          aria-label="章节设置"
+                          title="章节设置"
+                        >
+                          <Settings2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               ) : null}
             </div>

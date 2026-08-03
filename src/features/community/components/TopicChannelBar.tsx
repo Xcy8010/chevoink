@@ -56,7 +56,10 @@ export default function TopicChannelBar({
   }
 
   return (
-    <nav className="rail-scroll -mx-4 flex gap-1 overflow-x-auto px-4" aria-label="话题频道">
+    // 首尾用透明 spacer 占位而不是父级 px：横滑容器里 padding 起点会随内容一起滚动，
+    // 会把首个标签顶出可视区左侧（「全部」被截一半的根因）；spacer 随内容排布，首项永远完整
+    <nav className="rail-scroll -mx-4 flex gap-1 overflow-x-auto" aria-label="话题频道">
+      <span aria-hidden className="w-4 shrink-0" />
       {topics.map((topic) => {
         const isActive = topic.id === activeTopicId
         return (
@@ -82,6 +85,7 @@ export default function TopicChannelBar({
           </button>
         )
       })}
+      <span aria-hidden className="w-4 shrink-0" />
     </nav>
   )
 }

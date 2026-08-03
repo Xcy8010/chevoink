@@ -21,6 +21,7 @@ import { requireSessionUserId } from '../lib/auth-session.js'
 import { stopActiveRunsInSession } from '../lib/agent/loop.js'
 import {
   continueLoopRun,
+  createNovelPlanArtifact,
   deleteLoopSessionMessage,
   getRunEngine,
   listLoopSessionMessages,
@@ -371,6 +372,30 @@ router.get('/plans', async (req: Request, res: Response): Promise<void> => {
 
     const payload = await listNovelPlanArtifacts(userId, novelId)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 计划文件夹：作者手工新建一份空白计划
+router.post('/plans', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  const body = (req.body ?? {}) as { novelId?: unknown; title?: unknown }
+
+  try {
+    const userId = requireSessionUserId(req)
+    const novelId = typeof body.novelId === 'string' ? body.novelId.trim() : ''
+    if (!novelId) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID。'))
+      return
+    }
+
+    const payload = await createNovelPlanArtifact(
+      userId,
+      novelId,
+      typeof body.title === 'string' ? body.title : undefined,
+    )
+    res.status(201).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

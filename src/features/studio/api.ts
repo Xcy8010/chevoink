@@ -1376,6 +1376,18 @@ export async function listNovelPlanFiles(novelId: string): Promise<NovelPlanFile
   return data.items
 }
 
+/** 计划文件夹：手工新建一份空白计划 */
+export async function createNovelPlanFile(
+  novelId: string,
+  title?: string,
+): Promise<NovelPlanFileItem> {
+  const data = await requestData<{ item: NovelPlanFileItem }>('/api/agent/plans', {
+    method: 'POST',
+    body: JSON.stringify({ novelId, ...(title ? { title } : {}) }),
+  })
+  return data.item
+}
+
 /** 计划文件夹：同步改名/改正文，saved=false 从云端文件夹移除 */
 export async function updateNovelPlanFile(
   artifactId: string,

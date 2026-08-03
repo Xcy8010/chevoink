@@ -16,6 +16,7 @@ enum UserRole {
 enum NovelStatus {
   draft
   published
+  completed
   archived
 }
 

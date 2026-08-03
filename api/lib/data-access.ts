@@ -716,13 +716,16 @@ function buildCommentTargetIds(targetType: CommentTargetType, targetId: string) 
 }
 
 export async function listTopicsData(): Promise<{ items: TopicSummary[] }> {
+  // postCount 以 PostTopic 关联表实时计数为准：Topic.postCount 是发帖时 increment 的冗余列，
+  // 历史删帖/删话题不回写会漂移（话题栏「全部」与各频道数字对不上的根因）
   const items = await prisma.topic.findMany({
+    include: { _count: { select: { postLinks: true } } },
     orderBy: [{ postCount: 'desc' }, { name: 'asc' }],
     take: 12,
   })
 
   return {
-    items: items.map(toTopic),
+    items: items.map((item) => toTopic({ ...item, postCount: item._count.postLinks })),
   }
 }
 
@@ -808,7 +811,7 @@ async function buildHomePayload() {
         new Date(right.publishedAt ?? right.updatedAt).getTime() - new Date(left.publishedAt ?? left.updatedAt).getTime(),
     )
     .slice(0, 10)
-  const finished = cards.filter((novel) => novel.status === 'archived')
+  const finished = cards.filter((novel) => novel.status === 'completed')
   const rankingFinished = finished.sort((left, right) => totalScore(right) - totalScore(left)).slice(0, 10)
 
   const latestUpdated = [...cards]
@@ -898,7 +901,7 @@ export async function listNovelsData(
   }
   if (options?.publishedOnly) {
     where.visibility = 'public'
-    where.status = { in: ['published', 'archived'] }
+    where.status = { in: ['published', 'completed', 'archived'] }
     // 没有任何公开章节的作品不对外展示（例如发布后又全部改成仅自己可见）
     where.chapters = { some: publicChapterWhere }
   }
@@ -998,11 +1001,21 @@ export async function updateNovelData(
     return null
   }
 
+  const nextTitle = input.title === undefined ? undefined : ensureNonEmptyText(input.title, 'title')
+  const inputDisplayTitle = input.displayTitle === undefined ? undefined : input.displayTitle?.trim() || null
+  // 各展示端统一优先读 displayTitle（它兼作 title 被占位名回滚时的备份），改书名时若调用方
+  // 未显式给出新的展示名、或给出的仍是改名前的旧值，则让 displayTitle 跟随新书名，
+  // 否则首页/切换器等会继续显示旧 displayTitle
+  const nextDisplayTitle =
+    nextTitle !== undefined && (inputDisplayTitle === undefined || inputDisplayTitle === (existing.displayTitle ?? null))
+      ? nextTitle
+      : inputDisplayTitle
+
   const updated = await prisma.novel.update({
     where: { id: novelId },
     data: {
-      title: input.title === undefined ? undefined : ensureNonEmptyText(input.title, 'title'),
-      displayTitle: input.displayTitle === undefined ? undefined : input.displayTitle?.trim() || null,
+      title: nextTitle,
+      displayTitle: nextDisplayTitle,
       summary: input.summary === undefined ? undefined : ensureNonEmptyText(input.summary, 'summary'),
       categoryId: input.categoryId === undefined ? undefined : input.categoryId,
       tagNames: input.tags ?? undefined,
@@ -1405,8 +1418,12 @@ export async function createChapterData(
 ): Promise<Chapter | null> {
   await ensureNovelOwner(userId, novelId)
 
-  const count = await prisma.chapter.count({
+  // 用「最大编号+1」而不是「总数+1」：删过中间章节后总数会小于最大编号，
+  // 总数+1 会撞 novelId+orderIndex 唯一约束导致建章直接报错
+  const lastChapter = await prisma.chapter.findFirst({
     where: { novelId },
+    orderBy: { orderIndex: 'desc' },
+    select: { orderIndex: true },
   })
 
   const chapter = await prisma.$transaction(async (tx) => {
@@ -1417,7 +1434,7 @@ export async function createChapterData(
         title: ensureNonEmptyText(input.title, 'title'),
         summary: input.summary?.trim() || null,
         content: input.content,
-        orderIndex: count + 1,
+        orderIndex: (lastChapter?.orderIndex ?? 0) + 1,
         wordCount: input.content.length,
         status: input.status,
         visibility: input.visibility ?? defaultVisibility,
@@ -1491,6 +1508,26 @@ export async function updateChapterData(
   return toChapter(updated)
 }
 
+/** 删除章节后把剩余章节编号压缩为连续的 1..N，避免章节树出现「第1/第4/第5章」跳号。
+ * 按 orderIndex 升序逐个更新：目标编号恒 ≤ 当前编号且此前已被腾空，不会撞 novelId+orderIndex 唯一约束 */
+async function compactChapterOrder(tx: Prisma.TransactionClient, novelId: string) {
+  const chapters = await tx.chapter.findMany({
+    where: { novelId },
+    orderBy: { orderIndex: 'asc' },
+    select: { id: true, orderIndex: true },
+  })
+
+  for (let index = 0; index < chapters.length; index += 1) {
+    const expected = index + 1
+    if (chapters[index].orderIndex !== expected) {
+      await tx.chapter.update({
+        where: { id: chapters[index].id },
+        data: { orderIndex: expected },
+      })
+    }
+  }
+}
+
 export async function deleteChapterData(userId: string, novelId: string, chapterId: string): Promise<boolean> {
   await ensureNovelOwner(userId, novelId)
 
@@ -1506,6 +1543,7 @@ export async function deleteChapterData(userId: string, novelId: string, chapter
     await tx.chapter.delete({
       where: { id: chapterId },
     })
+    await compactChapterOrder(tx, novelId)
     await recalculateNovelStats(tx, novelId)
   })
 
@@ -2381,7 +2419,7 @@ const publicChapterWhere = {
  * 额外要求至少有一个公开章节，避免发布后又全部设为仅自己可见的空壳作品对外展示 */
 const searchableNovelWhere = {
   visibility: 'public',
-  status: { in: ['published', 'archived'] },
+  status: { in: ['published', 'completed', 'archived'] },
   chapters: { some: publicChapterWhere },
 } satisfies Prisma.NovelWhereInput
 
@@ -2664,14 +2702,11 @@ export async function createPostData(userId: string, input: CreatePostRequest): 
         data: topicIds.map((topicId) => ({ postId: created.id, topicId })),
         skipDuplicates: true,
       })
-      await tx.topic.updateMany({
-        where: { id: { in: topicIds } },
-        data: {
-          postCount: {
-            increment: 1,
-          },
-        },
-      })
+      // 计数按关联表实量回算（与 listTopicsData 的实时计数口径一致）
+      for (const topicId of topicIds) {
+        const linkedCount = await tx.postTopic.count({ where: { topicId } })
+        await tx.topic.updateMany({ where: { id: topicId }, data: { postCount: linkedCount } })
+      }
     }
 
     await tx.user.update({
@@ -2687,6 +2722,56 @@ export async function createPostData(userId: string, input: CreatePostRequest): 
   })
 
   return toPost(post)
+}
+
+/** 删除自己的帖子：连同评论/点赞/收藏/话题关联一并清理，计数回算 */
+export async function deletePostData(userId: string, postId: string): Promise<boolean | null> {
+  const existing = await prisma.post.findUnique({
+    where: { id: postId },
+    include: { topicLinks: true },
+  })
+  if (!existing) {
+    return null
+  }
+  if (existing.userId !== userId) {
+    throw new DataAccessError(403, 'FORBIDDEN', '只能删除自己的动态。')
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const commentIds = (
+      await tx.comment.findMany({
+        where: { targetType: 'post', targetId: postId },
+        select: { id: true },
+      })
+    ).map((item) => item.id)
+
+    if (commentIds.length > 0) {
+      await tx.commentLike.deleteMany({ where: { commentId: { in: commentIds } } })
+      await tx.comment.deleteMany({ where: { id: { in: commentIds } } })
+    }
+    await tx.postLike.deleteMany({ where: { postId } })
+    await tx.postBookmark.deleteMany({ where: { postId } })
+    await tx.postTopic.deleteMany({ where: { postId } })
+    await tx.post.delete({ where: { id: postId } })
+
+    // 话题计数回算（含主话题与多话题关联），避免 decrement 出现负数
+    const topicIds = new Set<string>()
+    if (existing.topicId) {
+      topicIds.add(existing.topicId)
+    }
+    for (const link of existing.topicLinks) {
+      topicIds.add(link.topicId)
+    }
+    for (const topicId of topicIds) {
+      const remaining = await tx.postTopic.count({ where: { topicId } })
+      await tx.topic.updateMany({ where: { id: topicId }, data: { postCount: remaining } })
+    }
+
+    const remainingPosts = await tx.post.count({ where: { userId } })
+    await tx.user.updateMany({ where: { id: userId }, data: { postCount: remainingPosts } })
+  })
+
+  return true
 }
 
 export async function getMePayloadData(userId: string): Promise<UserMePayload> {

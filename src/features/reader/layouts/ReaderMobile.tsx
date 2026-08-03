@@ -7,6 +7,7 @@ import {
   MessageSquare,
   Settings2,
 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
@@ -14,8 +15,10 @@ import { useNavigate } from 'react-router-dom'
 import BottomSheet from '@/components/layout/BottomSheet'
 import AuthPromptDialog from '@/components/ui/AuthPromptDialog'
 import { useToast } from '@/components/ui/Toast'
+import { splitReaderParagraphs } from '@/features/discover/api'
 import { addToShelf } from '@/features/home/local-shelf'
 import { pushShelfAdd } from '@/features/home/reading-sync'
+import type { ReaderPayload } from '../../../../shared/contracts/index.js'
 import {
   enterNativeImmersive,
   exitNativeImmersive,
@@ -34,14 +37,14 @@ import ReaderDirectory from '../components/ReaderDirectory'
 import ReaderProgressBar from '../components/ReaderProgressBar'
 import ReaderSettingsContent from '../components/ReaderSettingsContent'
 import ReaderPageChrome, { useReaderChromeStatus } from '../pager/ReaderPageChrome'
-import ReaderPagedView, { PAGE_PARAGRAPH_GAP } from '../pager/ReaderPagedView'
-import { findPageForParagraphChar, useChapterPaginator } from '../pager/useChapterPaginator'
-import { COVER_PAGE_INDEX, useReaderPager } from '../pager/useReaderPager'
+import ReaderPagedView, { PAGE_PARAGRAPH_GAP, type BoundaryPageData } from '../pager/ReaderPagedView'
+import { findPageForParagraphChar, getPaginationCache, paginateChapterAsync, useChapterPaginator } from '../pager/useChapterPaginator'
+import { useReaderPager } from '../pager/useReaderPager'
 import TtsControlSheet from '../tts/TtsControlSheet'
 import TtsMiniBar from '../tts/TtsMiniBar'
 import TtsPagedPill from '../tts/TtsPagedPill'
 import { useParagraphUnderlines } from '../useParagraphUnderlines'
-import type { ReaderState } from '../useReaderState'
+import { readerQueryKey, type ReaderState } from '../useReaderState'
 
 type ReaderMobileProps = {
   state: ReaderState
@@ -67,6 +70,13 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
   const [authPromptOpen, setAuthPromptOpen] = useState(false)
   const [selection, setSelection] = useState<ParagraphActionAnchor | null>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
+  // 章边界翻页的进场动画方向：新章页从翻页方向滑入，避免瞬切内容观感上卡一下。
+  // 换章意图先记在 ref（并绑定目标章节），等新章数据就绪由落点 effect 统一起动，
+  // 预取未命中时不拿旧章页做动画
+  const [chapterEnter, setChapterEnter] = useState<'next' | 'prev' | null>(null)
+  const pendingEnterRef = useRef<{ targetId: string; direction: 'next' | 'prev' } | null>(null)
+  /** 章边界跟手跨章：边界页已随动画滑到位，落点帧跳过进场动画 */
+  const suppressEnterRef = useRef(false)
   const navigate = useNavigate()
   const toast = useToast()
   const tone = state.toneOption
@@ -93,18 +103,154 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
   })
   const pages = pagination.pages
 
+  // 跨章翻页防卡顿：新章分页要在渲染线程同步跑整章离屏测量（数百次 DOM 测量），
+  // 会卡住翻页动画一瞬；章内翻页命中分页缓存所以不卡。这里趁浏览器空闲
+  // 把已预取到的相邻章提前分页塞进缓存，真跨章时直接命中，换章和章内翻页一样顺。
+  const queryClient = useQueryClient()
+  // 预热用最新视口/字号/章节快照：effect 依赖不含它们（避免反复重挂），靠 ref 保证 warm 拿到最新值
+  const warmContextRef = useRef({
+    paged,
+    viewport,
+    novelId: state.novelId,
+    reader: state.reader,
+    chapterList: state.chapterList,
+    fontScaleOption: state.fontScaleOption,
+    fromStudio: state.fromStudio,
+  })
+  warmContextRef.current = {
+    paged,
+    viewport,
+    novelId: state.novelId,
+    reader: state.reader,
+    chapterList: state.chapterList,
+    fontScaleOption: state.fontScaleOption,
+    fromStudio: state.fromStudio,
+  }
+  useEffect(() => {
+    const warm = () => {
+      const context = warmContextRef.current
+      if (!context.paged || context.viewport.width <= 0 || context.viewport.height <= 0) return
+      if (!context.novelId || !context.reader) return
+
+      const layout = {
+        width: context.viewport.width,
+        height: context.viewport.height,
+        fontSize: context.fontScaleOption.fontSize,
+        lineHeight: context.fontScaleOption.lineHeight,
+        paragraphGap: PAGE_PARAGRAPH_GAP,
+      }
+      for (const targetId of [context.reader.nextChapterId, context.reader.previousChapterId]) {
+        if (!targetId) continue
+        const meta = context.chapterList.find((chapter) => chapter.id === targetId)
+        const payload = queryClient.getQueryData<ReaderPayload>(
+          readerQueryKey(context.novelId, targetId, context.fromStudio),
+        )
+        const content = payload?.currentChapter.content
+        if (!meta || !content) continue
+        // 缓存键与 useChapterPaginator 完全同源（章节身份+标题长+字号+视口），命中才是预热；
+        // 分片异步测量，整章离屏测量不再一口气占住主线程卡住触摸与翻页帧
+        const title = meta.title?.trim() || '未命名章节'
+        const cacheKey = `${targetId}|${meta.wordCount ?? 0}|${title.length}|${layout.fontSize}|${layout.lineHeight}|${Math.round(layout.width)}x${Math.round(layout.height)}|${layout.paragraphGap}`
+        void paginateChapterAsync(cacheKey, splitReaderParagraphs(content), layout, title)
+      }
+    }
+
+    // 空闲执行 + 防抖：已缓存的章 paginateChapter 内部直接命中，重复触发无成本
+    let idleId = 0
+    let timerId = 0
+    const schedule = () => {
+      if (timerId) return
+      timerId = window.setTimeout(() => {
+        timerId = 0
+        if (typeof window.requestIdleCallback === 'function') {
+          idleId = window.requestIdleCallback(() => warm(), { timeout: 2000 })
+        } else {
+          warm()
+        }
+      }, 250)
+    }
+
+    schedule()
+    // 相邻章数据由 useReaderState 后台预取，落地比本 effect 晚时靠缓存事件补一次预热
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === 'updated' && event.action.type === 'success' && event.query.queryKey[0] === 'reader') {
+        schedule()
+      }
+    })
+
+    return () => {
+      unsubscribe()
+      if (timerId) window.clearTimeout(timerId)
+      if (idleId && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleId)
+    }
+    // 快照走 ref，effect 只挂一次；预取落地/换章都会经缓存事件或 schedule 补预热
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryClient])
+
   // 代入页：仅公开阅读的第一章带（创作区预览不出）
   const coverEligible = !state.fromStudio && state.currentIndex === 0
 
   /** 换章落点：从上一章左滑进来落第 1 页，从下一章右滑回来落末页 */
   const pendingLandingRef = useRef<'first' | 'last' | null>(null)
+  /** 上次由跟读自己翻到的页码；null = 基准未知（换章/重排后），下次以当前页为准 */
+  const followPageRef = useRef<number | null>(null)
+  const followHoldUntilRef = useRef(0)
+
+  // 换章落点意图：在「新章数据落地」的那一次渲染里产出，交给 useReaderPager 在
+  // 新章分页就绪（页数变化）时钉页码。落点必须按新章页数算：换章 navigate 那一帧
+  // pages 还是旧章的，此前在这里直接 jumpTo(pages.length-1) 把旧章页号带进了新章
+  // （右滑回上一章落不了末页、左翻进下一章落不了第一页）
+  const renderedChapterId = state.reader?.currentChapter.id ?? null
+  const renderLandedRef = useRef<string | null>(null)
+  const landingChapterId =
+    paged && renderedChapterId && renderedChapterId === state.chapterId && renderLandedRef.current !== renderedChapterId
+      ? renderedChapterId
+      : null
+  if (landingChapterId) {
+    renderLandedRef.current = landingChapterId
+    // 章边界跟手跨章：边界页已随翻页动画滑到位，落点即当前画面，跳过进场动画
+    if (suppressEnterRef.current) {
+      suppressEnterRef.current = false
+      setChapterEnter(null)
+    } else if (pendingEnterRef.current?.targetId === state.chapterId) {
+      // 新章分页就绪：有指向本章的换章意图就此起动进场动画
+      setChapterEnter(pendingEnterRef.current.direction)
+      pendingEnterRef.current = null
+    }
+  }
+  let chapterLanding: import('../pager/useReaderPager').PagerLanding = null
+  if (landingChapterId) {
+    // 优先级：听书自动翻章钉第 1 页 > 左滑换章第 1 页 > 右滑回来末页 > 上次读到的位置 > 代入页。
+    // 听书信号绑定目标章，残留信号不会误钉手动换章落点
+    if (state.tts.takePendingAutoNext(state.chapterId ?? '')) {
+      chapterLanding = 'first'
+    } else {
+      const pending = pendingLandingRef.current
+      pendingLandingRef.current = null
+      if (pending === 'last') chapterLanding = 'last'
+      else if (pending === 'first') chapterLanding = 'first'
+      else {
+        const savedPercent = state.getSavedScrollPercent()
+        chapterLanding = savedPercent > 0.01 ? { percent: savedPercent } : coverEligible ? 'cover' : 'first'
+      }
+    }
+  }
 
   const pager = useReaderPager({
     totalPages: pages.length,
     hasCover: coverEligible,
+    landing: chapterLanding,
+    landingKey: landingChapterId,
     onOverflowNext: () => {
       if (state.nextHref) {
         pendingLandingRef.current = 'first'
+        if (getBoundaryPage(state.reader?.nextChapterId, 'first')) {
+          // 下一章首页已预渲染进图层并跟手翻完：落点即当前画面，不再跑进场动画
+          suppressEnterRef.current = true
+          pendingEnterRef.current = null
+        } else if (state.reader?.nextChapterId) {
+          pendingEnterRef.current = { targetId: state.reader.nextChapterId, direction: 'next' }
+        }
         navigate(state.nextHref)
         return
       }
@@ -113,44 +259,71 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
     onOverflowPrev: () => {
       if (state.previousHref) {
         pendingLandingRef.current = 'last'
+        if (getBoundaryPage(state.reader?.previousChapterId, 'last')) {
+          suppressEnterRef.current = true
+          pendingEnterRef.current = null
+        } else if (state.reader?.previousChapterId) {
+          pendingEnterRef.current = { targetId: state.reader.previousChapterId, direction: 'prev' }
+        }
         navigate(state.previousHref)
       }
     },
   })
+
+  /**
+   * 章边界顺滑翻页：把相邻章的边界页从分页预热缓存里取出来预渲染进前/后图层，
+   * 章边界的拖动/翻页就和章内一样跟手连续。只读缓存不触发测量：未命中时返回 null，
+   * ReaderPagedView 回落橡皮筋 + 进场动画的兼容行为。缓存键与预热/分页完全同源。
+   */
+  const neighborParagraphsCacheRef = useRef(new Map<string, string[]>())
+  const getBoundaryPage = (
+    targetId: string | null | undefined,
+    pick: 'first' | 'last',
+  ): BoundaryPageData | null => {
+    if (!paged || !targetId || viewport.width <= 0 || viewport.height <= 0) return null
+    const meta = state.chapterList.find((chapter) => chapter.id === targetId)
+    const payload = queryClient.getQueryData<ReaderPayload>(
+      readerQueryKey(state.novelId ?? '', targetId, state.fromStudio),
+    )
+    if (!meta || !payload?.currentChapter.content) return null
+    const title = meta.title?.trim() || '未命名章节'
+    const cacheKey = `${targetId}|${meta.wordCount ?? 0}|${title.length}|${state.fontScaleOption.fontSize}|${state.fontScaleOption.lineHeight}|${Math.round(viewport.width)}x${Math.round(viewport.height)}|${PAGE_PARAGRAPH_GAP}`
+    const result = getPaginationCache(cacheKey)
+    if (!result || result.pages.length === 0) return null
+    // 段落切分结果按章节缓存：避免每次渲染重切整章
+    const cacheId = `${targetId}|${payload.currentChapter.wordCount ?? 0}`
+    let neighborParagraphs = neighborParagraphsCacheRef.current.get(cacheId)
+    if (!neighborParagraphs) {
+      neighborParagraphs = splitReaderParagraphs(payload.currentChapter.content)
+      if (neighborParagraphsCacheRef.current.size >= 4) neighborParagraphsCacheRef.current.clear()
+      neighborParagraphsCacheRef.current.set(cacheId, neighborParagraphs)
+    }
+    return {
+      page: pick === 'first' ? result.pages[0] : result.pages[result.pages.length - 1],
+      paragraphs: neighborParagraphs,
+      title,
+    }
+  }
+  // 只在章边界页码上取相邻章页；预热未完成时返回 null，行为回落原有进场动画
+  const boundaryPrevPage = pager.pageIndex <= 0 ? getBoundaryPage(state.reader?.previousChapterId, 'last') : null
+  const boundaryNextPage =
+    pager.pageIndex >= pages.length - 1 ? getBoundaryPage(state.reader?.nextChapterId, 'first') : null
 
   // 换章后先把页码归零，避免沿用上一章的页号
   const chapterRef = useRef(state.chapterId)
   if (chapterRef.current !== state.chapterId) {
     chapterRef.current = state.chapterId
     setSelection(null)
+    // 进场意图只对绑定的目标章有效：目录跳转/听书自动翻章等其他路径换章时清掉残留动画态
+    if (pendingEnterRef.current?.targetId !== state.chapterId) {
+      pendingEnterRef.current = null
+      setChapterEnter(null)
+    }
+    // 同步作废跟读页码基准：不能只依赖 [pages] 重置（前后两章分页命中同一缓存时 pages 引用不变）
+    followPageRef.current = null
+    followHoldUntilRef.current = 0
+    suppressEnterRef.current = false
   }
-
-  // 首次分页完成后定位：换章落点 > 上次读到的位置 > 代入页
-  const landedChapterRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!paged || pages.length === 0) return
-    if (landedChapterRef.current === state.chapterId) return
-    landedChapterRef.current = state.chapterId ?? null
-
-    const pending = pendingLandingRef.current
-    pendingLandingRef.current = null
-    if (pending === 'last') {
-      pager.jumpTo(pages.length - 1)
-      return
-    }
-    if (pending === 'first') {
-      pager.jumpTo(0)
-      return
-    }
-
-    const savedPercent = state.getSavedScrollPercent()
-    if (savedPercent > 0.01) {
-      pager.jumpTo(Math.round(savedPercent * (pages.length - 1)))
-      return
-    }
-
-    pager.jumpTo(coverEligible ? COVER_PAGE_INDEX : 0)
-  }, [paged, pages.length, state.chapterId, coverEligible, pager, state])
 
   // 全屏沉浸（方案 20）：进入阅读区让 WebView 铺满整屏并隐藏系统栏，
   // 顶/底安全区由 setNativeImmersiveSafeArea 注入的 --safe-top/--safe-bottom 避让。
@@ -191,9 +364,11 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
     syncNativeSystemBars(tone.swatch, isDarkColor(tone.swatch))
   }, [tone.swatch])
 
-  // 翻页写回章内进度（语义：当前页/本章总页），退出时由防抖 flush
+  // 翻页写回章内进度（语义：当前页/本章总页），退出时由防抖 Flush；
+  // 换章过渡帧（占位数据还属上一章）不写，避免旧章页号污染新章进度
   useEffect(() => {
     if (!paged || pages.length === 0 || pager.pageIndex < 0) return
+    if (state.reader?.currentChapter.id !== state.chapterId) return
     const percent = pages.length > 1 ? pager.pageIndex / (pages.length - 1) : 1
     state.commitScrollPercent(percent)
     // 仅页码变化时写回，state 每次渲染都是新对象故不入依赖
@@ -223,14 +398,21 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
   // 段内位置在 TTS 里是 ref（不逐帧重渲染），因此播放期间轮询检查。
   const speakingParagraphIndex = state.tts.activeParagraphIndex
   const ttsPlaying = state.tts.status === 'playing'
-  /** 上次由跟读自己翻到的页码；null = 基准未知（换章/重排后），下次以当前页为准 */
-  const followPageRef = useRef<number | null>(pager.pageIndex)
-  const followHoldUntilRef = useRef(0)
   const followSpeakingRef = useRef<() => void>(() => {})
   followSpeakingRef.current = () => {
     if (!paged || speakingParagraphIndex === null || pages.length === 0) return
+    // 换章过渡期（占位数据仍属上一章）不跟读：旧段落号配新/旧页都会把页码拽到错误位置
+    if (state.reader?.currentChapter.id !== state.chapterId) return
+    // 基准未知（换章/重排后）：采纳当前页为基准并返回，不拿残留段号定位。
+    // 换章时 useTtsPlayer 会清空朗读段落，但那个 effect 在父级、晚于本层 effect 执行，
+    // 这一瞬 speakingParagraphIndex 可能还是旧章残留值——直接用它定位会把刚钉好的
+    // 换章落点覆盖掉（右滑回上一章被拽到第一页、往后翻被拽到章中某页）
+    if (followPageRef.current === null) {
+      followPageRef.current = pager.pageIndex
+      return
+    }
     // 页码不是自己翻的（用户手动滑动/跳转）：让位 5s，别把人拽回朗读页
-    if (followPageRef.current !== null && pager.pageIndex !== followPageRef.current) {
+    if (pager.pageIndex !== followPageRef.current) {
       followPageRef.current = pager.pageIndex
       followHoldUntilRef.current = Date.now() + TTS_FOLLOW_HOLD_MS
       return
@@ -265,22 +447,67 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
   /**
    * 全书页码：当前章精确分页 + 其余章按字数估算（番茄 3/11242 语义）。
    * 信息层每页一份，故这里只算「本章之前的页数 + 全书总页数」，具体页号由各页自己加。
+   *
+   * 页数账本：每章页数（实测或估算）首次算出即锁定，不再随后续章节的每页均字数变化而漂移；
+   * 否则换章后估算基数改变，前面章节的估算页数整体重算，跨章瞬间页码会跳变（109 → 114）。
+   * 字号/视口变化时页数整体改变，清空账本重新锁。
    */
+  const pageLedgerRef = useRef(new Map<string, number>())
+  const pageLedgerLayoutRef = useRef('')
   const bookPaging = useMemo(() => {
     if (!paged || pages.length === 0) return { before: 0, total: 0 }
     const avgChars = pagination.avgCharsPerPage > 0 ? pagination.avgCharsPerPage : 0
+
+    const layoutKey = `${state.fontScaleOption.fontSize}|${state.fontScaleOption.lineHeight}|${viewport.width}x${viewport.height}`
+    if (pageLedgerLayoutRef.current !== layoutKey) {
+      pageLedgerLayoutRef.current = layoutKey
+      pageLedgerRef.current.clear()
+    }
+    const ledger = pageLedgerRef.current
+
+    // 页码口径跟随「实际渲染中的章节」而非 URL 章节：听书自动翻章/翻页换章后，
+    // 新章数据未落地前占位数据仍属上一章，若 before 先切到新章口径，
+    // 旧章页号拼新章基数会瞬间漂出一大截（111 闪成 130）再被落点 effect 拉回；
+    // 过渡期保持旧口径，数据落地那一帧落点 effect 同提交钉到第 1 页，数字自然衔接
+    const renderedChapterId = state.reader?.currentChapter.id
+    const renderedIndex = renderedChapterId
+      ? state.chapterList.findIndex((chapter) => chapter.id === renderedChapterId)
+      : -1
+    const baseIndex = renderedIndex >= 0 ? renderedIndex : state.currentIndex
+    const baseChapterId = renderedIndex >= 0 ? renderedChapterId : state.chapterId
+
+    // 当前渲染章的实测页数是权威值，直接覆盖（字号变化后也会随清账重新锁）
+    if (baseChapterId) ledger.set(baseChapterId, pages.length)
+
     let before = 0
     let total = 0
     state.chapterList.forEach((chapter, index) => {
-      const estimated =
-        index === state.currentIndex
-          ? pages.length
-          : Math.max(1, Math.ceil((chapter.wordCount ?? 0) / Math.max(1, avgChars)))
-      if (index < state.currentIndex) before += estimated
-      total += estimated
+      let count: number
+      if (index === baseIndex) {
+        count = pages.length
+      } else {
+        const locked = ledger.get(chapter.id)
+        if (locked) {
+          count = locked
+        } else {
+          count = Math.max(1, Math.ceil((chapter.wordCount ?? 0) / Math.max(1, avgChars)))
+          ledger.set(chapter.id, count)
+        }
+      }
+      if (index < baseIndex) before += count
+      total += count
     })
     return { before, total }
-  }, [paged, pages.length, pagination.avgCharsPerPage, state.chapterList, state.currentIndex])
+  }, [
+    paged,
+    pages.length,
+    pagination.avgCharsPerPage,
+    state.chapterList,
+    state.currentIndex,
+    state.chapterId,
+    state.fontScaleOption,
+    viewport,
+  ])
 
   // ── 交互 ────────────────────────────────────────────────────────────
   const closePanel = () => state.setActivePanel(null)
@@ -295,9 +522,11 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
     }
     // 其余状态（未开始/播完/出错）一律按当前看到的位置重新起播，不复用上次朗读位置
     if (paged) {
-      // 分页模式下正文没有滚动容器：代入页与首页都从开头第一段读起
+      // 分页模式下正文没有滚动容器：从当前页第一个正文块读起；
+      // 页首块是跨页段落的续块时带上段内偏移，避免回读上一页已经翻过的内容
       const currentPage = pages[Math.max(0, pager.pageIndex)]
-      state.tts.startFromParagraph(currentPage?.blocks[0]?.paragraphIndex ?? 0)
+      const firstBlock = currentPage?.blocks[0]
+      state.tts.startFromParagraph(firstBlock?.paragraphIndex ?? 0, firstBlock?.startChar ?? 0)
       return
     }
     state.tts.start()
@@ -431,6 +660,20 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       className="fixed inset-0 z-[70] flex flex-col"
       style={{ background: tone.background, color: tone.text }}
     >
+      {/* 断网兜底读到的是本地缓存章节：顶部一条轻量徽标说明状态，不阻断阅读 */}
+      {state.isOfflineCache ? (
+        <div
+          className="pointer-events-none absolute left-1/2 z-[60] -translate-x-1/2 whitespace-nowrap rounded-full px-3 py-1 text-[11px]"
+          style={{
+            top: 'calc(var(--safe-top) + 6px)',
+            background: 'color-mix(in srgb, currentColor 12%, transparent)',
+            color: tone.text,
+            opacity: 0.9,
+          }}
+        >
+          离线模式 · 当前阅读缓存章节
+        </div>
+      ) : null}
       {paged ? (
         <ReaderPagedView
           pages={pages}
@@ -440,6 +683,28 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
           mode={state.pageTurnMode === 'cover' ? 'cover' : 'simulate'}
           tone={tone}
           fontScaleOption={state.fontScaleOption}
+          enterDirection={chapterEnter}
+          onEnterAnimationEnd={() => setChapterEnter(null)}
+          boundaryPrevPage={boundaryPrevPage}
+          boundaryNextPage={boundaryNextPage}
+          renderBoundaryChrome={(side) => {
+            // 相邻章边界页的全书页码：上一章末页 = 本章之前页数，下一章首页 = 本章之后第一页
+            const pageNumber = side === 'prev' ? bookPaging.before : bookPaging.before + pages.length + 1
+            if (pageNumber <= 0) return null
+            return (
+              <ReaderPageChrome
+                tone={tone}
+                novelTitle={state.novelTitle}
+                currentPage={pageNumber}
+                totalPages={Math.max(bookPaging.total, pageNumber)}
+                showPageNumber={bookPaging.total > 0}
+                clock={chromeStatus.clock}
+                batteryPercent={chromeStatus.batteryPercent}
+                onBack={handleExit}
+                onMoreClick={() => setMoreMenuOpen(true)}
+              />
+            )
+          }}
           underlined={underlines.underlined}
           speakingParagraphIndex={speakingParagraphIndex}
           selectedParagraphIndex={selection?.paragraphIndex ?? state.highlightParagraphIndex}
@@ -489,9 +754,24 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
           onLongPressParagraph={handleLongPressParagraph}
           onDismissSelection={() => setSelection(null)}
           fallback={
-            <p className="text-sm opacity-55">
-              {state.readerQuery.isLoading ? '正在载入章节…' : '本章暂无内容。'}
-            </p>
+            state.readerQuery.isLoading ? (
+              <p className="text-sm opacity-55">正在载入章节…</p>
+            ) : state.readerQuery.isError ? (
+              // 断网且无本地缓存：番茄式网络异常页（明确原因 + 可重试）
+              <div className="flex flex-col items-center gap-4 pt-20 text-center">
+                <p className="text-sm opacity-70">网络连接失败，请检查网络后重试</p>
+                <button
+                  type="button"
+                  onClick={() => void state.readerQuery.refetch()}
+                  className="press-feedback rounded-full border px-5 py-2 text-sm"
+                  style={{ borderColor: 'color-mix(in srgb, currentColor 25%, transparent)', color: tone.text }}
+                >
+                  重新加载
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm opacity-55">本章暂无内容。</p>
+            )
           }
         />
       ) : (

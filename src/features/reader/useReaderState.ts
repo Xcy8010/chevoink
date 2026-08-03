@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 
@@ -9,10 +9,12 @@ import {
   listCommentsByTarget,
   splitReaderParagraphs,
 } from '@/features/discover/api'
+import { ApiClientError } from '@/app/api-client'
 import { getReadingProgress, saveReadingProgress, updateReadingScrollPercent } from '@/features/home/reading-progress'
 import { pushProgress, pushScrollProgress } from '@/features/home/reading-sync'
 import { getChapterContent, getStudioPayload } from '@/features/studio/api'
 import type { ReaderPayload } from '../../../shared/contracts/index.js'
+import { cacheReaderPayload, getCachedReaderPayload } from './reader-offline-cache'
 import {
   getFontScaleOption,
   getThemeDefaultTone,
@@ -33,7 +35,7 @@ const numberFormatter = new Intl.NumberFormat('zh-CN')
 const READER_STALE_TIME = 5 * 60_000
 const READER_GC_TIME = 15 * 60_000
 
-const readerQueryKey = (novelId: string, chapterId: string, fromStudio: boolean) =>
+export const readerQueryKey = (novelId: string, chapterId: string, fromStudio: boolean) =>
   ['reader', novelId, chapterId, fromStudio ? 'studio-preview' : 'public'] as const
 
 /** 拉取阅读器 payload：公开阅读走 reader 接口，创作区预览用 studio 数据拼装 */
@@ -43,7 +45,17 @@ async function fetchReaderPayload(
   fromStudio: boolean,
 ): Promise<ReaderPayload> {
   if (!fromStudio) {
-    return getReaderPayload(novelId, chapterId)
+    try {
+      const payload = await getReaderPayload(novelId, chapterId)
+      // 读成功的章节落一份本地缓存：断网时回落它继续阅读（番茄式离线体验）
+      cacheReaderPayload(novelId, chapterId, payload)
+      return payload
+    } catch (error) {
+      // 网络失败/服务异常：回落本地缓存，命中则带离线标记供 UI 提示
+      const cached = getCachedReaderPayload(novelId, chapterId)
+      if (cached) return { ...cached, fromOfflineCache: true }
+      throw error
+    }
   }
 
   const [studio, chapter] = await Promise.all([
@@ -141,6 +153,12 @@ export function useReaderState() {
       return fetchReaderPayload(novelId, chapterId, fromStudio)
     },
     enabled: Boolean(novelId && chapterId),
+    // 断网时 fetch 直接失败：不空转重试，立刻落错误态（缓存兜底已在 queryFn 内做）；
+    // 服务端返回的结构化错误才少量重试
+    retry: (failureCount, error) => error instanceof ApiClientError && failureCount < 2,
+    // 预取未命中时旧章数据作占位：换章等待期间不闪骨架屏、不重挂阅读器，
+    // 布局层以 reader.currentChapter.id === chapterId 判断数据新鲜度后再动页码
+    placeholderData: keepPreviousData,
     staleTime: READER_STALE_TIME,
     gcTime: READER_GC_TIME,
   })
@@ -280,6 +298,7 @@ export function useReaderState() {
     fromStudio,
     paragraphs,
     nextHref,
+    nextChapterId: reader?.nextChapterId ?? null,
     novelTitle,
     chapterTitle,
     coverUrl: reader?.novel.coverUrl ?? null,
@@ -291,6 +310,8 @@ export function useReaderState() {
 
   /** 章内进度写回（防抖）：滚动模式 = 滚动百分比，分页模式 = 当前页/本章总页 */
   const scrollSaveTimerRef = useRef<number | null>(null)
+  /** 待写进度归属的章节：真换章时据此清掉上一章残留的防抖写入 */
+  const scrollSaveChapterRef = useRef<string | null>(null)
   const commitScrollPercent = (percent: number, delayMs = 800) => {
     setScrollPercent(percent)
 
@@ -298,9 +319,10 @@ export function useReaderState() {
     if (scrollSaveTimerRef.current) window.clearTimeout(scrollSaveTimerRef.current)
     scrollSaveTimerRef.current = window.setTimeout(() => {
       updateReadingScrollPercent(novelId, chapterId, percent)
-      // 章内位置写穿服务端，供跳设备恢复到上次读到的位置
+      // 章内位置写穿服务端，供跨设备恢复到上次读到的位置
       pushScrollProgress(novelId, novelTitle, chapterId, percent)
     }, delayMs)
+    scrollSaveChapterRef.current = chapterId
   }
 
   /** 绑定到各布局的正文滚动容器 */
@@ -314,6 +336,13 @@ export function useReaderState() {
 
   // 章节切换后回到顶部并重置章内进度与段评状态
   useEffect(() => {
+    // 真换章（非首次挂载）：清掉上一章尚未落盘的进度写入，避免旧章页号写进新章进度
+    if (scrollSaveChapterRef.current !== null && scrollSaveChapterRef.current !== chapterId) {
+      if (scrollSaveTimerRef.current) window.clearTimeout(scrollSaveTimerRef.current)
+      scrollSaveTimerRef.current = null
+    }
+    scrollSaveChapterRef.current = chapterId ?? null
+
     contentScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' })
     setScrollPercent(0)
     setActiveParagraphIndex(null)
@@ -372,6 +401,8 @@ export function useReaderState() {
     readerQuery,
     commentsQuery,
     reader,
+    /** 当前章节来自离线缓存（断网兜底读到的旧内容），UI 据此提示离线状态 */
+    isOfflineCache: Boolean(reader && reader.fromOfflineCache),
     paragraphs,
     chapterComments,
     chapterList,

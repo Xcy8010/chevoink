@@ -78,7 +78,7 @@ export function buildBoardNovels(id: RankingBoardId, novels: NovelCard[], limit 
       return pool.sort((left, right) => right.wordCount - left.wordCount).slice(0, limit)
     case 'finished':
       return pool
-        .filter((novel) => novel.status === 'archived')
+        .filter((novel) => novel.status === 'completed')
         .sort((left, right) => totalScore(right) - totalScore(left))
         .slice(0, limit)
   }

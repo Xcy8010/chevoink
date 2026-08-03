@@ -116,34 +116,62 @@ export const chapterCreateTool = defineTool({
   name: 'chapter_create',
   title: '新建章节',
   description:
-    '在当前作品末尾创建一个新章节。推荐两步流程：先只传 title 创建空章节（作者立刻能在章节树看到新章），再用 chapter_write 写入正文；也可以带 content 一次性创建。返回新章节的 chapterId。',
+    '在当前作品创建一个新章节，默认追加到末尾；传 position 可插入到指定位置（原第 position 章及之后的章节编号自动 +1），用于补写作者删掉的中间章节。仅用于新增章节；重写/重新生成已有章节必须用 chapter_write 覆盖原章节，绝不要另建重复章节（会导致章节编号错乱）。推荐两步流程：先只传 title 创建空章节（作者立刻能在章节树看到新章），再用 chapter_write 写入正文；也可以带 content 一次性创建。返回新章节的 chapterId。',
   parameters: z.object({
     title: z.string().min(1).max(120).describe('章节标题'),
     content: z.string().optional().describe('章节正文，可留空'),
+    position: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('插入位置（第 N 章）。缺省或超过现有章节数时追加到末尾；否则插入该位置，原第 N 章及之后的章节整体后移一位'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const count = await prisma.chapter.count({ where: { novelId: ctx.novelId } })
+    // 用「最大编号+1」而不是「总数+1」：删过中间章节后总数+1 会撞 novelId+orderIndex 唯一约束
+    const lastChapter = await prisma.chapter.findFirst({
+      where: { novelId: ctx.novelId },
+      orderBy: { orderIndex: 'desc' },
+      select: { orderIndex: true },
+    })
+    const maxOrder = lastChapter?.orderIndex ?? 0
     const content = args.content ?? ''
+    // position 超界或缺省都退化为末尾追加
+    const inserting = args.position !== undefined && args.position <= maxOrder
+    const targetOrder = inserting ? (args.position as number) : maxOrder + 1
 
-    const chapter = await prisma.chapter.create({
-      data: {
-        novelId: ctx.novelId,
-        authorId: ctx.userId,
-        title: args.title.trim(),
-        content,
-        orderIndex: count + 1,
-        wordCount: content.length,
-        status: 'draft',
-        visibility: 'public',
-      },
+    const chapter = await prisma.$transaction(async (tx) => {
+      if (inserting) {
+        // 中间插入：把排位 ≥ position 的章节按编号降序逐个 +1，先挪最大号避免撞 novelId+orderIndex 唯一约束
+        const shifting = await tx.chapter.findMany({
+          where: { novelId: ctx.novelId, orderIndex: { gte: targetOrder } },
+          orderBy: { orderIndex: 'desc' },
+          select: { id: true, orderIndex: true },
+        })
+        for (const item of shifting) {
+          await tx.chapter.update({ where: { id: item.id }, data: { orderIndex: item.orderIndex + 1 } })
+        }
+      }
+      return tx.chapter.create({
+        data: {
+          novelId: ctx.novelId,
+          authorId: ctx.userId,
+          title: args.title.trim(),
+          content,
+          orderIndex: targetOrder,
+          wordCount: content.length,
+          status: 'draft',
+          visibility: 'public',
+        },
+      })
     })
     await recalcNovelStats(ctx.novelId)
     recordChapterBaseline(ctx.runId, chapter.id, chapter.updatedAt)
 
     return {
-      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
+      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}${inserting ? '，原该位置及之后的章节已自动后移一位' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
       summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》`,
       // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
       display: content
@@ -167,7 +195,7 @@ export const chapterWriteTool = defineTool({
   name: 'chapter_write',
   title: '写入章节正文',
   description:
-    '用新内容整体覆盖指定章节的正文。需要已存在的 chapterId（新章节请先 chapter_create）。覆盖前建议先 chapter_read 了解现有内容；如只是接着写请用 chapter_append。',
+    '用新内容整体覆盖指定章节的正文。需要已存在的 chapterId（新章节请先 chapter_create）。覆盖前建议先 chapter_read 了解现有内容；如只是接着写请用 chapter_append。覆盖前必须确认该章节确实是作者所指：作者按「第N章」指称时，若该排位章节的标题序号对不上（作者删过章导致错位），不要覆盖，改用 chapter_create 传 position 在正确位置插入。',
   parameters: z.object({
     chapterId: z.string().optional().describe('目标章节 ID；缺省时默认写入最近操作/当前正在编辑的章节'),
     content: z.string().min(1).describe('完整的新正文'),

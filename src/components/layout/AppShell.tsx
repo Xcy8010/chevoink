@@ -1,7 +1,7 @@
 import { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, UIEvent, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LoaderCircle, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LoaderCircle, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users, WifiOff } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import Button from '@/components/ui/Button'
@@ -15,6 +15,7 @@ import { brandMeta } from '@/lib/theme/tokens'
 import { enterImmersiveFullscreen } from '@/lib/immersive-fullscreen'
 import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
+import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useShellStore } from '@/store/useShellStore'
 import { desktopNavItems, mobileNavItems, workspaceLinks } from '@/types/app'
 
@@ -49,6 +50,8 @@ export default function AppShell({ title, description, children }: AppShellProps
   const authStatus = useShellStore((state) => state.authStatus)
   const sessionUser = useShellStore((state) => state.sessionUser)
   const setGuest = useShellStore((state) => state.setGuest)
+  // 断网全局提示（番茄式）：已加载内容与本地缓存照常可用，仅提醒新数据拉不到
+  const online = useOnlineStatus()
   const isHome = location.pathname === '/'
   const isDiscoverRoute = location.pathname === '/discover'
   const isSearchRoute = location.pathname === '/search'
@@ -490,11 +493,17 @@ export default function AppShell({ title, description, children }: AppShellProps
   return (
     <div
       // 壳高随软键盘收缩（iOS 等不缩小布局视口的浏览器），消息输入栏、评论框等随之被顶到键盘上方
-      className="h-[calc(100dvh-var(--keyboard-inset,0px))] overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]"
+      className="flex h-[calc(100dvh-var(--keyboard-inset,0px))] flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]"
       style={{ ['--app-header-height' as string]: `${headerHeight}px` }}
     >
+      {online ? null : (
+        <div className="flex shrink-0 items-center justify-center gap-1.5 bg-[var(--surface-muted)] px-3 pb-1.5 pt-[calc(var(--safe-top)+4px)] text-xs text-[var(--text-secondary)]">
+          <WifiOff className="h-3.5 w-3.5" />
+          当前无网络连接，部分内容可能无法实时更新
+        </div>
+      )}
       {/* IDE 式布局：侧边栏贴视口左缘常驻文档流，收起/展开只变宽度，右侧内容区随之自然靠拢 */}
-      <div className="flex h-full">
+      <div className="flex min-h-0 flex-1">
         <aside
           className={cn(
             'hidden shrink-0 md:flex md:h-full md:flex-col md:overflow-y-auto md:transition-[width] md:duration-200',

@@ -312,6 +312,9 @@ export type CreatePostRequest = {
 
 export type CreatePostResponse = ApiSuccess<{ post: Post }>
 
+/** 删除自己的帖子（连同评论/点赞/收藏一并清理） */
+export type DeletePostResponse = ApiSuccess<{ deleted: boolean }>
+
 /** 帖子点赞：POST/DELETE /api/posts/:postId/like */
 export type SetPostLikeResponse = ApiSuccess<{ liked: boolean; likeCount: number }>
 

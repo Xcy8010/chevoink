@@ -15,6 +15,8 @@ type UseTtsPlayerArgs = {
   fromStudio: boolean
   paragraphs: string[]
   nextHref: string | null
+  /** 下一章 id（自动翻章信号绑定目标，落点校正据此验证） */
+  nextChapterId: string | null
   novelTitle: string
   chapterTitle: string
   coverUrl: string | null
@@ -62,6 +64,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     fromStudio,
     paragraphs,
     nextHref,
+    nextChapterId,
     novelTitle,
     chapterTitle,
     coverUrl,
@@ -110,6 +113,12 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const blobUrlsRef = useRef(new Map<string, string>())
   const fetchingRef = useRef(new Map<string, Promise<string>>())
   const pendingResumeRef = useRef(false)
+  /**
+   * 自动翻章信号：章末续播 navigate 前置位，供分页阅读层把落点钉在新章第一页。
+   * 记录目标章节 id：信号只对绑定的目标章有效——若落地没被消费（占位期被打断/退出阅读器等），
+   * 残留标志不会让后续任意一次手动换章被误判成「听书自动翻章」而错钉到第 1 页。
+   */
+  const pendingAutoNextTargetRef = useRef<string | null>(null)
   /** 当前朗读段落内的字符位置（近似，按批内字数占比折算） */
   const charOffsetRef = useRef(0)
   const userScrollUntilRef = useRef(0)
@@ -121,6 +130,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     autoNext,
     timerOption,
     nextHref,
+    nextChapterId,
     novelId,
     chapterId,
     voiceId,
@@ -134,6 +144,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     autoNext,
     timerOption,
     nextHref,
+    nextChapterId,
     novelId,
     chapterId,
     voiceId,
@@ -187,10 +198,11 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   /**
    * 播放指定批次（核心推进函数）。
    * 传 seekParagraph 时按段落在批内的字数占比跳到对应时间点（与 handleTimeUpdate 的映射同源），
-   * 避免「从本段听」/听书入口被拉回批首（一批可能横跨好几页）。
+   * 避免「从本段听」/听书入口被拉回批首（一批可能横跨好几页）；
+   * seekChar 进一步细化到段内字符位置（分页续块起播，避免回读上一页）。
    */
   const playBatch = useCallback(
-    async (batchIndex: number, seekParagraph?: number) => {
+    async (batchIndex: number, seekParagraph?: number, seekChar?: number) => {
       const session = sessionRef.current
       const audio = getAudio()
 
@@ -207,7 +219,13 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
         audio.playbackRate = stateRef.current.rate
 
         const batch = stateRef.current.batches[batchIndex]
-        if (batch && typeof seekParagraph === 'number' && seekParagraph > batch.paragraphStart) {
+        // 段落落在批首段时也要 seek：分页续块起播（seekChar > 0）否则会回读上一页内容
+        const needSeek =
+          batch &&
+          typeof seekParagraph === 'number' &&
+          (seekParagraph > batch.paragraphStart ||
+            (seekParagraph === batch.paragraphStart && typeof seekChar === 'number' && seekChar > 0))
+        if (needSeek && typeof seekParagraph === 'number') {
           setActiveParagraphIndex(seekParagraph)
           await waitForMetadata(audio)
           if (sessionRef.current !== session) return
@@ -218,6 +236,12 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
             let ratio = 0
             for (let i = batch.paragraphStart; i < seekParagraph; i += 1) {
               ratio += (allParagraphs[i]?.length ?? 0) / Math.max(1, batch.charCount)
+            }
+            // 段内字符偏移（分页续块起播）：补上本段已翻到上一页的部分，避免回读上一页内容
+            const seekCharOffset = typeof seekChar === 'number' ? Math.max(0, seekChar) : 0
+            const seekParagraphLength = allParagraphs[seekParagraph]?.length ?? 0
+            if (seekParagraphLength > 0 && seekCharOffset > 0) {
+              ratio += Math.min(1, seekCharOffset / seekParagraphLength) * (seekParagraphLength / Math.max(1, batch.charCount))
             }
             const target = Math.min(Math.max(0, duration * ratio), Math.max(0, duration - 0.3))
             if (target > 0.1) audio.currentTime = target
@@ -265,6 +289,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
 
     if (shouldAutoNext && next) {
       pendingResumeRef.current = true
+      pendingAutoNextTargetRef.current = stateRef.current.nextChapterId
       navigate(next)
       return
     }
@@ -361,9 +386,10 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     void playBatchRef.current(startBatch, startParagraph)
   }, [contentScrollRef, getAudio])
 
-  /** 从指定段落开始播放（分页模式听书入口 / 长按「从本段听」） */
+  /** 从指定段落开始播放（分页模式听书入口 / 长按「从本段听」）。
+   * charOffset：段内起始字符（分页页首块是跨页段落续块时传，避免从上一页读起）。 */
   const startFromParagraph = useCallback(
-    (paragraphIndex: number) => {
+    (paragraphIndex: number, charOffset?: number) => {
       const audio = getAudio()
 
       // iOS：首次 play 必须发生在用户手势调用栈内
@@ -381,7 +407,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       )
 
       sessionRef.current += 1
-      void playBatchRef.current(matched ? matched.index : 0, matched ? paragraphIndex : 0)
+      void playBatchRef.current(matched ? matched.index : 0, matched ? paragraphIndex : 0, charOffset)
     },
     [getAudio],
   )
@@ -414,6 +440,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const stop = useCallback(() => {
     sessionRef.current += 1
     pendingResumeRef.current = false
+    pendingAutoNextTargetRef.current = null
     const audio = audioRef.current
     if (audio) {
       audio.pause()
@@ -626,6 +653,16 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     hasNextBatch: currentBatchIndex + 1 < batches.length,
     start,
     startFromParagraph,
+    /**
+     * 消费「自动翻章」信号：仅当信号绑定的目标章与传入章节一致时返回 true（取过即清）；
+     * 指向其他章节的残留信号一并作废，避免误钉手动换章的落点
+     */
+    takePendingAutoNext: (targetChapterId: string) => {
+      const pendingTarget = pendingAutoNextTargetRef.current
+      if (!pendingTarget) return false
+      pendingAutoNextTargetRef.current = null
+      return pendingTarget === targetChapterId
+    },
     toggle,
     pause,
     resume,

@@ -31,7 +31,8 @@ export type DetailTab = 'directory' | 'comments' | 'related'
 export const novelStatusMap = {
   draft: '草稿',
   published: '连载中',
-  archived: '已完结',
+  completed: '已完结',
+  archived: '已下架',
 } as const
 
 export const novelVisibilityMap = {

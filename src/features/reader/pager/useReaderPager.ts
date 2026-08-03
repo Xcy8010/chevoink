@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+/**
+ * 换章落点意图：换章后首次分页就绪（页数变化）时用它钉页码。
+ * 落点必须按「新章」页数计算，而换章 navigate 那一帧 pages 还是旧章的，
+ * 上层直接 jumpTo 会把旧章页号带进新章，因此意图延后到页数就绪时执行。
+ */
+export type PagerLanding = 'first' | 'last' | 'cover' | { percent: number } | null
 
 /**
  * 分页阅读的页码窗口与章边界导航（方案 20 §2.2）。
@@ -15,6 +22,13 @@ type UseReaderPagerArgs = {
   totalPages: number
   /** 是否把代入页作为第 -1 页纳入翻页序列 */
   hasCover: boolean
+  /**
+   * 换章落点意图：非空时由本 hook 在下一次页数变化（新章分页就绪）时钉页码。
+   * 上层只在检测到「新章数据落地」的那一次渲染里产出非空意图，消费后回归 null
+   */
+  landing: PagerLanding
+  /** 落点归属标识（如章节 id）：换章时必变，保证新旧章页数相同时落点 effect 也会触发 */
+  landingKey: string | null
   /** 章末继续翻：进入下一章 */
   onOverflowNext: () => void
   /** 章首往前翻：回到上一章末页 */
@@ -24,6 +38,8 @@ type UseReaderPagerArgs = {
 export function useReaderPager({
   totalPages,
   hasCover,
+  landing,
+  landingKey,
   onOverflowNext,
   onOverflowPrev,
 }: UseReaderPagerArgs) {
@@ -31,17 +47,41 @@ export function useReaderPager({
   const maxIndex = Math.max(0, totalPages - 1)
   const [pageIndex, setPageIndexState] = useState(minIndex)
 
-  // 页数变化（首次分页完成/重排）后把页码夹回合法区间
-  useEffect(() => {
-    setPageIndexState((current) => {
-      if (current > maxIndex) return maxIndex
-      if (current < minIndex) return minIndex
-      return current
-    })
-  }, [minIndex, maxIndex])
+  // 待执行的落点意图：上层换章时写入，新章分页就绪（页数变化）时消费一次。
+  // 写入后若页数当场就绪，同一提交的落点 effect 直接消费；分页晚到时由
+  // 「页数 0→N」的变化再次触发本 effect 消费——两条路都钉在正确的首帧绘制前
+  const landingRef = useRef<PagerLanding>(null)
+  if (landing) landingRef.current = landing
+
+  // 页数变化（首次分页完成/新章分页就绪/重排）：有待消费的落点意图就钉页码，
+  // 否则只把页码夹回合法区间（重排场景）。
+  // 用 useLayoutEffect：绘制前钉页码，跟手跨章的落定帧不会先画出「旧页号拼新章」
+  useLayoutEffect(() => {
+    if (totalPages === 0) return
+    const pendingLanding = landingRef.current
+    if (!pendingLanding) {
+      setPageIndexState((current) => {
+        if (current > maxIndex) return maxIndex
+        if (current < minIndex) return minIndex
+        return current
+      })
+      return
+    }
+    landingRef.current = null
+    const target =
+      pendingLanding === 'last'
+        ? maxIndex
+        : pendingLanding === 'cover'
+          ? COVER_PAGE_INDEX
+          : typeof pendingLanding === 'object'
+            ? Math.round(pendingLanding.percent * maxIndex)
+            : 0
+    setPageIndexState(Math.min(maxIndex, Math.max(minIndex, target)))
+  }, [totalPages, minIndex, maxIndex, landingKey])
 
   const jumpTo = useCallback(
     (target: number) => {
+      landingRef.current = null
       setPageIndexState(Math.min(maxIndex, Math.max(minIndex, target)))
     },
     [minIndex, maxIndex],
@@ -56,7 +96,11 @@ export function useReaderPager({
 
   const requestNext = useCallback(() => {
     setPageIndexState((current) => {
-      if (current < maxIndex) return current + 1
+      if (current < maxIndex) {
+        // 章内翻页成功：页码已是用户当前位置，作废未消费的换章落点
+        landingRef.current = null
+        return current + 1
+      }
       overflowRef.current.onOverflowNext()
       return current
     })
@@ -64,7 +108,10 @@ export function useReaderPager({
 
   const requestPrev = useCallback(() => {
     setPageIndexState((current) => {
-      if (current > minIndex) return current - 1
+      if (current > minIndex) {
+        landingRef.current = null
+        return current - 1
+      }
       overflowRef.current.onOverflowPrev()
       return current
     })

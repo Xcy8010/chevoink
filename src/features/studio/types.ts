@@ -16,7 +16,7 @@ import type {
   Visibility,
 } from '../../../shared/contracts/index.js'
 
-export type EditableNovelStatus = 'draft' | 'published' | 'archived'
+export type EditableNovelStatus = 'draft' | 'published' | 'completed' | 'archived'
 export type AssistMode = 'draft' | 'outline' | 'continue' | 'rewrite' | 'polish' | 'summarize'
 export type MobileView = 'editor' | 'chapters' | 'assistant' | 'cover' | 'meta'
 export type ToolPanel = 'meta' | 'assistant' | 'cover'
@@ -267,6 +267,7 @@ export const chapterStatusLabelMap: Record<ChapterStatus, string> = {
 export const novelStatusLabelMap: Record<EditableNovelStatus, string> = {
   draft: '草稿箱',
   published: '公开连载',
+  completed: '已完结',
   archived: '已下架',
 }
 

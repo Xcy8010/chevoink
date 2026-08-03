@@ -151,7 +151,7 @@ export default function PublishNovelDialog({
           {publishableChapters.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-[var(--text-secondary)]">
               {chapters.length > 0
-                ? '所有章节都已公开发布，没有新的章节更新，无法重复发布。'
+                ? '所有章节都已公开发布，可直接发布以同步最新的书名、简介与标签等作品设置。'
                 : '还没有章节，先写一章再来发布吧。'}
             </p>
           ) : (
@@ -197,16 +197,18 @@ export default function PublishNovelDialog({
           <Button
             onClick={() => onConfirm(Array.from(selectedIds), visibility)}
             variant="primary"
-            disabled={busy || selectedIds.size === 0 || !willHavePublicChapter}
+            disabled={busy || !willHavePublicChapter}
             className="bg-zinc-900 text-white hover:bg-zinc-800"
           >
             {busy
               ? '正在发布...'
-              : selectedIds.size === 0
-                ? '暂无章节更新，无法发布'
-                : willHavePublicChapter
-                  ? `发布作品与 ${selectedIds.size} 个章节`
-                  : '需要至少一个公开章节'}
+              : !willHavePublicChapter
+                ? selectedIds.size === 0
+                  ? '暂无章节更新，无法发布'
+                  : '需要至少一个公开章节'
+                : selectedIds.size === 0
+                  ? '发布作品设置更新'
+                  : `发布作品与 ${selectedIds.size} 个章节`}
           </Button>
         </div>
       </div>

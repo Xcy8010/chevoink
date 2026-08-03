@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, Users, WandSparkles, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -38,6 +38,7 @@ import {
   applyWritingAgentArtifact,
   createWritingAgentSession,
   createNovelWorkspace,
+  createNovelPlanFile,
   createChapterDraft,
   deleteWritingAgentRun,
   deleteWritingAgentSession,
@@ -65,6 +66,7 @@ import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCr
 import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
 import ChapterSidebar from './components/ChapterSidebar'
+import PlanSettingsPanel from './components/PlanSettingsPanel'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
 import AgentTaskSidebar from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
@@ -1968,7 +1970,8 @@ function buildNovelFormState(novel: Novel): NovelFormState {
     summary: novel.summary,
     tagsText: novel.tags.join(' / '),
     visibility: novel.visibility,
-    status: novel.status === 'published' ? 'published' : 'draft',
+    // 四种状态原样保留：此前折叠成 published/draft 二选一，completed 会在保存后回退成 draft
+    status: novel.status,
   }
 }
 
@@ -2821,6 +2824,8 @@ export default function StudioWorkspace() {
   const [coverMessage, setCoverMessage] = useState('先整理提示词，再生成候选封面。')
   const [pendingCoverUploadFile, setPendingCoverUploadFile] = useState<File | null>(null)
   const [editorChapterSettingsOpen, setEditorChapterSettingsOpen] = useState(false)
+  // 计划设置抽屉：值为计划文件 id（本地产物 id 或 server- 前缀 id）
+  const [planSettingsPlanId, setPlanSettingsPlanId] = useState<string | null>(null)
   // 章节审查改为数组：Agent 连续写多章时各章审查态并存，互不覆盖（fix：新章写入导致旧审查被自动采纳）
   const [pendingChapterReviews, setPendingChapterReviews] = useState<ChapterPendingReview[]>([])
   const [pendingChapterReviewBusy, setPendingChapterReviewBusy] = useState(false)
@@ -3895,6 +3900,10 @@ export default function StudioWorkspace() {
       ),
     ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
   }, [agentArtifacts, serverPlanFiles])
+  // 计划设置抽屉指向的计划：计划被删除/切换作品后自动收起
+  const planSettingsPlan = planSettingsPlanId
+    ? savedPlanFiles.find((plan) => plan.id === planSettingsPlanId) ?? null
+    : null
   const catalogPreview = useMemo(
     () =>
       buildCatalogPreview(
@@ -4110,6 +4119,11 @@ export default function StudioWorkspace() {
     )
     void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
     void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
+    // 书名/简介/标签等元信息在阅读侧多处展示，保存后同步失效，否则首页/发现页/详情页仍显示旧值
+    void queryClient.invalidateQueries({ queryKey: ['home'] })
+    void queryClient.invalidateQueries({ queryKey: ['discover-novels'] })
+    void queryClient.invalidateQueries({ queryKey: ['novel-detail', updatedNovel.id] })
+    void queryClient.invalidateQueries({ queryKey: ['reader', updatedNovel.id] })
   }
 
   function syncSavedChapterState(
@@ -4242,7 +4256,7 @@ export default function StudioWorkspace() {
         ? payload.visibility
         : undefined
     const status =
-      payload.status === 'draft' || payload.status === 'published' || payload.status === 'archived'
+      payload.status === 'draft' || payload.status === 'published' || payload.status === 'completed' || payload.status === 'archived'
         ? payload.status
         : undefined
     const coverPrompt = typeof payload.coverPrompt === 'string' ? payload.coverPrompt.trim() : ''
@@ -5585,6 +5599,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
         description: '执行后，这部作品会以已发布状态对外展示，并自动保存当前作品设置。',
         confirmLabel: '确认上架',
       },
+      completed: {
+        title: '是否完结？',
+        description: '执行后，这部作品会标记为已完结并进入完结榜，同时自动保存当前作品设置。',
+        confirmLabel: '确认完结',
+      },
       archived: {
         title: '确认立即下架作品',
         description: '执行后，这部作品会切到已下架状态，并自动保存当前作品设置。',
@@ -6097,11 +6116,12 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
     callback()
   }
 
-  function handleSelectChapter(nextChapterId: string) {
+  function handleSelectChapter(nextChapterId: string, options?: { openSettings?: boolean }) {
+    const openSettings = options?.openSettings ?? false
     setSelectedTreeItemId(`chapter:${nextChapterId}`)
 
     if (nextChapterId === selectedChapterId) {
-      setEditorChapterSettingsOpen(false)
+      setEditorChapterSettingsOpen(openSettings)
       setMobileView('editor')
 
       const cachedChapter = queryClient.getQueryData<Chapter>(['studio-chapter', activeNovelId, nextChapterId])
@@ -6117,7 +6137,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
     guardUnsavedChanges(() => {
       setSelectedChapterId(nextChapterId)
-      setEditorChapterSettingsOpen(false)
+      setEditorChapterSettingsOpen(openSettings)
       setChapterDraft(null)
       setChapterSaveState('idle')
       setChapterSaveMessage('正在打开章节...')
@@ -7253,6 +7273,69 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
         }))
       },
     })
+  }
+
+  /** 手工新建空白计划：落到云端后直接选中，作者可在编辑区改名/补充内容 */
+  async function handleCreatePlanFile() {
+    setChapterSaveState('saving')
+    setChapterSaveMessage('正在新建计划...')
+
+    try {
+      const item = await createNovelPlanFile(activeNovelId)
+      const nextPlan = buildServerPlanFile(item)
+      setServerPlanFiles((current) => [...current, nextPlan])
+      setSelectedTreeItemId(`plan:${nextPlan.id}`)
+      setMobileView('editor')
+      setChapterSaveState('saved')
+      setChapterSaveMessage('已新建一份空白计划，可直接改名或补充内容。')
+    } catch (error) {
+      setChapterSaveState('error')
+      setChapterSaveMessage(error instanceof Error ? error.message : '新建计划失败，请稍后重试。')
+    }
+  }
+
+  function handleRequestCreatePlan() {
+    setWorkspaceDialog({
+      title: '确认新建计划',
+      description: '将会在计划文件夹新建一份空白计划，Agent 后续可直接读取它。确定现在新建吗？',
+      confirmLabel: '确认新建',
+      cancelLabel: '取消',
+      tone: 'default',
+      onConfirm: async () => {
+        await handleCreatePlanFile()
+      },
+    })
+  }
+
+  /** 计划设置面板内改名：本地产物与云端列表同步更新，再去抖 PATCH */
+  function handleRenamePlan(planId: string, nextTitle: string) {
+    const targetPlan = savedPlanFiles.find((plan) => plan.id === planId)
+
+    if (!targetPlan) {
+      return
+    }
+
+    updateAgentArtifact(planId, (current) => ({
+      ...current,
+      title: nextTitle.trim() || current.title,
+    }))
+    setServerPlanFiles((current) =>
+      current.map((plan) =>
+        plan.id === planId ||
+        Boolean(targetPlan.backendArtifactId && plan.backendArtifactId === targetPlan.backendArtifactId)
+          ? { ...plan, title: nextTitle.trim() || plan.title }
+          : plan,
+      ),
+    )
+    if (targetPlan.backendArtifactId) {
+      schedulePlanServerSync(
+        targetPlan.backendArtifactId,
+        nextTitle.trim() || targetPlan.title,
+        targetPlan.content,
+      )
+    }
+    setChapterSaveState('saved')
+    setChapterSaveMessage('计划名称已更新。')
   }
 
   /** 计划编辑去抖同步云端：先替换待发送负载，800ms 无新输入后 PATCH */
@@ -9014,6 +9097,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
+                  onOpenPlanSettings={() => {
+                    if (selectedTreeItemId?.startsWith('plan:')) {
+                      setPlanSettingsPlanId(selectedTreeItemId.slice('plan:'.length))
+                    }
+                  }}
                   onPublishNovel={handlePublishNovel}
                   novelPublished={novelForm?.status === 'published'}
                   onStatusChange={handleEditorStatusChange}
@@ -9073,9 +9161,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   activeCoverLabel={coverLabel}
                   onSelectChapter={handleSelectChapter}
                   onSelectPlan={handleSelectPlanFromTree}
-                  onDeletePlan={handleRequestDeletePlan}
+                  onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
+                  onOpenPlanSettings={setPlanSettingsPlanId}
                   onSelectCatalog={handleSelectCatalogFromTree}
                   onCreateChapter={handleRequestCreateChapter}
+                  onCreatePlan={handleRequestCreatePlan}
                 />
               </div>
             ) : null}
@@ -9278,9 +9368,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   activeCoverLabel={coverLabel}
                   onSelectChapter={handleSelectChapter}
                   onSelectPlan={handleSelectPlanFromTree}
-                  onDeletePlan={handleRequestDeletePlan}
+                  onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
+                  onOpenPlanSettings={setPlanSettingsPlanId}
                   onSelectCatalog={handleSelectCatalogFromTree}
                   onCreateChapter={handleRequestCreateChapter}
+                  onCreatePlan={handleRequestCreatePlan}
                 />
                 <PanelResizeHandle
                   panel="tree"
@@ -9307,6 +9399,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
+                  onOpenPlanSettings={() => {
+                    if (selectedTreeItemId?.startsWith('plan:')) {
+                      setPlanSettingsPlanId(selectedTreeItemId.slice('plan:'.length))
+                    }
+                  }}
                   onPublishNovel={handlePublishNovel}
                   novelPublished={novelForm?.status === 'published'}
                   onStatusChange={handleEditorStatusChange}
@@ -9406,8 +9503,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           onSelectChapter={handleSelectChapter}
           onSelectPlan={handleSelectPlanFromTree}
           onDeletePlan={handleRequestDeletePlan}
+          onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
+          onRenamePlan={handleRenamePlan}
           onSelectCatalog={handleSelectCatalogFromTree}
           onCreateChapter={handleRequestCreateChapter}
+          onCreatePlan={handleRequestCreatePlan}
           onDeleteChapter={() => void handleDeleteChapter()}
           onChange={handleChapterDraftChange}
           onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
@@ -9491,6 +9591,17 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
           onRequestVisibilityAction={handleRequestChapterVisibilityAction}
           onRequestDelete={handleRequestDeleteChapterFromEditor}
           onClose={() => setEditorChapterSettingsOpen(false)}
+        />
+      ) : null}
+      {planSettingsPlan ? (
+        <PlanSettingsPanel
+          plan={planSettingsPlan}
+          onRename={(title) => handleRenamePlan(planSettingsPlan.id, title)}
+          onRequestDelete={() => {
+            setPlanSettingsPlanId(null)
+            handleRequestDeletePlan(planSettingsPlan.id)
+          }}
+          onClose={() => setPlanSettingsPlanId(null)}
         />
       ) : null}
       <ConfirmDialog

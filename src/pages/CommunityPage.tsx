@@ -88,10 +88,11 @@ export default function CommunityPage() {
 
   const topics = useMemo<CommunityTopic[]>(() => {
     const items = topicsQuery.data?.items ?? []
-    const totalCount = items.reduce((sum, topic) => sum + topic.postCount, 0)
 
     return [
-      { id: 'all', name: '全部', slug: 'all', postCount: Math.max(totalCount, totalPosts) },
+      // 「全部」数字与帖子流同源（pagination.total）：话题计数与列表过滤口径不同，
+      // 用话题求和会出现「全部」随切换频道跳动的问题
+      { id: 'all', name: '全部', slug: 'all', postCount: totalPosts },
       ...items.map((topic) => ({ id: topic.id, name: topic.name, slug: topic.slug, postCount: topic.postCount })),
     ]
   }, [topicsQuery.data, totalPosts])

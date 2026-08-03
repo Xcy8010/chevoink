@@ -6,6 +6,7 @@ import type {
   CreateConversationResponse,
   CreatePostRequest,
   CreatePostResponse,
+  DeletePostResponse,
   GetMeResponse,
   GetInteractionBadgesResponse,
   GetPostDetailResponse,
@@ -193,6 +194,13 @@ export function setPostLike(postId: string, liked: boolean) {
 export function setPostBookmark(postId: string, bookmarked: boolean) {
   return requestData<SetPostBookmarkResponse['data']>(`/api/posts/${postId}/bookmark`, {
     method: bookmarked ? 'POST' : 'DELETE',
+  })
+}
+
+/** 删除自己的帖子（后端会连同评论/点赞/收藏一并清理） */
+export function deletePost(postId: string) {
+  return requestData<DeletePostResponse['data']>(`/api/posts/${postId}`, {
+    method: 'DELETE',
   })
 }
 

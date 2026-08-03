@@ -40,7 +40,9 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 3. 模式自适应：轻量诉求直接做，重决策先给方案；不要把简单任务复杂化。
 4. 长任务先建待办再执行：作者要求连续完成多个单元（如「连写六章不要停」「把这几章都改完」）时，先用 todo_write 把任务拆成待办清单（一个单元一条），然后逐条执行，每完成一条立即用 todo_write 把该条标记为 completed。只要清单里还有未完成项，就必须继续执行下一条，严禁中途停下来问作者「要不要继续」。
 5. 记忆沉淀有时机：新设定、新角色、关键转折确立后及时用 memory_save 沉淀，试写内容不沉淀。
-6. 一致性防线前移：写作前先用 memory_search 校对人名、设定与时间线，而不是写完再检查。`
+6. 一致性防线前移：写作前先用 memory_search 校对人名、设定与时间线，而不是写完再检查。
+7. 章节序号先核对再动笔：作者用「第N章」指称章节时，先用 novel_get_context 核对该排位章节的标题与内容是否就是作者所指；若发现该排位的章节标题序号对不上或目标章节缺失（作者删过章导致错位），绝不直接覆盖现有章节，而是用 chapter_create 传 position 在正确位置插入新章（后续章节编号自动后移），必要时再用 chapter_rename 修正错位的标题序号；拿不准作者意图时用 ask_user 确认。
+8. 短答复先对齐上一轮：作者发「好的」「可以」「继续」「嗯」这类短消息时，它大概率是在答复你上一条回复结尾的提问或建议（如「是否需要我继续？」等对用户的提问或者建议）。先回看历史里自己最后一条回复提了什么，把短答复对应到那个提问上直接执行；只有上一条回复没有待答事项时，才把「继续」理解为推进待办清单；两者都对不上时用 ask_user 确认，不要当作无效消息忽略。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。
@@ -80,7 +82,7 @@ async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
   })
 
   const lines = [
-    `当前作品：《${novel.displayTitle ?? novel.title}》（${novel.status === 'published' ? '已发布' : novel.status === 'archived' ? '已下架' : '草稿'}，${novel.chapterCount} 章 / ${novel.wordCount} 字）`,
+    `当前作品：《${novel.displayTitle ?? novel.title}》（${novel.status === 'published' ? '已发布' : novel.status === 'completed' ? '已完结' : novel.status === 'archived' ? '已下架' : '草稿'}，${novel.chapterCount} 章 / ${novel.wordCount} 字）`,
     novel.summary ? `简介：${clip(novel.summary, 200)}` : '',
     novel.tagNames.length ? `标签：${novel.tagNames.join('、')}` : '',
     ...rules.map((rule) => `[${rule.memoryType === 'stylePreference' ? '风格' : '一致性'}] ${rule.title}：${clip(rule.content, 160)}`),
@@ -171,7 +173,7 @@ async function buildTodoDigest(sessionId: string): Promise<string | null> {
   const unfinished = items.filter((item) => item.status !== 'completed').length
   return `[系统] 当前会话的任务待办清单最新状态（${items.length - unfinished}/${items.length} 已完成）：
 ${renderTodoItems(items)}
-注意：这是待办清单的唯一真实状态，历史对话中出现的任何旧待办清单、旧进度数字均已过时作废，一律以本清单为准。标记为 [x] 的项已真实完成，严禁重做；用 todo_write 全量更新状态。${unfinished > 0 ? '\n清单里还有未完成项：除非作者提出了新任务，否则请从第一条未完成项接着执行（先用 chapter_read 等工具核实它的实际进度再动笔）。' : ''}`
+注意：这是待办清单的唯一真实状态，历史对话中出现的任何旧待办清单、旧进度数字均已过时作废，一律以本清单为准。标记为 [x] 的项已真实完成，严禁重做；用 todo_write 全量更新状态。另外：若作者的最新一条消息是在答复你上一条回复结尾的提问或建议（如「好的」「可以」「继续」），优先执行那个提问对应的操作，再回到本清单。${unfinished > 0 ? '\n清单里还有未完成项：除非作者提出了新任务或正在答复你的提问，否则请从第一条未完成项接着执行（先用 chapter_read 等工具核实它的实际进度再动笔）。' : ''}`
 }
 
 /** 把持久化的 AgentMessage.parts 还原为对话文本（工具轨迹压缩为一行，封面类保留 coverAssetId 供跨轮引用） */
@@ -198,11 +200,15 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
 
 /** 历史消息按字符预算裁剪：从最新往回收，超预算的旧消息折叠成一条占位 */
 async function loadSessionHistory(sessionId: string, excludeRunId: string, budgetChars: number): Promise<ChatMessage[]> {
+  // 必须取「最近」的 60 条（desc + reverse）：之前用 asc 取到的是最早 60 条，
+  // 长会话里最新几轮（含助手上一轮结尾的提问）被整体截掉，
+  // 作者回「好的/继续」时模型根本看不到自己刚问过什么
   const records = await prisma.agentMessage.findMany({
     where: { sessionId, runId: { not: excludeRunId }, role: { in: ['user', 'assistant'] } },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { createdAt: 'desc' },
     take: 60,
   })
+  records.reverse()
 
   const plain = records
     .map((record) => ({

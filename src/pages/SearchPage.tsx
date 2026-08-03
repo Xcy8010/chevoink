@@ -21,7 +21,8 @@ type ResultTabId = 'all' | 'novel' | 'author' | 'post'
 
 const STATUS_LABEL: Record<string, string> = {
   published: '连载中',
-  archived: '完结',
+  completed: '完结',
+  archived: '已下架',
   draft: '草稿',
 }
 

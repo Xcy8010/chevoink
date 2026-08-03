@@ -10,6 +10,7 @@ import {
   FileText as FileTextIcon,
   ImagePlus,
   MoreHorizontal,
+  NotebookPen,
   PanelBottomOpen,
   Save,
   Settings2,
@@ -36,6 +37,7 @@ import ChapterSidebar from './ChapterSidebar'
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import ChapterSettingsPanel from './ChapterSettingsPanel'
+import PlanSettingsPanel from './PlanSettingsPanel'
 import ConfirmDialog from './ConfirmDialog'
 import { SaveStatusPill } from './StudioControls'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
@@ -74,8 +76,13 @@ type ImmersiveComposerProps = {
   onSelectChapter: (chapterId: string) => void
   onSelectPlan: (planId: string) => void
   onDeletePlan: (planId: string) => void
+  /** 作品树里点齿轮：切到该章并打开章节设置抽屉 */
+  onOpenChapterSettings?: (chapterId: string) => void
+  /** 计划改名（计划设置面板内） */
+  onRenamePlan: (planId: string, title: string) => void
   onSelectCatalog: () => void
   onCreateChapter: () => void
+  onCreatePlan: () => void
   onDeleteChapter: () => void | Promise<void>
   onChange: (next: ChapterDraftState) => void
   onWorkspaceDocumentChange?: (next: { title: string; content: string }) => void
@@ -141,8 +148,11 @@ export default function ImmersiveComposer({
   onSelectChapter,
   onSelectPlan,
   onDeletePlan,
+  onOpenChapterSettings,
+  onRenamePlan,
   onSelectCatalog,
   onCreateChapter,
+  onCreatePlan,
   onDeleteChapter,
   onChange,
   onWorkspaceDocumentChange,
@@ -189,6 +199,7 @@ export default function ImmersiveComposer({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const keyboardInset = useKeyboardInset()
   const [showChapterSettings, setShowChapterSettings] = useState(false)
+  const [planSettingsPlanId, setPlanSettingsPlanId] = useState<string | null>(null)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string
@@ -201,6 +212,14 @@ export default function ImmersiveComposer({
   const currentIndex = chapters.findIndex((chapter) => chapter.id === selectedChapterId)
   const previousChapter = currentIndex > 0 ? chapters[currentIndex - 1] : null
   const nextChapter = currentIndex >= 0 ? chapters[currentIndex + 1] ?? null : null
+  // 当前正在看的计划：供「计划设置」入口与面板定位
+  const activePlanId =
+    workspaceDocument?.kind === 'plan' && selectedTreeItemId?.startsWith('plan:')
+      ? selectedTreeItemId.slice('plan:'.length)
+      : null
+  const planSettingsPlan = planSettingsPlanId
+    ? savedPlans.find((plan) => plan.id === planSettingsPlanId) ?? null
+    : null
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(min-width: 1280px)')
@@ -504,9 +523,14 @@ export default function ImmersiveComposer({
                 activeCoverLabel=""
                 onSelectChapter={onSelectChapter}
                 onSelectPlan={onSelectPlan}
-                onDeletePlan={onDeletePlan}
+                onOpenChapterSettings={(chapterId) => {
+                  onOpenChapterSettings?.(chapterId)
+                  setShowChapterSettings(true)
+                }}
+                onOpenPlanSettings={setPlanSettingsPlanId}
                 onSelectCatalog={onSelectCatalog}
                 onCreateChapter={onCreateChapter}
+                onCreatePlan={onCreatePlan}
               />
               <PanelResizeHandle
                 panel="tree"
@@ -520,7 +544,31 @@ export default function ImmersiveComposer({
           {isDesktop ? (
             <div className={cn('flex h-full min-h-0 flex-col', isDesktop && 'border-r border-[var(--border-subtle)] px-5 py-5 xl:px-6')}>
               {workspaceDocument ? (
-                <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4">
+                <>
+                  {/* 计划/目录文档的工具行：与章节的「章节设置」保持同一位置 */}
+                  <div className="flex flex-wrap items-center justify-end gap-2 pb-4">
+                    <Button variant="ghost" size="sm" onClick={onCreatePlan}>
+                      <NotebookPen className="h-4 w-4" />
+                      新建计划
+                    </Button>
+                    {activePlanId ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setPlanSettingsPlanId(activePlanId)}
+                        className="bg-zinc-900 text-white hover:bg-zinc-800"
+                      >
+                        <Settings2 className="h-4 w-4" />
+                        计划设置
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" onClick={onCreateChapter}>
+                        <FilePlus2 className="h-4 w-4" />
+                        新建章节
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4">
                   {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
                     <PlanChangeReview
                       review={pendingPlanReview}
@@ -575,7 +623,8 @@ export default function ImmersiveComposer({
                     )}
                   </div>
                   )}
-                </div>
+                  </div>
+                </>
               ) : chapterDraft ? (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
@@ -856,18 +905,33 @@ export default function ImmersiveComposer({
                 <>
                   <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} aria-hidden />
                   <div className="absolute bottom-full right-0 z-40 mb-2 w-44 overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
-                    <button
-                      type="button"
-                      disabled={!chapterDraft}
-                      onClick={() => {
-                        setMobileMenuOpen(false)
-                        setShowChapterSettings(true)
-                      }}
-                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
-                    >
-                      <Settings2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                      章节设置
-                    </button>
+                    {/* 设置入口二选一：当前是计划文档显示「计划设置」，否则是章节显示「章节设置」 */}
+                    {activePlanId ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false)
+                          setPlanSettingsPlanId(activePlanId)
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                      >
+                        <Settings2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                        计划设置
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!chapterDraft}
+                        onClick={() => {
+                          setMobileMenuOpen(false)
+                          setShowChapterSettings(true)
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)] disabled:opacity-40"
+                      >
+                        <Settings2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                        章节设置
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -878,6 +942,17 @@ export default function ImmersiveComposer({
                     >
                       <FilePlus2 className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
                       新建章节
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        onCreatePlan()
+                      }}
+                      className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                    >
+                      <NotebookPen className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                      新建计划
                     </button>
                     <button
                       type="button"
@@ -1031,13 +1106,25 @@ export default function ImmersiveComposer({
                       onSelectPlan(planId)
                       setSheetOpen(false)
                     }}
-                    onDeletePlan={onDeletePlan}
+                    onOpenChapterSettings={(chapterId) => {
+                      onOpenChapterSettings?.(chapterId)
+                      setShowChapterSettings(true)
+                      setSheetOpen(false)
+                    }}
+                    onOpenPlanSettings={(planId) => {
+                      setPlanSettingsPlanId(planId)
+                      setSheetOpen(false)
+                    }}
                     onSelectCatalog={() => {
                       onSelectCatalog()
                       setSheetOpen(false)
                     }}
                     onCreateChapter={() => {
                       onCreateChapter()
+                      setSheetOpen(false)
+                    }}
+                    onCreatePlan={() => {
+                      onCreatePlan()
                       setSheetOpen(false)
                     }}
                   />
@@ -1062,6 +1149,18 @@ export default function ImmersiveComposer({
           onRequestVisibilityAction={requestVisibilityAction}
           onRequestDelete={handleDeleteRequest}
           onClose={() => setShowChapterSettings(false)}
+          overlayClassName="z-[110]"
+        />
+      ) : null}
+      {planSettingsPlan ? (
+        <PlanSettingsPanel
+          plan={planSettingsPlan}
+          onRename={(title) => onRenamePlan(planSettingsPlan.id, title)}
+          onRequestDelete={() => {
+            setPlanSettingsPlanId(null)
+            onDeletePlan(planSettingsPlan.id)
+          }}
+          onClose={() => setPlanSettingsPlanId(null)}
           overlayClassName="z-[110]"
         />
       ) : null}

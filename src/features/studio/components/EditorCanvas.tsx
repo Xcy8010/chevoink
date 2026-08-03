@@ -26,6 +26,8 @@ type EditorCanvasProps = {
   onRetryLoad: () => void
   onCreateChapter: () => void
   onOpenChapterSettings: () => void
+  /** 打开当前计划的设置抽屉（改名 / 删除） */
+  onOpenPlanSettings?: () => void
   /** 发布作品入口（仅手机端工具行展示；桌面端由 StudioToolbar 承担） */
   onPublishNovel?: () => void
   novelPublished?: boolean
@@ -73,6 +75,7 @@ export default function EditorCanvas({
   onRetryLoad,
   onCreateChapter,
   onOpenChapterSettings,
+  onOpenPlanSettings,
   onPublishNovel,
   novelPublished = false,
   onStatusChange: _onStatusChange,
@@ -130,10 +133,17 @@ export default function EditorCanvas({
               ) : null}
               <p className="text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
             </div>
-            <Button onClick={onCreateChapter} variant="ghost" size="sm" className="shrink-0">
-              <FilePenLine className="h-4 w-4" />
-              新建章节
-            </Button>
+            {workspaceDocument.kind === 'plan' ? (
+              <Button onClick={() => onOpenPlanSettings?.()} variant="primary" size="sm" className="shrink-0">
+                <Settings2 className="h-4 w-4" />
+                计划设置
+              </Button>
+            ) : (
+              <Button onClick={onCreateChapter} variant="ghost" size="sm" className="shrink-0">
+                <FilePenLine className="h-4 w-4" />
+                新建章节
+              </Button>
+            )}
           </div>
           {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
             <PlanChangeReview
@@ -187,10 +197,17 @@ export default function EditorCanvas({
             ) : null}
             <p className="text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
           </div>
-          <Button onClick={onCreateChapter} variant="ghost" size="sm">
-            <FilePenLine className="h-4 w-4" />
-            新建章节
-          </Button>
+          {workspaceDocument.kind === 'plan' ? (
+            <Button onClick={() => onOpenPlanSettings?.()} variant="primary" size="sm">
+              <Settings2 className="h-4 w-4" />
+              计划设置
+            </Button>
+          ) : (
+            <Button onClick={onCreateChapter} variant="ghost" size="sm">
+              <FilePenLine className="h-4 w-4" />
+              新建章节
+            </Button>
+          )}
         </div>
 
         <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">

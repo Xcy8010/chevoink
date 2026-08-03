@@ -73,18 +73,26 @@ export const PAGE_TITLE_STYLE = {
 }
 
 const MEASURER_ID = 'reader-paginator-measurer'
-const CACHE_LIMIT = 16
+const ASYNC_MEASURER_ID = 'reader-paginator-measurer-async'
+const CACHE_LIMIT = 32
 const paginateCache = new Map<string, PaginateResult>()
+/** 分片预热的单片时间预算：超时就让出主线程，避免整章测量卡住触摸/翻页 */
+const WARM_CHUNK_BUDGET_MS = 5
+/** 异步预热任务串行队列：测量节点只有一个，并发让出时会互相覆盖文本 */
+let warmQueue: Promise<unknown> = Promise.resolve()
+
+function createMeasurer(id: string): HTMLDivElement {
+  const node = document.createElement('div')
+  node.id = id
+  node.setAttribute('aria-hidden', 'true')
+  document.body.appendChild(node)
+  return node
+}
 
 function getMeasurer(): HTMLDivElement {
   const existing = document.getElementById(MEASURER_ID)
   if (existing) return existing as HTMLDivElement
-
-  const node = document.createElement('div')
-  node.id = MEASURER_ID
-  node.setAttribute('aria-hidden', 'true')
-  document.body.appendChild(node)
-  return node
+  return createMeasurer(MEASURER_ID)
 }
 
 /** 把切点微调到标点禁则允许的位置 */
@@ -100,11 +108,17 @@ function adjustCut(text: string, cut: number): number {
   return Math.min(text.length, Math.max(1, next))
 }
 
-function paginate(paragraphs: string[], layout: PaginateLayout, title: string): PaginateResult {
+function paginate(
+  paragraphs: string[],
+  layout: PaginateLayout,
+  title: string,
+  yieldGuard?: () => Promise<void>,
+  measurerNode?: HTMLDivElement,
+): PaginateResult | Promise<PaginateResult> {
   const { width, height, fontSize, lineHeight, paragraphGap } = layout
   if (paragraphs.length === 0 || width <= 0 || height <= 0) return EMPTY_RESULT
 
-  const node = getMeasurer()
+  const node = measurerNode ?? getMeasurer()
   const style = node.style
   style.position = 'fixed'
   style.left = '-10000px'
@@ -165,7 +179,37 @@ function paginate(paragraphs: string[], layout: PaginateLayout, title: string): 
     pageStartOffset = globalOffset
   }
 
+  const finish = (): PaginateResult => {
+    flushPage()
+    node.textContent = ''
+
+    return {
+      pages,
+      paragraphPageMap,
+      avgCharsPerPage: pages.length > 0 ? totalChars / pages.length : 0,
+      totalChars,
+    }
+  }
+
+  // 分片模式（预热专用）：每处理几段就让出主线程，整章测量不再阻塞触摸/翻页帧；
+  // 同步模式（渲染线程缓存未命中）保持原有行为不变。
+  if (yieldGuard) {
+    const run = async (): Promise<PaginateResult> => {
+      for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+        consumeParagraph(paragraphIndex)
+        if (paragraphIndex % 4 === 3) await yieldGuard()
+      }
+      return finish()
+    }
+    return run()
+  }
+
   for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+    consumeParagraph(paragraphIndex)
+  }
+  return finish()
+
+  function consumeParagraph(paragraphIndex: number) {
     const text = paragraphs[paragraphIndex]
     totalChars += text.length
     let start = 0
@@ -226,16 +270,6 @@ function paginate(paragraphs: string[], layout: PaginateLayout, title: string): 
       if (start >= text.length) break
     }
   }
-
-  flushPage()
-  node.textContent = ''
-
-  return {
-    pages,
-    paragraphPageMap,
-    avgCharsPerPage: pages.length > 0 ? totalChars / pages.length : 0,
-    totalChars,
-  }
 }
 
 /** 带缓存的分页计算：同一章节/字号/视口只算一次 */
@@ -248,13 +282,65 @@ export function paginateChapter(
   const cached = paginateCache.get(cacheKey)
   if (cached) return cached
 
-  const result = paginate(paragraphs, layout, title)
+  const result = paginate(paragraphs, layout, title) as PaginateResult
   paginateCache.set(cacheKey, result)
   if (paginateCache.size > CACHE_LIMIT) {
     const oldest = paginateCache.keys().next().value
     if (oldest) paginateCache.delete(oldest)
   }
   return result
+}
+
+/**
+ * 只读查询分页缓存（不触发测量）：章边界预渲染相邻章边界页用——
+ * 预热命中才渲染，未命中不落回同步测量，避免把整章测量卡进翻页帧
+ */
+export function getPaginationCache(cacheKey: string): PaginateResult | undefined {
+  return paginateCache.get(cacheKey)
+}
+
+/**
+ * 预热专用分页：命中缓存直接返回，未命中则分片异步测量（每片超预算即 setTimeout(0)
+ * 让出主线程），整章测量不再一口气卡住渲染线程。与 paginateChapter 共用同一份缓存；
+ * 用独立的测量节点 + 串行队列，异步让出期间不会与渲染线程的同步测量互相污染。
+ */
+export function paginateChapterAsync(
+  cacheKey: string,
+  paragraphs: string[],
+  layout: PaginateLayout,
+  title = '',
+): Promise<PaginateResult> {
+  const task = warmQueue.then(async (): Promise<PaginateResult> => {
+    const cached = paginateCache.get(cacheKey)
+    if (cached) return cached
+
+    const node = document.getElementById(ASYNC_MEASURER_ID) as HTMLDivElement | null
+    const measurerNode = node ?? createMeasurer(ASYNC_MEASURER_ID)
+
+    let chunkStart = performance.now()
+    const yieldGuard = async () => {
+      if (performance.now() - chunkStart < WARM_CHUNK_BUDGET_MS) return
+      chunkStart = performance.now()
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    }
+
+    const result = await (paginate(
+      paragraphs,
+      layout,
+      title,
+      yieldGuard,
+      measurerNode,
+    ) as Promise<PaginateResult>)
+    paginateCache.set(cacheKey, result)
+    if (paginateCache.size > CACHE_LIMIT) {
+      const oldest = paginateCache.keys().next().value
+      if (oldest) paginateCache.delete(oldest)
+    }
+    return result
+  })
+  // 队列失败不阻断后续预热任务
+  warmQueue = task.catch(() => undefined)
+  return task
 }
 
 /** 页码 → 页首字符偏移；用于改字号/旋屏重排后回到同一处正文 */

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express'
 
 import type { CreatePostRequest } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
-import { createPostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
+import { createPostData, deletePostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { MAX_POST_IMAGE_COUNT, storePostImageDataUrls } from '../lib/post-image-storage.js'
 import { sendRouteError } from '../lib/route-error.js'
@@ -114,6 +114,24 @@ async function handlePostBookmark(req: Request, res: Response, bookmarked: boole
     sendRouteError(res, requestId, error)
   }
 }
+
+router.delete('/:postId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const deleted = await deletePostData(userId, req.params.postId)
+
+    if (!deleted) {
+      res.status(404).json(buildError(requestId, 'POST_NOT_FOUND', '未找到动态。'))
+      return
+    }
+
+    res.status(200).json(buildSuccess(requestId, { deleted: true }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
 
 router.post('/:postId/like', (req, res) => handlePostLike(req, res, true))
 router.delete('/:postId/like', (req, res) => handlePostLike(req, res, false))

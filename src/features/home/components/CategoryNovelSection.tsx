@@ -21,7 +21,8 @@ type CategoryNovelSectionProps = {
 
 const statusLabel: Record<string, string> = {
   published: '连载中',
-  archived: '完结',
+  completed: '完结',
+  archived: '已下架',
   draft: '草稿',
 }
 

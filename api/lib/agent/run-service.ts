@@ -432,6 +432,89 @@ export async function listNovelPlanArtifacts(
   return { items: deduped.map(toNovelPlanArtifact) }
 }
 
+/** 手工新建计划：作者在作品树点「新建计划」时落一份空白计划，挂到该作品最近的 Agent 任务上 */
+export async function createNovelPlanArtifact(
+  userId: string,
+  novelId: string,
+  title?: string,
+): Promise<{ item: NovelPlanArtifact }> {
+  const novel = await prisma.novel.findFirst({
+    where: { id: novelId, authorId: userId },
+    select: { id: true, title: true },
+  })
+
+  if (!novel) {
+    throw new DataAccessError(404, 'NOT_FOUND', '作品不存在或无权访问。')
+  }
+
+  // 计划产物必须挂在 AgentRun 上：优先复用该作品最近一次任务，还没跑过任务时补一条载体
+  let run = await prisma.agentRun.findFirst({
+    where: { userId, novelId },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+
+  if (!run) {
+    const session = await prisma.agentSession.create({
+      data: {
+        userId,
+        novelId,
+        // 标题保留默认命名且不写 lastRunAt，这条载体不会出现在任务会话列表里
+        title: `${novel.title} 写作会话`,
+        status: 'active',
+      },
+      select: { id: true },
+    })
+
+    run = await prisma.agentRun.create({
+      data: {
+        sessionId: session.id,
+        userId,
+        novelId,
+        mode: 'plan',
+        action: 'planChapter',
+        agentType: 'storyPlanner',
+        status: 'completed',
+        inputSummary: '作者手工新建计划',
+        finishedAt: new Date(),
+      },
+      select: { id: true },
+    })
+  }
+
+  // listNovelPlanArtifacts 会按标题折叠同名计划，这里自动排号，避免新建的空白计划与旧计划互相吞掉
+  const existing = await prisma.agentArtifact.findMany({
+    where: {
+      artifactType: 'chapterPlan',
+      metadata: { path: ['savedAsPlan'], equals: true },
+      run: { userId, novelId },
+    },
+    select: { title: true },
+  })
+  const usedTitles = new Set(existing.map((artifact) => artifact.title.trim()))
+
+  const baseTitle = title?.trim().slice(0, 60) || '未命名计划'
+  let nextTitle = baseTitle
+  let suffix = 2
+  while (usedTitles.has(nextTitle)) {
+    nextTitle = `${baseTitle} ${suffix}`
+    suffix += 1
+  }
+
+  const artifact = await prisma.agentArtifact.create({
+    data: {
+      runId: run.id,
+      artifactType: 'chapterPlan',
+      title: nextTitle,
+      content: '',
+      metadata: { savedAsPlan: true, manualCreated: true },
+    },
+    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
+  })
+
+  return { item: toNovelPlanArtifact(artifact) }
+}
+
 /** 更新计划：改名/改正文，或 saved=false 从计划文件夹移除（保留产物本体与任务历史） */
 export async function updateNovelPlanArtifact(
   userId: string,
@@ -654,6 +737,7 @@ export async function rollbackLoopSessionFromMessage(
         snapshot.field === 'status' &&
         (snapshot.previousValue === 'draft' ||
           snapshot.previousValue === 'published' ||
+          snapshot.previousValue === 'completed' ||
           snapshot.previousValue === 'archived')
       ) {
         await tx.novel.update({

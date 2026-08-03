@@ -205,6 +205,12 @@ export function AgentPanel({
       return
     }
 
+    // 切换/重载会话语义上就是「跳到对话最新处」：强制复位贴底跟随。
+    // 否则旧对话内容清空/替换时容器高度骤减，浏览器把 scrollTop 钳制回 0 并触发 scroll 事件，
+    // 会被误判为用户上滑而关闭自动滚底，导致历史载入后永远停在最顶部
+    pinnedToBottomRef.current = true
+    lastScrollTopRef.current = 0
+
     let cancelled = false
     disconnect()
     useAgentStore.getState().resetRun()
@@ -251,7 +257,10 @@ export function AgentPanel({
     }
   }, [sessionId, connect, disconnect])
 
-  // 消息更新自动滚动到底部（仅当用户本就贴底时）；历史载入完成（historyLoading 置回 false）后等一帧再滚，确保消息已完成布局
+  // 消息更新自动滚动到底部（仅当用户本就贴底时）。
+  // 消息流用 content-visibility 虚拟化，scrollHeight 起初只是估算值：面板新挂载（如进入沉浸层）时
+  // 单次滚底只能跳到「估算底部」，随后底部消息真实布局、高度膨胀，位置会停在半山腰；
+  // 改为逐帧追底直到连续多帧稳定贴底才收敛
   useEffect(() => {
     if (historyLoading) {
       return
@@ -263,9 +272,25 @@ export function AgentPanel({
     if (!pinnedToBottomRef.current) {
       return
     }
-    const frame = requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight
-      lastScrollTopRef.current = node.scrollTop
+    let attempts = 0
+    let stableTicks = 0
+    let frame = requestAnimationFrame(function step() {
+      // 用户中途上滑脱离贴底：立刻停止追底，不和手势抢滚动
+      if (!pinnedToBottomRef.current) {
+        return
+      }
+      if (node.scrollHeight - node.scrollTop - node.clientHeight > 1) {
+        node.scrollTop = node.scrollHeight
+        lastScrollTopRef.current = node.scrollTop
+        stableTicks = 0
+      } else {
+        stableTicks += 1
+      }
+      attempts += 1
+      // 连续 3 帧稳定贴底视为布局收敛；上限 30 帧防止极端情况下空转
+      if (attempts < 30 && stableTicks < 3) {
+        frame = requestAnimationFrame(step)
+      }
     })
     return () => cancelAnimationFrame(frame)
   }, [messages, pendingApproval, pendingQuestion, historyLoading])
@@ -280,11 +305,18 @@ export function AgentPanel({
     }
     const previousTop = lastScrollTopRef.current
     lastScrollTopRef.current = node.scrollTop
-    if (node.scrollTop < previousTop - 2) {
+    const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+    // scrollTop 变小但人仍在底部 → 是内容高度变化（content-visibility 估算修正/清空重建）
+    // 引发的浏览器钳制，不是用户上滑，不能据此关闭贴底跟随
+    if (node.scrollTop < previousTop - 2 && distanceToBottom > 1) {
       pinnedToBottomRef.current = false
       return
     }
-    pinnedToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80
+    // 只在回到底部附近时恢复贴底；不在中途向下滚时置 false——自动滚底后底部内容真实布局撑高会让
+    // 距底距离瞬间超阈值，若据此关贴底会把追底收敛循环自己打断
+    if (distanceToBottom < 80) {
+      pinnedToBottomRef.current = true
+    }
   }, [])
 
   const handleSend = useCallback(
@@ -483,11 +515,24 @@ export function AgentPanel({
           onNewSession?.()
         }
       } else if (sessionId) {
+        // 刚发出的用户消息在本地是临时 id（local-*），服务端落库用的是另一个 uuid：
+        // 直接拿临时 id 调删除/回退会 404「消息不存在或已被删除」，先按 runId 对齐到真实 id
+        let targetMessageId = confirmAction.messageId
+        if (targetMessageId.startsWith('local-')) {
+          const localMessage = useAgentStore
+            .getState()
+            .messages.find((item) => item.id === targetMessageId)
+          const { messages: history } = await fetchAgentSessionMessages(sessionId)
+          const serverMessage = history.find(
+            (item) => item.role === 'user' && localMessage != null && item.runId === localMessage.runId,
+          )
+          targetMessageId = serverMessage?.id ?? targetMessageId
+        }
         if (confirmAction.kind === 'deleteMessage') {
-          await deleteAgentSessionMessage(sessionId, confirmAction.messageId)
+          await deleteAgentSessionMessage(sessionId, targetMessageId)
           await reloadMessages()
         } else {
-          await rollbackAgentSessionMessage(sessionId, confirmAction.messageId)
+          await rollbackAgentSessionMessage(sessionId, targetMessageId)
           await reloadMessages()
           onWorkspaceRollback?.()
         }
@@ -496,7 +541,18 @@ export function AgentPanel({
       setTouchActionsId(null)
       setExpandedActionsId(null)
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : '操作失败，请稍后再试。')
+      // 服务端已经没有这条消息（如此前已删除成功但界面未同步）：重拉历史对齐界面，不再报错
+      if (
+        error instanceof AgentApiError &&
+        error.status === 404 &&
+        confirmAction.kind !== 'deleteSession'
+      ) {
+        await reloadMessages()
+        setTouchActionsId(null)
+        setExpandedActionsId(null)
+      } else {
+        setActionError(error instanceof Error ? error.message : '操作失败，请稍后再试。')
+      }
       setConfirmAction(null)
     } finally {
       setConfirmBusy(false)

@@ -1,17 +1,19 @@
-import { Heart, Link2, MessageSquareMore, Share2, Star, UserRoundPlus } from 'lucide-react'
+import { Heart, Link2, MessageSquareMore, MoreHorizontal, Star, Trash2, UserRoundPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { useToast } from '@/components/ui/Toast'
 import AppImage from '@/components/ui/AppImage'
-import { setPostBookmark, setPostLike } from '@/features/community/api'
-import { patchPostInCaches } from '@/features/community/post-cache'
+import { deletePost, setPostBookmark, setPostLike } from '@/features/community/api'
+import { patchPostInCaches, removePostFromCaches } from '@/features/community/post-cache'
 import Avatar from '@/features/community/components/Avatar'
 import AuthorReferenceCard from '@/features/community/components/AuthorReferenceCard'
 import NovelReferenceCard from '@/features/community/components/NovelReferenceCard'
 import PostImageViewer from '@/features/community/components/PostImageViewer'
 import ShareToFriendSheet from '@/features/community/components/ShareToFriendSheet'
+import ConfirmDialog from '@/features/studio/components/ConfirmDialog'
+import { useShellStore } from '@/store/useShellStore'
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
@@ -38,6 +40,10 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const [shareSheetOpen, setShareSheetOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const sessionUser = useShellStore((state) => state.sessionUser)
+  const isOwnPost = Boolean(sessionUser && sessionUser.id === post.author.id)
 
   // 服务端 viewer 状态刷新后同步本地状态
   useEffect(() => {
@@ -96,6 +102,25 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
       toast.success('链接已复制，去分享给朋友吧')
     } else {
       toast.error('复制失败，请手动复制地址栏链接')
+    }
+  }
+
+  const handleDelete = async () => {
+    if (deleting) return
+    setDeleting(true)
+    try {
+      await deletePost(post.id)
+      removePostFromCaches(queryClient, post.id)
+      toast.success('动态已删除')
+      setDeleteConfirmOpen(false)
+      // 详情页里删除后直接返回，避免停在已失效的内容页
+      if (flat) {
+        navigate(-1)
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除失败，请稍后再试')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -284,7 +309,7 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
         <div className="relative">
           <button
             type="button"
-            aria-label="分享"
+            aria-label="更多操作"
             aria-expanded={shareMenuOpen}
             onClick={(event) => {
               event.stopPropagation()
@@ -292,8 +317,7 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
             }}
             className={actionButtonClass(false)}
           >
-            <Share2 className="h-4 w-4" />
-            分享
+            <MoreHorizontal className="h-4 w-4" />
           </button>
 
           {shareMenuOpen ? (
@@ -308,6 +332,20 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
                 aria-hidden
               />
               <div className="absolute bottom-[42px] right-0 z-50 w-44 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1.5 shadow-[var(--shadow-modal)]">
+                {isOwnPost ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setShareMenuOpen(false)
+                      setDeleteConfirmOpen(true)
+                    }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-[rgb(153,27,27)] transition-colors hover:bg-[var(--surface-muted)]"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    删除
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={(event) => {
@@ -350,6 +388,24 @@ export default function PostCard({ post, compact = false, flat = false }: PostCa
       {previewIndex !== null && imageUrls.length > 0 ? (
         <PostImageViewer images={imageUrls} initialIndex={previewIndex} onClose={() => setPreviewIndex(null)} />
       ) : null}
+
+      {/* 弹窗经 portal 渲染到 body，但 React 事件仍会沿虚拟 DOM 冒泡到卡片的 openDetail，
+          这里阻断冒泡，避免点确认/取消时同时跳转帖子详情 */}
+      <span onClick={(event) => event.stopPropagation()}>
+        <ConfirmDialog
+          open={deleteConfirmOpen}
+          title="确认删除这条动态"
+          description="删除后，这条动态及其评论、点赞、收藏都会一起移除，且无法恢复。确定要删除吗？"
+          confirmLabel="确定删除"
+          cancelLabel="取消"
+          tone="danger"
+          busy={deleting}
+          onConfirm={() => void handleDelete()}
+          onCancel={() => {
+            if (!deleting) setDeleteConfirmOpen(false)
+          }}
+        />
+      </span>
     </article>
   )
 }

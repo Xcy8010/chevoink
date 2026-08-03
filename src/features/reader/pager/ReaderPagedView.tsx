@@ -33,6 +33,13 @@ const EXIT_HINT_REVEAL = 44
 
 type PageTurnAnimation = 'simulate' | 'cover'
 
+/** 章边界预渲染的相邻章边界页（来自分页预热缓存）：有它时章边界翻页和章内一样跟手 */
+export type BoundaryPageData = {
+  page: ReaderPageContent
+  paragraphs: string[]
+  title: string
+}
+
 type ReaderPagedViewProps = {
   pages: ReaderPageContent[]
   paragraphs: string[]
@@ -51,6 +58,15 @@ type ReaderPagedViewProps = {
   /** 代入页（第 -1 页）内容 */
   renderCover?: () => ReactNode
   /**
+   * 章边界预渲染的相邻章边界页（分页预热缓存命中才有）：
+   * 渲染进前/后图层，让章边界拖动跟手、翻页动画连续滑过去不卡；
+   * 未命中时维持橡皮筋 + 进场动画的兼容行为
+   */
+  boundaryPrevPage?: BoundaryPageData | null
+  boundaryNextPage?: BoundaryPageData | null
+  /** 相邻章边界页各自的信息层（全书页码口径与本章不同，由上层单独给） */
+  renderBoundaryChrome?: (side: 'prev' | 'next') => ReactNode
+  /**
    * 每页各自的常驻信息层（左上返回/右上菜单/底部页码时间）。
    * 必须画进每一个页面图层而不是单独一层：单层时右滑露出的上一页会先把它盖住、
    * 翻页落定后再重新出现，观感上闪一下（番茄是每页各带一份）。参数为该页页码。
@@ -59,6 +75,12 @@ type ReaderPagedViewProps = {
   renderChrome?: (pageIndex: number) => ReactNode
   /** 代入页右滑到位：退出阅读器回作品页（不传则右滑只做橡皮筋） */
   onExitByGesture?: () => void
+  /**
+   * 章边界换章的进场动画方向：next = 新章页从右侧滑入（往后翻），prev = 从左侧滑入（往前翻）。
+   * 没有换章动画诉求时传 null；动画结束回调用于上层清状态。
+   */
+  enterDirection?: 'next' | 'prev' | null
+  onEnterAnimationEnd?: () => void
   /** 正文区尺寸变化（供分页引擎测量） */
   onViewportChange: (size: { width: number; height: number }) => void
   /** 轻点中间区域（左右各 25% 为翻页热区） */
@@ -101,8 +123,13 @@ export default function ReaderPagedView({
   speakingParagraphIndex,
   selectedParagraphIndex,
   renderCover,
+  boundaryPrevPage = null,
+  boundaryNextPage = null,
+  renderBoundaryChrome,
   renderChrome,
   onExitByGesture,
+  enterDirection = null,
+  onEnterAnimationEnd,
   onViewportChange,
   onTapCenter,
   onLongPressParagraph,
@@ -136,6 +163,8 @@ export default function ReaderPagedView({
     decided: false,
     direction: null as 'next' | 'prev' | null,
     rubber: false,
+    /** 章边界且相邻章边界页已预渲染：走章边界阈值但翻页动画连续 */
+    boundary: false,
     /** 代入页右滑退出手势 */
     exiting: false,
     startX: 0,
@@ -149,6 +178,11 @@ export default function ReaderPagedView({
 
   const exitCallbackRef = useRef(onExitByGesture)
   exitCallbackRef.current = onExitByGesture
+
+  const onEnterEndRef = useRef(onEnterAnimationEnd)
+  onEnterEndRef.current = onEnterAnimationEnd
+  /** 换章进场动画进行中：期间跳过 resetLayers，避免页码归零的重置把进场起点抹掉 */
+  const enterActiveRef = useRef(false)
 
   const pagerRef = useRef(pager)
   pagerRef.current = pager
@@ -194,10 +228,50 @@ export default function ReaderPagedView({
     [baseTransform, duration],
   )
 
-  // 翻页落定/重排后清掉内联动画样式（在绘制前完成，无闪帧）
+  // 翻页落定/重排/换章后清掉内联动画样式（在绘制前完成，无闪帧）；换章进场期间让位给进场动画。
+  // pages 也在依赖里：章边界跟手跨章后落点页码可能恰好不变，只靠页码依赖会漏掉图层归位
   useLayoutEffect(() => {
+    if (enterActiveRef.current) return
     resetLayers(false)
-  }, [pager.pageIndex, mode, resetLayers])
+  }, [pager.pageIndex, pages, mode, resetLayers])
+
+  // 换章进场：新章首/末页从翻页方向滑入（与章内翻页同一条补间曲线），
+  // 避免章边界瞬切内容观感上“卡一下”。起点在绘制前就摆好，不会先闪一帧落点。
+  useLayoutEffect(() => {
+    if (!enterDirection || pages.length === 0) return
+    if (enterActiveRef.current) return
+    enterActiveRef.current = true
+    animatingRef.current = true
+
+    const node = currentLayerRef.current
+    const width = rootRef.current?.getBoundingClientRect().width || window.innerWidth
+    if (node) {
+      node.style.transition = 'none'
+      node.style.transform = `translateX(${enterDirection === 'next' ? width : -width}px)`
+      node.style.boxShadow = 'none'
+    }
+    if (shadeRef.current) shadeRef.current.style.opacity = '0'
+
+    let raf2 = 0
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        const el = currentLayerRef.current
+        if (!el) return
+        el.style.transition = `transform ${duration}ms ${FLIP_EASING}`
+        el.style.transform = baseTransform('current')
+        animationTimerRef.current = window.setTimeout(() => {
+          animatingRef.current = false
+          enterActiveRef.current = false
+          resetLayers(false)
+          onEnterEndRef.current?.()
+        }, duration + 16)
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(raf1)
+      if (raf2) window.cancelAnimationFrame(raf2)
+    }
+  }, [enterDirection, pages, duration, baseTransform, resetLayers])
 
   useEffect(() => {
     return () => {
@@ -320,13 +394,17 @@ export default function ReaderPagedView({
     }, duration + 16)
   }, [duration, resetLayers])
 
-  /** 把还在补间的翻页立即落定：连续快速滑动时不丢手势 */
+  /** 把还在补间的翻页立即落定：连续快速滑动时不丢手势；换章进场中也一并收掉 */
   const settleFlip = useCallback(() => {
     if (animationTimerRef.current !== null) {
       window.clearTimeout(animationTimerRef.current)
       animationTimerRef.current = null
     }
     animatingRef.current = false
+    if (enterActiveRef.current) {
+      enterActiveRef.current = false
+      onEnterEndRef.current?.()
+    }
     const direction = pendingCommitRef.current
     pendingCommitRef.current = null
     if (direction === 'next') pagerRef.current.requestNext()
@@ -403,15 +481,17 @@ export default function ReaderPagedView({
       const root = rootRef.current
       dragRef.current.width = root?.getBoundingClientRect().width || window.innerWidth
       const canFlipInChapter = direction === 'next' ? pagerRef.current.hasNextPage : pagerRef.current.hasPrevPage
-      if (!canFlipInChapter) {
-        // 章边界：不做动画，直接交给上层换章
+      // 相邻章边界页已预渲染：轻点也能带补间动画跨章，不再瞬切
+      const canFlipAcross = direction === 'next' ? Boolean(boundaryNextPage) : Boolean(boundaryPrevPage)
+      if (!canFlipInChapter && !canFlipAcross) {
+        // 章边界且无预渲染页：不做动画，直接交给上层换章
         if (direction === 'next') pagerRef.current.requestNext()
         else pagerRef.current.requestPrev()
         return
       }
       commitFlip(direction)
     },
-    [commitFlip],
+    [commitFlip, boundaryPrevPage, boundaryNextPage],
   )
 
   const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -429,6 +509,7 @@ export default function ReaderPagedView({
       decided: false,
       direction: null,
       rubber: false,
+      boundary: false,
       exiting: false,
       startX: touch.clientX,
       startY: touch.clientY,
@@ -464,8 +545,15 @@ export default function ReaderPagedView({
       // 代入页右滑：不是翻页而是退出阅读器
       drag.exiting =
         drag.direction === 'prev' && Boolean(exitCallbackRef.current) && pagerRef.current.isCoverPage
+      // 相邻章边界页已预渲染进图层时不算橡皮筋：拖动跟手、翻页动画连续滑过去
       drag.rubber =
         !drag.exiting &&
+        (drag.direction === 'next'
+          ? !pagerRef.current.hasNextPage && !boundaryNextPage
+          : !pagerRef.current.hasPrevPage && !boundaryPrevPage)
+      drag.boundary =
+        !drag.exiting &&
+        !drag.rubber &&
         (drag.direction === 'next' ? !pagerRef.current.hasNextPage : !pagerRef.current.hasPrevPage)
     }
 
@@ -531,7 +619,8 @@ export default function ReaderPagedView({
 
     const passed =
       !drag.rubber &&
-      (Math.abs(drag.dx) > drag.width * COMMIT_RATIO || velocity > COMMIT_VELOCITY)
+      (Math.abs(drag.dx) > drag.width * (drag.boundary ? CHAPTER_COMMIT_RATIO : COMMIT_RATIO) ||
+        velocity > (drag.boundary ? CHAPTER_COMMIT_VELOCITY : COMMIT_VELOCITY))
 
     if (passed) {
       commitFlip(direction)
@@ -553,77 +642,99 @@ export default function ReaderPagedView({
     cancelFlip()
   }
 
+  /** 页内容主体：本章页与相邻章边界页共用；相邻章页不带本章的选段/听书/划线高亮 */
+  const renderPageContent = (
+    page: ReaderPageContent,
+    sourceParagraphs: string[],
+    sourceTitle: string,
+    interactive: boolean,
+  ): ReactNode => (
+    <div className="absolute" style={insetStyle}>
+      {page.showTitle && sourceTitle.length > 0 ? (
+        <div
+          style={{
+            borderLeft: `${PAGE_TITLE_STYLE.barWidth}px solid ${tone.accent}`,
+            paddingLeft: PAGE_TITLE_STYLE.barGap,
+            marginBottom: PAGE_TITLE_STYLE.gapBelow,
+          }}
+        >
+          <h2
+            style={{
+              fontSize: `${Math.round(fontScaleOption.fontSize * PAGE_TITLE_STYLE.scale)}px`,
+              lineHeight: PAGE_TITLE_STYLE.lineHeight,
+              fontWeight: 700,
+              letterSpacing: '0.01em',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              color: tone.accent,
+            }}
+          >
+            {sourceTitle}
+          </h2>
+        </div>
+      ) : null}
+      {page.blocks.map((block, blockIndex) => {
+        const source = sourceParagraphs[block.paragraphIndex] ?? ''
+        const text = source.slice(block.startChar, block.endChar)
+        const isSpeaking = interactive && speakingParagraphIndex === block.paragraphIndex
+        const isSelected = interactive && selectedParagraphIndex === block.paragraphIndex
+        const isUnderlined = interactive && underlined.has(block.paragraphIndex)
+        return (
+          <p
+            key={`${block.paragraphIndex}-${block.startChar}`}
+            data-tts-p={block.paragraphIndex}
+            style={{
+              fontSize: `${fontScaleOption.fontSize}px`,
+              lineHeight: fontScaleOption.lineHeight,
+              letterSpacing: '0.01em',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              textIndent: block.startChar > 0 ? 0 : '2em',
+              marginTop: blockIndex > 0 ? PAGE_PARAGRAPH_GAP : 0,
+              color: tone.text,
+              background: isSelected
+                ? 'color-mix(in srgb, currentColor 14%, transparent)'
+                : isSpeaking
+                  ? 'color-mix(in srgb, currentColor 9%, transparent)'
+                  : undefined,
+              borderRadius: isSelected || isSpeaking ? 8 : undefined,
+              textDecoration: isUnderlined ? 'underline' : undefined,
+              textDecorationStyle: isUnderlined ? 'dotted' : undefined,
+              textDecorationColor: isUnderlined
+                ? `color-mix(in srgb, ${tone.accent} 65%, transparent)`
+                : undefined,
+              textDecorationThickness: isUnderlined ? '2px' : undefined,
+              textUnderlineOffset: isUnderlined ? '5px' : undefined,
+            }}
+          >
+            {text}
+          </p>
+        )
+      })}
+    </div>
+  )
+
   const renderPageAt = (index: number): ReactNode => {
     if (index < 0) return index === -1 && renderCover ? renderCover() : null
     const page = pages[index]
     if (!page) return null
     return (
       <>
-        <div className="absolute" style={insetStyle}>
-          {page.showTitle && chapterTitle.length > 0 ? (
-            <div
-              style={{
-                borderLeft: `${PAGE_TITLE_STYLE.barWidth}px solid ${tone.accent}`,
-                paddingLeft: PAGE_TITLE_STYLE.barGap,
-                marginBottom: PAGE_TITLE_STYLE.gapBelow,
-              }}
-            >
-              <h2
-                style={{
-                  fontSize: `${Math.round(fontScaleOption.fontSize * PAGE_TITLE_STYLE.scale)}px`,
-                  lineHeight: PAGE_TITLE_STYLE.lineHeight,
-                  fontWeight: 700,
-                  letterSpacing: '0.01em',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: tone.accent,
-                }}
-              >
-                {chapterTitle}
-              </h2>
-            </div>
-          ) : null}
-          {page.blocks.map((block, blockIndex) => {
-            const source = paragraphs[block.paragraphIndex] ?? ''
-            const text = source.slice(block.startChar, block.endChar)
-            const isSpeaking = speakingParagraphIndex === block.paragraphIndex
-            const isSelected = selectedParagraphIndex === block.paragraphIndex
-            const isUnderlined = underlined.has(block.paragraphIndex)
-            return (
-              <p
-                key={`${block.paragraphIndex}-${block.startChar}`}
-                data-tts-p={block.paragraphIndex}
-                style={{
-                  fontSize: `${fontScaleOption.fontSize}px`,
-                  lineHeight: fontScaleOption.lineHeight,
-                  letterSpacing: '0.01em',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  textIndent: block.startChar > 0 ? 0 : '2em',
-                  marginTop: blockIndex > 0 ? PAGE_PARAGRAPH_GAP : 0,
-                  color: tone.text,
-                  background: isSelected
-                    ? 'color-mix(in srgb, currentColor 14%, transparent)'
-                    : isSpeaking
-                      ? 'color-mix(in srgb, currentColor 9%, transparent)'
-                      : undefined,
-                  borderRadius: isSelected || isSpeaking ? 8 : undefined,
-                  textDecoration: isUnderlined ? 'underline' : undefined,
-                  textDecorationStyle: isUnderlined ? 'dotted' : undefined,
-                  textDecorationColor: isUnderlined
-                    ? `color-mix(in srgb, ${tone.accent} 65%, transparent)`
-                    : undefined,
-                  textDecorationThickness: isUnderlined ? '2px' : undefined,
-                  textUnderlineOffset: isUnderlined ? '5px' : undefined,
-                }}
-              >
-                {text}
-              </p>
-            )
-          })}
-        </div>
+        {renderPageContent(page, paragraphs, chapterTitle, true)}
         {/* 本页自带的信息层：跟着这一页一起进出屏幕，翻页过程中不会消失再重现 */}
         {renderChrome?.(index)}
+      </>
+    )
+  }
+
+  /** 相邻章边界页：预热缓存命中才有；不带本章的高亮态，信息层用单独的全书页码口径 */
+  const renderBoundaryAt = (side: 'prev' | 'next'): ReactNode => {
+    const neighbor = side === 'prev' ? boundaryPrevPage : boundaryNextPage
+    if (!neighbor) return null
+    return (
+      <>
+        {renderPageContent(neighbor.page, neighbor.paragraphs, neighbor.title, false)}
+        {renderBoundaryChrome?.(side)}
       </>
     )
   }
@@ -688,7 +799,9 @@ export default function ReaderPagedView({
         </div>
       ) : null}
 
-      {/* 下一页（仿真模式在当前页下方显出，覆盖模式从右侧滑入） */}
+      {/* 下一页（仿真模式在当前页下方显出，覆盖模式从右侧滑入）；
+          换章进场期间不渲染相邻页：仿真模式下下一页图层垫在当前页下方，
+          滑入过程左侧未覆盖区会提前露出新章第 2 页（闪一下错页） */}
       <div
         ref={nextLayerRef}
         className={layerClass}
@@ -698,7 +811,9 @@ export default function ReaderPagedView({
           transform: baseTransform('next'),
         }}
       >
-        {renderPageAt(pager.pageIndex + 1)}
+        {enterDirection ? null : pager.pageIndex + 1 <= pager.maxIndex
+          ? renderPageAt(pager.pageIndex + 1)
+          : renderBoundaryAt('next')}
         <div
           ref={shadeRef}
           aria-hidden
@@ -716,13 +831,15 @@ export default function ReaderPagedView({
         {renderPageAt(pager.pageIndex)}
       </div>
 
-      {/* 上一页：默认停在屏幕左侧外，右滑时滑回来盖住当前页 */}
+      {/* 上一页：默认停在屏幕左侧外，右滑时滑回来盖住当前页；换章进场期间同样不渲染 */}
       <div
         ref={prevLayerRef}
         className={layerClass}
         style={{ ...layerStyle, zIndex: 30, transform: baseTransform('prev'), transformOrigin: 'right center' }}
       >
-        {renderPageAt(pager.pageIndex - 1)}
+        {enterDirection ? null : pager.pageIndex - 1 >= pager.minIndex
+          ? renderPageAt(pager.pageIndex - 1)
+          : renderBoundaryAt('prev')}
       </div>
     </div>
   )

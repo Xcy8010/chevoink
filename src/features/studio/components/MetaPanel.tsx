@@ -119,6 +119,7 @@ export default function MetaPanel({
               >
                 <option value="draft">草稿</option>
                 <option value="published">上架中</option>
+                <option value="completed">已完结</option>
                 <option value="archived">已下架</option>
               </SelectControl>
             </label>

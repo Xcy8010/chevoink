@@ -257,7 +257,7 @@ export default function RankingsPage() {
                           <span className="max-w-full truncate">{getAuthorName(novel.author)}</span>
                           <span>·</span>
                           <span>{formatWordCount(novel.wordCount)}</span>
-                          {novel.status === 'archived' ? (
+                          {novel.status === 'completed' ? (
                             <>
                               <span>·</span>
                               <span>已完结</span>

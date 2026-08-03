@@ -10,6 +10,43 @@ function clip(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`
 }
 
+const CN_DIGITS: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
+
+function parseChapterNumber(raw: string): number | null {
+  if (/^[0-9０-９]+$/.test(raw)) {
+    const normalized = raw.replace(/[０-９]/g, (ch) => String(ch.charCodeAt(0) - 0xff10))
+    return Number(normalized)
+  }
+  // 中文数字支持到千位，章节序号场景够用
+  let total = 0
+  let current = 0
+  for (const ch of raw) {
+    if (ch in CN_DIGITS) {
+      current = CN_DIGITS[ch]
+    } else if (ch === '十') {
+      total += (current || 1) * 10
+      current = 0
+    } else if (ch === '百') {
+      total += (current || 1) * 100
+      current = 0
+    } else if (ch === '千') {
+      total += (current || 1) * 1000
+      current = 0
+    } else {
+      return null
+    }
+  }
+  const value = total + current
+  return value > 0 ? value : null
+}
+
+/** 从章节标题提取作者自带的「第N章」序号，用于和实际排位比对，
+ * 揭示「作者删过章导致排位与标题错位」的情况 */
+function extractTitleChapterNumber(title: string): number | null {
+  const match = /^第\s*([0-9０-９零一二两三四五六七八九十百千]+)\s*[章回节]/.exec(title.trim())
+  return match ? parseChapterNumber(match[1]) : null
+}
+
 /** 小说全局上下文：信息/章节列表/状态 */
 export const novelGetContextTool = defineTool({
   name: 'novel_get_context',
@@ -45,10 +82,15 @@ export const novelGetContextTool = defineTool({
       select: { id: true, title: true, orderIndex: true, wordCount: true, status: true, summary: true },
     })
 
-    const chapterLines = chapters.map(
-      (chapter) =>
-        `- [${chapter.id}] 第${chapter.orderIndex}章《${chapter.title}》 ${chapter.wordCount}字 ${chapter.status === 'published' ? '已发布' : '草稿'}${chapter.summary ? ' 有摘要' : ''}${chapter.id === ctx.chapterId ? '（当前章节）' : ''}`,
-    )
+    const chapterLines = chapters.map((chapter) => {
+      const titleNumber = extractTitleChapterNumber(chapter.title)
+      const mismatched = titleNumber !== null && titleNumber !== chapter.orderIndex
+      return `- [${chapter.id}] 第${chapter.orderIndex}章《${chapter.title}》 ${chapter.wordCount}字 ${chapter.status === 'published' ? '已发布' : '草稿'}${chapter.summary ? ' 有摘要' : ''}${chapter.id === ctx.chapterId ? '（当前章节）' : ''}${mismatched ? ` 【注意：标题自称第${titleNumber}章，但实际排在第${chapter.orderIndex}位】` : ''}`
+    })
+    const hasMismatch = chapters.some((chapter) => {
+      const titleNumber = extractTitleChapterNumber(chapter.title)
+      return titleNumber !== null && titleNumber !== chapter.orderIndex
+    })
 
     const output = [
       `作品：《${novel.displayTitle ?? novel.title}》 状态：${novel.status} 总字数：${novel.wordCount} 章节数：${novel.chapterCount}`,
@@ -56,6 +98,9 @@ export const novelGetContextTool = defineTool({
       novel.tagNames.length ? `标签：${novel.tagNames.join('、')}${novel.categoryName ? ` 分类：${novel.categoryName}` : ''}` : '',
       novel.coverPrompt ? `封面提示词：${clip(novel.coverPrompt, 160)}` : '',
       chapters.length ? `章节列表：\n${chapterLines.join('\n')}` : '章节列表：暂无章节。',
+      hasMismatch
+        ? '提醒：存在标题序号与实际排位不一致的章节（通常是作者删过中间章节导致错位）。作者要求写「第N章」时，先确认目标到底是哪一章：要补写被删掉的章节时用 chapter_create 传 position 在正确位置插入（后续章节编号会自动后移），不要直接覆盖错位的其他章节；处理完后用 chapter_rename 把序号对不上的标题一并修正。'
+        : '',
     ]
       .filter(Boolean)
       .join('\n')
