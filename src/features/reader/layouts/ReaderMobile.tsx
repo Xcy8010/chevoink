@@ -8,7 +8,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 
@@ -196,17 +196,23 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
   const followPageRef = useRef<number | null>(null)
   const followHoldUntilRef = useRef(0)
 
-  // 换章落点意图：在「新章数据落地」的那一次渲染里产出，交给 useReaderPager 在
-  // 新章分页就绪（页数变化）时钉页码。落点必须按新章页数算：换章 navigate 那一帧
-  // pages 还是旧章的，此前在这里直接 jumpTo(pages.length-1) 把旧章页号带进了新章
-  // （右滑回上一章落不了末页、左翻进下一章落不了第一页）
+  // 换章落点意图：「新章数据落地」的渲染里确定归属，提交后的 layout effect 里产出写进
+  // 与 useReaderPager 共享的 ref，由它在新章分页就绪（页数变化）时消费钉页码。
+  // 绝不能在渲染期改 ref / 消费信号 / setState：这里的 setChapterEnter、chapterRef 块的
+  // setSelection 都会触发「丢弃本次渲染再重渲染」，被丢弃渲染里的「标记已落定/消费待定信号」
+  // 不会回滚，提交的重渲染里 landingKey 变回 null——新旧章页数恰好相同时落点 effect 依赖
+  // 整体不变，意图永远不被消费（右滑回上一章落第一页、左翻进下一章落末页，仅部分章节复现）
   const renderedChapterId = state.reader?.currentChapter.id ?? null
   const renderLandedRef = useRef<string | null>(null)
   const landingChapterId =
     paged && renderedChapterId && renderedChapterId === state.chapterId && renderLandedRef.current !== renderedChapterId
       ? renderedChapterId
       : null
-  if (landingChapterId) {
+  const pagerLandingRef = useRef<import('../pager/useReaderPager').PagerLanding>(null)
+  // 必须声明在 useReaderPager 之前：同组件 effect 按声明顺序执行，保证同一提交里
+  // 先写入意图、再由 pager 的落点 effect 读取消费（绘制前钉页码，无闪帧）
+  useLayoutEffect(() => {
+    if (!landingChapterId) return
     renderLandedRef.current = landingChapterId
     // 章边界跟手跨章：边界页已随翻页动画滑到位，落点即当前画面，跳过进场动画
     if (suppressEnterRef.current) {
@@ -217,29 +223,28 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       setChapterEnter(pendingEnterRef.current.direction)
       pendingEnterRef.current = null
     }
-  }
-  let chapterLanding: import('../pager/useReaderPager').PagerLanding = null
-  if (landingChapterId) {
     // 优先级：听书自动翻章钉第 1 页 > 左滑换章第 1 页 > 右滑回来末页 > 上次读到的位置 > 代入页。
     // 听书信号绑定目标章，残留信号不会误钉手动换章落点
     if (state.tts.takePendingAutoNext(state.chapterId ?? '')) {
-      chapterLanding = 'first'
+      pagerLandingRef.current = 'first'
     } else {
       const pending = pendingLandingRef.current
       pendingLandingRef.current = null
-      if (pending === 'last') chapterLanding = 'last'
-      else if (pending === 'first') chapterLanding = 'first'
+      if (pending === 'last') pagerLandingRef.current = 'last'
+      else if (pending === 'first') pagerLandingRef.current = 'first'
       else {
         const savedPercent = state.getSavedScrollPercent()
-        chapterLanding = savedPercent > 0.01 ? { percent: savedPercent } : coverEligible ? 'cover' : 'first'
+        pagerLandingRef.current = savedPercent > 0.01 ? { percent: savedPercent } : coverEligible ? 'cover' : 'first'
       }
     }
-  }
+    // 快照经 landingChapterId 入依赖，闭包里的 state 即落定那一帧的最新值
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [landingChapterId])
 
   const pager = useReaderPager({
     totalPages: pages.length,
     hasCover: coverEligible,
-    landing: chapterLanding,
+    landingRef: pagerLandingRef,
     landingKey: landingChapterId,
     onOverflowNext: () => {
       if (state.nextHref) {

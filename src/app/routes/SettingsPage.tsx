@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
+import BottomSheet from '@/components/layout/BottomSheet'
 import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
 import { SettingsSkeleton } from '@/components/ui/Skeleton'
@@ -84,6 +85,21 @@ const PRIVACY_LEVEL_META: Record<PrivacyLevel, { label: string; caption: string 
 }
 
 const PRIVACY_LEVEL_ORDER: PrivacyLevel[] = ['public', 'mutual', 'private']
+
+/** 设置弹窗状态：点开设置项一律弹出自定义弹窗，不再在对应行下方内联展开 */
+type SettingsDialogState =
+  | { kind: 'profile' }
+  | { kind: 'password' }
+  | { kind: 'privacy'; key: keyof PrivacySettings }
+  | { kind: 'update' }
+  | null
+
+/** 等待指定毫秒（检测更新动画至少展示 1.5 秒，哪怕请求提前返回） */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
 
 /** 安卓客户端 APK 下载地址（nginx /download/ 静态目录） */
 const ANDROID_APK_URL = 'https://chevoink.chevolink.com/download/chevoink.apk'
@@ -205,8 +221,8 @@ export default function SettingsPage() {
   const unreadMessageCount = useShellStore((state) => state.unreadMessageCount)
   const unreadNotificationCount = useShellStore((state) => state.unreadNotificationCount)
 
-  /** 当前展开的行：昵称简介 / 登录密码 / 某个隐私维度 */
-  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  /** 当前打开的设置弹窗：昵称简介 / 登录密码 / 某个隐私维度 / 新版本提示 */
+  const [openDialog, setOpenDialog] = useState<SettingsDialogState>(null)
   const [nickname, setNickname] = useState('')
   const [bio, setBio] = useState('')
   const [profileSubmitting, setProfileSubmitting] = useState(false)
@@ -282,18 +298,19 @@ export default function SettingsPage() {
     })
   }
 
-  function toggleRow(rowId: string) {
-    setExpandedRow((current) => (current === rowId ? null : rowId))
-  }
 
-  /** 手动检测 APP 更新：已是最新给 toast，有新版本展开更新入口 */
+  /** 手动检测 APP 更新：已是最新给 toast，有新版本弹窗展示。
+   * 「检测中…」动画至少持续 1.5 秒：请求提前返回时也等满时长，避免一闪而过 */
   async function handleCheckUpdate() {
     if (updateChecking) return
     setUpdateChecking(true)
+
     try {
-      const result = await checkAppUpdate()
+      const [result] = await Promise.all([checkAppUpdate(), delay(1500)])
+
       if (result.status === 'update') {
         setAvailableUpdate(result.manifest)
+        setOpenDialog({ kind: 'update' })
       } else {
         setAvailableUpdate(null)
         toast.success('当前已是最新版本')
@@ -352,7 +369,7 @@ export default function SettingsPage() {
       })
 
       syncUser(payload.user)
-      setExpandedRow(null)
+      setOpenDialog(null)
       toast.success('个人信息已保存')
     } catch (error) {
       toast.error(error instanceof ApiClientError ? error.message : '暂时无法保存个人信息，请稍后再试。')
@@ -505,6 +522,7 @@ export default function SettingsPage() {
       toast.error(error instanceof Error ? error.message : '暂时无法更新隐私设置，请稍后再试。')
     } finally {
       setPrivacySubmittingKey(null)
+      setOpenDialog(null)
     }
   }
 
@@ -572,7 +590,7 @@ export default function SettingsPage() {
       setOldPassword('')
       setSmsCode('')
       setPasswordMode('old')
-      setExpandedRow(null)
+      setOpenDialog(null)
       toast.success(
         passwordConfigured ? '登录密码已更新，下次登录请使用新密码' : '登录密码已设置成功，之后可以直接使用手机号和密码登录',
       )
@@ -659,44 +677,33 @@ export default function SettingsPage() {
     </div>
   )
 
-  /** 关于分组：仅 APP 壳内展示，提供手动检测更新入口；登录/未登录都可用 */
+  /** 关于分组：仅 APP 壳内展示，提供手动检测更新入口；登录/未登录都可用。
+   * 发现新版本不再在行下方内联展开，而是弹出版本弹窗（openDialog.kind === 'update'） */
   const aboutSection = isNativeApp() ? (
     <section>
       <SectionTitle>关于</SectionTitle>
       <div className="divide-y divide-[var(--border-subtle)]">
-        <div>
-          <SettingsRow
-            icon={<RefreshCw className={cn('h-[18px] w-[18px]', updateChecking && 'animate-spin')} />}
-            title="检测更新"
-            caption={`当前版本 ${getNativeAppVersion() ?? '未知'}`}
-            value={
-              updateChecking
-                ? '检测中…'
-                : availableUpdate
-                  ? `发现新版本 ${availableUpdate.latestVersionName}`
-                  : undefined
+        <SettingsRow
+          icon={<RefreshCw className={cn('h-[18px] w-[18px]', updateChecking && 'animate-spin')} />}
+          title="检测更新"
+          caption={`当前版本 ${getNativeAppVersion() ?? '未知'}`}
+          value={
+            updateChecking
+              ? '检测更新中…'
+              : availableUpdate
+                ? `发现新版本 ${availableUpdate.latestVersionName}`
+                : undefined
+          }
+          chevron={availableUpdate && !updateChecking ? 'right' : 'none'}
+          onClick={() => {
+            if (updateChecking) return
+            if (availableUpdate) {
+              setOpenDialog({ kind: 'update' })
+              return
             }
-            onClick={() => void handleCheckUpdate()}
-          />
-          {availableUpdate ? (
-            <div className="flex items-center gap-3 pb-4 pl-[50px] pr-1">
-              <p className="min-w-0 flex-1 text-xs text-[var(--text-tertiary)]">
-                {availableUpdate.notes?.trim() || '点击更新以获取最新功能与修复'}
-              </p>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className="shrink-0"
-                onClick={() => {
-                  if (availableUpdate.url) openExternalUrl(availableUpdate.url)
-                }}
-              >
-                立即更新
-              </Button>
-            </div>
-          ) : null}
-        </div>
+            void handleCheckUpdate()
+          }}
+        />
       </div>
     </section>
   ) : null
@@ -911,18 +918,124 @@ export default function SettingsPage() {
             </button>
           </div>
 
-          {/* 昵称与简介：展开式内联编辑 */}
-          <div>
+          {/* 昵称与简介：点开弹出编辑弹窗，不在行下方展开 */}
+          <SettingsRow
+            icon={<UserRound className="h-[18px] w-[18px]" />}
+            title="昵称与简介"
+            caption={sessionUser.bio || '还没有填写简介'}
+            value={sessionUser.nickname}
+            chevron="right"
+            onClick={() => setOpenDialog({ kind: 'profile' })}
+          />
+        </div>
+      </section>
+
+      {/* 分组二：隐私 */}
+      <section>
+        <SectionTitle>隐私</SectionTitle>
+        <div className="divide-y divide-[var(--border-subtle)]">
+          {/* 隐私维度：点开弹出选项弹窗，不在行下方展开 */}
+          {PRIVACY_ITEMS.map((item) => (
             <SettingsRow
-              icon={<UserRound className="h-[18px] w-[18px]" />}
-              title="昵称与简介"
-              caption={sessionUser.bio || '还没有填写简介'}
-              value={sessionUser.nickname}
-              chevron={expandedRow === 'profile' ? 'up' : 'down'}
-              onClick={() => toggleRow('profile')}
+              key={item.key}
+              icon={
+                privacy[item.key] === 'public' ? (
+                  <Users className="h-[18px] w-[18px]" />
+                ) : privacy[item.key] === 'mutual' ? (
+                  <UserRoundCheck className="h-[18px] w-[18px]" />
+                ) : (
+                  <Lock className="h-[18px] w-[18px]" />
+                )
+              }
+              title={item.label}
+              caption={item.caption}
+              value={PRIVACY_LEVEL_META[privacy[item.key]].label}
+              chevron="right"
+              onClick={() => setOpenDialog({ kind: 'privacy', key: item.key })}
             />
-            {expandedRow === 'profile' ? (
-              <form className="space-y-4 pb-5 pl-[50px] pr-1" onSubmit={handleUpdateProfile}>
+          ))}
+        </div>
+      </section>
+
+      {/* 分组三：显示 */}
+      <section>
+        <SectionTitle>显示</SectionTitle>
+        {appearanceRows}
+      </section>
+
+      {/* 分组四：账号安全 */}
+      <section>
+        <SectionTitle>账号安全</SectionTitle>
+        <div className="divide-y divide-[var(--border-subtle)]">
+          <SettingsRow
+            icon={<Smartphone className="h-[18px] w-[18px]" />}
+            title="手机号"
+            caption="登录入口统一使用手机号"
+            value={maskPhoneNumber(sessionUser.phone)}
+          />
+
+          {/* 登录密码：点开弹出设置弹窗，不在行下方展开 */}
+          <SettingsRow
+            icon={<KeyRound className="h-[18px] w-[18px]" />}
+            title="登录密码"
+            caption={sessionUser.passwordConfigured ? '修改前需验证当前密码或手机验证码' : '设置后可使用手机号和密码登录'}
+            value={sessionUser.passwordConfigured ? '已设置' : '未设置'}
+            chevron="right"
+            onClick={() => setOpenDialog({ kind: 'password' })}
+          />
+        </div>
+      </section>
+
+      {/* 分组五：会话 */}
+      <section>
+        <SectionTitle>会话</SectionTitle>
+        <div className="divide-y divide-[var(--border-subtle)]">
+          <SettingsRow
+            icon={<LogOut className="h-[18px] w-[18px]" />}
+            title="退出登录"
+            caption="退出后可随时重新登录，继续管理你的书架和草稿"
+            onClick={() => setLogoutConfirmOpen(true)}
+            danger
+          />
+        </div>
+      </section>
+
+      {/* 分组六：关于（仅 APP 壳内） */}
+      {aboutSection}
+
+      {/* 分组七：客户端安装（仅手机浏览器） */}
+      {clientSection}
+
+      {clientDialog}
+
+      {/* 退出登录二次确认弹窗 */}
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="确认要退出登录吗？"
+        description="退出后可随时重新登录，继续管理你的书架和草稿。"
+        confirmLabel="退出登录"
+        tone="danger"
+        busy={logoutSubmitting}
+        onConfirm={() => void handleLogout()}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
+
+      {/* 封面裁剪弹窗：选完文件后进入，确认才真正上传 */}
+      <ImageCropperDialog
+        open={Boolean(coverDraft)}
+        imageDataUrl={coverDraft}
+        aspect={3}
+        submitting={coverSubmitting}
+        onCancel={() => setCoverDraft(null)}
+        onConfirm={(dataUrl) => void handleCoverCropConfirm(dataUrl)}
+      />
+
+      {/* 设置弹窗统一出口：点开设定项不再在行下方展开，而是弹出自定义弹窗。
+          弹窗挂在 body 上且遮罩独占一层，点弹窗内按钮不会误触到下方页面内容 */}
+      {typeof document !== 'undefined' && openDialog?.kind === 'profile'
+        ? createPortal(
+            <BottomSheet open onClose={() => setOpenDialog(null)} title="昵称与简介">
+              <form className="space-y-4 px-4 pb-[calc(20px+var(--safe-bottom))] pt-4 md:px-5" onSubmit={handleUpdateProfile}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="settings-nickname">
                     昵称
@@ -949,110 +1062,67 @@ export default function SettingsPage() {
                     className="w-full resize-none rounded-[var(--radius-lg)] border border-[var(--border-strong)] bg-[var(--surface-default)] px-4 py-3 text-sm leading-7 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[var(--focus-ring)]"
                   />
                 </div>
-                <Button type="submit" variant="primary" size="sm" disabled={profileSubmitting}>
+                <Button type="submit" variant="primary" className="h-11 w-full" disabled={profileSubmitting}>
                   {profileSubmitting ? '保存中…' : '保存'}
                 </Button>
               </form>
-            ) : null}
-          </div>
-        </div>
-      </section>
+            </BottomSheet>,
+            document.body,
+          )
+        : null}
 
-      {/* 分组二：隐私 */}
-      <section>
-        <SectionTitle>隐私</SectionTitle>
-        <div className="divide-y divide-[var(--border-subtle)]">
-          {PRIVACY_ITEMS.map((item) => {
-            const rowId = `privacy-${item.key}`
-            const isExpanded = expandedRow === rowId
+      {typeof document !== 'undefined' && openDialog?.kind === 'privacy'
+        ? createPortal(
+            <BottomSheet
+              open
+              onClose={() => setOpenDialog(null)}
+              title={PRIVACY_ITEMS.find((item) => item.key === openDialog.key)?.label ?? '隐私设置'}
+            >
+              <p className="px-4 pb-1 pt-3 text-xs text-[var(--text-tertiary)] md:px-5">
+                {PRIVACY_ITEMS.find((item) => item.key === openDialog.key)?.caption}
+              </p>
+              <div className="space-y-1 px-2 pb-[calc(20px+var(--safe-bottom))] md:px-3">
+                {PRIVACY_LEVEL_ORDER.map((level) => {
+                  const selected = privacy[openDialog.key] === level
 
-            return (
-              <div key={item.key}>
-                <SettingsRow
-                  icon={
-                    privacy[item.key] === 'public' ? (
-                      <Users className="h-[18px] w-[18px]" />
-                    ) : privacy[item.key] === 'mutual' ? (
-                      <UserRoundCheck className="h-[18px] w-[18px]" />
-                    ) : (
-                      <Lock className="h-[18px] w-[18px]" />
-                    )
-                  }
-                  title={item.label}
-                  caption={item.caption}
-                  value={PRIVACY_LEVEL_META[privacy[item.key]].label}
-                  chevron={isExpanded ? 'up' : 'down'}
-                  onClick={() => toggleRow(rowId)}
-                />
-                {isExpanded ? (
-                  <div className="space-y-1 pb-4 pl-[50px] pr-1">
-                    {PRIVACY_LEVEL_ORDER.map((level) => {
-                      const selected = privacy[item.key] === level
-
-                      return (
-                        <button
-                          key={level}
-                          type="button"
-                          disabled={privacySubmittingKey === item.key}
-                          onClick={() => void handlePrivacyChange(item.key, level)}
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      disabled={privacySubmittingKey === openDialog.key}
+                      onClick={() => void handlePrivacyChange(openDialog.key, level)}
+                      className={cn(
+                        'press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-3 text-left transition-colors',
+                        selected ? 'bg-[var(--color-brand-soft)]' : 'hover:bg-[var(--surface-muted)]',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span
                           className={cn(
-                            'press-feedback flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-colors',
-                            selected ? 'bg-[var(--color-brand-soft)]' : 'hover:bg-[var(--surface-muted)]',
+                            'block text-sm font-medium',
+                            selected ? 'text-[var(--color-brand)]' : 'text-[var(--text-primary)]',
                           )}
                         >
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={cn(
-                                'block text-sm font-medium',
-                                selected ? 'text-[var(--color-brand)]' : 'text-[var(--text-primary)]',
-                              )}
-                            >
-                              {PRIVACY_LEVEL_META[level].label}
-                            </span>
-                            <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
-                              {PRIVACY_LEVEL_META[level].caption}
-                            </span>
-                          </span>
-                          {selected ? <Check className="h-4 w-4 shrink-0 text-[var(--color-brand)]" /> : null}
-                        </button>
-                      )
-                    })}
-                  </div>
-                ) : null}
+                          {PRIVACY_LEVEL_META[level].label}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
+                          {PRIVACY_LEVEL_META[level].caption}
+                        </span>
+                      </span>
+                      {selected ? <Check className="h-4 w-4 shrink-0 text-[var(--color-brand)]" /> : null}
+                    </button>
+                  )
+                })}
               </div>
-            )
-          })}
-        </div>
-      </section>
+            </BottomSheet>,
+            document.body,
+          )
+        : null}
 
-      {/* 分组三：显示 */}
-      <section>
-        <SectionTitle>显示</SectionTitle>
-        {appearanceRows}
-      </section>
-
-      {/* 分组四：账号安全 */}
-      <section>
-        <SectionTitle>账号安全</SectionTitle>
-        <div className="divide-y divide-[var(--border-subtle)]">
-          <SettingsRow
-            icon={<Smartphone className="h-[18px] w-[18px]" />}
-            title="手机号"
-            caption="登录入口统一使用手机号"
-            value={maskPhoneNumber(sessionUser.phone)}
-          />
-
-          <div>
-            <SettingsRow
-              icon={<KeyRound className="h-[18px] w-[18px]" />}
-              title="登录密码"
-              caption={sessionUser.passwordConfigured ? '修改前需验证当前密码或手机验证码' : '设置后可使用手机号和密码登录'}
-              value={sessionUser.passwordConfigured ? '已设置' : '未设置'}
-              chevron={expandedRow === 'password' ? 'up' : 'down'}
-              onClick={() => toggleRow('password')}
-            />
-            {expandedRow === 'password' ? (
-              <form className="space-y-4 pb-5 pl-[50px] pr-1" onSubmit={handleSetPassword}>
+      {typeof document !== 'undefined' && openDialog?.kind === 'password'
+        ? createPortal(
+            <BottomSheet open onClose={() => setOpenDialog(null)} title="登录密码">
+              <form className="space-y-4 px-4 pb-[calc(20px+var(--safe-bottom))] pt-4 md:px-5" onSubmit={handleSetPassword}>
                 {sessionUser.passwordConfigured ? (
                   passwordMode === 'old' ? (
                     <div className="space-y-2">
@@ -1147,58 +1217,50 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <Button type="submit" variant="primary" size="sm" disabled={passwordSubmitting}>
+                <Button type="submit" variant="primary" className="h-11 w-full" disabled={passwordSubmitting}>
                   {passwordSubmitting ? '保存中…' : sessionUser.passwordConfigured ? '更新密码' : '设置密码'}
                 </Button>
               </form>
-            ) : null}
-          </div>
-        </div>
-      </section>
+            </BottomSheet>,
+            document.body,
+          )
+        : null}
 
-      {/* 分组五：会话 */}
-      <section>
-        <SectionTitle>会话</SectionTitle>
-        <div className="divide-y divide-[var(--border-subtle)]">
-          <SettingsRow
-            icon={<LogOut className="h-[18px] w-[18px]" />}
-            title="退出登录"
-            caption="退出后可随时重新登录，继续管理你的书架和草稿"
-            onClick={() => setLogoutConfirmOpen(true)}
-            danger
-          />
-        </div>
-      </section>
-
-      {/* 分组六：关于（仅 APP 壳内） */}
-      {aboutSection}
-
-      {/* 分组七：客户端安装（仅手机浏览器） */}
-      {clientSection}
-
-      {clientDialog}
-
-      {/* 退出登录二次确认弹窗 */}
-      <ConfirmDialog
-        open={logoutConfirmOpen}
-        title="确认要退出登录吗？"
-        description="退出后可随时重新登录，继续管理你的书架和草稿。"
-        confirmLabel="退出登录"
-        tone="danger"
-        busy={logoutSubmitting}
-        onConfirm={() => void handleLogout()}
-        onCancel={() => setLogoutConfirmOpen(false)}
-      />
-
-      {/* 封面裁剪弹窗：选完文件后进入，确认才真正上传 */}
-      <ImageCropperDialog
-        open={Boolean(coverDraft)}
-        imageDataUrl={coverDraft}
-        aspect={3}
-        submitting={coverSubmitting}
-        onCancel={() => setCoverDraft(null)}
-        onConfirm={(dataUrl) => void handleCoverCropConfirm(dataUrl)}
-      />
+      {typeof document !== 'undefined' && openDialog?.kind === 'update' && availableUpdate
+        ? createPortal(
+            <BottomSheet open onClose={() => setOpenDialog(null)} title="发现新版本">
+              <div className="space-y-4 px-4 pb-[calc(20px+var(--safe-bottom))] pt-4 md:px-5">
+                <p className="text-[15px] font-medium text-[var(--text-primary)]">
+                  新版本 {availableUpdate.latestVersionName} 已发布
+                </p>
+                <p className="text-sm leading-6 text-[var(--text-secondary)]">
+                  {availableUpdate.notes?.trim() || '点击更新以获取最新功能与修复'}
+                </p>
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-11 flex-1"
+                    onClick={() => setOpenDialog(null)}
+                  >
+                    稍后再说
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="h-11 flex-1"
+                    onClick={() => {
+                      if (availableUpdate.url) openExternalUrl(availableUpdate.url)
+                    }}
+                  >
+                    立即更新
+                  </Button>
+                </div>
+              </div>
+            </BottomSheet>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }

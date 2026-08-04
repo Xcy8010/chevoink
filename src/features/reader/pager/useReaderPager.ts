@@ -23,10 +23,12 @@ type UseReaderPagerArgs = {
   /** 是否把代入页作为第 -1 页纳入翻页序列 */
   hasCover: boolean
   /**
-   * 换章落点意图：非空时由本 hook 在下一次页数变化（新章分页就绪）时钉页码。
-   * 上层只在检测到「新章数据落地」的那一次渲染里产出非空意图，消费后回归 null
+   * 换章落点意图：由上层在提交后的 layout effect 里写入（非空即待消费），
+   * 本 hook 在新章分页就绪（页数变化）时读取并消费一次。
+   * 不能走渲染期 prop：渲染期 setState 会触发「丢弃本次渲染再重渲染」，
+   * 意图产出渲染被丢弃时 prop 在提交的渲染里永远是 null，意图送不进来
    */
-  landing: PagerLanding
+  landingRef: { current: PagerLanding }
   /** 落点归属标识（如章节 id）：换章时必变，保证新旧章页数相同时落点 effect 也会触发 */
   landingKey: string | null
   /** 章末继续翻：进入下一章 */
@@ -38,7 +40,7 @@ type UseReaderPagerArgs = {
 export function useReaderPager({
   totalPages,
   hasCover,
-  landing,
+  landingRef,
   landingKey,
   onOverflowNext,
   onOverflowPrev,
@@ -46,12 +48,6 @@ export function useReaderPager({
   const minIndex = hasCover ? COVER_PAGE_INDEX : 0
   const maxIndex = Math.max(0, totalPages - 1)
   const [pageIndex, setPageIndexState] = useState(minIndex)
-
-  // 待执行的落点意图：上层换章时写入，新章分页就绪（页数变化）时消费一次。
-  // 写入后若页数当场就绪，同一提交的落点 effect 直接消费；分页晚到时由
-  // 「页数 0→N」的变化再次触发本 effect 消费——两条路都钉在正确的首帧绘制前
-  const landingRef = useRef<PagerLanding>(null)
-  if (landing) landingRef.current = landing
 
   // 页数变化（首次分页完成/新章分页就绪/重排）：有待消费的落点意图就钉页码，
   // 否则只把页码夹回合法区间（重排场景）。
@@ -77,7 +73,7 @@ export function useReaderPager({
             ? Math.round(pendingLanding.percent * maxIndex)
             : 0
     setPageIndexState(Math.min(maxIndex, Math.max(minIndex, target)))
-  }, [totalPages, minIndex, maxIndex, landingKey])
+  }, [totalPages, minIndex, maxIndex, landingKey, landingRef])
 
   const jumpTo = useCallback(
     (target: number) => {

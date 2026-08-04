@@ -21,7 +21,7 @@ AI 驱动的全栈小说创作与阅读平台：读者可以在书城发现、�
 两种方式任选其一：
 
 1. **GitHub Releases（推荐）**
-   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.03`）；
+   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.05.1`）；
    - 在 Assets 中下载 `chevoink-vX.XX.apk` 到手机；
    - 点击安装。系统若提示「未知来源应用」，在弹窗中允许「本次安装」即可（APK 已使用发布密钥签名）。
 2. **官网直装**
