@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -12,6 +13,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 
 import androidx.core.view.WindowCompat;
@@ -30,6 +33,9 @@ public class MainActivity extends BridgeActivity {
     private View offlineOverlay;
     /** 是否处于离线兜底态（避免联网瞬间重复 reload） */
     private boolean offlineShown = false;
+    /** 本次主文档加载是否已失败：失败后 WebView 仍会回调 onPageFinished（错误页加载完成），
+     * 不能见 onPageFinished 就收离线页，否则离线页刚盖上去就被撤掉、系统错误页重新露出 */
+    private boolean mainFrameFailed = false;
     private ConnectivityManager.NetworkCallback networkCallback;
     private BroadcastReceiver legacyNetworkReceiver;
 
@@ -63,13 +69,26 @@ public class MainActivity extends BridgeActivity {
         offlineOverlay.setVisibility(View.GONE);
         offlineOverlay.findViewById(R.id.offlineRetry).setOnClickListener(v -> reloadSite());
 
-        // 加载失败接管：主文档失败才出离线页（子资源失败不打断已加载内容）
+        // 加载失败接管：主文档失败才出离线页（子资源失败不打断已加载内容）。
+        // API 23+ 的错误（如 ERR_INTERNET_DISCONNECTED）走新签名回调，必须覆写新版；
+        // 且冷启动首载失败时 view.getUrl() 还是 null，不能用「failingUrl 等于当前 URL」判主文档
         webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    mainFrameFailed = true;
+                    showOffline();
+                    return;
+                }
+                super.onReceivedError(view, request, error);
+            }
+
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                 String currentUrl = view.getUrl();
-                boolean mainDocument = failingUrl != null && failingUrl.equals(currentUrl);
+                boolean mainDocument = failingUrl != null && (currentUrl == null || failingUrl.equals(currentUrl));
                 if (mainDocument) {
+                    mainFrameFailed = true;
                     showOffline();
                     return;
                 }
@@ -77,10 +96,19 @@ public class MainActivity extends BridgeActivity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                // 新一轮加载开始（含重试/联网自动重载）：重置失败标记
+                mainFrameFailed = false;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                // 站点成功加载：收起离线页（含联网自动重载后的恢复）
-                hideOffline();
+                // 站点真正加载成功才收离线页；主文档失败后的 onPageFinished 是错误页加载完成，不能收
+                if (!mainFrameFailed) {
+                    hideOffline();
+                }
             }
         });
 
