@@ -84,14 +84,23 @@ export default function CommunityPage() {
   })
 
   const rawPosts = useMemo(() => postsQuery.data?.pages.flatMap((page) => page.items) ?? [], [postsQuery.data])
-  const totalPosts = postsQuery.data?.pages[0]?.pagination.total ?? rawPosts.length
+
+  // 「全部」计数必须用未过滤口径：帖子流查询带 topicId 筛选，复用它的 pagination.total
+  // 会导致切到别的频道后「全部」变成筛选后的条数。这里独立发一次不带筛选的轻量请求只取 total；
+  // queryKey 以 ['community','posts'] 开头，发帖/删帖等现有 invalidate 会顺带刷新它
+  const allTotalQuery = useQuery({
+    queryKey: ['community', 'posts', 'all-total'],
+    queryFn: () => listPosts(1, { page: 1, sort: 'latest' }),
+    staleTime: 60_000,
+  })
+  const totalPosts =
+    allTotalQuery.data?.pagination.total ?? postsQuery.data?.pages[0]?.pagination.total ?? rawPosts.length
 
   const topics = useMemo<CommunityTopic[]>(() => {
     const items = topicsQuery.data?.items ?? []
 
     return [
-      // 「全部」数字与帖子流同源（pagination.total）：话题计数与列表过滤口径不同，
-      // 用话题求和会出现「全部」随切换频道跳动的问题
+      // 「全部」用未过滤的帖子总数（allTotalQuery），不随当前频道筛选跳动
       { id: 'all', name: '全部', slug: 'all', postCount: totalPosts },
       ...items.map((topic) => ({ id: topic.id, name: topic.name, slug: topic.slug, postCount: topic.postCount })),
     ]
