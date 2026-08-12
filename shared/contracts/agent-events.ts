@@ -49,6 +49,12 @@ export type AgentToolDisplayPayload =
     }
   | { kind: 'uiIntent'; intent: 'open_meta' | 'open_cover' }
   | { kind: 'todoList'; items: AgentTodoItem[] }
+  | {
+      kind: 'webSearch'
+      query: string
+      provider: string
+      results: Array<{ title: string; url: string; snippet: string; source: string }>
+    }
 
 /** 工具调用的回滚快照（写操作自动记录） */
 export interface AgentRollbackSnapshot {

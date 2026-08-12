@@ -196,6 +196,7 @@ export function resolveQuestionAnswer(runId: string, callId: string, answer: str
 export function cancelAllQuestions(runId: string) {
   const pending = pendingQuestionsByRun.get(runId)
   questionCountByRun.delete(runId)
+  webSearchCountByRun.delete(runId)
 
   if (!pending) {
     return
@@ -225,5 +226,25 @@ export function consumeQuestionBudget(runId: string): boolean {
   }
 
   questionCountByRun.set(runId, used + 1)
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 联网搜索预算：每个 run 最多搜索 5 次，防止循环滥用拖慢任务
+// ---------------------------------------------------------------------------
+
+export const WEB_SEARCH_BUDGET_PER_RUN = 5
+
+const webSearchCountByRun = new Map<string, number>()
+
+/** 尝试消耗一次联网搜索额度：返回是否允许本次搜索 */
+export function consumeWebSearchBudget(runId: string): boolean {
+  const used = webSearchCountByRun.get(runId) ?? 0
+
+  if (used >= WEB_SEARCH_BUDGET_PER_RUN) {
+    return false
+  }
+
+  webSearchCountByRun.set(runId, used + 1)
   return true
 }

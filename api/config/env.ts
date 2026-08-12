@@ -88,6 +88,12 @@ export const env = {
   aiImageModel: process.env.AI_IMAGE_MODEL ?? 'gpt-image-2',
   aiImageDefaultSize: process.env.AI_IMAGE_DEFAULT_SIZE ?? '1024x1536',
   aiImageDefaultCount: parsePositiveNumber(process.env.AI_IMAGE_DEFAULT_COUNT, 1),
+  // 联网搜索（Agent web_search 工具）：auto = 有博查 key 用博查、失败降 Bing 无 key 抓取；
+  // bocha/bing 显式指定单引擎（仍带降级）；disabled = 工具回填不可用
+  webSearchProvider: process.env.WEB_SEARCH_PROVIDER ?? 'auto',
+  webSearchBochaApiKeyConfigured: isConfigured(process.env.WEB_SEARCH_BOCHA_API_KEY),
+  webSearchBochaApiKey: process.env.WEB_SEARCH_BOCHA_API_KEY ?? '',
+  webSearchTimeoutMs: parsePositiveNumber(process.env.WEB_SEARCH_TIMEOUT_MS, 15000),
   // 听书 TTS（方案 17）：edge = 免费 Edge 神经音色；disabled = 全端隐藏听书入口
   ttsProvider: process.env.TTS_PROVIDER ?? 'edge',
   ttsDefaultVoice: process.env.TTS_DEFAULT_VOICE ?? 'zh-CN-YunjianNeural',

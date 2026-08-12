@@ -6,6 +6,7 @@ import {
   ChevronUp,
   CircleAlert,
   LoaderCircle,
+  Search,
   ShieldX,
   Wrench,
 } from 'lucide-react'
@@ -207,6 +208,59 @@ function CoverImagesCard({
   )
 }
 
+/** 联网搜索结果卡片：折叠行 = 已检索网络「query」· n 个结果，展开为标题+来源域名列表 */
+function WebSearchCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'webSearch' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const unavailable = display.provider === 'unavailable'
+
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <Search className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+          {unavailable ? '联网搜索不可用 · ' : '已检索网络 '}
+          「{display.query}」
+          {!unavailable && display.results.length > 0 ? ` · ${display.results.length} 个结果` : ''}
+        </span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        )}
+      </button>
+      {expanded && display.results.length > 0 ? (
+        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] px-1 py-1">
+          {display.results.map((result, index) => (
+            <li key={result.url || index}>
+              <a
+                href={result.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-[8px] px-2 py-1.5 transition hover:bg-[var(--surface-muted)]"
+              >
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+                  {result.title}
+                </span>
+                <span className="shrink-0 text-[10px] text-[var(--text-secondary)]">
+                  {result.source}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) {
   switch (display.kind) {
     case 'chapterDiff':
@@ -215,6 +269,8 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       return <PlanCard display={display} />
     case 'coverImages':
       return <CoverImagesCard display={display} />
+    case 'webSearch':
+      return <WebSearchCard display={display} />
     case 'markdown':
       return (
         <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
@@ -309,6 +365,18 @@ const ToolCallCard = memo(function ToolCallCard({
   }, [part.args])
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
+  // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
+  const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
+  const webSearchQuery =
+    part.toolName === 'web_search' && typeof argsRecord?.query === 'string' ? argsRecord.query : ''
+  const runningLabel =
+    running && webSearchQuery
+      ? `正在搜索「${webSearchQuery}」…`
+      : running
+        ? part.progressChars
+          ? `已生成 ${part.progressChars} 字 · 执行中…`
+          : '执行中…'
+        : ''
 
   return (
     <div
@@ -335,7 +403,7 @@ const ToolCallCard = memo(function ToolCallCard({
         </span>
         {running ? (
           <span className="shrink-0 animate-pulse text-[10px] font-medium text-[var(--text-secondary)]">
-            {part.progressChars ? `已生成 ${part.progressChars} 字 · 执行中…` : '执行中…'}
+            {runningLabel}
           </span>
         ) : null}
         {durationLabel ? (
