@@ -10,6 +10,8 @@ type BottomSheetProps = {
   children: ReactNode
   /** 最大高度比例，默认 85dvh */
   maxHeight?: string
+  /** 最小高度（内容少时抽屉也撑到这个高度，如章节评论至少半屏） */
+  minHeight?: string
   /** 是否显示关闭按钮 */
   showClose?: boolean
 }
@@ -26,6 +28,7 @@ export default function BottomSheet({
   title,
   children,
   maxHeight = '85dvh',
+  minHeight,
   showClose = true,
 }: BottomSheetProps) {
   const sheetRef = useRef<HTMLDivElement | null>(null)
@@ -94,7 +97,13 @@ export default function BottomSheet({
           'md:relative md:inset-auto md:w-[min(560px,100%)]',
           'md:rounded-[var(--radius-xl)] md:border-b',
         )}
-        style={{ maxHeight: `min(${maxHeight}, calc(100dvh - var(--keyboard-inset, 0px)))` }}
+        style={{
+          maxHeight: `min(${maxHeight}, calc(100dvh - var(--keyboard-inset, 0px)))`,
+          // 软键盘弹起时最小高度同样收窄，避免抽屉比可视区还高
+          ...(minHeight
+            ? { minHeight: `min(${minHeight}, calc(100dvh - var(--keyboard-inset, 0px)))` }
+            : {}),
+        }}
       >
         {/* 拖拽指示条（仅手机端显示） */}
         <div

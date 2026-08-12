@@ -232,7 +232,11 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       pendingLandingRef.current = null
       if (pending === 'last') pagerLandingRef.current = 'last'
       else if (pending === 'first') pagerLandingRef.current = 'first'
-      else {
+      else if (state.deepLinkComments || state.deepLinkParagraph !== null) {
+        // 互动消息深链直达：落本章正文第 1 页，不停在引入页也不恢复旧位置
+        // （带 ?paragraph 时段落定位 effect 随后把页码钉到目标段）
+        pagerLandingRef.current = 'first'
+      } else {
         const savedPercent = state.getSavedScrollPercent()
         pagerLandingRef.current = savedPercent > 0.01 ? { percent: savedPercent } : coverEligible ? 'cover' : 'first'
       }
@@ -946,7 +950,8 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       <BottomSheet open={state.activePanel === 'directory'} onClose={closePanel} title="目录">
         <ReaderDirectory state={state} onNavigate={closePanel} />
       </BottomSheet>
-      <BottomSheet open={state.activePanel === 'comments'} onClose={closePanel} title="章节评论">
+      {/* 章节评论至少占半屏：评论少时也保持足够浏览高度 */}
+      <BottomSheet open={state.activePanel === 'comments'} onClose={closePanel} title="章节评论" minHeight="60dvh">
         <ReaderCommentsPanel state={state} />
       </BottomSheet>
       <BottomSheet open={state.activePanel === 'settings'} onClose={closePanel} title="阅读设置">

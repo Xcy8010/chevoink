@@ -27,7 +27,9 @@ const KIND_META: Record<
 /** 明细行的跳转目标：章节评论/回复直达阅读器并自动展开评论面板，帖子进帖子，作品进作品页 */
 function getInteractionTargetPath(item: InteractionItem): string | null {
   if (item.chapterId && item.novelId) {
-    return `/novel/${item.novelId}/read/${item.chapterId}?panel=comments`
+    // 段评带上段落序号：阅读器直达对应段落并高亮闪一下
+    const paragraph = typeof item.paragraphIndex === 'number' ? `&paragraph=${item.paragraphIndex}` : ''
+    return `/novel/${item.novelId}/read/${item.chapterId}?panel=comments${paragraph}`
   }
   if (item.postId) {
     return `/post/${item.postId}`

@@ -174,6 +174,8 @@ export interface InteractionItem {
   novelId: EntityId | null
   /** 跳转用：章节 id（章节评论/回复直达阅读器评论面板） */
   chapterId?: EntityId | null
+  /** 跳转用：段落序号（段评直达正文对应段落并高亮） */
+  paragraphIndex?: number | null
   /** 作品标题（收藏/作品评论/章节评论时带上） */
   novelTitle?: string | null
   /** 章节标题（章节评论时带上） */

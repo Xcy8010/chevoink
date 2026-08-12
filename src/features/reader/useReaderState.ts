@@ -132,9 +132,17 @@ export function useReaderState() {
     toneOverride && toneOverride.theme === currentTheme
       ? toneOverride.tone
       : getThemeDefaultTone(isDarkTheme)
-  // 深链 ?panel=comments：互动消息点击章节评论/回复直达时自动展开评论面板
+  // 深链（互动消息直达）：?panel=comments 展开评论面板；?paragraph=N 直达对应段落并高亮。
+  // 段评带段落时优先定位正文段落（不弹面板，面板会盖住高亮位置）
+  const deepLinkParagraph = useMemo(() => {
+    const raw = searchParams.get('paragraph')
+    if (raw === null) return null
+    const value = Number.parseInt(raw, 10)
+    return Number.isInteger(value) && value >= 0 ? value : null
+  }, [searchParams])
+  const deepLinkComments = searchParams.get('panel') === 'comments'
   const [activePanel, setActivePanelState] = useState<ReaderPanelId>(() =>
-    searchParams.get('panel') === 'comments' ? 'comments' : null,
+    deepLinkComments && deepLinkParagraph === null ? 'comments' : null,
   )
   // 段评：当前查看的段落序号（null = 章评总合视图）与定位高亮闪烁的段落
   const [activeParagraphIndex, setActiveParagraphIndex] = useState<number | null>(null)
@@ -253,20 +261,21 @@ export function useReaderState() {
     setActivePanelState('comments')
   }
 
+  /** 段落高亮闪一下（1.6s 后自动消退） */
+  const flashHighlight = (index: number) => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+    setHighlightParagraphIndex(index)
+    highlightTimerRef.current = window.setTimeout(() => setHighlightParagraphIndex(null), 1600)
+  }
+
   /** 从评论定位到正文段落：关面板 → 滑到段落 → 高亮闪一下 */
   const locateParagraph = (index: number) => {
     setActiveParagraphIndex(null)
     setActivePanelState(null)
 
-    const flashHighlight = () => {
-      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-      setHighlightParagraphIndex(index)
-      highlightTimerRef.current = window.setTimeout(() => setHighlightParagraphIndex(null), 1600)
-    }
-
     // 分页模式由布局层注册定位器（翻到该段所在页），滚动模式走原滚动定位
     if (paragraphLocatorRef.current?.(index)) {
-      flashHighlight()
+      flashHighlight(index)
       return
     }
 
@@ -274,8 +283,21 @@ export function useReaderState() {
       const element = contentScrollRef.current?.querySelector<HTMLElement>(`[data-tts-p="${index}"]`)
       if (!element) return
       element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      flashHighlight()
+      flashHighlight(index)
     })
+  }
+
+  /** 段评深链定位：翻到/滚到对应段落并高亮闪一下，返回是否定位成功（分页未就绪时返回 false 供重试） */
+  const locateDeepLinkParagraph = (index: number): boolean => {
+    if (paragraphLocatorRef.current?.(index)) {
+      flashHighlight(index)
+      return true
+    }
+    const element = contentScrollRef.current?.querySelector<HTMLElement>(`[data-tts-p="${index}"]`)
+    if (!element) return false
+    element.scrollIntoView({ block: 'center' })
+    flashHighlight(index)
+    return true
   }
   /** 分页阅读布局注册段落定位器（传 null 注销，回到滚动定位） */
   const registerParagraphLocator = (locator: ((index: number) => boolean) | null) => {
@@ -352,11 +374,38 @@ export function useReaderState() {
     setHighlightParagraphIndex(null)
   }, [chapterId])
 
+  // 段评深链（?paragraph=N）：章节数据新鲜后定位到对应段落并高亮闪一下。
+  // 分页模式要等视口测量+分页完成，首次可能未就绪，按 150ms 间隔重试至成功或超时。
+  // 声明在换章重置 effect 之后：同组件 effect 按声明顺序执行，保证重置不会清掉本次高亮
+  useEffect(() => {
+    if (deepLinkParagraph === null || fromStudio) return
+    // 占位数据（上一章残留）不是本章：等真数据落地再定位
+    if (!reader || reader.currentChapter.id !== chapterId) return
+
+    let cancelled = false
+    let timer: number | null = null
+    let attempts = 0
+    const attempt = () => {
+      if (cancelled || locateDeepLinkParagraph(deepLinkParagraph)) return
+      attempts += 1
+      if (attempts < 20) timer = window.setTimeout(attempt, 150)
+    }
+    attempt()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+    // locateDeepLinkParagraph 只依赖稳定的 ref，不进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reader, chapterId, deepLinkParagraph, fromStudio])
+
   // 首次进入时恢复上次阅读位置（仅同一章节且本次会话尚未定位过）
   const restoredScrollRef = useRef(false)
   useEffect(() => {
     if (restoredScrollRef.current || !reader || !novelId || !chapterId || fromStudio) return
     restoredScrollRef.current = true
+    // 互动消息深链直达：按深链意图定位（段落/章首），不恢复上次阅读位置
+    if (deepLinkComments || deepLinkParagraph !== null) return
 
     const entry = getReadingProgress(novelId)
     if (!entry || entry.chapterId !== chapterId) return
@@ -427,6 +476,9 @@ export function useReaderState() {
     setActivePanel,
     activeParagraphIndex,
     highlightParagraphIndex,
+    /** 互动消息深链：直达评论面板 / 直达段落（见 URL ?panel / ?paragraph） */
+    deepLinkComments,
+    deepLinkParagraph,
     paragraphCommentCounts,
     openParagraphComments,
     locateParagraph,

@@ -3371,6 +3371,8 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
       },
       include: {
         author: true,
+        // 父评论的段落序号：被回复的段评可直达正文对应段落
+        parent: { select: { id: true, paragraphIndex: true } },
         novel: { select: { id: true, title: true, displayTitle: true } },
         chapter: {
           select: {
@@ -3427,6 +3429,8 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
         postId: null,
         novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
         chapterId: isChapterComment ? record.chapter?.id ?? null : null,
+        // 段评带上段落序号：前端直达正文对应段落并高亮
+        paragraphIndex: isChapterComment ? record.paragraphIndex ?? null : null,
         novelTitle: novelMeta ? resolveEffectiveNovelTitle(novelMeta.title, novelMeta.displayTitle) : null,
         chapterTitle: isChapterComment ? record.chapter?.title ?? null : null,
         happenedAt: toIso(record.createdAt) ?? nowIso(),
@@ -3444,6 +3448,8 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
         postId: record.postId ?? null,
         novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
         chapterId: isChapterReply ? record.chapter?.id ?? null : null,
+        // 回复本身不记段落，取被回复评论（我的段评）的段落序号用于直达定位
+        paragraphIndex: isChapterReply ? record.parent?.paragraphIndex ?? null : null,
         novelTitle: novelMeta ? resolveEffectiveNovelTitle(novelMeta.title, novelMeta.displayTitle) : null,
         chapterTitle: isChapterReply ? record.chapter?.title ?? null : null,
         happenedAt: toIso(record.createdAt) ?? nowIso(),
