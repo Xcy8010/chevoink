@@ -95,7 +95,7 @@ export default function AdminMessagesPage() {
           >
             {data ? (
               <>
-                <ul className="max-h-[56vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
+                <ul className="divide-y divide-[var(--border-default)] md:max-h-[56vh] md:overflow-y-auto md:pr-1">
                   {data.items.map((conversation) => (
                     <li key={conversation.id}>
                       <button
@@ -162,7 +162,7 @@ export default function AdminMessagesPage() {
               <AdminPanelState
                 state={messagesQuery.isLoading ? 'loading' : messagesQuery.isError ? 'error' : messages.length === 0 ? 'empty' : 'ready'}
               >
-                <ul className="max-h-[62vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
+                <ul className="divide-y divide-[var(--border-default)] md:max-h-[62vh] md:overflow-y-auto md:pr-1">
                   {messages.map((message) => (
                     <li key={message.id} className="flex items-start gap-2.5 py-2.5">
                       <Avatar nickname={message.sender.nickname} avatarUrl={message.sender.avatarUrl} />

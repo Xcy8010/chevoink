@@ -60,7 +60,7 @@ export default function AdminPostDetailPage() {
               {detail.comments.length === 0 ? (
                 <p className="py-6 text-center text-sm text-[var(--text-secondary)]">暂无评论</p>
               ) : (
-                <ul className="max-h-[60vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
+                <ul className="divide-y divide-[var(--border-default)] md:max-h-[60vh] md:overflow-y-auto md:pr-1">
                   {detail.comments.map((comment) => (
                     <li key={comment.id} className="py-3">
                       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--text-secondary)]">

@@ -67,7 +67,7 @@ export default function AdminPostsPage() {
         >
           {data ? (
             <>
-              <ul className="max-h-[60vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
+              <ul className="divide-y divide-[var(--border-default)] md:max-h-[60vh] md:overflow-y-auto md:pr-1">
                 {data.items.map((post) => (
                   <li key={post.id} className="flex items-start justify-between gap-3 py-3">
                     <Link to={`/admin/posts/${post.id}`} className="min-w-0 flex-1 transition-opacity hover:opacity-75">

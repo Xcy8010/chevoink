@@ -172,7 +172,7 @@ export default function AdminNovelDetailPage() {
               {detail.chapters.length === 0 ? (
                 <p className="py-6 text-center text-sm text-[var(--text-secondary)]">暂无章节</p>
               ) : (
-                <ul className="max-h-[52vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
+                <ul className="divide-y divide-[var(--border-default)] md:max-h-[52vh] md:overflow-y-auto md:pr-1">
                   {detail.chapters.map((chapter) => (
                     <li key={chapter.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
                       <div className="min-w-0">
