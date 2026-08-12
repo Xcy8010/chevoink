@@ -88,8 +88,8 @@ export const env = {
   aiImageModel: process.env.AI_IMAGE_MODEL ?? 'gpt-image-2',
   aiImageDefaultSize: process.env.AI_IMAGE_DEFAULT_SIZE ?? '1024x1536',
   aiImageDefaultCount: parsePositiveNumber(process.env.AI_IMAGE_DEFAULT_COUNT, 1),
-  // 联网搜索（Agent web_search 工具）：auto = 有博查 key 用博查、失败降 Bing 无 key 抓取；
-  // bocha/bing 显式指定单引擎（仍带降级）；disabled = 工具回填不可用
+  // 联网搜索（Agent web_search 工具）：auto = 有博查 key 用博查、失败依次降搜狗/Bing 免 key 抓取；
+  // disabled = 工具回填不可用
   webSearchProvider: process.env.WEB_SEARCH_PROVIDER ?? 'auto',
   webSearchBochaApiKeyConfigured: isConfigured(process.env.WEB_SEARCH_BOCHA_API_KEY),
   webSearchBochaApiKey: process.env.WEB_SEARCH_BOCHA_API_KEY ?? '',

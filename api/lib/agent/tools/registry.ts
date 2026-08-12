@@ -11,7 +11,7 @@ import {
   novelGetContextTool,
   planReadTool,
 } from './read-tools.js'
-import { webSearchTool } from './search-tools.js'
+import { webReadTool, webSearchTool } from './search-tools.js'
 import type { AgentTool } from './types.js'
 import { todoWriteTool } from './todo-tools.js'
 import {
@@ -42,6 +42,7 @@ export const allTools: AgentTool<any>[] = [
   memorySearchTool,
   planReadTool,
   webSearchTool,
+  webReadTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
