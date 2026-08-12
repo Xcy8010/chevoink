@@ -1,0 +1,201 @@
+import { Link, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft } from 'lucide-react'
+
+import Button from '@/components/ui/Button'
+import { useToast } from '@/components/ui/Toast'
+import { ApiClientError } from '@/app/api-client'
+import { banAdminUser, getAdminUserDetail, resetAdminUserPassword, unbanAdminUser } from '../api'
+import { AdminCard, AdminConfirmDialog, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { useState } from 'react'
+
+const ROLE_LABELS: Record<string, string> = {
+  user: '用户',
+  author: '作者',
+  admin: '管理员',
+}
+
+export default function AdminUserDetailPage() {
+  const { userId = '' } = useParams()
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [showBanDialog, setShowBanDialog] = useState(false)
+  const [showResetDialog, setShowResetDialog] = useState(false)
+  const [tempPassword, setTempPassword] = useState<string | null>(null)
+
+  const query = useQuery({
+    queryKey: ['admin', 'users', userId],
+    queryFn: () => getAdminUserDetail(userId),
+    enabled: Boolean(userId),
+  })
+
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] })
+
+  const banMutation = useMutation({
+    mutationFn: () => banAdminUser(userId),
+    onSuccess: () => {
+      toast.success('已封禁该用户')
+      invalidate()
+      setShowBanDialog(false)
+    },
+    onError: (error) => toast.error(error instanceof ApiClientError ? error.message : '封禁失败'),
+  })
+
+  const unbanMutation = useMutation({
+    mutationFn: () => unbanAdminUser(userId),
+    onSuccess: () => {
+      toast.success('已解封该用户')
+      invalidate()
+    },
+    onError: (error) => toast.error(error instanceof ApiClientError ? error.message : '解封失败'),
+  })
+
+  const resetMutation = useMutation({
+    mutationFn: () => resetAdminUserPassword(userId),
+    onSuccess: (result) => {
+      setTempPassword(result.tempPassword)
+      setShowResetDialog(false)
+    },
+    onError: (error) => toast.error(error instanceof ApiClientError ? error.message : '重置失败'),
+  })
+
+  const detail = query.data
+  const user = detail?.user
+
+  return (
+    <div>
+      <Link to="/admin/users" className="mb-4 inline-flex items-center gap-1 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+        <ArrowLeft size={15} />
+        返回用户列表
+      </Link>
+
+      <AdminPanelState state={query.isLoading ? 'loading' : query.isError ? 'error' : 'ready'}>
+        {user && detail ? (
+          <div className="space-y-4">
+            <AdminCard>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt={user.nickname} className="h-14 w-14 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--surface-muted)] text-lg font-semibold">
+                      {user.nickname.slice(0, 1)}
+                    </span>
+                  )}
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h1 className="text-lg font-semibold">{user.nickname}</h1>
+                      {user.bannedAt ? (
+                        <StatusPill tone="danger">已封禁</StatusPill>
+                      ) : (
+                        <StatusPill tone="success">正常</StatusPill>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-sm text-[var(--text-secondary)]">
+                      {ROLE_LABELS[user.role] ?? user.role}
+                      {user.bio ? <span className="mx-1.5">·</span> : null}
+                      {user.bio ?? ''}
+                    </p>
+                  </div>
+                </div>
+
+                {user.role !== 'admin' ? (
+                  <div className="flex gap-2">
+                    {user.bannedAt ? (
+                      <Button onClick={() => unbanMutation.mutate()} disabled={unbanMutation.isPending}>
+                        解封
+                      </Button>
+                    ) : (
+                      <Button onClick={() => setShowBanDialog(true)}>封禁账号</Button>
+                    )}
+                    <Button variant="ghost" onClick={() => setShowResetDialog(true)}>
+                      重置密码
+                    </Button>
+                  </div>
+                ) : (
+                  <StatusPill tone="warning">当前管理员账号</StatusPill>
+                )}
+              </div>
+
+              <dl className="mt-5 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                {[
+                  ['手机号', user.phone ?? '未绑定'],
+                  ['邮箱', user.email ?? '未绑定'],
+                  ['注册时间', formatDateTime(user.createdAt)],
+                  ['最近活跃', formatDateTime(user.lastActiveAt)],
+                  ['封禁时间', user.bannedAt ? formatDateTime(user.bannedAt) : '—'],
+                  ['粉丝数', String(user.followerCount)],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-xs text-[var(--text-secondary)]">{label}</dt>
+                    <dd className="mt-0.5">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </AdminCard>
+
+            <AdminCard>
+              <h2 className="mb-3 text-sm font-semibold">内容统计</h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { label: '作品', value: detail.stats.novels, to: `/admin/novels?search=${encodeURIComponent(user.nickname)}` },
+                  { label: '帖子', value: detail.stats.posts, to: `/admin/posts?search=${encodeURIComponent(user.nickname)}` },
+                  { label: '评论', value: detail.stats.comments, to: `/admin/comments?search=${encodeURIComponent(user.nickname)}` },
+                  { label: '收藏作品', value: detail.stats.favorites, to: null },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-lg bg-[var(--surface-muted)] p-3">
+                    <p className="text-xs text-[var(--text-secondary)]">{item.label}</p>
+                    {item.to ? (
+                      <Link to={item.to} className="mt-1 block text-xl font-semibold hover:underline">
+                        {item.value}
+                      </Link>
+                    ) : (
+                      <p className="mt-1 text-xl font-semibold">{item.value}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </AdminCard>
+          </div>
+        ) : null}
+      </AdminPanelState>
+
+      <AdminConfirmDialog
+        open={showBanDialog}
+        title="封禁用户"
+        description={user ? <>封禁后 {user.nickname} 的登录态立即失效且无法再访问平台。确定要封禁吗？</> : null}
+        confirmLabel="确认封禁"
+        loading={banMutation.isPending}
+        onCancel={() => setShowBanDialog(false)}
+        onConfirm={() => banMutation.mutate()}
+      />
+
+      <AdminConfirmDialog
+        open={showResetDialog}
+        title="重置用户密码"
+        description="将生成新的临时密码并覆盖旧密码，请通过安全渠道交付给用户。"
+        confirmLabel="生成临时密码"
+        loading={resetMutation.isPending}
+        onCancel={() => setShowResetDialog(false)}
+        onConfirm={() => resetMutation.mutate()}
+      />
+
+      <AdminConfirmDialog
+        open={tempPassword !== null}
+        tone="primary"
+        title="临时密码已生成"
+        description={
+          <div>
+            <p>请通过安全渠道交付给用户：</p>
+            <p className="mt-3 select-all rounded-lg bg-[var(--surface-muted)] px-3 py-2 font-mono text-sm text-[var(--text-primary)]">
+              {tempPassword}
+            </p>
+          </div>
+        }
+        confirmLabel="我已记录"
+        onCancel={() => setTempPassword(null)}
+        onConfirm={() => setTempPassword(null)}
+      />
+    </div>
+  )
+}

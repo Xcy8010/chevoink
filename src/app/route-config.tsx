@@ -4,6 +4,7 @@ import { Navigate } from 'react-router-dom'
 import AuthPage from '@/app/routes/AuthPage'
 import NotFoundPage from '@/app/routes/NotFoundPage'
 import RequireAuthRoute from '@/app/routes/RequireAuthRoute'
+import AdminLayout from '@/features/admin/AdminLayout'
 import {
   AuthorSkeleton,
   ConversationSkeleton,
@@ -52,6 +53,18 @@ const ReaderPage = lazyPage(() => import('@/pages/ReaderPage'))
 const SearchPage = lazyPage(() => import('@/pages/SearchPage'))
 const StudioPage = lazyPage(() => import('@/pages/StudioPage'))
 const TopicPage = lazyPage(() => import('@/pages/TopicPage'))
+
+// 后台管理（方案 18）：独立分区，不走主站壳
+const AdminLoginPage = lazyPage(() => import('@/features/admin/pages/AdminLoginPage'))
+const AdminDashboardPage = lazyPage(() => import('@/features/admin/pages/AdminDashboardPage'))
+const AdminUsersPage = lazyPage(() => import('@/features/admin/pages/AdminUsersPage'))
+const AdminUserDetailPage = lazyPage(() => import('@/features/admin/pages/AdminUserDetailPage'))
+const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
+const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
+const AdminPostsPage = lazyPage(() => import('@/features/admin/pages/AdminPostsPage'))
+const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCommentsPage'))
+const AdminLogsPage = lazyPage(() => import('@/features/admin/pages/AdminLogsPage'))
+const AdminSettingsPage = lazyPage(() => import('@/features/admin/pages/AdminSettingsPage'))
 
 export type AppRouteDefinition = {
   path: string
@@ -238,6 +251,113 @@ export const appRoutes: AppRouteDefinition[] = [
     title: '',
     description: '',
     element: <Navigate to="/studio" replace />,
+    useShell: false,
+  },
+  /* ---------------- 后台管理（/admin 分区，不走主站壳） ---------------- */
+  {
+    path: '/admin/login',
+    title: '管理后台登录',
+    description: '启创墨域管理后台，仅限管理员访问。',
+    element: <AdminLoginPage />,
+    useShell: false,
+  },
+  {
+    path: '/admin',
+    title: '管理仪表盘',
+    description: '平台内容与管理动作的实时概览。',
+    element: (
+      <AdminLayout>
+        <AdminDashboardPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/users',
+    title: '用户管理',
+    description: '查看注册用户、封禁违规账号、调整角色或重置密码。',
+    element: (
+      <AdminLayout>
+        <AdminUsersPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/users/:userId',
+    title: '用户详情',
+    description: '查看单个用户的完整资料与内容统计。',
+    element: (
+      <AdminLayout>
+        <AdminUserDetailPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/novels',
+    title: '作品管理',
+    description: '检索全站作品，对违规内容执行下架、恢复或删除。',
+    element: (
+      <AdminLayout>
+        <AdminNovelsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/novels/:novelId',
+    title: '作品详情管理',
+    description: '查看单部作品的章节与数据，执行下架、恢复或删除。',
+    element: (
+      <AdminLayout>
+        <AdminNovelDetailPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/posts',
+    title: '帖子管理',
+    description: '检索社区帖子，对违规内容执行删除。',
+    element: (
+      <AdminLayout>
+        <AdminPostsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/comments',
+    title: '评论管理',
+    description: '检索全站评论，对违规内容执行删除。',
+    element: (
+      <AdminLayout>
+        <AdminCommentsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/logs',
+    title: '操作日志',
+    description: '所有管理操作留痕，只增不删。',
+    element: (
+      <AdminLayout>
+        <AdminLogsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/settings',
+    title: '安全设置',
+    description: '修改管理员登录密码。',
+    element: (
+      <AdminLayout>
+        <AdminSettingsPage />
+      </AdminLayout>
+    ),
     useShell: false,
   },
   {

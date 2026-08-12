@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { Request, Response } from 'express'
 
 import { env } from '../config/env.js'
-import { DataAccessError } from './prisma.js'
+import { prisma, DataAccessError } from './prisma.js'
 
 const SESSION_COOKIE_NAME = 'chevoink_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
@@ -96,6 +96,11 @@ export function clearSession(res: Response) {
 }
 
 export function getSessionUserId(req: Request): string | null {
+  // 全局中间件已判定本请求属于被封禁会话：直接视为未登录
+  if (isSessionMarkedBanned(req)) {
+    return null
+  }
+
   const fromCookie = verifySessionToken(parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME])
   if (fromCookie) {
     return fromCookie
@@ -109,6 +114,41 @@ export function getSessionUserId(req: Request): string | null {
   }
 
   return null
+}
+
+/* ---------------- 封禁生效（后台管理封禁后全站登录态失效） ---------------- */
+
+/** 封禁状态进程内缓存：60 秒内的重复请求不打库，封禁/解封操作会主动清缓存 */
+const BAN_CACHE_TTL_MS = 60_000
+const banStateCache = new Map<string, { banned: boolean; checkedAt: number }>()
+const BANNED_FLAG_KEY = Symbol('chevoinkBannedSession')
+
+export function evictUserBanCache(userId: string): void {
+  banStateCache.delete(userId)
+}
+
+export async function isUserBanned(userId: string): Promise<boolean> {
+  const cached = banStateCache.get(userId)
+  if (cached && Date.now() - cached.checkedAt < BAN_CACHE_TTL_MS) {
+    return cached.banned
+  }
+
+  // 查询异常按未封禁处理：管理功能故障不能把全站登录态打挂
+  const user = await prisma.user
+    .findUnique({ where: { id: userId }, select: { bannedAt: true } })
+    .catch(() => null)
+  const banned = user ? user.bannedAt !== null : false
+  banStateCache.set(userId, { banned, checkedAt: Date.now() })
+  return banned
+}
+
+/** 全局中间件判定封禁后打标：后续 getSessionUserId / requireSessionUserId 一律视为未登录 */
+export function markSessionBanned(req: Request): void {
+  ;(req as Request & { [key: symbol]: unknown })[BANNED_FLAG_KEY] = true
+}
+
+function isSessionMarkedBanned(req: Request): boolean {
+  return Boolean((req as Request & { [key: symbol]: unknown })[BANNED_FLAG_KEY])
 }
 
 function verifySessionToken(token: string | undefined | null): string | null {

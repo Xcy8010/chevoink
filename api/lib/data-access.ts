@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 
 import type { Prisma, Visibility as PrismaVisibility } from '@prisma/client'
 
@@ -50,6 +50,7 @@ import type {
 import { ALL_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../shared/contracts/novel-tags.js'
 import { extractTopicNames } from '../../shared/contracts/topic-parse.js'
 import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, verifyPassword } from './password.js'
+import { evictUserBanCache } from './auth-session.js'
 import { paginate } from './http.js'
 import { storeMessageImageDataUrl } from './message-image-storage.js'
 import { storeNovelCoverDataUrl } from './novel-cover-storage.js'
@@ -1557,6 +1558,23 @@ export async function deleteNovelData(userId: string, novelId: string): Promise<
     return false
   }
 
+  await purgeNovelData(novelId, userId)
+  return true
+}
+
+/** 后台管理删除作品：不做归属校验，级联清理与普通删除一致 */
+export async function adminDeleteNovelData(novelId: string): Promise<boolean> {
+  const existing = await prisma.novel.findUnique({ where: { id: novelId }, select: { authorId: true } })
+  if (!existing) {
+    return false
+  }
+
+  await purgeNovelData(novelId, existing.authorId)
+  return true
+}
+
+/** 删除作品核心事务（普通删除与后台管理删除共用） */
+async function purgeNovelData(novelId: string, authorId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const chapters = await tx.chapter.findMany({
       where: { novelId },
@@ -1620,7 +1638,7 @@ export async function deleteNovelData(userId: string, novelId: string): Promise<
       where: { id: novelId },
     })
     await tx.user.update({
-      where: { id: userId },
+      where: { id: authorId },
       data: {
         novelCount: {
           decrement: 1,
@@ -1628,8 +1646,6 @@ export async function deleteNovelData(userId: string, novelId: string): Promise<
       },
     })
   })
-
-  return true
 }
 
 /** 评论排序候选集上限：单目标评论百千级，内存线程化排序足够 */
@@ -1914,6 +1930,27 @@ export async function deleteCommentData(
     throw new DataAccessError(403, 'FORBIDDEN', '只能删除自己的评论。')
   }
 
+  return purgeCommentData(existing)
+}
+
+/** 后台管理删除评论：不做归属校验，级联与计数回算与普通删除一致 */
+export async function adminDeleteCommentData(commentId: string): Promise<{ deletedCount: number } | null> {
+  const existing = await prisma.comment.findUnique({ where: { id: commentId } })
+  if (!existing) {
+    return null
+  }
+
+  return purgeCommentData(existing)
+}
+
+/** 删除评论核心事务（普通删除与后台管理删除共用） */
+async function purgeCommentData(existing: {
+  id: string
+  parentId: string | null
+  targetType: CommentTargetType
+  targetId: string
+}): Promise<{ deletedCount: number }> {
+  const commentId = existing.id
   const deletedCount = await prisma.$transaction(async (tx) => {
     const descendants = await tx.comment.findMany({
       where: { OR: [{ parentId: commentId }, { rootId: commentId }] },
@@ -2750,6 +2787,34 @@ export async function deletePostData(userId: string, postId: string): Promise<bo
     throw new DataAccessError(403, 'FORBIDDEN', '只能删除自己的动态。')
   }
 
+  await purgePostData(existing)
+  return true
+}
+
+/** 后台管理删除帖子：不做归属校验，级联与计数回算与普通删除一致 */
+export async function adminDeletePostData(postId: string): Promise<boolean | null> {
+  const existing = await prisma.post.findUnique({
+    where: { id: postId },
+    include: { topicLinks: true },
+  })
+  if (!existing) {
+    return null
+  }
+
+  await purgePostData(existing)
+  return true
+}
+
+/** 删除帖子核心事务（普通删除与后台管理删除共用） */
+async function purgePostData(existing: {
+  id: string
+  userId: string
+  topicId: string | null
+  topicLinks: Array<{ topicId: string }>
+}): Promise<void> {
+  const postId = existing.id
+  const userId = existing.userId
+
   await prisma.$transaction(async (tx) => {
     const commentIds = (
       await tx.comment.findMany({
@@ -2783,8 +2848,6 @@ export async function deletePostData(userId: string, postId: string): Promise<bo
     const remainingPosts = await tx.post.count({ where: { userId } })
     await tx.user.updateMany({ where: { id: userId }, data: { postCount: remainingPosts } })
   })
-
-  return true
 }
 
 export async function getMePayloadData(userId: string): Promise<UserMePayload> {
@@ -3975,4 +4038,720 @@ export async function createUploadedCoverAssetData(input: {
 
 export function toPrismaVisibility(visibility: Visibility | PrismaVisibility | undefined): PrismaVisibility {
   return (visibility ?? 'public') as PrismaVisibility
+}
+
+/* ========================================================================== */
+/* 后台管理数据层（方案 18）                                                    */
+/* 所有写操作必须在路由层配套 recordAdminAuditLog 审计记录                          */
+/* ========================================================================== */
+
+export type AdminUserRow = {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+  phone: string | null
+  email: string | null
+  role: string
+  bannedAt: string | null
+  createdAt: string
+  lastActiveAt: string | null
+  isOnline: boolean
+  novelCount: number
+  postCount: number
+  followerCount: number
+}
+
+export type AdminDashboardPayload = {
+  totals: {
+    users: number
+    publishedNovels: number
+    posts: number
+    comments: number
+  }
+  trend: Array<{ date: string; users: number; novels: number; posts: number }>
+  recentLogs: Array<{
+    id: string
+    action: string
+    targetType: string | null
+    targetId: string | null
+    adminNickname: string | null
+    createdAt: string
+  }>
+}
+
+export type AdminNovelRow = {
+  id: string
+  title: string
+  displayTitle: string | null
+  status: string
+  visibility: string
+  categoryName: string | null
+  wordCount: number
+  chapterCount: number
+  commentCount: number
+  favoriteCount: number
+  publishedAt: string | null
+  updatedAt: string
+  author: { id: string; nickname: string; avatarUrl: string | null }
+}
+
+export type AdminPostRow = {
+  id: string
+  excerpt: string
+  imageCount: number
+  likeCount: number
+  commentCount: number
+  createdAt: string
+  topicTitle: string | null
+  author: { id: string; nickname: string; avatarUrl: string | null }
+}
+
+export type AdminCommentRow = {
+  id: string
+  content: string
+  targetType: string
+  targetTitle: string | null
+  likeCount: number
+  replyCount: number
+  createdAt: string
+  author: { id: string; nickname: string; avatarUrl: string | null }
+  targetHref: string | null
+}
+
+export type AdminAuditLogRow = {
+  id: string
+  adminId: string
+  adminNickname: string | null
+  action: string
+  targetType: string | null
+  targetId: string | null
+  detail: Record<string, unknown>
+  ip: string | null
+  createdAt: string
+}
+
+export async function recordAdminAuditLog(input: {
+  adminId: string
+  action: string
+  targetType?: string | null
+  targetId?: string | null
+  detail?: Record<string, unknown>
+  ip?: string | null
+}): Promise<void> {
+  await prisma.adminAuditLog.create({
+    data: {
+      id: randomUUID(),
+      adminId: input.adminId,
+      action: input.action,
+      targetType: input.targetType ?? null,
+      targetId: input.targetId ?? null,
+      detail: (input.detail ?? {}) as Prisma.InputJsonValue,
+      ip: input.ip ?? null,
+    },
+  })
+}
+
+/** 管理后台登录：邮箱 + 密码，仅放行 admin 角色且未封禁的账号 */
+export async function adminLoginByEmailData(
+  email: string,
+  password: string,
+): Promise<{ userId: string; nickname: string } | null> {
+  const user = await prisma.user.findUnique({
+    where: { email: email.trim().toLowerCase() },
+  })
+
+  if (!user || user.role !== 'admin' || user.bannedAt !== null) {
+    return null
+  }
+  if (!verifyPassword(password, user.passwordHash)) {
+    return null
+  }
+
+  return { userId: user.id, nickname: user.nickname }
+}
+
+export async function getAdminUserBySessionData(userId: string): Promise<{
+  id: string
+  nickname: string
+  email: string | null
+  role: string
+} | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nickname: true, email: true, role: true, bannedAt: true },
+  })
+
+  if (!user || user.role !== 'admin' || user.bannedAt !== null) {
+    return null
+  }
+
+  return { id: user.id, nickname: user.nickname, email: user.email, role: user.role }
+}
+
+/** 管理员改自己的密码：先校验旧密码 */
+export async function adminChangeMyPasswordData(
+  userId: string,
+  oldPassword: string,
+  newPassword: string,
+): Promise<boolean> {
+  const user = await prisma.user.findUnique({ where: { id: userId } })
+  if (!user) {
+    return false
+  }
+  if (!verifyPassword(oldPassword, user.passwordHash)) {
+    return false
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash: hashPassword(newPassword) },
+  })
+  return true
+}
+
+/** 重置某用户密码：生成一次性临时密码返回给管理员，线下交付 */
+export async function resetUserPasswordData(userId: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
+  if (!user) {
+    return null
+  }
+
+  const tempPassword = `Cv-${randomBytes(9).toString('base64url')}`
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash: hashPassword(tempPassword) },
+  })
+  return tempPassword
+}
+
+export async function setUserBannedData(
+  userId: string,
+  banned: boolean,
+): Promise<{ nickname: string } | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, nickname: true } })
+  if (!user) {
+    return null
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { bannedAt: banned ? new Date() : null },
+  })
+  evictUserBanCache(userId)
+  return { nickname: user.nickname }
+}
+
+export async function setUserRoleData(
+  userId: string,
+  role: 'user' | 'author' | 'admin',
+): Promise<{ nickname: string; role: string } | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, nickname: true } })
+  if (!user) {
+    return null
+  }
+
+  await prisma.user.update({ where: { id: userId }, data: { role } })
+  return { nickname: user.nickname, role }
+}
+
+export async function listAdminUsersData(input: {
+  search?: string
+  role?: string
+  banned?: boolean
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminUserRow[]; pagination: Pagination }> {
+  const where: Prisma.UserWhereInput = {}
+
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.OR = [
+      { nickname: { contains: keyword, mode: 'insensitive' } },
+      { phone: { contains: keyword } },
+      { email: { contains: keyword, mode: 'insensitive' } },
+    ]
+  }
+  if (input.role) {
+    where.role = input.role as Prisma.UserWhereInput['role']
+  }
+  if (input.banned === true) {
+    where.bannedAt = { not: null }
+  } else if (input.banned === false) {
+    where.bannedAt = null
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.user.count({ where }),
+    prisma.user.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+      select: {
+        id: true,
+        nickname: true,
+        avatarUrl: true,
+        phone: true,
+        email: true,
+        role: true,
+        bannedAt: true,
+        createdAt: true,
+        lastActiveAt: true,
+        novelCount: true,
+        postCount: true,
+        followerCount: true,
+      },
+    }),
+  ])
+
+  const items: AdminUserRow[] = records.map((record) => ({
+    id: record.id,
+    nickname: record.nickname,
+    avatarUrl: record.avatarUrl,
+    phone: record.phone,
+    email: record.email,
+    role: record.role,
+    bannedAt: toIso(record.bannedAt),
+    createdAt: record.createdAt.toISOString(),
+    lastActiveAt: toIso(record.lastActiveAt),
+    isOnline: isUserOnline(record.lastActiveAt),
+    novelCount: record.novelCount,
+    postCount: record.postCount,
+    followerCount: record.followerCount,
+  }))
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function getAdminUserDetailData(userId: string): Promise<{
+  user: AdminUserRow & { bio: string | null }
+  stats: { novels: number; posts: number; comments: number; favorites: number }
+} | null> {
+  const record = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      nickname: true,
+      avatarUrl: true,
+      phone: true,
+      email: true,
+      bio: true,
+      role: true,
+      bannedAt: true,
+      createdAt: true,
+      lastActiveAt: true,
+      novelCount: true,
+      postCount: true,
+      followerCount: true,
+    },
+  })
+  if (!record) {
+    return null
+  }
+
+  const [novels, posts, comments, favorites] = await Promise.all([
+    prisma.novel.count({ where: { authorId: userId } }),
+    prisma.post.count({ where: { userId } }),
+    prisma.comment.count({ where: { userId } }),
+    prisma.novelFavorite.count({ where: { userId } }),
+  ])
+
+  return {
+    user: {
+      id: record.id,
+      nickname: record.nickname,
+      avatarUrl: record.avatarUrl,
+      phone: record.phone,
+      email: record.email,
+      role: record.role,
+      bannedAt: toIso(record.bannedAt),
+      createdAt: record.createdAt.toISOString(),
+      lastActiveAt: toIso(record.lastActiveAt),
+      isOnline: isUserOnline(record.lastActiveAt),
+      novelCount: record.novelCount,
+      postCount: record.postCount,
+      followerCount: record.followerCount,
+      bio: record.bio,
+    },
+    stats: { novels, posts, comments, favorites },
+  }
+}
+
+function buildRecentDays(dates: Date[]): Map<string, number> {
+  const counter = new Map<string, number>()
+  for (const date of dates) {
+    const key = date.toISOString().slice(0, 10)
+    counter.set(key, (counter.get(key) ?? 0) + 1)
+  }
+  return counter
+}
+
+export async function getAdminDashboardData(): Promise<AdminDashboardPayload> {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+
+  const [userTotal, novelTotal, postTotal, commentTotal, recentUsers, recentNovels, recentPosts, recentLogs] =
+    await Promise.all([
+      prisma.user.count(),
+      prisma.novel.count({ where: { status: { in: ['published', 'completed'] } } }),
+      prisma.post.count(),
+      prisma.comment.count(),
+      prisma.user.findMany({ where: { createdAt: { gte: since } }, select: { createdAt: true } }),
+      prisma.novel.findMany({
+        where: { status: { in: ['published', 'completed'] }, lastPublishedAt: { gte: since } },
+        select: { lastPublishedAt: true },
+      }),
+      prisma.post.findMany({ where: { createdAt: { gte: since } }, select: { createdAt: true } }),
+      prisma.adminAuditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }),
+    ])
+
+  const userCounter = buildRecentDays(recentUsers.map((item) => item.createdAt))
+  const novelCounter = buildRecentDays(
+    recentNovels.map((item) => item.lastPublishedAt).filter((item): item is Date => item !== null),
+  )
+  const postCounter = buildRecentDays(recentPosts.map((item) => item.createdAt))
+
+  const trend: AdminDashboardPayload['trend'] = []
+  for (let day = 6; day >= 0; day -= 1) {
+    const key = new Date(Date.now() - day * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    trend.push({ date: key, users: userCounter.get(key) ?? 0, novels: novelCounter.get(key) ?? 0, posts: postCounter.get(key) ?? 0 })
+  }
+
+  const adminIds = [...new Set(recentLogs.map((log) => log.adminId))]
+  const admins = adminIds.length
+    ? await prisma.user.findMany({ where: { id: { in: adminIds } }, select: { id: true, nickname: true } })
+    : []
+  const adminNames = new Map(admins.map((admin) => [admin.id, admin.nickname]))
+
+  return {
+    totals: { users: userTotal, publishedNovels: novelTotal, posts: postTotal, comments: commentTotal },
+    trend,
+    recentLogs: recentLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      targetType: log.targetType,
+      targetId: log.targetId,
+      adminNickname: adminNames.get(log.adminId) ?? null,
+      createdAt: log.createdAt.toISOString(),
+    })),
+  }
+}
+
+export async function listAdminNovelsData(input: {
+  search?: string
+  status?: string
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminNovelRow[]; pagination: Pagination }> {
+  const where: Prisma.NovelWhereInput = {}
+
+  if (input.status) {
+    where.status = input.status as Prisma.NovelWhereInput['status']
+  }
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.OR = [
+      { title: { contains: keyword, mode: 'insensitive' } },
+      { displayTitle: { contains: keyword, mode: 'insensitive' } },
+      { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
+    ]
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.novel.count({ where }),
+    prisma.novel.findMany({
+      where,
+      orderBy: { updatedAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+      include: { author: { select: { id: true, nickname: true, avatarUrl: true } } },
+    }),
+  ])
+
+  const items: AdminNovelRow[] = records.map((record) => ({
+    id: record.id,
+    title: record.title,
+    displayTitle: record.displayTitle,
+    status: record.status,
+    visibility: record.visibility,
+    categoryName: record.categoryName,
+    wordCount: record.wordCount,
+    chapterCount: record.chapterCount,
+    commentCount: record.commentCount,
+    favoriteCount: record.favoriteCount,
+    publishedAt: toIso(record.publishedAt),
+    updatedAt: record.updatedAt.toISOString(),
+    author: { id: record.author.id, nickname: record.author.nickname, avatarUrl: record.author.avatarUrl },
+  }))
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function getAdminNovelDetailData(novelId: string): Promise<{
+  novel: AdminNovelRow & { summary: string; author: AdminUserRow }
+  chapters: Array<{
+    id: string
+    title: string
+    orderIndex: number
+    status: string
+    wordCount: number
+    publishedAt: string | null
+    updatedAt: string
+  }>
+} | null> {
+  const record = await prisma.novel.findUnique({
+    where: { id: novelId },
+    include: {
+      author: true,
+      chapters: { orderBy: { orderIndex: 'asc' } },
+    },
+  })
+  if (!record) {
+    return null
+  }
+
+  return {
+    novel: {
+      id: record.id,
+      title: record.title,
+      displayTitle: record.displayTitle,
+      status: record.status,
+      visibility: record.visibility,
+      categoryName: record.categoryName,
+      wordCount: record.wordCount,
+      chapterCount: record.chapterCount,
+      commentCount: record.commentCount,
+      favoriteCount: record.favoriteCount,
+      publishedAt: toIso(record.publishedAt),
+      updatedAt: record.updatedAt.toISOString(),
+      summary: record.summary,
+      author: {
+        id: record.author.id,
+        nickname: record.author.nickname,
+        avatarUrl: record.author.avatarUrl,
+        phone: record.author.phone,
+        email: record.author.email,
+        role: record.author.role,
+        bannedAt: toIso(record.author.bannedAt),
+        createdAt: record.author.createdAt.toISOString(),
+        lastActiveAt: toIso(record.author.lastActiveAt),
+        isOnline: isUserOnline(record.author.lastActiveAt),
+        novelCount: record.author.novelCount,
+        postCount: record.author.postCount,
+        followerCount: record.author.followerCount,
+      },
+    },
+    chapters: record.chapters.map((chapter) => ({
+      id: chapter.id,
+      title: chapter.title,
+      orderIndex: chapter.orderIndex,
+      status: chapter.status,
+      wordCount: chapter.wordCount,
+      publishedAt: toIso(chapter.publishedAt),
+      updatedAt: chapter.updatedAt.toISOString(),
+    })),
+  }
+}
+
+/** 下架：转私有 + 归档，前台列表/搜索/详情对普通用户不可见 */
+export async function takeDownNovelData(novelId: string): Promise<{ title: string; previousVisibility: string } | null> {
+  const record = await prisma.novel.findUnique({
+    where: { id: novelId },
+    select: { id: true, title: true, visibility: true },
+  })
+  if (!record) {
+    return null
+  }
+
+  await prisma.novel.update({
+    where: { id: novelId },
+    data: { visibility: 'private', status: 'archived' },
+  })
+  return { title: record.title, previousVisibility: record.visibility }
+}
+
+/** 恢复上架：转公开 + 发布态 */
+export async function restoreNovelData(novelId: string): Promise<{ title: string } | null> {
+  const record = await prisma.novel.findUnique({ where: { id: novelId }, select: { id: true, title: true } })
+  if (!record) {
+    return null
+  }
+
+  await prisma.novel.update({
+    where: { id: novelId },
+    data: { visibility: 'public', status: 'published' },
+  })
+  return { title: record.title }
+}
+
+/** 后台删除单章：复用普通删除的排序压缩与统计回算 */
+export async function adminDeleteChapterData(chapterId: string): Promise<{ title: string; novelId: string } | null> {
+  const existing = await prisma.chapter.findUnique({
+    where: { id: chapterId },
+    select: { id: true, title: true, novelId: true },
+  })
+  if (!existing) {
+    return null
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.chapter.delete({ where: { id: chapterId } })
+    await compactChapterOrder(tx, existing.novelId)
+    await recalculateNovelStats(tx, existing.novelId)
+  })
+  return { title: existing.title, novelId: existing.novelId }
+}
+
+export async function listAdminPostsData(input: {
+  search?: string
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminPostRow[]; pagination: Pagination }> {
+  const where: Prisma.PostWhereInput = {}
+
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.OR = [
+      { content: { contains: keyword, mode: 'insensitive' } },
+      { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
+    ]
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.post.count({ where }),
+    prisma.post.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+      include: {
+        author: { select: { id: true, nickname: true, avatarUrl: true } },
+        topic: { select: { name: true } },
+      },
+    }),
+  ])
+
+  const items: AdminPostRow[] = records.map((record) => ({
+    id: record.id,
+    excerpt: excerptContent(record.content),
+    imageCount: record.imageUrls.length,
+    likeCount: record.likeCount,
+    commentCount: record.commentCount,
+    createdAt: record.createdAt.toISOString(),
+    topicTitle: record.topic?.name ?? null,
+    author: { id: record.author.id, nickname: record.author.nickname, avatarUrl: record.author.avatarUrl },
+  }))
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function listAdminCommentsData(input: {
+  targetType?: string
+  search?: string
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminCommentRow[]; pagination: Pagination }> {
+  const where: Prisma.CommentWhereInput = {}
+
+  if (input.targetType === 'novel' || input.targetType === 'chapter' || input.targetType === 'post') {
+    where.targetType = input.targetType
+  }
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.OR = [
+      { content: { contains: keyword, mode: 'insensitive' } },
+      { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
+    ]
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.comment.count({ where }),
+    prisma.comment.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+      include: {
+        author: { select: { id: true, nickname: true, avatarUrl: true } },
+        novel: { select: { id: true, title: true, displayTitle: true } },
+        chapter: { select: { id: true, title: true, novelId: true, novel: { select: { id: true, title: true } } } },
+        post: { select: { id: true, content: true } },
+      },
+    }),
+  ])
+
+  const items: AdminCommentRow[] = records.map((record) => {
+    let targetTitle: string | null = null
+    let targetHref: string | null = null
+
+    if (record.targetType === 'novel' && record.novel) {
+      targetTitle = record.novel.displayTitle ?? record.novel.title
+      targetHref = `/novel/${record.novel.id}`
+    } else if (record.targetType === 'chapter' && record.chapter) {
+      targetTitle = `《${record.chapter.novel.title}》${record.chapter.title}`
+      targetHref = `/novel/${record.chapter.novelId}/read/${record.chapter.id}`
+    } else if (record.targetType === 'post' && record.post) {
+      targetTitle = excerptContent(record.post.content)
+      targetHref = `/post/${record.post.id}`
+    }
+
+    return {
+      id: record.id,
+      content: excerptContent(record.content),
+      targetType: record.targetType,
+      targetTitle,
+      likeCount: record.likeCount,
+      replyCount: record.replyCount,
+      createdAt: record.createdAt.toISOString(),
+      author: { id: record.author.id, nickname: record.author.nickname, avatarUrl: record.author.avatarUrl },
+      targetHref,
+    }
+  })
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function listAdminAuditLogsData(input: {
+  action?: string
+  targetType?: string
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminAuditLogRow[]; pagination: Pagination }> {
+  const where: Prisma.AdminAuditLogWhereInput = {}
+
+  if (input.action?.trim()) {
+    where.action = input.action.trim()
+  }
+  if (input.targetType?.trim()) {
+    where.targetType = input.targetType.trim()
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.adminAuditLog.count({ where }),
+    prisma.adminAuditLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+  ])
+
+  const adminIds = [...new Set(records.map((record) => record.adminId))]
+  const admins = adminIds.length
+    ? await prisma.user.findMany({ where: { id: { in: adminIds } }, select: { id: true, nickname: true } })
+    : []
+  const adminNames = new Map(admins.map((admin) => [admin.id, admin.nickname]))
+
+  const items: AdminAuditLogRow[] = records.map((record) => ({
+    id: record.id,
+    adminId: record.adminId,
+    adminNickname: adminNames.get(record.adminId) ?? null,
+    action: record.action,
+    targetType: record.targetType,
+    targetId: record.targetId,
+    detail: (record.detail ?? {}) as Record<string, unknown>,
+    ip: record.ip,
+    createdAt: record.createdAt.toISOString(),
+  }))
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
 }

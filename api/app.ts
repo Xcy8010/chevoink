@@ -5,6 +5,7 @@ import express, {
 } from 'express'
 import cors from 'cors'
 import agentRoutes from './routes/agent.js'
+import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
 import authRoutes from './routes/auth.js'
 import commentsRoutes from './routes/comments.js'
@@ -17,7 +18,7 @@ import searchRoutes from './routes/search.js'
 import topicsRoutes from './routes/topics.js'
 import usersRoutes from './routes/users.js'
 import { env } from './config/env.js'
-import { getSessionUserId } from './lib/auth-session.js'
+import { clearSession, getSessionUserId, isUserBanned, markSessionBanned } from './lib/auth-session.js'
 import { getUploadsStaticDirectory } from './lib/avatar-storage.js'
 import { prisma } from './lib/prisma.js'
 
@@ -38,25 +39,37 @@ app.use(
   express.static(getUploadsStaticDirectory(), { fallthrough: false, maxAge: '30d', immutable: true }),
 )
 
-// 在线状态：登录用户每次请求刷新 lastActiveAt（内存节流 60s 写一次库），5 分钟内活跃视为在线
+// 登录态统一闸口：
+// 1. 封禁检查（60s 缓存）——被封禁会话打标 + 清 cookie，后续所有鉴权一律视为未登录；
+// 2. 在线状态：每次请求刷新 lastActiveAt（内存节流 60s 写一次库），5 分钟内活跃视为在线
 const lastActiveWriteAt = new Map<string, number>()
 const LAST_ACTIVE_WRITE_INTERVAL_MS = 60_000
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  const userId = getSessionUserId(req)
-  if (userId) {
-    const now = Date.now()
-    if (now - (lastActiveWriteAt.get(userId) ?? 0) >= LAST_ACTIVE_WRITE_INTERVAL_MS) {
-      lastActiveWriteAt.set(userId, now)
-      // 异步落库不阻塞请求；用户不存在等异常静默忽略
-      prisma.user
-        .updateMany({ where: { id: userId }, data: { lastActiveAt: new Date(now) } })
-        .catch(() => {})
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = getSessionUserId(req)
+    if (userId) {
+      if (await isUserBanned(userId)) {
+        markSessionBanned(req)
+        clearSession(res)
+      } else {
+        const now = Date.now()
+        if (now - (lastActiveWriteAt.get(userId) ?? 0) >= LAST_ACTIVE_WRITE_INTERVAL_MS) {
+          lastActiveWriteAt.set(userId, now)
+          // 异步落库不阻塞请求；用户不存在等异常静默忽略
+          prisma.user
+            .updateMany({ where: { id: userId }, data: { lastActiveAt: new Date(now) } })
+            .catch(() => {})
+        }
+      }
     }
+  } catch {
+    // 闸口自身异常放行：管理功能故障不能把全站请求打挂
   }
   next()
 })
 
 app.use('/api/agent', agentRoutes)
+app.use('/api/admin', adminRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/comments', commentsRoutes)

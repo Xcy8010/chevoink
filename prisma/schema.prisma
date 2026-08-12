@@ -166,6 +166,8 @@ model User {
   interactionsSeenAt      DateTime?            @map("interactions_seen_at")
   followersSeenAt         DateTime?            @map("followers_seen_at")
   lastActiveAt            DateTime?            @map("last_active_at")
+  /** 封禁时间（NULL = 正常）：后台管理封禁后全站登录态失效 */
+  bannedAt                DateTime?            @map("banned_at")
   privacyFollowers        PrivacyLevel         @default(public) @map("privacy_followers")
   privacyFollowing        PrivacyLevel         @default(public) @map("privacy_following")
   privacyLikes            PrivacyLevel         @default(public) @map("privacy_likes")
@@ -697,4 +699,20 @@ model ProjectMemoryEntry {
   @@index([novelId, memoryType])
   @@index([sourceChapterId])
   @@map("project_memory_entries")
+}
+
+/** 后台管理操作审计日志：只增不删，admin_id 不做外键（避免用户删除产生悬挂） */
+model AdminAuditLog {
+  id         String   @id @default(cuid()) @db.VarChar(64)
+  adminId    String   @map("admin_id") @db.VarChar(64)
+  action     String   @db.VarChar(64)
+  targetType String?  @map("target_type") @db.VarChar(32)
+  targetId   String?  @map("target_id") @db.VarChar(64)
+  detail     Json     @default("{}")
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@map("admin_audit_logs")
 }
