@@ -31,7 +31,7 @@ export const webSearchTool = defineTool({
   name: 'web_search',
   title: '联网搜索',
   description:
-    '当作者明确要求联网搜索/查资料，或任务涉及记忆与章节知识无法覆盖的外部事实（真实人物事件、专业术语、行业数据、时事）时，用本工具获取实时信息；作品内部设定、角色、伏笔等问题用 memory_search，不要用本工具。引用搜索结果时在回复中注明来源。一次任务最多搜索 5 次。',
+    '当作者明确要求联网搜索/查资料，或任务涉及记忆与章节知识无法覆盖的外部事实（真实人物事件、专业术语、行业数据、时事）时，用本工具获取实时信息；作品内部设定、角色、伏笔等问题用 memory_search，不要用本工具。天气/气温类查询会自动走结构化天气源，返回实时气温与多日预报。引用搜索结果时在回复中注明来源。一次任务最多搜索 5 次。',
   parameters: webSearchParameters,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
