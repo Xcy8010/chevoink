@@ -1,19 +1,25 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Home,
+  LayoutDashboard,
   LogOut,
+  MessagesSquare,
   MoonStar,
+  MoreHorizontal,
   ShieldCheck,
   SunMedium,
+  Users,
 } from 'lucide-react'
 
 import { ApiClientError } from '@/app/api-client'
+import BottomSheet from '@/components/layout/BottomSheet'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
@@ -66,10 +72,27 @@ const navItems = [
   { to: '/admin/settings', label: '安全设置' },
 ]
 
+/** 手机端底部导航：四个主入口 + 「更多」抽屉（与主站移动端同模式） */
+const mobilePrimaryNav = [
+  { to: '/admin', label: '仪表盘', end: true, icon: LayoutDashboard },
+  { to: '/admin/users', label: '用户', icon: Users },
+  { to: '/admin/novels', label: '作品', icon: BookOpen },
+  { to: '/admin/posts', label: '帖子', icon: MessagesSquare },
+]
+
+const mobileMoreNav = [
+  { to: '/admin/comments', label: '评论管理' },
+  { to: '/admin/messages', label: '消息管理' },
+  { to: '/admin/logs', label: '操作日志' },
+  { to: '/admin/settings', label: '安全设置' },
+]
+
 export default function AdminLayout({ children }: { children?: ReactNode }) {
   const { admin, isLoading, denied } = useAdminSession()
   const navigate = useNavigate()
+  const location = useLocation()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const theme = useShellStore((state) => state.theme)
   const toggleTheme = useShellStore((state) => state.toggleTheme)
 
@@ -165,9 +188,9 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
       </aside>
 
       <div className="min-w-0 flex-1">
-        {/* 移动端顶栏：横向导航替代侧边栏 */}
+        {/* 手机端顶栏：品牌 + 图标操作区（导航移至底部） */}
         <header className="sticky top-0 z-10 border-b border-[var(--border-default)] bg-[var(--surface-default)] md:hidden">
-          <div className="flex items-center justify-between px-4 pt-3">
+          <div className="flex items-center justify-between px-4 py-3">
             <p className="text-sm font-semibold">启创墨域 · 管理后台</p>
             <div className="flex items-center gap-2">
               <button
@@ -198,29 +221,69 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
               </button>
             </div>
           </div>
-          <nav className="flex gap-1 overflow-x-auto px-3 py-2">
-            {navItems.map((item) => (
+        </header>
+        
+        {/* children 由扁平路由表直接注入；Outlet 仅作兜底 */}
+        <main className="mx-auto w-full max-w-6xl px-4 pt-6 pb-[calc(88px+var(--safe-bottom))] md:px-8 md:pb-6">
+          {children ?? <Outlet />}
+        </main>
+        
+        {/* 手机端底部导航：与主站移动端同模式 */}
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-default)] bg-[var(--surface-default)]/95 pb-[var(--safe-bottom)] backdrop-blur md:hidden">
+          <div className="grid grid-cols-5">
+            {mobilePrimaryNav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
                   cn(
-                    'whitespace-nowrap rounded-full px-3 py-1.5 text-xs',
+                    'flex flex-col items-center gap-1 py-2 text-[11px]',
+                    isActive ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]',
+                  )
+                }
+              >
+                <item.icon size={18} />
+                {item.label}
+              </NavLink>
+            ))}
+            <button
+              type="button"
+              onClick={() => setMoreOpen(true)}
+              className={cn(
+                'flex flex-col items-center gap-1 py-2 text-[11px]',
+                mobileMoreNav.some((item) => location.pathname.startsWith(item.to))
+                  ? 'font-medium text-[var(--text-primary)]'
+                  : 'text-[var(--text-tertiary)]',
+              )}
+            >
+              <MoreHorizontal size={18} />
+              更多
+            </button>
+          </div>
+        </nav>
+        
+        <BottomSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="更多管理">
+          <div className="space-y-1 p-2 pb-[calc(8px+var(--safe-bottom))]">
+            {mobileMoreNav.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={() => setMoreOpen(false)}
+                className={({ isActive }) =>
+                  cn(
+                    'block rounded-lg px-4 py-3 text-sm',
                     isActive
-                      ? 'bg-[var(--surface-contrast)] text-[var(--text-contrast)]'
-                      : 'bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+                      ? 'bg-[var(--surface-muted)] font-medium text-[var(--text-primary)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]',
                   )
                 }
               >
                 {item.label}
               </NavLink>
             ))}
-          </nav>
-        </header>
-
-        {/* children 由扁平路由表直接注入；Outlet 仅作兜底 */}
-        <main className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8">{children ?? <Outlet />}</main>
+          </div>
+        </BottomSheet>
       </div>
     </div>
   )
