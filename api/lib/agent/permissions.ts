@@ -209,10 +209,10 @@ export function cancelAllQuestions(runId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// 提问预算（plan/14 §四 B2）：每个 run 最多提问 2 次，防止反复追问拖垮体验
+// 提问预算（plan/14 §四 B2）：每个 run 最多提问 3 次，防止反复追问拖垮体验
 // ---------------------------------------------------------------------------
 
-export const ASK_USER_BUDGET_PER_RUN = 2
+export const ASK_USER_BUDGET_PER_RUN = 3
 
 const questionCountByRun = new Map<string, number>()
 
