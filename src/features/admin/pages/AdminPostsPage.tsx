@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
@@ -69,7 +70,7 @@ export default function AdminPostsPage() {
               <ul className="max-h-[60vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
                 {data.items.map((post) => (
                   <li key={post.id} className="flex items-start justify-between gap-3 py-3">
-                    <div className="min-w-0 flex-1">
+                    <Link to={`/admin/posts/${post.id}`} className="min-w-0 flex-1 transition-opacity hover:opacity-75">
                       <p className="break-words text-sm leading-relaxed">{post.excerpt}</p>
                       <p className="mt-1.5 text-xs text-[var(--text-secondary)]">
                         {post.author.nickname}
@@ -81,7 +82,7 @@ export default function AdminPostsPage() {
                         <span className="mx-1.5">·</span>
                         {formatDateTime(post.createdAt)}
                       </p>
-                    </div>
+                    </Link>
                     <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setPendingDelete(post)}>
                       删除
                     </Button>

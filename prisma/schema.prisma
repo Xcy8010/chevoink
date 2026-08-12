@@ -158,6 +158,8 @@ model User {
   profileCoverUrl         String?              @map("profile_cover_url")
   bio                     String?
   role                    UserRole             @default(user)
+  /** 超级管理（唯一）：仅该账号可在后台设置用户身份（用户↔管理） */
+  isSuperAdmin            Boolean              @default(false) @map("is_super_admin")
   isAuthor                Boolean              @default(false) @map("is_author")
   followerCount           Int                  @default(0) @map("follower_count")
   followingCount          Int                  @default(0) @map("following_count")

@@ -2,12 +2,15 @@ import type {
   AdminAuditLogRow,
   AdminCaptchaPayload,
   AdminCommentRow,
+  AdminConversationRow,
   AdminDashboardPayload,
   AdminListPayload,
   AdminLoginRequest,
   AdminMePayload,
+  AdminMessageRow,
   AdminNovelDetailPayload,
   AdminNovelRow,
+  AdminPostDetailPayload,
   AdminPostRow,
   AdminUserDetailPayload,
   AdminUserRow,
@@ -162,8 +165,12 @@ export function deleteAdminPost(postId: string): Promise<{ ok: boolean }> {
   return requestJson(`/api/admin/posts/${postId}`, { method: 'DELETE' })
 }
 
+export function getAdminPostDetail(postId: string): Promise<AdminPostDetailPayload> {
+  return requestJson<AdminPostDetailPayload>(`/api/admin/posts/${postId}`)
+}
+
 export function listAdminComments(input: {
-  targetType?: string
+  category?: string
   search?: string
   page: number
   pageSize: number
@@ -184,4 +191,18 @@ export function listAdminAuditLogs(input: {
   pageSize: number
 }): Promise<AdminListPayload<AdminAuditLogRow>> {
   return requestJson(`/api/admin/logs${buildQueryString(input)}`)
+}
+
+/* ---------------- 消息管理 ---------------- */
+
+export function listAdminConversations(input: {
+  search?: string
+  page: number
+  pageSize: number
+}): Promise<AdminListPayload<AdminConversationRow>> {
+  return requestJson(`/api/admin/conversations${buildQueryString(input)}`)
+}
+
+export function getAdminConversationMessages(conversationId: string): Promise<{ messages: AdminMessageRow[] }> {
+  return requestJson(`/api/admin/conversations/${conversationId}/messages`)
 }

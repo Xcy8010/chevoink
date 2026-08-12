@@ -14,11 +14,13 @@ import {
   setAdminUserRole,
   unbanAdminUser,
 } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill, useAdminSession } from '../AdminLayout'
 
 export default function AdminUsersPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
+  const { admin } = useAdminSession()
+  const isSuperAdmin = Boolean(admin?.isSuperAdmin)
   const [keyword, setKeyword] = useState('')
   const [search, setSearch] = useState('')
   const [role, setRole] = useState('')
@@ -147,6 +149,10 @@ export default function AdminUsersPage() {
             <option value="false">正常</option>
             <option value="true">已封禁</option>
           </select>
+
+          {!isSuperAdmin ? (
+            <p className="text-xs text-[var(--text-secondary)]">仅超级管理可调整用户身份</p>
+          ) : null}
         </div>
       </AdminCard>
 
@@ -183,7 +189,7 @@ export default function AdminUsersPage() {
                         <td className="py-2.5">
                           <select
                             value={user.role === 'admin' ? 'admin' : 'user'}
-                            disabled={user.role === 'admin'}
+                            disabled={!isSuperAdmin || user.id === admin?.id}
                             onChange={(event) => handleRoleChange(user, event.target.value)}
                             className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none disabled:opacity-60"
                           >

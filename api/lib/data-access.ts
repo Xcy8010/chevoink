@@ -4110,12 +4110,58 @@ export type AdminCommentRow = {
   id: string
   content: string
   targetType: string
+  paragraphIndex: number | null
   targetTitle: string | null
   likeCount: number
   replyCount: number
   createdAt: string
   author: { id: string; nickname: string; avatarUrl: string | null }
   targetHref: string | null
+}
+
+export type AdminPostDetailPayload = {
+  post: {
+    id: string
+    content: string
+    imageUrls: string[]
+    likeCount: number
+    commentCount: number
+    createdAt: string
+    topicTitle: string | null
+    author: { id: string; nickname: string; avatarUrl: string | null }
+  }
+  comments: Array<{
+    id: string
+    content: string
+    likeCount: number
+    replyCount: number
+    createdAt: string
+    author: { id: string; nickname: string; avatarUrl: string | null }
+    replies: Array<{
+      id: string
+      content: string
+      createdAt: string
+      author: { id: string; nickname: string; avatarUrl: string | null }
+    }>
+  }>
+}
+
+export type AdminConversationRow = {
+  id: string
+  type: string
+  title: string | null
+  lastMessagePreview: string | null
+  lastMessageAt: string | null
+  messageCount: number
+  members: Array<{ id: string; nickname: string; avatarUrl: string | null }>
+}
+
+export type AdminMessageRow = {
+  id: string
+  content: string
+  type: string
+  createdAt: string
+  sender: { id: string; nickname: string; avatarUrl: string | null }
 }
 
 export type AdminAuditLogRow = {
@@ -4234,17 +4280,25 @@ export async function getAdminUserBySessionData(userId: string): Promise<{
   email: string | null
   phone: string | null
   role: string
+  isSuperAdmin: boolean
 } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, nickname: true, email: true, phone: true, role: true, bannedAt: true },
+    select: { id: true, nickname: true, email: true, phone: true, role: true, bannedAt: true, isSuperAdmin: true },
   })
 
   if (!user || user.role !== 'admin' || user.bannedAt !== null) {
     return null
   }
 
-  return { id: user.id, nickname: user.nickname, email: user.email, phone: user.phone, role: user.role }
+  return {
+    id: user.id,
+    nickname: user.nickname,
+    email: user.email,
+    phone: user.phone,
+    role: user.role,
+    isSuperAdmin: user.isSuperAdmin,
+  }
 }
 
 /** 管理员改自己的密码：先校验旧密码 */
@@ -4303,10 +4357,17 @@ export async function setUserBannedData(
 export async function setUserRoleData(
   userId: string,
   role: 'user' | 'admin',
-): Promise<{ nickname: string; role: string } | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, nickname: true } })
+): Promise<{ nickname: string; role: string } | null | { blocked: 'super' }> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nickname: true, isSuperAdmin: true },
+  })
   if (!user) {
     return null
+  }
+  // 超级管理身份唯一且不可被他人改动
+  if (user.isSuperAdmin) {
+    return { blocked: 'super' }
   }
 
   await prisma.user.update({ where: { id: userId }, data: { role } })
@@ -4554,7 +4615,7 @@ export async function listAdminNovelsData(input: {
 }
 
 export async function getAdminNovelDetailData(novelId: string): Promise<{
-  novel: AdminNovelRow & { summary: string; author: AdminUserRow }
+  novel: AdminNovelRow & { summary: string; author: AdminUserRow; coverUrl: string | null }
   chapters: Array<{
     id: string
     title: string
@@ -4569,6 +4630,7 @@ export async function getAdminNovelDetailData(novelId: string): Promise<{
     where: { id: novelId },
     include: {
       author: true,
+      coverAsset: { select: { imageUrl: true } },
       chapters: { orderBy: { orderIndex: 'asc' } },
     },
   })
@@ -4591,6 +4653,7 @@ export async function getAdminNovelDetailData(novelId: string): Promise<{
       publishedAt: toIso(record.publishedAt),
       updatedAt: record.updatedAt.toISOString(),
       summary: record.summary,
+      coverUrl: record.coverAsset?.imageUrl ?? null,
       author: {
         id: record.author.id,
         nickname: record.author.nickname,
@@ -4712,15 +4775,18 @@ export async function listAdminPostsData(input: {
 }
 
 export async function listAdminCommentsData(input: {
-  targetType?: string
+  /** 评论分类：novel=作品评论（含章节评论/段落评论），post=帖子评论 */
+  category?: string
   search?: string
   page: number
   pageSize: number
 }): Promise<{ items: AdminCommentRow[]; pagination: Pagination }> {
   const where: Prisma.CommentWhereInput = {}
 
-  if (input.targetType === 'novel' || input.targetType === 'chapter' || input.targetType === 'post') {
-    where.targetType = input.targetType
+  if (input.category === 'novel') {
+    where.targetType = { in: ['novel', 'chapter'] }
+  } else if (input.category === 'post') {
+    where.targetType = 'post'
   }
   if (input.search?.trim()) {
     const keyword = input.search.trim()
@@ -4765,6 +4831,7 @@ export async function listAdminCommentsData(input: {
       id: record.id,
       content: excerptContent(record.content),
       targetType: record.targetType,
+      paragraphIndex: record.paragraphIndex ?? null,
       targetTitle,
       likeCount: record.likeCount,
       replyCount: record.replyCount,
@@ -4775,6 +4842,118 @@ export async function listAdminCommentsData(input: {
   })
 
   return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function getAdminPostDetailData(postId: string): Promise<AdminPostDetailPayload | null> {
+  const record = await prisma.post.findUnique({
+    where: { id: postId },
+    include: {
+      author: { select: { id: true, nickname: true, avatarUrl: true } },
+      topic: { select: { name: true } },
+      comments: {
+        where: { parentId: null },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          author: { select: { id: true, nickname: true, avatarUrl: true } },
+          replies: {
+            orderBy: { createdAt: 'asc' },
+            include: { author: { select: { id: true, nickname: true, avatarUrl: true } } },
+          },
+        },
+      },
+    },
+  })
+  if (!record) {
+    return null
+  }
+
+  return {
+    post: {
+      id: record.id,
+      content: record.content,
+      imageUrls: record.imageUrls,
+      likeCount: record.likeCount,
+      commentCount: record.commentCount,
+      createdAt: record.createdAt.toISOString(),
+      topicTitle: record.topic?.name ?? null,
+      author: record.author,
+    },
+    comments: record.comments.map((comment) => ({
+      id: comment.id,
+      content: comment.content,
+      likeCount: comment.likeCount,
+      replyCount: comment.replyCount,
+      createdAt: comment.createdAt.toISOString(),
+      author: comment.author,
+      replies: comment.replies.map((reply) => ({
+        id: reply.id,
+        content: reply.content,
+        createdAt: reply.createdAt.toISOString(),
+        author: reply.author,
+      })),
+    })),
+  }
+}
+
+export async function listAdminConversationsData(input: {
+  search?: string
+  page: number
+  pageSize: number
+}): Promise<{ items: AdminConversationRow[]; pagination: Pagination }> {
+  const where: Prisma.ConversationWhereInput = {}
+
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.members = { some: { user: { nickname: { contains: keyword, mode: 'insensitive' } } } }
+  }
+
+  const [total, records] = await Promise.all([
+    prisma.conversation.count({ where }),
+    prisma.conversation.findMany({
+      where,
+      orderBy: { lastMessageAt: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+      include: {
+        members: { include: { user: { select: { id: true, nickname: true, avatarUrl: true } } } },
+        _count: { select: { messages: true } },
+      },
+    }),
+  ])
+
+  const items: AdminConversationRow[] = records.map((record) => ({
+    id: record.id,
+    type: record.type,
+    title: record.title,
+    lastMessagePreview: record.lastMessagePreview,
+    lastMessageAt: toIso(record.lastMessageAt),
+    messageCount: record._count.messages,
+    members: record.members.map((member) => member.user),
+  }))
+
+  return { items, pagination: buildPagination(input.page, input.pageSize, total) }
+}
+
+export async function getAdminConversationMessagesData(conversationId: string): Promise<AdminMessageRow[] | null> {
+  const exists = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { id: true } })
+  if (!exists) {
+    return null
+  }
+
+  const messages = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: 'asc' },
+    take: 2000,
+    include: { sender: { select: { id: true, nickname: true, avatarUrl: true } } },
+  })
+
+  return messages.map((message) => ({
+    id: message.id,
+    content: message.content,
+    type: message.type,
+    createdAt: message.createdAt.toISOString(),
+    sender: message.sender,
+  }))
 }
 
 export async function listAdminAuditLogsData(input: {

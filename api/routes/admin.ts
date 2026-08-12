@@ -19,13 +19,16 @@ import {
   adminLoginByPhoneData,
   bindAdminPhoneData,
   findAdminByPhoneData,
+  getAdminConversationMessagesData,
   getAdminDashboardData,
   getAdminNovelDetailData,
+  getAdminPostDetailData,
   getAdminUserBySessionData,
   getAdminUserDetailData,
   isPhoneTakenByOtherData,
   listAdminAuditLogsData,
   listAdminCommentsData,
+  listAdminConversationsData,
   listAdminNovelsData,
   listAdminPostsData,
   listAdminUsersData,
@@ -403,6 +406,10 @@ router.post('/users/:userId/role', async (req: Request, res: Response): Promise<
 
   try {
     const admin = await requireAdmin(req)
+    if (!admin.isSuperAdmin) {
+      res.status(403).json(buildError(requestId, 'SUPER_REQUIRED', '仅超级管理可以设置用户身份。'))
+      return
+    }
     if (req.params.userId === admin.id) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '不能修改当前登录管理员自己的角色。'))
       return
@@ -415,8 +422,12 @@ router.post('/users/:userId/role', async (req: Request, res: Response): Promise<
     }
 
     const result = await setUserRoleData(req.params.userId, role)
-    if (!result) {
+    if (result === null) {
       res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
+      return
+    }
+    if ('blocked' in result) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '超级管理身份唯一，不可修改。'))
       return
     }
 
@@ -648,13 +659,29 @@ router.delete('/posts/:postId', async (req: Request, res: Response): Promise<voi
   }
 })
 
+router.get('/posts/:postId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await getAdminPostDetailData(req.params.postId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '帖子不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.get('/comments', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
   try {
     await requireAdmin(req)
     const payload = await listAdminCommentsData({
-      targetType: typeof req.query.targetType === 'string' ? req.query.targetType : undefined,
+      category: typeof req.query.category === 'string' ? req.query.category : undefined,
       search: typeof req.query.search === 'string' ? req.query.search : undefined,
       page: parsePositiveInt(req.query.page, 1),
       pageSize: parsePositiveInt(req.query.pageSize, 20),
@@ -691,6 +718,38 @@ router.delete('/comments/:commentId', async (req: Request, res: Response): Promi
 })
 
 /* ---------------- 审计日志 ---------------- */
+
+router.get('/conversations', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await listAdminConversationsData({
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      page: parsePositiveInt(req.query.page, 1),
+      pageSize: parsePositiveInt(req.query.pageSize, 20),
+    })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/conversations/:conversationId/messages', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await getAdminConversationMessagesData(req.params.conversationId)
+    if (payload === null) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '会话不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { messages: payload }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
 
 router.get('/logs', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()

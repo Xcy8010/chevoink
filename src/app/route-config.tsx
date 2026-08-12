@@ -62,7 +62,9 @@ const AdminUserDetailPage = lazyPage(() => import('@/features/admin/pages/AdminU
 const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
 const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
 const AdminPostsPage = lazyPage(() => import('@/features/admin/pages/AdminPostsPage'))
+const AdminPostDetailPage = lazyPage(() => import('@/features/admin/pages/AdminPostDetailPage'))
 const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCommentsPage'))
+const AdminMessagesPage = lazyPage(() => import('@/features/admin/pages/AdminMessagesPage'))
 const AdminLogsPage = lazyPage(() => import('@/features/admin/pages/AdminLogsPage'))
 const AdminSettingsPage = lazyPage(() => import('@/features/admin/pages/AdminSettingsPage'))
 
@@ -328,12 +330,34 @@ export const appRoutes: AppRouteDefinition[] = [
     useShell: false,
   },
   {
+    path: '/admin/posts/:postId',
+    title: '帖子详情管理',
+    description: '查看单条帖子正文与全部评论。',
+    element: (
+      <AdminLayout>
+        <AdminPostDetailPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
     path: '/admin/comments',
     title: '评论管理',
     description: '检索全站评论，对违规内容执行删除。',
     element: (
       <AdminLayout>
         <AdminCommentsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/messages',
+    title: '消息管理',
+    description: '查看全站用户的私聊会话与聊天记录。',
+    element: (
+      <AdminLayout>
+        <AdminMessagesPage />
       </AdminLayout>
     ),
     useShell: false,

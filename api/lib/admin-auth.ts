@@ -7,6 +7,8 @@ export type AdminIdentity = {
   id: string
   nickname: string
   email: string | null
+  /** 超级管理：唯一，可设置用户身份 */
+  isSuperAdmin: boolean
 }
 
 /**
@@ -21,7 +23,7 @@ export async function requireAdmin(req: Request): Promise<AdminIdentity> {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, nickname: true, email: true, role: true, bannedAt: true },
+    select: { id: true, nickname: true, email: true, role: true, bannedAt: true, isSuperAdmin: true },
   })
   if (!user || user.bannedAt !== null) {
     throw new DataAccessError(401, 'AUTH_REQUIRED', '请先登录管理后台。')
@@ -30,7 +32,7 @@ export async function requireAdmin(req: Request): Promise<AdminIdentity> {
     throw new DataAccessError(403, 'ADMIN_REQUIRED', '需要管理员权限。')
   }
 
-  return { id: user.id, nickname: user.nickname, email: user.email }
+  return { id: user.id, nickname: user.nickname, email: user.email, isSuperAdmin: user.isSuperAdmin }
 }
 
 /** 取请求来源 IP（nginx 已透传 X-Forwarded-For），用于登录限速与审计 */

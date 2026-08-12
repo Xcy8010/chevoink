@@ -1,12 +1,24 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, LogOut, ShieldCheck } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Home,
+  LogOut,
+  MoonStar,
+  ShieldCheck,
+  SunMedium,
+} from 'lucide-react'
 
 import { ApiClientError } from '@/app/api-client'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
+import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { cn } from '@/lib/utils'
+import { useShellStore } from '@/store/useShellStore'
 import type { Pagination } from '../../../shared/contracts/index.js'
 import { adminLogout, getAdminMe } from './api'
 
@@ -49,6 +61,7 @@ const navItems = [
   { to: '/admin/novels', label: '作品管理' },
   { to: '/admin/posts', label: '帖子管理' },
   { to: '/admin/comments', label: '评论管理' },
+  { to: '/admin/messages', label: '消息管理' },
   { to: '/admin/logs', label: '操作日志' },
   { to: '/admin/settings', label: '安全设置' },
 ]
@@ -57,6 +70,11 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
   const { admin, isLoading, denied } = useAdminSession()
   const navigate = useNavigate()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const theme = useShellStore((state) => state.theme)
+  const toggleTheme = useShellStore((state) => state.toggleTheme)
+
+  // 与主站一致：细滚动条 + 不滚动时自动隐藏
+  useAutoHideScrollbars()
 
   if (denied) {
     return <Navigate to="/admin/login" replace />
@@ -111,15 +129,34 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
           ))}
         </nav>
         <div className="border-t border-[var(--border-default)] px-5 py-4">
-          <p className="truncate text-sm">{admin?.nickname}</p>
-          <button
-            type="button"
-            onClick={() => void handleLogout()}
-            className="mt-1 flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-          >
-            <LogOut size={13} />
-            退出登录
-          </button>
+          <p className="truncate text-sm">
+            {admin?.nickname}
+            {admin?.isSuperAdmin ? <span className="ml-1.5 text-xs text-[var(--color-warning)]">超级管理</span> : null}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              <LogOut size={13} />
+              退出登录
+            </button>
+            <span className="text-[var(--border-strong)]">·</span>
+            <Link to="/" className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+              <Home size={13} />
+              返回主站
+            </Link>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label="切换主题"
+              title="切换深色/浅色模式"
+              className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              {theme === 'light' ? <MoonStar size={14} /> : <SunMedium size={14} />}
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -128,14 +165,33 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
         <header className="sticky top-0 z-10 border-b border-[var(--border-default)] bg-[var(--surface-default)] md:hidden">
           <div className="flex items-center justify-between px-4 pt-3">
             <p className="text-sm font-semibold">启创墨域 · 管理后台</p>
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              className="flex items-center gap-1 text-xs text-[var(--text-secondary)]"
-            >
-              <LogOut size={13} />
-              退出
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleTheme}
+                aria-label="切换主题"
+                title="切换深色/浅色模式"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)]"
+              >
+                {theme === 'light' ? <MoonStar size={14} /> : <SunMedium size={14} />}
+              </button>
+              <Link
+                to="/"
+                aria-label="返回主站"
+                title="返回主站"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)]"
+              >
+                <Home size={14} />
+              </Link>
+              <button
+                type="button"
+                onClick={() => void handleLogout()}
+                className="flex items-center gap-1 text-xs text-[var(--text-secondary)]"
+              >
+                <LogOut size={13} />
+                退出
+              </button>
+            </div>
           </div>
           <nav className="flex gap-1 overflow-x-auto px-3 py-2">
             {navItems.map((item) => (

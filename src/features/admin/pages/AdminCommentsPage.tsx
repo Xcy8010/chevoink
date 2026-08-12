@@ -15,22 +15,30 @@ const TARGET_TYPE_LABELS: Record<string, string> = {
   post: '帖子评论',
 }
 
+/** 作品评论下细分：章节评论 / 段落评论（paragraphIndex 非空） */
+function commentTypeLabel(comment: AdminCommentRow): string {
+  if (comment.targetType === 'chapter' && comment.paragraphIndex !== null && comment.paragraphIndex !== undefined) {
+    return '段落评论'
+  }
+  return TARGET_TYPE_LABELS[comment.targetType] ?? comment.targetType
+}
+
 export default function AdminCommentsPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [keyword, setKeyword] = useState('')
   const [search, setSearch] = useState('')
-  const [targetType, setTargetType] = useState('')
+  const [category, setCategory] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [pendingDelete, setPendingDelete] = useState<AdminCommentRow | null>(null)
 
   const query = useQuery({
-    queryKey: ['admin', 'comments', search, targetType, page, pageSize],
+    queryKey: ['admin', 'comments', search, category, page, pageSize],
     queryFn: () =>
       listAdminComments({
         search: search || undefined,
-        targetType: targetType || undefined,
+        category: category || undefined,
         page,
         pageSize,
       }),
@@ -74,16 +82,15 @@ export default function AdminCommentsPage() {
           </form>
 
           <select
-            value={targetType}
+            value={category}
             onChange={(event) => {
-              setTargetType(event.target.value)
+              setCategory(event.target.value)
               setPage(1)
             }}
             className="h-10 rounded-[var(--radius-pill)] border border-[var(--border-strong)] bg-[var(--surface-default)] px-3 text-sm text-[var(--text-primary)] outline-none"
           >
             <option value="">全部类型</option>
-            <option value="novel">作品评论</option>
-            <option value="chapter">章节评论</option>
+            <option value="novel">作品评论（含章节/段落评论）</option>
             <option value="post">帖子评论</option>
           </select>
         </div>
@@ -101,7 +108,7 @@ export default function AdminCommentsPage() {
                     <div className="min-w-0 flex-1">
                       <p className="break-words text-sm leading-relaxed">{comment.content}</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--text-secondary)]">
-                        <StatusPill>{TARGET_TYPE_LABELS[comment.targetType] ?? comment.targetType}</StatusPill>
+                        <StatusPill>{commentTypeLabel(comment)}</StatusPill>
                         <span>{comment.author.nickname}</span>
                         <span>·</span>
                         <span>{formatDateTime(comment.createdAt)}</span>

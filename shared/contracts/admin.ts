@@ -66,7 +66,7 @@ export type AdminNovelRow = {
 }
 
 export type AdminNovelDetailPayload = {
-  novel: AdminNovelRow & { summary: string; author: AdminUserRow }
+  novel: AdminNovelRow & { summary: string; author: AdminUserRow; coverUrl: string | null }
   chapters: Array<{
     id: string
     title: string
@@ -93,12 +93,59 @@ export type AdminCommentRow = {
   id: string
   content: string
   targetType: 'novel' | 'chapter' | 'post'
+  /** 段评所属正文段落序号（仅章节评论）；非空即段落评论 */
+  paragraphIndex: number | null
   targetTitle: string | null
   likeCount: number
   replyCount: number
   createdAt: string
   author: AdminBriefUser
   targetHref: string | null
+}
+
+export type AdminPostDetailPayload = {
+  post: {
+    id: string
+    content: string
+    imageUrls: string[]
+    likeCount: number
+    commentCount: number
+    createdAt: string
+    topicTitle: string | null
+    author: AdminBriefUser
+  }
+  comments: Array<{
+    id: string
+    content: string
+    likeCount: number
+    replyCount: number
+    createdAt: string
+    author: AdminBriefUser
+    replies: Array<{
+      id: string
+      content: string
+      createdAt: string
+      author: AdminBriefUser
+    }>
+  }>
+}
+
+export type AdminConversationRow = {
+  id: string
+  type: string
+  title: string | null
+  lastMessagePreview: string | null
+  lastMessageAt: string | null
+  messageCount: number
+  members: AdminBriefUser[]
+}
+
+export type AdminMessageRow = {
+  id: string
+  content: string
+  type: string
+  createdAt: string
+  sender: AdminBriefUser
 }
 
 export type AdminAuditLogRow = {
@@ -124,6 +171,8 @@ export type AdminMePayload = {
   email: string | null
   phone: string | null
   role: string
+  /** 超级管理（唯一）：仅超级管理可设置用户身份 */
+  isSuperAdmin: boolean
 }
 
 /** 管理后台登录：邮箱+密码 / 手机号+密码 / 手机号+短信验证码（后两者 captcha 仅在发码环节校验） */

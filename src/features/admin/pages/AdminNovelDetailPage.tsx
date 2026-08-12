@@ -88,7 +88,19 @@ export default function AdminNovelDetailPage() {
           <div className="space-y-4">
             <AdminCard>
               <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
+                <div className="flex min-w-0 flex-1 flex-wrap gap-4 sm:flex-nowrap">
+                  {novel.coverUrl ? (
+                    <img
+                      src={novel.coverUrl}
+                      alt="作品封面"
+                      className="h-32 w-24 shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-32 w-24 shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] text-xs text-[var(--text-secondary)]">
+                      暂无封面
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-semibold">{novel.displayTitle ?? novel.title}</h1>
                     {takenDown ? (
@@ -110,6 +122,7 @@ export default function AdminNovelDetailPage() {
                   {novel.summary ? (
                     <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">{novel.summary}</p>
                   ) : null}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -159,7 +172,7 @@ export default function AdminNovelDetailPage() {
               {detail.chapters.length === 0 ? (
                 <p className="py-6 text-center text-sm text-[var(--text-secondary)]">暂无章节</p>
               ) : (
-                <ul className="divide-y divide-[var(--border-default)]">
+                <ul className="max-h-[52vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
                   {detail.chapters.map((chapter) => (
                     <li key={chapter.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
                       <div className="min-w-0">

@@ -5,8 +5,8 @@ import { ArrowLeft } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
 import { ApiClientError } from '@/app/api-client'
-import { banAdminUser, getAdminUserDetail, resetAdminUserPassword, unbanAdminUser } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { banAdminUser, getAdminUserDetail, resetAdminUserPassword, setAdminUserRole, unbanAdminUser } from '../api'
+import { AdminCard, AdminConfirmDialog, AdminPanelState, formatDateTime, StatusPill, useAdminSession } from '../AdminLayout'
 import { useState } from 'react'
 
 const ROLE_LABELS: Record<string, string> = {
@@ -19,6 +19,8 @@ export default function AdminUserDetailPage() {
   const { userId = '' } = useParams()
   const toast = useToast()
   const queryClient = useQueryClient()
+  const { admin } = useAdminSession()
+  const isSuperAdmin = Boolean(admin?.isSuperAdmin)
   const [showBanDialog, setShowBanDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
@@ -57,6 +59,15 @@ export default function AdminUserDetailPage() {
       setShowResetDialog(false)
     },
     onError: (error) => toast.error(error instanceof ApiClientError ? error.message : '重置失败'),
+  })
+
+  const roleMutation = useMutation({
+    mutationFn: (nextRole: 'user' | 'admin') => setAdminUserRole(userId, nextRole),
+    onSuccess: () => {
+      toast.success('角色已更新')
+      invalidate()
+    },
+    onError: (error) => toast.error(error instanceof ApiClientError ? error.message : '角色更新失败'),
   })
 
   const detail = query.data
@@ -99,22 +110,38 @@ export default function AdminUserDetailPage() {
                   </div>
                 </div>
 
-                {user.role !== 'admin' ? (
-                  <div className="flex gap-2">
-                    {user.bannedAt ? (
-                      <Button onClick={() => unbanMutation.mutate()} disabled={unbanMutation.isPending}>
-                        解封
+                <div className="flex flex-wrap items-center gap-2">
+                  {isSuperAdmin && user.id !== admin?.id ? (
+                    <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+                      身份
+                      <select
+                        value={user.role === 'admin' ? 'admin' : 'user'}
+                        disabled={roleMutation.isPending}
+                        onChange={(event) => roleMutation.mutate(event.target.value as 'user' | 'admin')}
+                        className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none"
+                      >
+                        <option value="user">用户</option>
+                        <option value="admin">管理</option>
+                      </select>
+                    </label>
+                  ) : null}
+                  {user.role !== 'admin' ? (
+                    <>
+                      {user.bannedAt ? (
+                        <Button onClick={() => unbanMutation.mutate()} disabled={unbanMutation.isPending}>
+                          解封
+                        </Button>
+                      ) : (
+                        <Button onClick={() => setShowBanDialog(true)}>封禁账号</Button>
+                      )}
+                      <Button variant="ghost" onClick={() => setShowResetDialog(true)}>
+                        重置密码
                       </Button>
-                    ) : (
-                      <Button onClick={() => setShowBanDialog(true)}>封禁账号</Button>
-                    )}
-                    <Button variant="ghost" onClick={() => setShowResetDialog(true)}>
-                      重置密码
-                    </Button>
-                  </div>
-                ) : (
-                  <StatusPill tone="warning">当前管理员账号</StatusPill>
-                )}
+                    </>
+                  ) : (
+                    <StatusPill tone="warning">管理员账号</StatusPill>
+                  )}
+                </div>
               </div>
 
               <dl className="mt-5 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
