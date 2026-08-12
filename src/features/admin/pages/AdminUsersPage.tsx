@@ -162,7 +162,61 @@ export default function AdminUsersPage() {
         >
           {data ? (
             <>
-              <div className="overflow-x-auto">
+              {/* 手机端：卡片式列表，避免宽表格横向裁切 */}
+              <ul className="space-y-3 md:hidden">
+                {data.items.map((user) => (
+                  <li key={user.id} className="rounded-lg border border-[var(--border-default)] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Link to={`/admin/users/${user.id}`} className="min-w-0 truncate text-sm font-medium hover:underline">
+                        {user.nickname}
+                      </Link>
+                      {user.bannedAt ? (
+                        <StatusPill tone="danger">已封禁</StatusPill>
+                      ) : user.isOnline ? (
+                        <StatusPill tone="success">在线</StatusPill>
+                      ) : (
+                        <StatusPill>正常</StatusPill>
+                      )}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-[var(--text-secondary)]">
+                      {user.phone ?? '无手机号'}
+                      {user.email ? <span> · {user.email}</span> : null}
+                    </p>
+                    <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
+                      作品 / 帖子 {user.novelCount} / {user.postCount} · 注册 {formatDateTime(user.createdAt)}
+                    </p>
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                      <select
+                        value={user.role === 'admin' ? 'admin' : 'user'}
+                        disabled={!isSuperAdmin || user.id === admin?.id}
+                        onChange={(event) => handleRoleChange(user, event.target.value)}
+                        className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none disabled:opacity-60"
+                      >
+                        <option value="user">用户</option>
+                        <option value="admin">管理</option>
+                      </select>
+                      <div className="ml-auto flex gap-1.5">
+                        {user.bannedAt ? (
+                          <Button size="sm" onClick={() => unbanMutation.mutate(user.id)} disabled={unbanMutation.isPending}>
+                            解封
+                          </Button>
+                        ) : user.role !== 'admin' ? (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => setPendingBan(user)}>
+                              封禁
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setPendingReset(user)}>
+                              重置密码
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full min-w-[900px] text-sm">
                   <thead>
                     <tr className="text-left text-xs text-[var(--text-secondary)]">

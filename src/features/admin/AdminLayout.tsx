@@ -137,15 +137,19 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              aria-label="退出登录"
+              title="退出登录"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
-              <LogOut size={13} />
-              退出登录
+              <LogOut size={14} />
             </button>
-            <span className="text-[var(--border-strong)]">·</span>
-            <Link to="/" className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
-              <Home size={13} />
-              返回主站
+            <Link
+              to="/"
+              aria-label="返回主站"
+              title="返回主站"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              <Home size={14} />
             </Link>
             <button
               type="button"
@@ -186,10 +190,11 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
               <button
                 type="button"
                 onClick={() => void handleLogout()}
-                className="flex items-center gap-1 text-xs text-[var(--text-secondary)]"
+                aria-label="退出登录"
+                title="退出登录"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] text-[var(--text-secondary)]"
               >
-                <LogOut size={13} />
-                退出
+                <LogOut size={14} />
               </button>
             </div>
           </div>

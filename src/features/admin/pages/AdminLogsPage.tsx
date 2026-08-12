@@ -63,7 +63,31 @@ export default function AdminLogsPage() {
         >
           {data ? (
             <>
-              <div className="overflow-x-auto">
+              {/* 手机端：卡片式列表，避免宽表格横向裁切 */}
+              <ul className="space-y-3 md:hidden">
+                {data.items.map((log) => {
+                  const detailEntries = Object.entries(log.detail).filter(([key]) => key !== 'previousVisibility')
+                  return (
+                    <li key={log.id} className="rounded-lg border border-[var(--border-default)] p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">{describeAdminAction(log.action)}</p>
+                        <span className="shrink-0 text-xs text-[var(--text-secondary)]">{formatDateTime(log.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        管理员 {log.adminNickname ?? log.adminId} · 对象{' '}
+                        {log.targetType ? TARGET_TYPE_LABELS[log.targetType] ?? log.targetType : '—'} · IP {log.ip ?? '—'}
+                      </p>
+                      {detailEntries.length > 0 ? (
+                        <p className="mt-1 break-words text-xs text-[var(--text-tertiary)]">
+                          {detailEntries.map(([key, value]) => `${key}: ${String(value)}`).join('；')}
+                        </p>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ul>
+
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full min-w-[720px] text-sm">
                   <thead>
                     <tr className="text-left text-xs text-[var(--text-secondary)]">
