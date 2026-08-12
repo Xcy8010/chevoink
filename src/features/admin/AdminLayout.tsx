@@ -105,7 +105,7 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--surface-muted)] text-sm text-[var(--text-secondary)]">
+      <div className="flex h-[100dvh] items-center justify-center bg-[var(--surface-muted)] text-sm text-[var(--text-secondary)]">
         正在校验管理员身份…
       </div>
     )
@@ -123,8 +123,8 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-[var(--surface-muted)] text-[var(--text-primary)]">
-      <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-[var(--border-default)] bg-[var(--surface-default)] md:flex">
+    <div className="flex h-[100dvh] overflow-hidden bg-[var(--surface-muted)] text-[var(--text-primary)]">
+      <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-[var(--border-default)] bg-[var(--surface-default)] md:flex">
         <Link to="/admin" className="flex items-center gap-2 px-5 py-5">
           <ShieldCheck size={20} className="text-[var(--text-primary)]" />
           <div>
@@ -187,9 +187,9 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
         {/* 手机端顶栏：品牌 + 图标操作区（导航移至底部） */}
-        <header className="sticky top-0 z-10 border-b border-[var(--border-default)] bg-[var(--surface-default)] md:hidden">
+        <header className="shrink-0 border-b border-[var(--border-default)] bg-[var(--surface-default)] md:hidden">
           <div className="flex items-center justify-between px-4 py-3">
             <p className="text-sm font-semibold">启创墨域 · 管理后台</p>
             <div className="flex items-center gap-2">
@@ -223,9 +223,12 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
           </div>
         </header>
         
-        {/* children 由扁平路由表直接注入；Outlet 仅作兜底 */}
-        <main className="mx-auto w-full max-w-6xl px-4 pt-6 pb-[calc(88px+var(--safe-bottom))] md:px-8 md:pb-6">
-          {children ?? <Outlet />}
+        {/* 整体滚动容器：body 全局 overflow hidden，管理端自管滚动；
+            滚动条走全局 6px 细条 + autohide 机制（静止隐藏、滚动时显示） */}
+        <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto w-full max-w-6xl px-4 pt-6 pb-[calc(88px+var(--safe-bottom))] md:px-8 md:pb-8">
+            {children ?? <Outlet />}
+          </div>
         </main>
         
         {/* 手机端底部导航：与主站移动端同模式 */}
