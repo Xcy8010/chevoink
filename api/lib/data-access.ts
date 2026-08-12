@@ -1776,6 +1776,19 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
     }
   }
 
+  // 回复：校验父评论存在并从父评论派生 rootId（父为根评论时 rootId 为空，父即根）
+  let replyRootId: string | null = null
+  if (input.parentId) {
+    const parent = await prisma.comment.findUnique({
+      where: { id: input.parentId },
+      select: { id: true, rootId: true },
+    })
+    if (!parent) {
+      throw new DataAccessError(404, 'COMMENT_NOT_FOUND', '回复的评论不存在。')
+    }
+    replyRootId = parent.rootId ?? parent.id
+  }
+
   const comment = await prisma.$transaction(async (tx) => {
     const created = await tx.comment.create({
       data: {
@@ -1783,7 +1796,7 @@ export async function createCommentData(userId: string, input: CreateCommentRequ
         targetType: input.targetType,
         targetId: input.targetId,
         parentId: input.parentId ?? null,
-        rootId: input.parentId ?? null,
+        rootId: replyRootId,
         content: input.content,
         rating,
         paragraphIndex,
@@ -3301,8 +3314,8 @@ export async function listReceivedLikesData(userId: string): Promise<{ items: Re
 export async function listInteractionsData(userId: string): Promise<{ items: InteractionItem[]; total: number }> {
   await ensureUserExists(userId)
 
-  // 互动消息全部从现有表派生：赞/收藏/作品评论/章节评论，各取最近 100 条合并按时间降序
-  const [postLikes, commentLikes, favorites, commentRecords] = await Promise.all([
+  // 互动消息全部从现有表派生：赞/收藏/作品评论/章节评论/回复我的评论，各取最近 100 条合并按时间降序
+  const [postLikes, commentLikes, favorites, commentRecords, replyRecords] = await Promise.all([
     prisma.postLike.findMany({
       where: { post: { userId }, userId: { not: userId } },
       include: { user: true, post: { select: { id: true, excerpt: true, content: true } } },
@@ -3325,6 +3338,33 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
       where: {
         userId: { not: userId },
         OR: [
+          { targetType: 'novel', novel: { authorId: userId } },
+          { targetType: 'chapter', chapter: { authorId: userId } },
+        ],
+      },
+      include: {
+        author: true,
+        novel: { select: { id: true, title: true, displayTitle: true } },
+        chapter: {
+          select: {
+            id: true,
+            title: true,
+            novelId: true,
+            novel: { select: { id: true, title: true, displayTitle: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    // 回复我的评论：父评论作者是我、非我本人发出；
+    // 排除目标内容作者是我的情况（这类已作为作品/章节评论出现在 feed 里，避免重复）
+    prisma.comment.findMany({
+      where: {
+        userId: { not: userId },
+        parentId: { not: null },
+        parent: { userId },
+        NOT: [
           { targetType: 'novel', novel: { authorId: userId } },
           { targetType: 'chapter', chapter: { authorId: userId } },
         ],
@@ -3386,8 +3426,26 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
         rating: record.rating ?? null,
         postId: null,
         novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
+        chapterId: isChapterComment ? record.chapter?.id ?? null : null,
         novelTitle: novelMeta ? resolveEffectiveNovelTitle(novelMeta.title, novelMeta.displayTitle) : null,
         chapterTitle: isChapterComment ? record.chapter?.title ?? null : null,
+        happenedAt: toIso(record.createdAt) ?? nowIso(),
+      }
+    }),
+    ...replyRecords.map((record) => {
+      const isChapterReply = record.targetType === 'chapter'
+      const novelMeta = isChapterReply ? record.chapter?.novel : record.novel
+      return {
+        id: `comment-reply-${record.id}`,
+        user: toUserSummary(record.author),
+        kind: 'commentReply' as const,
+        excerpt: excerptContent(record.content),
+        rating: null,
+        postId: record.postId ?? null,
+        novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
+        chapterId: isChapterReply ? record.chapter?.id ?? null : null,
+        novelTitle: novelMeta ? resolveEffectiveNovelTitle(novelMeta.title, novelMeta.displayTitle) : null,
+        chapterTitle: isChapterReply ? record.chapter?.title ?? null : null,
         happenedAt: toIso(record.createdAt) ?? nowIso(),
       }
     }),
@@ -3406,25 +3464,38 @@ export async function getInteractionBadgesData(userId: string): Promise<Interact
   const followersAfter = followersSeenAt ? { createdAt: { gt: followersSeenAt } } : {}
 
   // 未读数 = 已读水位之后新产生的互动/新粉丝条数，与互动 feed 口径保持一致
-  const [postLikeCount, commentLikeCount, favoriteCount, commentCount, followerCount] = await prisma.$transaction([
-    prisma.postLike.count({ where: { post: { userId }, userId: { not: userId }, ...interactionsAfter } }),
-    prisma.commentLike.count({ where: { comment: { userId }, userId: { not: userId }, ...interactionsAfter } }),
-    prisma.novelFavorite.count({ where: { novel: { authorId: userId }, userId: { not: userId }, ...interactionsAfter } }),
-    prisma.comment.count({
-      where: {
-        userId: { not: userId },
-        OR: [
-          { targetType: 'novel', novel: { authorId: userId } },
-          { targetType: 'chapter', chapter: { authorId: userId } },
-        ],
-        ...interactionsAfter,
-      },
-    }),
-    prisma.userFollow.count({ where: { followingId: userId, ...followersAfter } }),
-  ])
+  const [postLikeCount, commentLikeCount, favoriteCount, commentCount, replyCount, followerCount] =
+    await prisma.$transaction([
+      prisma.postLike.count({ where: { post: { userId }, userId: { not: userId }, ...interactionsAfter } }),
+      prisma.commentLike.count({ where: { comment: { userId }, userId: { not: userId }, ...interactionsAfter } }),
+      prisma.novelFavorite.count({ where: { novel: { authorId: userId }, userId: { not: userId }, ...interactionsAfter } }),
+      prisma.comment.count({
+        where: {
+          userId: { not: userId },
+          OR: [
+            { targetType: 'novel', novel: { authorId: userId } },
+            { targetType: 'chapter', chapter: { authorId: userId } },
+          ],
+          ...interactionsAfter,
+        },
+      }),
+      prisma.comment.count({
+        where: {
+          userId: { not: userId },
+          parentId: { not: null },
+          parent: { userId },
+          NOT: [
+            { targetType: 'novel', novel: { authorId: userId } },
+            { targetType: 'chapter', chapter: { authorId: userId } },
+          ],
+          ...interactionsAfter,
+        },
+      }),
+      prisma.userFollow.count({ where: { followingId: userId, ...followersAfter } }),
+    ])
 
   return {
-    interactionsUnseen: postLikeCount + commentLikeCount + favoriteCount + commentCount,
+    interactionsUnseen: postLikeCount + commentLikeCount + favoriteCount + commentCount + replyCount,
     interactionsSeenAt: toIso(interactionsSeenAt),
     followersUnseen: followerCount,
     followersSeenAt: toIso(followersSeenAt),

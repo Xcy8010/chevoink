@@ -314,6 +314,8 @@ model Comment {
   novel       Novel?             @relation(fields: [novelId], references: [id])
   chapter     Chapter?           @relation(fields: [chapterId], references: [id])
   post        Post?              @relation(fields: [postId], references: [id])
+  parent      Comment?           @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies     Comment[]          @relation("CommentReplies")
   likes       CommentLike[]
 
   @@index([targetType, targetId])

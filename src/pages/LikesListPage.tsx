@@ -21,10 +21,14 @@ const KIND_META: Record<
   novelFavorite: { action: ' 收藏了你的作品', icon: Heart, iconClass: 'fill-rose-500 text-rose-500' },
   novelComment: { action: ' 点评了你的作品', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
   chapterComment: { action: ' 评论了你的章节', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
+  commentReply: { action: ' 回复了你的评论', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
 }
 
-/** 明细行的跳转目标：帖子互动进帖子，作品/章节互动进作品页 */
+/** 明细行的跳转目标：章节评论/回复直达阅读器并自动展开评论面板，帖子进帖子，作品进作品页 */
 function getInteractionTargetPath(item: InteractionItem): string | null {
+  if (item.chapterId && item.novelId) {
+    return `/novel/${item.novelId}/read/${item.chapterId}?panel=comments`
+  }
   if (item.postId) {
     return `/post/${item.postId}`
   }

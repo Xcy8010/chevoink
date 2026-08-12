@@ -47,6 +47,7 @@ const INTERACTION_ACTION_TEXT: Record<InteractionItem['kind'], string> = {
   novelFavorite: '收藏了你的作品',
   novelComment: '点评了你的作品',
   chapterComment: '评论了你的章节',
+  commentReply: '回复了你的评论',
 }
 
 /**

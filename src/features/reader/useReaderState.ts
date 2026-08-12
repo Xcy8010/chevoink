@@ -132,7 +132,10 @@ export function useReaderState() {
     toneOverride && toneOverride.theme === currentTheme
       ? toneOverride.tone
       : getThemeDefaultTone(isDarkTheme)
-  const [activePanel, setActivePanelState] = useState<ReaderPanelId>(null)
+  // 深链 ?panel=comments：互动消息点击章节评论/回复直达时自动展开评论面板
+  const [activePanel, setActivePanelState] = useState<ReaderPanelId>(() =>
+    searchParams.get('panel') === 'comments' ? 'comments' : null,
+  )
   // 段评：当前查看的段落序号（null = 章评总合视图）与定位高亮闪烁的段落
   const [activeParagraphIndex, setActiveParagraphIndex] = useState<number | null>(null)
   const [highlightParagraphIndex, setHighlightParagraphIndex] = useState<number | null>(null)

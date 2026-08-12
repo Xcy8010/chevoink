@@ -3,7 +3,6 @@ import { BookOpen, LoaderCircle, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import AppImage from '@/components/ui/AppImage'
-import AppState from '@/components/ui/AppState'
 import Avatar from '@/features/community/components/Avatar'
 import PostImageViewer from '@/features/community/components/PostImageViewer'
 import { cn } from '@/lib/utils'
@@ -172,15 +171,9 @@ export default function MessageBubbleList({
 }: MessageBubbleListProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
+  // 空会话不展示任何占位图标/文案，保持干净的聊天背景
   if (messages.length === 0 && pendingMessages.length === 0) {
-    return (
-      <AppState
-        tone="empty"
-        title="这段会话还没有消息"
-        description="先发一条问候，让对话继续下去。"
-        className="min-h-[240px] border-0 shadow-none"
-      />
-    )
+    return null
   }
 
   const items: RenderItem[] = []

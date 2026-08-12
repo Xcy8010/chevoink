@@ -156,7 +156,7 @@ export interface ReceivedLikeItem {
 }
 
 /** 互动消息类型：赞/收藏/作品评论/章节评论 */
-export type InteractionKind = 'postLike' | 'commentLike' | 'novelFavorite' | 'novelComment' | 'chapterComment'
+export type InteractionKind = 'postLike' | 'commentLike' | 'novelFavorite' | 'novelComment' | 'chapterComment' | 'commentReply'
 
 /** 互动消息条目：谁对你的内容做了什么 */
 export interface InteractionItem {
@@ -172,6 +172,8 @@ export interface InteractionItem {
   postId: EntityId | null
   /** 跳转用：作品 id */
   novelId: EntityId | null
+  /** 跳转用：章节 id（章节评论/回复直达阅读器评论面板） */
+  chapterId?: EntityId | null
   /** 作品标题（收藏/作品评论/章节评论时带上） */
   novelTitle?: string | null
   /** 章节标题（章节评论时带上） */
