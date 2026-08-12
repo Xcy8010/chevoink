@@ -4068,7 +4068,7 @@ export type AdminDashboardPayload = {
     posts: number
     comments: number
   }
-  trend: Array<{ date: string; users: number; novels: number; posts: number }>
+  trend: Array<{ date: string; users: number; novels: number; posts: number; comments: number }>
   recentLogs: Array<{
     id: string
     action: string
@@ -4170,22 +4170,81 @@ export async function adminLoginByEmailData(
   return { userId: user.id, nickname: user.nickname }
 }
 
+/** 手机号登录管理后台：可选校验密码（验证码模式由路由层先校验短信码） */
+export async function adminLoginByPhoneData(
+  phone: string,
+  password?: string,
+): Promise<{ userId: string; nickname: string } | null> {
+  const user = await prisma.user.findUnique({
+    where: { phone },
+  })
+
+  if (!user || user.role !== 'admin' || user.bannedAt !== null) {
+    return null
+  }
+  if (password !== undefined && !verifyPassword(password, user.passwordHash)) {
+    return null
+  }
+
+  return { userId: user.id, nickname: user.nickname }
+}
+
+/** 查询手机号是否绑定有效管理员（用于发码前置校验，避免给非管理员手机号发短信） */
+export async function findAdminByPhoneData(phone: string): Promise<{ id: string } | null> {
+  const user = await prisma.user.findUnique({
+    where: { phone },
+    select: { id: true, role: true, bannedAt: true },
+  })
+
+  if (!user || user.role !== 'admin' || user.bannedAt !== null) {
+    return null
+  }
+  return { id: user.id }
+}
+
+/** 手机号是否已被其他账号绑定（绑定发码前置校验，避免浪费短信） */
+export async function isPhoneTakenByOtherData(phone: string, excludeUserId: string): Promise<boolean> {
+  const occupied = await prisma.user.findFirst({
+    where: { phone, id: { not: excludeUserId } },
+    select: { id: true },
+  })
+  return occupied !== null
+}
+
+/** 管理员绑定手机号：手机号未被其他账号占用时写入 */
+export async function bindAdminPhoneData(
+  adminId: string,
+  phone: string,
+): Promise<{ ok: boolean; reason?: 'taken' }> {
+  const occupied = await prisma.user.findFirst({
+    where: { phone, id: { not: adminId } },
+    select: { id: true },
+  })
+  if (occupied) {
+    return { ok: false, reason: 'taken' }
+  }
+
+  await prisma.user.update({ where: { id: adminId }, data: { phone } })
+  return { ok: true }
+}
+
 export async function getAdminUserBySessionData(userId: string): Promise<{
   id: string
   nickname: string
   email: string | null
+  phone: string | null
   role: string
 } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, nickname: true, email: true, role: true, bannedAt: true },
+    select: { id: true, nickname: true, email: true, phone: true, role: true, bannedAt: true },
   })
 
   if (!user || user.role !== 'admin' || user.bannedAt !== null) {
     return null
   }
 
-  return { id: user.id, nickname: user.nickname, email: user.email, role: user.role }
+  return { id: user.id, nickname: user.nickname, email: user.email, phone: user.phone, role: user.role }
 }
 
 /** 管理员改自己的密码：先校验旧密码 */
@@ -4243,7 +4302,7 @@ export async function setUserBannedData(
 
 export async function setUserRoleData(
   userId: string,
-  role: 'user' | 'author' | 'admin',
+  role: 'user' | 'admin',
 ): Promise<{ nickname: string; role: string } | null> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, nickname: true } })
   if (!user) {
@@ -4389,7 +4448,7 @@ function buildRecentDays(dates: Date[]): Map<string, number> {
 export async function getAdminDashboardData(): Promise<AdminDashboardPayload> {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
 
-  const [userTotal, novelTotal, postTotal, commentTotal, recentUsers, recentNovels, recentPosts, recentLogs] =
+  const [userTotal, novelTotal, postTotal, commentTotal, recentUsers, recentNovels, recentPosts, recentComments, recentLogs] =
     await Promise.all([
       prisma.user.count(),
       prisma.novel.count({ where: { status: { in: ['published', 'completed'] } } }),
@@ -4401,6 +4460,7 @@ export async function getAdminDashboardData(): Promise<AdminDashboardPayload> {
         select: { lastPublishedAt: true },
       }),
       prisma.post.findMany({ where: { createdAt: { gte: since } }, select: { createdAt: true } }),
+      prisma.comment.findMany({ where: { createdAt: { gte: since } }, select: { createdAt: true } }),
       prisma.adminAuditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }),
     ])
 
@@ -4409,11 +4469,18 @@ export async function getAdminDashboardData(): Promise<AdminDashboardPayload> {
     recentNovels.map((item) => item.lastPublishedAt).filter((item): item is Date => item !== null),
   )
   const postCounter = buildRecentDays(recentPosts.map((item) => item.createdAt))
+  const commentCounter = buildRecentDays(recentComments.map((item) => item.createdAt))
 
   const trend: AdminDashboardPayload['trend'] = []
   for (let day = 6; day >= 0; day -= 1) {
     const key = new Date(Date.now() - day * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    trend.push({ date: key, users: userCounter.get(key) ?? 0, novels: novelCounter.get(key) ?? 0, posts: postCounter.get(key) ?? 0 })
+    trend.push({
+      date: key,
+      users: userCounter.get(key) ?? 0,
+      novels: novelCounter.get(key) ?? 0,
+      posts: postCounter.get(key) ?? 0,
+      comments: commentCounter.get(key) ?? 0,
+    })
   }
 
   const adminIds = [...new Set(recentLogs.map((log) => log.adminId))]

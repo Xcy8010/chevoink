@@ -38,7 +38,7 @@ export type AdminDashboardPayload = {
     posts: number
     comments: number
   }
-  trend: Array<{ date: string; users: number; novels: number; posts: number }>
+  trend: Array<{ date: string; users: number; novels: number; posts: number; comments: number }>
   recentLogs: Array<{
     id: string
     action: string
@@ -122,14 +122,18 @@ export type AdminMePayload = {
   id: string
   nickname: string
   email: string | null
+  phone: string | null
   role: string
 }
 
+/** 管理后台登录：邮箱+密码 / 手机号+密码 / 手机号+短信验证码（后两者 captcha 仅在发码环节校验） */
 export type AdminLoginRequest = {
-  email: string
-  password: string
-  captchaId: string
-  captchaAnswer: string
+  email?: string
+  phone?: string
+  password?: string
+  code?: string
+  captchaId?: string
+  captchaAnswer?: string
 }
 
 export type AdminCaptchaPayload = {

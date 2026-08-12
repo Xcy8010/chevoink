@@ -22,18 +22,24 @@ export default function AdminCommentsPage() {
   const [search, setSearch] = useState('')
   const [targetType, setTargetType] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [pendingDelete, setPendingDelete] = useState<AdminCommentRow | null>(null)
 
   const query = useQuery({
-    queryKey: ['admin', 'comments', search, targetType, page],
+    queryKey: ['admin', 'comments', search, targetType, page, pageSize],
     queryFn: () =>
       listAdminComments({
         search: search || undefined,
         targetType: targetType || undefined,
         page,
-        pageSize: 20,
+        pageSize,
       }),
   })
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
 
   const deleteMutation = useMutation({
     mutationFn: (commentId: string) => deleteAdminComment(commentId),
@@ -126,7 +132,13 @@ export default function AdminCommentsPage() {
                   </li>
                 ))}
               </ul>
-              <AdminPager pagination={data.pagination} page={page} onPageChange={setPage} />
+              <AdminPager
+                pagination={data.pagination}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+              />
             </>
           ) : null}
         </AdminPanelState>

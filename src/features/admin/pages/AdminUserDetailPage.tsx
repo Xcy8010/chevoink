@@ -11,8 +11,8 @@ import { useState } from 'react'
 
 const ROLE_LABELS: Record<string, string> = {
   user: '用户',
-  author: '作者',
-  admin: '管理员',
+  author: '用户',
+  admin: '管理',
 }
 
 export default function AdminUserDetailPage() {

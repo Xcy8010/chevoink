@@ -4,6 +4,7 @@ import { BookOpen, MessageSquare, Newspaper, Users } from 'lucide-react'
 
 import { getAdminDashboard } from '../api'
 import { AdminCard, AdminPageHeader, AdminPanelState, formatDateTime } from '../AdminLayout'
+import TrendLineChart from '../components/TrendLineChart'
 
 const ACTION_LABELS: Record<string, string> = {
   'admin.login': '登录后台',
@@ -39,54 +40,66 @@ export default function AdminDashboardPage() {
       <AdminPanelState state={query.isLoading ? 'loading' : query.isError ? 'error' : 'ready'}>
         {dashboard ? (
           <div className="space-y-5">
-            {/* 指标卡 */}
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {/* 指标卡 + 近 7 日折线趋势 */}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
               {[
-                { label: '注册用户', value: dashboard.totals.users, icon: Users, to: '/admin/users' },
-                { label: '已发布作品', value: dashboard.totals.publishedNovels, icon: BookOpen, to: '/admin/novels' },
-                { label: '社区帖子', value: dashboard.totals.posts, icon: Newspaper, to: '/admin/posts' },
-                { label: '评论总数', value: dashboard.totals.comments, icon: MessageSquare, to: '/admin/comments' },
+                {
+                  label: '注册用户',
+                  caption: '近 7 天新增注册趋势',
+                  value: dashboard.totals.users,
+                  icon: Users,
+                  to: '/admin/users',
+                  series: dashboard.trend.map((day) => day.users),
+                },
+                {
+                  label: '已发布作品',
+                  caption: '近 7 天新发布趋势',
+                  value: dashboard.totals.publishedNovels,
+                  icon: BookOpen,
+                  to: '/admin/novels',
+                  series: dashboard.trend.map((day) => day.novels),
+                },
+                {
+                  label: '社区帖子',
+                  caption: '近 7 天新帖趋势',
+                  value: dashboard.totals.posts,
+                  icon: Newspaper,
+                  to: '/admin/posts',
+                  series: dashboard.trend.map((day) => day.posts),
+                },
+                {
+                  label: '评论总数',
+                  caption: '近 7 天新评论趋势',
+                  value: dashboard.totals.comments,
+                  icon: MessageSquare,
+                  to: '/admin/comments',
+                  series: dashboard.trend.map((day) => day.comments),
+                },
               ].map((card) => (
                 <Link
                   key={card.label}
                   to={card.to}
                   className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-default)] p-4 transition-colors hover:border-[var(--border-strong)]"
                 >
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-[var(--text-secondary)]">{card.label}</p>
-                    <card.icon size={16} className="text-[var(--text-secondary)]" />
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm text-[var(--text-secondary)]">{card.label}</p>
+                        <card.icon size={14} className="text-[var(--text-tertiary)]" />
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{card.caption}</p>
+                    </div>
+                    <p className="shrink-0 text-xl font-semibold tracking-[-0.02em]">
+                      {card.value.toLocaleString('zh-CN')}
+                    </p>
                   </div>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.02em]">{card.value.toLocaleString('zh-CN')}</p>
+                  <div className="mt-3">
+                    <TrendLineChart labels={dashboard.trend.map((day) => day.date.slice(5))} values={card.series} />
+                  </div>
+                  <p className="mt-2 text-right text-[10px] text-[var(--text-tertiary)]">近 7 天</p>
                 </Link>
               ))}
             </div>
-
-            {/* 近 7 日新增 */}
-            <AdminCard>
-              <h2 className="mb-3 text-sm font-semibold">近 7 日新增</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[480px] text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-[var(--text-secondary)]">
-                      <th className="pb-2 font-normal">日期</th>
-                      <th className="pb-2 font-normal">注册用户</th>
-                      <th className="pb-2 font-normal">发布作品</th>
-                      <th className="pb-2 font-normal">新帖子</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dashboard.trend.map((day) => (
-                      <tr key={day.date} className="border-t border-[var(--border-default)]">
-                        <td className="py-2 text-[var(--text-secondary)]">{day.date.slice(5)}</td>
-                        <td className="py-2">{day.users}</td>
-                        <td className="py-2">{day.novels}</td>
-                        <td className="py-2">{day.posts}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </AdminCard>
 
             {/* 最近管理操作 */}
             <AdminCard>

@@ -15,12 +15,18 @@ export default function AdminPostsPage() {
   const [keyword, setKeyword] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [pendingDelete, setPendingDelete] = useState<AdminPostRow | null>(null)
 
   const query = useQuery({
-    queryKey: ['admin', 'posts', search, page],
-    queryFn: () => listAdminPosts({ search: search || undefined, page, pageSize: 20 }),
+    queryKey: ['admin', 'posts', search, page, pageSize],
+    queryFn: () => listAdminPosts({ search: search || undefined, page, pageSize }),
   })
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
 
   const deleteMutation = useMutation({
     mutationFn: (postId: string) => deleteAdminPost(postId),
@@ -82,7 +88,13 @@ export default function AdminPostsPage() {
                   </li>
                 ))}
               </ul>
-              <AdminPager pagination={data.pagination} page={page} onPageChange={setPage} />
+              <AdminPager
+                pagination={data.pagination}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+              />
             </>
           ) : null}
         </AdminPanelState>

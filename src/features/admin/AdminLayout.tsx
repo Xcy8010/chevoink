@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { LogOut, ShieldCheck } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, LogOut, ShieldCheck } from 'lucide-react'
 
 import { ApiClientError } from '@/app/api-client'
 import Button from '@/components/ui/Button'
@@ -204,25 +204,111 @@ export function StatusPill({ children, tone = 'neutral' }: { children: ReactNode
 
 /* ---------------- 分页 ---------------- */
 
-export function AdminPager({ pagination, page, onPageChange }: { pagination: Pagination; page: number; onPageChange: (page: number) => void }) {
-  const totalPages = Math.max(Math.ceil(pagination.total / pagination.pageSize), 1)
+function PagerIconButton({
+  disabled,
+  label,
+  onClick,
+  children,
+}: {
+  disabled: boolean
+  label: string
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-40 disabled:hover:text-[var(--text-secondary)]"
+    >
+      {children}
+    </button>
+  )
+}
 
-  if (totalPages <= 1) {
-    return <p className="mt-4 text-xs text-[var(--text-secondary)]">共 {pagination.total} 条</p>
+/** 列表分页器：左侧总条数，右侧条/页选择 + 首页/上一页/页码输入/下一页/末页 */
+export function AdminPager({
+  pagination,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  pagination: Pagination
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
+}) {
+  const totalPages = Math.max(Math.ceil(pagination.total / pageSize), 1)
+  const [draft, setDraft] = useState(String(page))
+
+  useEffect(() => {
+    setDraft(String(page))
+  }, [page, totalPages])
+
+  const commitDraft = () => {
+    const parsed = Number.parseInt(draft, 10)
+    if (Number.isNaN(parsed)) {
+      setDraft(String(page))
+      return
+    }
+    const next = Math.min(Math.max(parsed, 1), totalPages)
+    setDraft(String(next))
+    if (next !== page) {
+      onPageChange(next)
+    }
   }
 
   return (
-    <div className="mt-4 flex items-center justify-between">
-      <p className="text-xs text-[var(--text-secondary)]">
-        共 {pagination.total} 条 · 第 {page} / {totalPages} 页
-      </p>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-          上一页
-        </Button>
-        <Button size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
-          下一页
-        </Button>
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] pt-3">
+      <p className="text-xs text-[var(--text-secondary)]">共 {pagination.total} 条</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            className="h-8 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] px-1.5 text-xs text-[var(--text-primary)] outline-none"
+          >
+            {[10, 20, 50].map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+          条 / 页
+        </label>
+        <div className="flex items-center gap-1">
+          <PagerIconButton label="首页" disabled={page <= 1} onClick={() => onPageChange(1)}>
+            <ChevronsLeft size={14} />
+          </PagerIconButton>
+          <PagerIconButton label="上一页" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+            <ChevronLeft size={14} />
+          </PagerIconButton>
+          <input
+            value={draft}
+            inputMode="numeric"
+            aria-label="页码"
+            onChange={(event) => setDraft(event.target.value.replace(/\D/g, ''))}
+            onBlur={commitDraft}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                commitDraft()
+              }
+            }}
+            className="h-8 w-12 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] text-center text-xs text-[var(--text-primary)] outline-none"
+          />
+          <span className="px-0.5 text-xs text-[var(--text-secondary)]">/ {totalPages} 页</span>
+          <PagerIconButton label="下一页" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+            <ChevronRight size={14} />
+          </PagerIconButton>
+          <PagerIconButton label="末页" disabled={page >= totalPages} onClick={() => onPageChange(totalPages)}>
+            <ChevronsRight size={14} />
+          </PagerIconButton>
+        </div>
       </div>
     </div>
   )

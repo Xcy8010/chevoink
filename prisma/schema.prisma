@@ -137,6 +137,8 @@ enum SmsVerificationPurpose {
   login
   register
   reset_password
+  admin_login
+  admin_bind
 }
 
 /// 隐私可见级别：公开 / 仅自己 / 仅互关可见

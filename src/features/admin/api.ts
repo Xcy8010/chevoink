@@ -36,6 +36,28 @@ export function adminLogin(
   return requestJson('/api/admin/auth/login', { method: 'POST', body: JSON.stringify(payload) })
 }
 
+/** 手机号登录发码：需人机验证 */
+export function adminSendLoginSmsCode(payload: {
+  phone: string
+  captchaId: string
+  captchaAnswer: string
+}): Promise<{ ok: boolean; cooldownSeconds: number }> {
+  return requestJson('/api/admin/auth/sms/send-code', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+/** 绑定手机号发码：需人机验证 */
+export function adminSendBindSmsCode(payload: {
+  phone: string
+  captchaId: string
+  captchaAnswer: string
+}): Promise<{ ok: boolean; cooldownSeconds: number }> {
+  return requestJson('/api/admin/me/sms/send-code', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function adminBindPhone(payload: { phone: string; code: string }): Promise<{ ok: boolean; phone: string }> {
+  return requestJson('/api/admin/me/bind-phone', { method: 'POST', body: JSON.stringify(payload) })
+}
+
 export function getAdminMe(): Promise<AdminMePayload> {
   return requestJson<AdminMePayload>('/api/admin/me')
 }
@@ -84,7 +106,7 @@ export function unbanAdminUser(userId: string): Promise<{ ok: boolean }> {
   return requestJson(`/api/admin/users/${userId}/unban`, { method: 'POST', body: '{}' })
 }
 
-export function setAdminUserRole(userId: string, role: 'user' | 'author' | 'admin'): Promise<{ ok: boolean }> {
+export function setAdminUserRole(userId: string, role: 'user' | 'admin'): Promise<{ ok: boolean }> {
   return requestJson(`/api/admin/users/${userId}/role`, { method: 'POST', body: JSON.stringify({ role }) })
 }
 

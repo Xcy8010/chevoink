@@ -16,16 +16,22 @@ const TARGET_TYPE_LABELS: Record<string, string> = {
 export default function AdminLogsPage() {
   const [targetType, setTargetType] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
 
   const query = useQuery({
-    queryKey: ['admin', 'logs', targetType, page],
+    queryKey: ['admin', 'logs', targetType, page, pageSize],
     queryFn: () =>
       listAdminAuditLogs({
         targetType: targetType || undefined,
         page,
-        pageSize: 20,
+        pageSize,
       }),
   })
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
 
   const data = query.data
 
@@ -92,7 +98,13 @@ export default function AdminLogsPage() {
                   </tbody>
                 </table>
               </div>
-              <AdminPager pagination={data.pagination} page={page} onPageChange={setPage} />
+              <AdminPager
+                pagination={data.pagination}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+              />
             </>
           ) : null}
         </AdminPanelState>

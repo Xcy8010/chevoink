@@ -24,21 +24,27 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState('')
   const [banned, setBanned] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [pendingBan, setPendingBan] = useState<AdminUserRow | null>(null)
   const [pendingReset, setPendingReset] = useState<AdminUserRow | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
 
   const query = useQuery({
-    queryKey: ['admin', 'users', search, role, banned, page],
+    queryKey: ['admin', 'users', search, role, banned, page, pageSize],
     queryFn: () =>
       listAdminUsers({
         search: search || undefined,
         role: role || undefined,
         banned: banned === 'true' ? 'true' : banned === 'false' ? 'false' : undefined,
         page,
-        pageSize: 20,
+        pageSize,
       }),
   })
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
 
@@ -62,7 +68,7 @@ export default function AdminUsersPage() {
   })
 
   const roleMutation = useMutation({
-    mutationFn: ({ userId, role: nextRole }: { userId: string; role: 'user' | 'author' | 'admin' }) =>
+    mutationFn: ({ userId, role: nextRole }: { userId: string; role: 'user' | 'admin' }) =>
       setAdminUserRole(userId, nextRole),
     onSuccess: () => {
       toast.success('角色已更新')
@@ -82,8 +88,9 @@ export default function AdminUsersPage() {
   })
 
   const handleRoleChange = (user: AdminUserRow, nextRole: string) => {
-    if (nextRole === user.role || !nextRole) return
-    roleMutation.mutate({ userId: user.id, role: nextRole as 'user' | 'author' | 'admin' })
+    const current = user.role === 'admin' ? 'admin' : 'user'
+    if (nextRole === current || !nextRole) return
+    roleMutation.mutate({ userId: user.id, role: nextRole as 'user' | 'admin' })
   }
 
   const data = query.data
@@ -125,8 +132,7 @@ export default function AdminUsersPage() {
           >
             <option value="">全部角色</option>
             <option value="user">用户</option>
-            <option value="author">作者</option>
-            <option value="admin">管理员</option>
+            <option value="admin">管理</option>
           </select>
 
           <select
@@ -176,14 +182,13 @@ export default function AdminUsersPage() {
                         <td className="py-2.5 text-[var(--text-secondary)]">{user.phone ?? '—'}</td>
                         <td className="py-2.5">
                           <select
-                            value={user.role}
+                            value={user.role === 'admin' ? 'admin' : 'user'}
                             disabled={user.role === 'admin'}
                             onChange={(event) => handleRoleChange(user, event.target.value)}
                             className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-default)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none disabled:opacity-60"
                           >
                             <option value="user">用户</option>
-                            <option value="author">作者</option>
-                            <option value="admin">管理员</option>
+                            <option value="admin">管理</option>
                           </select>
                         </td>
                         <td className="py-2.5">
@@ -223,7 +228,13 @@ export default function AdminUsersPage() {
                   </tbody>
                 </table>
               </div>
-              <AdminPager pagination={data.pagination} page={page} onPageChange={setPage} />
+              <AdminPager
+                pagination={data.pagination}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+              />
             </>
           ) : null}
         </AdminPanelState>

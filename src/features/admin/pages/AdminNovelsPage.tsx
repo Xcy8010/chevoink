@@ -29,18 +29,24 @@ export default function AdminNovelsPage() {
   const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [pendingTakeDown, setPendingTakeDown] = useState<AdminNovelRow | null>(null)
 
   const query = useQuery({
-    queryKey: ['admin', 'novels', search, status, page],
+    queryKey: ['admin', 'novels', search, status, page, pageSize],
     queryFn: () =>
       listAdminNovels({
         search: search || undefined,
         status: status || undefined,
         page,
-        pageSize: 20,
+        pageSize,
       }),
   })
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['admin', 'novels'] })
 
@@ -167,7 +173,13 @@ export default function AdminNovelsPage() {
                   </tbody>
                 </table>
               </div>
-              <AdminPager pagination={data.pagination} page={page} onPageChange={setPage} />
+              <AdminPager
+                pagination={data.pagination}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+              />
             </>
           ) : null}
         </AdminPanelState>
