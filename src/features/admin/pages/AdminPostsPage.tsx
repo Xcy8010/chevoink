@@ -66,7 +66,7 @@ export default function AdminPostsPage() {
         >
           {data ? (
             <>
-              <ul className="divide-y divide-[var(--border-default)]">
+              <ul className="max-h-[60vh] divide-y divide-[var(--border-default)] overflow-y-auto pr-1">
                 {data.items.map((post) => (
                   <li key={post.id} className="flex items-start justify-between gap-3 py-3">
                     <div className="min-w-0 flex-1">

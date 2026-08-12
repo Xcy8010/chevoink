@@ -127,7 +127,8 @@ export default function AdminSettingsPage() {
     <div>
       <AdminPageHeader title="安全设置" description="管理你的登录凭证" />
 
-      <AdminCard className="max-w-lg">
+      <div className="grid items-start gap-5 md:grid-cols-2">
+      <AdminCard>
         <h2 className="mb-1 text-sm font-semibold">修改登录密码</h2>
         <p className="mb-4 text-xs text-[var(--text-secondary)]">
           修改成功后当前会话将退出，需使用新密码重新登录。
@@ -171,7 +172,7 @@ export default function AdminSettingsPage() {
         </form>
       </AdminCard>
 
-      <AdminCard className="mt-5 max-w-lg">
+      <AdminCard>
         <h2 className="mb-1 text-sm font-semibold">绑定手机号</h2>
         <p className="mb-4 text-xs text-[var(--text-secondary)]">
           当前绑定：{admin?.phone ?? '未绑定'}。绑定后可在登录页使用手机号 + 密码或短信验证码登录。
@@ -248,6 +249,7 @@ export default function AdminSettingsPage() {
           </Button>
         </div>
       </AdminCard>
+      </div>
     </div>
   )
 }
