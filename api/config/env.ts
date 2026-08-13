@@ -94,6 +94,13 @@ export const env = {
   webSearchBochaApiKeyConfigured: isConfigured(process.env.WEB_SEARCH_BOCHA_API_KEY),
   webSearchBochaApiKey: process.env.WEB_SEARCH_BOCHA_API_KEY ?? '',
   webSearchTimeoutMs: parsePositiveNumber(process.env.WEB_SEARCH_TIMEOUT_MS, 15000),
+  // web_read 深读增强：readability 主线提取（false 一键回退正则提取）
+  webReadUseReadability: (process.env.WEB_READ_USE_READABILITY ?? 'true') !== 'false',
+  // 托管 Reader 爬虫兜底层：仅本地提取正文不足时触发；off | jina | firecrawl。
+  // r.jina.ai 境内可达性有争议（jina-ai/reader issue #1237），启用前在 VPS 实测：curl https://r.jina.ai/https://example.com
+  webReaderFallback: process.env.WEB_READER_FALLBACK ?? 'off',
+  webReaderJinaApiKey: process.env.JINA_READER_API_KEY ?? '',
+  webReaderFirecrawlApiKey: process.env.FIRECRAWL_API_KEY ?? '',
   // 听书 TTS（方案 17）：edge = 免费 Edge 神经音色；disabled = 全端隐藏听书入口
   ttsProvider: process.env.TTS_PROVIDER ?? 'edge',
   ttsDefaultVoice: process.env.TTS_DEFAULT_VOICE ?? 'zh-CN-YunjianNeural',

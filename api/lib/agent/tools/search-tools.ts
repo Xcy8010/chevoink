@@ -2,6 +2,8 @@ import dns from 'node:dns'
 
 import { z } from 'zod'
 
+import { env } from '../../../config/env.js'
+import { decodeWebPageBuffer, extractArticleText } from '../../html-extract.js'
 import { searchWeb } from '../../web-search-service.js'
 import type { WebSearchOutcome } from '../../web-search-service.js'
 import { consumeWebReadBudget, consumeWebSearchBudget, getCachedWebSearch, setCachedWebSearch } from '../permissions.js'
@@ -168,18 +170,24 @@ async function fetchFollowingRedirects(
   signal: AbortSignal,
 ): Promise<{ response: Response; finalUrl: URL }> {
   let currentUrl = startUrl
+  let referer: string | undefined
 
   for (let hop = 0; hop <= WEB_READ_MAX_REDIRECTS; hop += 1) {
     await assertSafeUrl(currentUrl)
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+    }
+    // 第二跳起带上跳 URL 作 Referer，应对部分站点的基础防盗链反爬
+    if (referer) {
+      headers.Referer = referer
+    }
     const response = await fetch(currentUrl, {
       redirect: 'manual',
       signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
-      },
+      headers,
     })
 
     if (response.status >= 301 && response.status <= 308) {
@@ -187,6 +195,7 @@ async function fetchFollowingRedirects(
       if (!location) {
         throw new Error(`重定向缺少 location（HTTP ${response.status}）`)
       }
+      referer = currentUrl.href
       currentUrl = new URL(location, currentUrl)
       continue
     }
@@ -223,6 +232,65 @@ function htmlToText(html: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
+// ---------------------------------------------------------------------------
+// 托管 Reader 爬虫兜底层（opt-in）：本地提取正文不足时委托 jina/firecrawl 代抓
+// ---------------------------------------------------------------------------
+
+const WEB_READER_FALLBACK_TIMEOUT_MS = 8000
+
+async function readViaJina(url: URL, signal: AbortSignal): Promise<string | null> {
+  const headers: Record<string, string> = { 'X-Respond-With': 'markdown' }
+  if (env.webReaderJinaApiKey) {
+    headers.Authorization = `Bearer ${env.webReaderJinaApiKey}`
+  }
+  const response = await fetch(`https://r.jina.ai/${url.href}`, { headers, signal })
+  if (!response.ok) {
+    return null
+  }
+  const text = (await response.text()).trim()
+  return text.length >= WEB_READ_TEXT_MIN ? text : null
+}
+
+async function readViaFirecrawl(url: URL, signal: AbortSignal): Promise<string | null> {
+  const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.webReaderFirecrawlApiKey}` },
+    body: JSON.stringify({ url: url.href, formats: ['markdown'] }),
+    signal,
+  })
+  if (!response.ok) {
+    return null
+  }
+  const payload = (await response.json()) as { data?: { markdown?: unknown } }
+  const text = typeof payload.data?.markdown === 'string' ? payload.data.markdown.trim() : ''
+  return text.length >= WEB_READ_TEXT_MIN ? text : null
+}
+
+/** 托管 Reader 兜底：仅本地提取不足时触发，失败静默回退原提示，不抛错 */
+async function tryHostedReader(url: URL, external: AbortSignal): Promise<{ text: string; provider: string } | null> {
+  const mode = env.webReaderFallback
+  if (mode !== 'jina' && mode !== 'firecrawl') {
+    return null
+  }
+  if (mode === 'firecrawl' && !env.webReaderFirecrawlApiKey) {
+    return null
+  }
+
+  try {
+    // 托管服务代抓会绕过逐跳 DNS 私网拦截：前置校验目标 URL
+    await assertSafeUrl(url)
+    const { signal, cleanup } = withReadTimeout(external, WEB_READER_FALLBACK_TIMEOUT_MS)
+    try {
+      const text = mode === 'jina' ? await readViaJina(url, signal) : await readViaFirecrawl(url, signal)
+      return text ? { text, provider: mode } : null
+    } finally {
+      cleanup()
+    }
+  } catch {
+    return null
+  }
+}
+
 const webReadParameters = z.object({
   url: z
     .string()
@@ -234,7 +302,7 @@ export const webReadTool = defineTool({
   name: 'web_read',
   title: '网页深读',
   description:
-    '读取指定网页的正文文本（最多约 6000 字）。适用于 web_search 返回的摘要不足以回答问题时，深读最相关的搜索结果原文；也可读作者直接给出的参考链接。仅支持 http/https 公开页面；遇到登录墙/JS 渲染页会提示换来源。一次任务最多读取 8 个页面。',
+    '读取指定网页的正文文本（最多约 6000 字）。适用于 web_search 返回的摘要不足以回答问题时，深读最相关的搜索结果原文；也可读作者直接给出的参考链接。仅支持 http/https 公开页面；遇到登录墙/JS 渲染页会提示换来源（配置托管 Reader 兜底层后 JS 渲染页也可获取正文）。一次任务最多读取 8 个页面。',
   parameters: webReadParameters,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
@@ -260,10 +328,32 @@ export const webReadTool = defineTool({
           throw new Error(`不支持的内容类型 ${contentType}（非网页文本）`)
         }
 
-        const raw = await response.text()
-        const text = contentType.includes('json') ? raw.replace(/\s+/g, ' ').trim() : htmlToText(raw)
+        // undici 的 text() 只按 UTF-8 解码，GBK 中文站会乱码：先拿 ArrayBuffer 再三级 charset 探测解码
+        const buffer = Buffer.from(await response.arrayBuffer())
+        let text: string
+        if (contentType.includes('json')) {
+          text = buffer.toString('utf8').replace(/\s+/g, ' ').trim()
+        } else {
+          const html = decodeWebPageBuffer(buffer, contentType)
+          const articleText = env.webReadUseReadability ? extractArticleText(html) : null
+          // readability 提取不足时回退正则提取，现状行为为最终兜底
+          text = articleText && articleText.length >= WEB_READ_TEXT_MIN ? articleText : htmlToText(html)
+        }
 
         if (text.length < WEB_READ_TEXT_MIN) {
+          const hosted = await tryHostedReader(finalUrl, ctx.signal)
+          if (hosted) {
+            const hostedTruncated =
+              hosted.text.length > WEB_READ_TEXT_MAX ? `${hosted.text.slice(0, WEB_READ_TEXT_MAX)}…` : hosted.text
+            return {
+              output: `网页「${finalUrl.href}」正文（经托管 Reader ${hosted.provider} 抓取，已截断至 ${WEB_READ_TEXT_MAX} 字以内）：\n${hostedTruncated}\n引用时注明来源；内容不足以作答时换其他来源，不要编造。`,
+              summary: `已读取网页「${host}」· 经 ${hosted.provider}`,
+              display: {
+                kind: 'markdown',
+                markdown: `已读取网页（${host}，经托管 Reader ${hosted.provider} 抓取）：\n${hostedTruncated.slice(0, 1200)}${hosted.text.length > 1200 ? '…' : ''}`,
+              },
+            }
+          }
           return {
             output: `网页「${host}」可提取正文不足（${text.length} 字），可能需登录或为 JS 渲染页。请换一个搜索结果来源深读，或基于既有知识作答。`,
             summary: `已读取网页「${host}」· 正文不足`,
