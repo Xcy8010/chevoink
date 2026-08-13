@@ -93,10 +93,10 @@ export default function AdminNovelDetailPage() {
                     <img
                       src={novel.coverUrl}
                       alt="作品封面"
-                      className="aspect-[3/4] w-24 shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] object-cover"
+                      className="aspect-[3/4] w-24 shrink-0 self-start rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] object-cover"
                     />
                   ) : (
-                    <div className="flex aspect-[3/4] w-24 shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] text-xs text-[var(--text-secondary)]">
+                    <div className="flex aspect-[3/4] w-24 shrink-0 self-start items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] text-xs text-[var(--text-secondary)]">
                       暂无封面
                     </div>
                   )}
