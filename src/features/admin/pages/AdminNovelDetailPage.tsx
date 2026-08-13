@@ -87,22 +87,22 @@ export default function AdminNovelDetailPage() {
         {novel && detail ? (
           <div className="space-y-4">
             <AdminCard>
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="flex min-w-0 flex-1 flex-wrap gap-4 sm:flex-nowrap">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="flex min-w-0 gap-4 md:flex-1">
                   {novel.coverUrl ? (
                     <img
                       src={novel.coverUrl}
                       alt="作品封面"
-                      className="h-32 w-24 shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] object-cover"
+                      className="aspect-[3/4] w-24 shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] object-cover"
                     />
                   ) : (
-                    <div className="flex h-32 w-24 shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] text-xs text-[var(--text-secondary)]">
+                    <div className="flex aspect-[3/4] w-24 shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-muted)] text-xs text-[var(--text-secondary)]">
                       暂无封面
                     </div>
                   )}
                   <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-lg font-semibold">{novel.displayTitle ?? novel.title}</h1>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <h1 className="min-w-0 break-words text-lg font-semibold">{novel.displayTitle ?? novel.title}</h1>
                     {takenDown ? (
                       <StatusPill tone="danger">已下架</StatusPill>
                     ) : (
@@ -125,7 +125,7 @@ export default function AdminNovelDetailPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 md:shrink-0 md:justify-end">
                   <a
                     href={`/novel/${novel.id}`}
                     target="_blank"
