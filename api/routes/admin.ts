@@ -22,6 +22,7 @@ import {
   getAdminConversationMessagesData,
   getAdminDashboardData,
   getAdminNovelDetailData,
+  getAdminChapterContentData,
   getAdminPostDetailData,
   getAdminUserBySessionData,
   getAdminUserDetailData,
@@ -501,6 +502,22 @@ router.get('/novels/:novelId', async (req: Request, res: Response): Promise<void
     const payload = await getAdminNovelDetailData(req.params.novelId)
     if (!payload) {
       res.status(404).json(buildError(requestId, 'NOT_FOUND', '作品不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/chapters/:chapterId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await getAdminChapterContentData(req.params.novelId, req.params.chapterId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '章节不存在。'))
       return
     }
     res.status(200).json(buildSuccess(requestId, payload))

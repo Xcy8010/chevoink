@@ -61,6 +61,7 @@ const AdminUsersPage = lazyPage(() => import('@/features/admin/pages/AdminUsersP
 const AdminUserDetailPage = lazyPage(() => import('@/features/admin/pages/AdminUserDetailPage'))
 const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
 const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
+const AdminNovelPreviewPage = lazyPage(() => import('@/features/admin/pages/AdminNovelPreviewPage'))
 const AdminPostsPage = lazyPage(() => import('@/features/admin/pages/AdminPostsPage'))
 const AdminPostDetailPage = lazyPage(() => import('@/features/admin/pages/AdminPostDetailPage'))
 const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCommentsPage'))
@@ -314,6 +315,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminNovelDetailPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/novels/:novelId/preview',
+    title: '作品内部预览',
+    description: '管理端内部预览，草稿与已下架作品亦可阅读全文。',
+    element: (
+      <AdminLayout>
+        <AdminNovelPreviewPage />
       </AdminLayout>
     ),
     useShell: false,

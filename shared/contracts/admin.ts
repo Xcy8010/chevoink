@@ -78,6 +78,17 @@ export type AdminNovelDetailPayload = {
   }>
 }
 
+export type AdminChapterContentPayload = {
+  id: string
+  title: string
+  orderIndex: number
+  status: string
+  wordCount: number
+  content: string
+  publishedAt: string | null
+  updatedAt: string
+}
+
 export type AdminPostRow = {
   id: string
   excerpt: string

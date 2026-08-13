@@ -1,6 +1,7 @@
 import type {
   AdminAuditLogRow,
   AdminCaptchaPayload,
+  AdminChapterContentPayload,
   AdminCommentRow,
   AdminConversationRow,
   AdminDashboardPayload,
@@ -130,6 +131,10 @@ export function listAdminNovels(input: {
 
 export function getAdminNovelDetail(novelId: string): Promise<AdminNovelDetailPayload> {
   return requestJson<AdminNovelDetailPayload>(`/api/admin/novels/${novelId}`)
+}
+
+export function getAdminChapterContent(novelId: string, chapterId: string): Promise<AdminChapterContentPayload> {
+  return requestJson<AdminChapterContentPayload>(`/api/admin/novels/${novelId}/chapters/${chapterId}`)
 }
 
 export function takeDownAdminNovel(novelId: string): Promise<{ ok: boolean }> {

@@ -4682,6 +4682,39 @@ export async function getAdminNovelDetailData(novelId: string): Promise<{
   }
 }
 
+/** 管理端内部预览：取作品任意章节正文（含草稿/已下架），仅管理后台预览页使用 */
+export async function getAdminChapterContentData(
+  novelId: string,
+  chapterId: string,
+): Promise<{
+  id: string
+  title: string
+  orderIndex: number
+  status: string
+  wordCount: number
+  content: string
+  publishedAt: string | null
+  updatedAt: string
+} | null> {
+  const record = await prisma.chapter.findFirst({
+    where: { id: chapterId, novelId },
+  })
+  if (!record) {
+    return null
+  }
+
+  return {
+    id: record.id,
+    title: record.title,
+    orderIndex: record.orderIndex,
+    status: record.status,
+    wordCount: record.wordCount,
+    content: record.content,
+    publishedAt: toIso(record.publishedAt),
+    updatedAt: record.updatedAt.toISOString(),
+  }
+}
+
 /** 下架：转私有 + 归档，前台列表/搜索/详情对普通用户不可见 */
 export async function takeDownNovelData(novelId: string): Promise<{ title: string; previousVisibility: string } | null> {
   const record = await prisma.novel.findUnique({

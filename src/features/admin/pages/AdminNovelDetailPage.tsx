@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Eye } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
@@ -126,6 +126,13 @@ export default function AdminNovelDetailPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2 md:shrink-0 md:justify-end">
+                  <Link
+                    to={`/admin/novels/${novel.id}/preview`}
+                    className="inline-flex h-9 items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border-strong)] px-3 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"
+                  >
+                    <Eye size={14} />
+                    内部预览
+                  </Link>
                   <a
                     href={`/novel/${novel.id}`}
                     target="_blank"
