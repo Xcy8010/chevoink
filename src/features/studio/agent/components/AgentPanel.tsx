@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   CircleAlert,
@@ -225,6 +225,44 @@ export function AgentPanel({
   // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
   const awaiting =
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
+
+  // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
+  const blockInfoById = useMemo(() => {
+    const map = new Map<string, { firstId: string; ops: number }>()
+    let firstId: string | null = null
+    let ops = 0
+    let ids: string[] = []
+    const flush = () => {
+      if (!firstId) {
+        return
+      }
+      const blockFirst = firstId
+      for (const id of ids) {
+        map.set(id, { firstId: blockFirst, ops })
+      }
+      firstId = null
+      ops = 0
+      ids = []
+    }
+    for (const message of messages) {
+      if (message.role === 'assistant') {
+        if (!firstId) {
+          firstId = message.id
+        }
+        ids.push(message.id)
+        ops += message.parts.filter((part) => part.type !== 'text').length
+      } else {
+        flush()
+      }
+    }
+    flush()
+    return map
+  }, [messages])
+
+  const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({})
+  const handleToggleBlockSummary = useCallback((blockId: string) => {
+    setExpandedBlocks((current) => ({ ...current, [blockId]: !current[blockId] }))
+  }, [])
 
   useEffect(
     () => () => {
@@ -788,8 +826,9 @@ export function AgentPanel({
           </div>
         ) : (
           <div className="flex flex-col gap-4 pb-2">
-            {messages.map((message) =>
-              message.role === 'user' ? (
+            {messages.map((message) => {
+              if (message.role === 'user') {
+                return (
                 <div
                   key={message.id}
                   className="agent-msg-cv group flex items-center justify-end gap-1.5"
@@ -860,7 +899,20 @@ export function AgentPanel({
                       .join('')}
                   </div>
                 </div>
-              ) : (
+                )
+              }
+
+              const block = blockInfoById.get(message.id)
+              const isBlockFirst = block?.firstId === message.id
+              const blockExpanded = block ? !!expandedBlocks[block.firstId] : false
+              const blockCollapsed = !active && !blockExpanded
+              const hasTextPart = message.parts.some((part) => part.type === 'text')
+              // 折叠态下块内非首条且无文本的消息不贡献任何内容，不渲染空壳（避免 flex gap 多出空隙）
+              if (blockCollapsed && !isBlockFirst && !hasTextPart) {
+                return null
+              }
+
+              return (
                 <div
                   key={message.id}
                   // 正在流式的消息不加 content-visibility，避免高度估算干扰自动滚底
@@ -870,6 +922,10 @@ export function AgentPanel({
                     parts={message.parts}
                     streaming={active && message.id === lastAssistantId}
                     runActive={active}
+                    blockId={block?.firstId}
+                    summaryCount={isBlockFirst ? block?.ops : undefined}
+                    summaryExpanded={blockExpanded}
+                    onToggleSummary={handleToggleBlockSummary}
                   />
                   {/* 最后结论复制：结尾左下角（qoder/Trae 风格），流式进行中不显示 */}
                   {message.id === lastAssistantId && !active && getMessageText(message.parts) ? (
@@ -897,8 +953,8 @@ export function AgentPanel({
                     </div>
                   ) : null}
                 </div>
-              ),
-            )}
+              )
+            })}
             <ProcessingHint visible={awaiting} />
             {pendingApproval ? (
               <AgentPermissionCard approval={pendingApproval} onResolve={handleResolveApproval} />

@@ -576,26 +576,39 @@ export const AgentMessageParts = memo(function AgentMessageParts({
   parts,
   streaming,
   runActive,
+  blockId,
+  summaryCount,
+  summaryExpanded = false,
+  onToggleSummary,
 }: {
   parts: AgentMessagePart[]
   streaming: boolean
-  /** 所属 run 是否仍活跃：活跃时平铺输出，结束后默认折叠为「已处理 n 个操作」摘要行 */
+  /** 所属 run 是否仍活跃：活跃时平铺输出 */
   runActive: boolean
+  /** 所属对话块（连续助手消息）的首条消息 id */
+  blockId?: string
+  /** 整个对话块的操作总数（仅块内首条助手消息传值）：run 结束后显示唯一一行「已处理 n 个操作」 */
+  summaryCount?: number
+  /** 摘要是否已展开（回看全部思考/动作） */
+  summaryExpanded?: boolean
+  onToggleSummary?: (blockId: string) => void
 }) {
-  const [manualExpanded, setManualExpanded] = useState(false)
-  const opCount = useMemo(() => parts.filter((part) => part.type !== 'text').length, [parts])
-  const showSummary = !runActive && opCount > 0
-  const collapsed = showSummary && !manualExpanded
+  const showSummary = !runActive && (summaryCount ?? 0) > 0
+  const collapsed = !runActive && !summaryExpanded
 
   return (
     <div className="space-y-2">
       {showSummary ? (
         <button
           type="button"
-          onClick={() => setManualExpanded((value) => !value)}
+          onClick={() => {
+            if (blockId) {
+              onToggleSummary?.(blockId)
+            }
+          }}
           className="flex w-full animate-fade-in items-center gap-1 text-left"
         >
-          <span className="text-[11px] text-[var(--text-secondary)]">已处理 {opCount} 个操作</span>
+          <span className="text-[11px] text-[var(--text-secondary)]">已处理 {summaryCount} 个操作</span>
           {collapsed ? (
             <ChevronRight className="h-3.5 w-3.5 text-[var(--text-secondary)]" />
           ) : (
