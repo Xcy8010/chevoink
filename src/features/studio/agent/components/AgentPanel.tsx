@@ -111,6 +111,52 @@ function formatSessionTime(iso: string): string {
     : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
+/** 当前 run 的助手消息是否已有输出（思考/动作/文本）：决定「正在处理...」占位的消失时机 */
+function assistantHasParts(messages: AgentUIMessage[], runId: string | null): boolean {
+  if (!runId) {
+    return false
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'assistant' && message.runId === runId) {
+      return message.parts.length > 0
+    }
+  }
+  return false
+}
+
+/** 「正在处理...」占位：无容器、银色文字光泽；首个思考/动作事件到达后 visible 翻假，自然淡出再卸载 */
+function ProcessingHint({ visible }: { visible: boolean }) {
+  const [leaving, setLeaving] = useState(false)
+  const wasVisibleRef = useRef(false)
+
+  useEffect(() => {
+    if (visible) {
+      wasVisibleRef.current = true
+      setLeaving(false)
+    } else if (wasVisibleRef.current) {
+      setLeaving(true)
+    }
+  }, [visible])
+
+  if (!visible && !leaving) {
+    return null
+  }
+
+  return (
+    <p
+      className={cn('px-1 text-xs', leaving ? 'animate-agent-fade-out' : 'animate-fade-in')}
+      onAnimationEnd={(event) => {
+        if (leaving && event.animationName === 'agent-fade-out') {
+          setLeaving(false)
+        }
+      }}
+    >
+      <span className="agent-processing-shimmer">正在处理...</span>
+    </p>
+  )
+}
+
 export function AgentPanel({
   sessionId,
   novelId,
@@ -176,6 +222,9 @@ export function AgentPanel({
   const pinnedToBottomRef = useRef(true)
   const lastScrollTopRef = useRef(0)
   const active = isRunActive(phase)
+  // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
+  const awaiting =
+    active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
 
   useEffect(
     () => () => {
@@ -820,6 +869,7 @@ export function AgentPanel({
                   <AgentMessageParts
                     parts={message.parts}
                     streaming={active && message.id === lastAssistantId}
+                    runActive={active}
                   />
                   {/* 最后结论复制：结尾左下角（qoder/Trae 风格），流式进行中不显示 */}
                   {message.id === lastAssistantId && !active && getMessageText(message.parts) ? (
@@ -849,6 +899,7 @@ export function AgentPanel({
                 </div>
               ),
             )}
+            <ProcessingHint visible={awaiting} />
             {pendingApproval ? (
               <AgentPermissionCard approval={pendingApproval} onResolve={handleResolveApproval} />
             ) : null}

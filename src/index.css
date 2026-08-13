@@ -349,6 +349,34 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+@keyframes agent-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-agent-fade-out {
+  animation: agent-fade-out var(--duration-normal) var(--easing-default) both;
+}
+
+/* Agent「正在处理...」占位文字：银色文字光泽（复用 skeleton-shimmer 位移动画，主题变量自适应深浅色） */
+.agent-processing-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--text-secondary) 25%,
+    var(--text-primary) 50%,
+    var(--text-secondary) 75%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
 /* Agent 消息流轻量虚拟化：视口外的历史消息跳过渲染与布局，长会话不再拖垮主线程 */
 .agent-msg-cv {
   content-visibility: auto;

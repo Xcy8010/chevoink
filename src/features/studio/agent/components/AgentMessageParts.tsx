@@ -3,6 +3,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   CircleAlert,
   LoaderCircle,
@@ -365,6 +366,8 @@ const ToolCallCard = memo(function ToolCallCard({
   }, [part.args])
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
+  // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
+  const collapsible = part.toolName === 'web_read' && !!part.display
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   const webSearchQuery =
@@ -412,6 +415,13 @@ const ToolCallCard = memo(function ToolCallCard({
           </span>
         ) : null}
         <span className="shrink-0">{toolStatusIcon[part.status]}</span>
+        {collapsible ? (
+          expanded ? (
+            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+          )
+        ) : null}
       </button>
       {part.summary ? (
         <p
@@ -430,7 +440,7 @@ const ToolCallCard = memo(function ToolCallCard({
           {argsPreview}
         </pre>
       ) : null}
-      {part.display ? (
+      {part.display && (!collapsible || expanded) ? (
         <div className="px-3 pb-3 pt-1">
           <ToolDisplayRenderer display={part.display} />
         </div>
@@ -565,17 +575,44 @@ const TextPart = memo(function TextPart({
 export const AgentMessageParts = memo(function AgentMessageParts({
   parts,
   streaming,
+  runActive,
 }: {
   parts: AgentMessagePart[]
   streaming: boolean
+  /** 所属 run 是否仍活跃：活跃时平铺输出，结束后默认折叠为「已处理 n 个操作」摘要行 */
+  runActive: boolean
 }) {
+  const [manualExpanded, setManualExpanded] = useState(false)
+  const opCount = useMemo(() => parts.filter((part) => part.type !== 'text').length, [parts])
+  const showSummary = !runActive && opCount > 0
+  const collapsed = showSummary && !manualExpanded
+
   return (
     <div className="space-y-2">
+      {showSummary ? (
+        <button
+          type="button"
+          onClick={() => setManualExpanded((value) => !value)}
+          className="flex w-full animate-fade-in items-center gap-1 text-left"
+        >
+          <span className="text-[11px] text-[var(--text-secondary)]">已处理 {opCount} 个操作</span>
+          {collapsed ? (
+            <ChevronRight className="h-3.5 w-3.5 text-[var(--text-secondary)]" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 text-[var(--text-secondary)]" />
+          )}
+        </button>
+      ) : null}
       {parts.map((part, index) => {
         const isLast = index === parts.length - 1
 
         if (part.type === 'text') {
           return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast} />
+        }
+
+        // 折叠态：隐藏思考/动作，仅保留 text 结论
+        if (collapsed) {
+          return null
         }
 
         if (part.type === 'reasoning') {
