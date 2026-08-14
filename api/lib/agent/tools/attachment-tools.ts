@@ -32,7 +32,10 @@ const EXT_TO_MIME: Record<string, string> = {
 
 const MIME_ALLOWED = new Set(Object.values(EXT_TO_MIME))
 const MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024
-const REMOTE_FETCH_TIMEOUT_MS = 20000
+/** 外网下载时限：生图 CDN 跨境较慢（实测 2MB+ 需 ~20s），放宽到 60s */
+const REMOTE_FETCH_TIMEOUT_MS = 60000
+const REMOTE_FETCH_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 
 /** 外网图片 URL 安全校验：仅 https、禁止 IP/localhost/内网段（防 SSRF 打云元数据/内网探测） */
 function isSafeRemoteImageUrl(url: string): boolean {
@@ -92,6 +95,7 @@ async function downloadRemoteImage(
   try {
     response = await fetch(url, {
       signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+      headers: { 'user-agent': REMOTE_FETCH_USER_AGENT },
       redirect: 'manual',
     })
   } catch {

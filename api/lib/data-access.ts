@@ -53,7 +53,7 @@ import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, verifyPas
 import { evictUserBanCache } from './auth-session.js'
 import { paginate } from './http.js'
 import { storeMessageImageDataUrl } from './message-image-storage.js'
-import { storeNovelCoverDataUrl } from './novel-cover-storage.js'
+import { storeNovelCoverDataUrl, storeNovelCoverFromRemoteUrl } from './novel-cover-storage.js'
 import { normalizePhoneNumber } from './phone.js'
 import { DataAccessError, prisma } from './prisma.js'
 
@@ -1298,16 +1298,23 @@ export async function getNovelDetailData(
   }
 }
 
-/** 封面图若是 base64 data URL，落盘转为静态文件路径；失败（超限/磁盘异常）时保留原值不阻断主流程 */
+/** 封面图若是 base64 data URL 或生图服务远程直链，落盘转为静态文件路径；失败（超限/磁盘异常/下载超时）时保留原值不阻断主流程 */
 async function normalizeCoverImageUrl(imageUrl: string): Promise<string> {
-  if (!imageUrl.startsWith('data:image/')) {
-    return imageUrl
+  if (imageUrl.startsWith('data:image/')) {
+    try {
+      return await storeNovelCoverDataUrl(imageUrl)
+    } catch {
+      return imageUrl
+    }
   }
-  try {
-    return await storeNovelCoverDataUrl(imageUrl)
-  } catch {
-    return imageUrl
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+    try {
+      return await storeNovelCoverFromRemoteUrl(imageUrl)
+    } catch {
+      return imageUrl
+    }
   }
+  return imageUrl
 }
 
 export async function getStudioPayloadData(userId: string, novelId: string): Promise<StudioPayload | null> {

@@ -1,6 +1,6 @@
 # 启创墨域 Chevoink
 
-这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台：读者可以在书城发现、追更、听书，作者可以在创作区与写作 Agent 协作产出章节，社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
+这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台：读者可以在书城发现、追更、听书，作者可以在创作区与写作 Agent 协作产出章节（Agent 支持图片/文件附件、视觉看图与参考资料读取），社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
 
 线上地址：<https://chevoink.chevolink.com>
 
@@ -21,7 +21,7 @@
 两种方式任选其一：
 
 1. **GitHub Releases（推荐）**
-   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.05.1`）；
+   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.06`）；
    - 在 Assets 中下载 `chevoink-vX.XX.apk` 到手机；
    - 点击安装。系统若提示「未知来源应用」，在弹窗中允许「本次安装」即可（APK 已使用发布密钥签名）。
 2. **官网直装**
@@ -42,16 +42,18 @@
 ### 作者
 
 1. 进入**创作区**，「新建作品」填写书名、简介与标签；
-2. 在章节编辑器直接写作，或呼出 **AI 写作 Agent**：它能按你的设定与知识集（世界观、人物卡）流式生成章节草稿、改写润色，全程可干预；
-3. 用 **AI 封面生成**一键产出封面图；
-4. 章节写完点击发布，读者端即刻可见；支持定时追更与章节管理。
+2. 在章节编辑器直接写作，或呼出 **AI 写作 Agent**：默认最大权限自主执行（工具调用自动批准，保留追踪按钮），能按你的设定与知识集（世界观、人物卡）流式生成章节草稿、改写润色，全程可干预；
+3. 输入框可附加**图片（≤6 张）与文件（≤3 个，pdf/docx/txt/md）**随提示词发送，Agent 会先用视觉/读取工具理解附件再行动；对话内文件可点击打开、长文件内容默认折叠；
+4. 用 **AI 封面生成**一键产出封面图（远程直链自动落盘本站）；也可以让 Agent 直接「查看当前封面」核对画面效果；
+5. 章节写完点击发布，读者端即刻可见；支持定时追更与章节管理。
 
 ## 功能一览
 
 - **阅读区**：书城首页（轮播、榜单、分类推荐）、书架与阅读进度云同步、沉浸式阅读器、TTS 听书
-- **创作区**：小说/章节管理、AI 写作 Agent（流式事件、工具调用、知识集 Skill）、AI 封面生成
+- **创作区**：小说/章节管理、AI 写作 Agent（流式事件、工具调用、知识集 Skill、默认最大权限、图片/文件附件、视觉看图、pdf/docx/txt/md 参考资料读取）、AI 封面生成（远程直链自动落盘）
 - **社区**：帖子与话题系统、推荐算法、评论/点赞/收藏、关注与粉丝、私信与在线状态
 - **账号体系**：手机号验证码登录（腾讯云短信）、HttpOnly Cookie 会话 + Bearer 备选通道（安卓壳杀后台不掉登录）
+- **管理后台**：数据看板、用户/作品/内容治理、移动端适配
 - **安卓客户端**：Capacitor 壳加载远程站点，应用内检测更新与 APK 分发
 
 ## 技术栈
@@ -60,7 +62,7 @@
 | --- | --- |
 | 前端 | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | 后端 | Express 4 · Prisma 6 · PostgreSQL · Zod |
-| AI | DeepSeek 文本生成 · OpenAI 兼容图像生成 · Edge TTS 语音合成 |
+| AI | DeepSeek 文本生成 · 智谱 GLM-4.1V 图像理解 · OpenAI 兼容图像生成 · Edge TTS 语音合成 |
 | 部署 | PM2 + nginx（生产）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
 ## 目录结构
@@ -106,7 +108,7 @@ npm run dev
 ## 部署与发布
 
 - **生产部署**：`npm run deploy:prod`（本地检查 → 构建 → 打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
-- **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.03 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
+- **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.06 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
 ## 环境变量
