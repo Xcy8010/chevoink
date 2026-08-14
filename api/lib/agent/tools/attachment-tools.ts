@@ -55,9 +55,9 @@ export const viewImageTool = defineTool({
   name: 'view_image',
   title: '查看图片',
   description:
-    '查看并理解一张图片（作者附带的参考图或 cover_generate 返回的封面候选图）。你是纯文本模型，看不到图片像素；本工具把图片发给视觉推理模型，返回文字描述。作者消息附带参考图时必须先逐张调用本工具理解图片再开始任务；cover_generate 生成封面后必须对每张候选调用本工具校验画面是否符合提示词。url 只接受本站附件或封面地址（即附件元数据/cover_generate 返回的 url）。',
+    '查看并理解一张图片（作者附带的参考图、cover_generate 返回的封面候选图，或 novel_get_context 返回的正式封面地址）。你是纯文本模型，看不到图片像素；本工具把图片发给视觉推理模型，返回文字描述。作者消息附带参考图时必须先逐张调用本工具理解图片再开始任务；cover_generate 生成封面后必须对每张候选调用本工具校验画面是否符合提示词；作者询问当前封面效果时用正式封面地址调用本工具查看。url 只接受本站附件或封面地址（即附件元数据/cover_generate/novel_get_context 返回的 url）。',
   parameters: z.object({
-    url: z.string().describe('图片地址（作者附件 url 或 cover_generate 返回的候选图 url）'),
+    url: z.string().describe('图片地址（作者附件 url、cover_generate 候选图 url 或正式封面 url）'),
     focus: z
       .string()
       .max(500)

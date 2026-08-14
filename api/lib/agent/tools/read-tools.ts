@@ -69,6 +69,7 @@ export const novelGetContextTool = defineTool({
         wordCount: true,
         chapterCount: true,
         coverPrompt: true,
+        coverAsset: { select: { imageUrl: true } },
       },
     })
 
@@ -97,6 +98,9 @@ export const novelGetContextTool = defineTool({
       `简介：${clip(novel.summary, 400)}`,
       novel.tagNames.length ? `标签：${novel.tagNames.join('、')}${novel.categoryName ? ` 分类：${novel.categoryName}` : ''}` : '',
       novel.coverPrompt ? `封面提示词：${clip(novel.coverPrompt, 160)}` : '',
+      novel.coverAsset?.imageUrl
+        ? `正式封面地址：${novel.coverAsset.imageUrl}（调用 view_image 即可查看当前封面画面效果）`
+        : '正式封面：暂无',
       chapters.length ? `章节列表：\n${chapterLines.join('\n')}` : '章节列表：暂无章节。',
       hasMismatch
         ? '提醒：存在标题序号与实际排位不一致的章节（通常是作者删过中间章节导致错位）。作者要求写「第N章」时，先确认目标到底是哪一章：要补写被删掉的章节时用 chapter_create 传 position 在正确位置插入（后续章节编号会自动后移），不要直接覆盖错位的其他章节；处理完后用 chapter_rename 把序号对不上的标题一并修正。'
