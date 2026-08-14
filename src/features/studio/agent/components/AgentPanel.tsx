@@ -924,14 +924,17 @@ export function AgentPanel({
                             )
                           }
                           return (
-                            <span
+                            <a
                               key={`${message.id}-attach-${partIndex}`}
-                              className="inline-flex max-w-52 items-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-primary)]"
-                              title={part.name}
+                              href={part.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex max-w-52 items-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-primary)] transition hover:bg-[var(--surface-default)] hover:underline"
+                              title={`打开文件 ${part.name}`}
                             >
                               <FileText className="h-3 w-3 shrink-0 text-[var(--text-secondary)]" />
                               <span className="truncate">{part.name}</span>
-                            </span>
+                            </a>
                           )
                         })}
                       </div>

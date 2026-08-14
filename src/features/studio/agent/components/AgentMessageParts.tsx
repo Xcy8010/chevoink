@@ -7,6 +7,7 @@ import {
   ChevronUp,
   CircleAlert,
   Eye,
+  FileText,
   LoaderCircle,
   Search,
   ShieldX,
@@ -328,6 +329,53 @@ function ViewedImageCard({
   )
 }
 
+/** markdown 内容卡片：长内容（读文件/读网页）默认折叠、点击展开收起；短内容（如封面提示词）直接展示 */
+function MarkdownCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'markdown' }>
+}) {
+  const collapsible = display.markdown.length > 300
+  const [expanded, setExpanded] = useState(false)
+
+  if (!collapsible) {
+    return (
+      <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
+        <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6 text-[var(--text-primary)]">
+          {display.markdown}
+        </pre>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+          内容 · {display.markdown.length} 字
+        </span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+          <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs leading-6 text-[var(--text-primary)]">
+            {display.markdown}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) {
   switch (display.kind) {
     case 'chapterDiff':
@@ -341,13 +389,7 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
     case 'viewedImage':
       return <ViewedImageCard display={display} />
     case 'markdown':
-      return (
-        <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
-          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6 text-[var(--text-primary)]">
-            {display.markdown}
-          </pre>
-        </div>
-      )
+      return <MarkdownCard display={display} />
     case 'chapterRef':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">
