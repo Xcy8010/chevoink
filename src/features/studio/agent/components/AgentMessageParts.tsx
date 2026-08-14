@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ChevronUp,
   CircleAlert,
+  Eye,
   LoaderCircle,
   Search,
   ShieldX,
@@ -262,6 +263,71 @@ function WebSearchCard({
   )
 }
 
+/** 视觉旁路查看图片卡片：折叠行「已查看图片 · n 张」，展开为缩略图行（点击放大）+ 视觉模型描述 */
+function ViewedImageCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'viewedImage' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [previewImage, setPreviewImage] = useState<{ id: string; url: string } | null>(null)
+
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <Eye className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+          已查看图片 · {display.images.length} 张
+        </span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+          <div className="flex flex-wrap gap-2">
+            {display.images.map((image) => (
+              <button
+                key={image.id}
+                type="button"
+                onClick={() => setPreviewImage(image)}
+                className="cursor-zoom-in overflow-hidden rounded-[10px] border border-[var(--border-subtle)] transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                aria-label="放大查看图片"
+              >
+                <img
+                  src={image.url}
+                  alt="查看过的图片"
+                  className="h-24 w-24 object-cover"
+                  loading="lazy"
+                />
+              </button>
+            ))}
+          </div>
+          {display.description ? (
+            <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-[var(--text-secondary)]">
+              {display.description}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {previewImage ? (
+        <ImageLightbox
+          src={previewImage.url}
+          alt="查看过的图片"
+          downloadName={`图片-${previewImage.id}.webp`}
+          onClose={() => setPreviewImage(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) {
   switch (display.kind) {
     case 'chapterDiff':
@@ -272,6 +338,8 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       return <CoverImagesCard display={display} />
     case 'webSearch':
       return <WebSearchCard display={display} />
+    case 'viewedImage':
+      return <ViewedImageCard display={display} />
     case 'markdown':
       return (
         <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
@@ -632,7 +700,12 @@ export const AgentMessageParts = memo(function AgentMessageParts({
           return <ReasoningPart key={index} part={part} streaming={streaming && isLast} />
         }
 
-        return <ToolCallCard key={`${part.callId}-${index}`} part={part} />
+        if (part.type === 'tool-call') {
+          return <ToolCallCard key={`${part.callId}-${index}`} part={part} />
+        }
+
+        // attachment part 只在用户消息出现，由 AgentPanel 气泡自行渲染，此处防御性跳过
+        return null
       })}
     </div>
   )

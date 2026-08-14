@@ -1,3 +1,4 @@
+import type { AgentAttachmentMeta } from './agent-attachments.js'
 import type { AgentExecutionMode, EntityId } from './models.js'
 
 /** 任务待办项：todo_write 工具全量维护，驱动 Agent 面板待办清单与循环防早停 */
@@ -24,6 +25,12 @@ export type AgentToolDisplayPayload =
       appliedDirectly: boolean
     }
   | { kind: 'coverImages'; images: Array<{ id: EntityId; url: string }> }
+  | {
+      /** view_image 视觉旁路结果：被查看的图片（可展开、点击放大）+ 视觉模型描述 */
+      kind: 'viewedImage'
+      images: Array<{ id: string; url: string }>
+      description: string
+    }
   | { kind: 'markdown'; markdown: string }
   | { kind: 'chapterRef'; chapterId: EntityId; title: string; wordCount: number }
   | { kind: 'plan'; summary: string; steps: Array<{ title: string; detail?: string }> }
@@ -157,6 +164,14 @@ export type AgentMessagePart =
       /** 写操作的回滚快照：仅服务端持久化使用，消息列表接口返回前会剥离 */
       snapshot?: AgentRollbackSnapshot
     }
+  | {
+      /** 用户消息附件（图片/文件）：additive union，旧消息不含该成员时所有分发点安全跳过 */
+      type: 'attachment'
+      kind: 'image' | 'file'
+      name: string
+      url: string
+      size?: number
+    }
 
 export interface AgentUIMessage {
   id: string
@@ -178,6 +193,8 @@ export interface StartAgentLoopRunRequest {
     start?: number
     end?: number
   } | null
+  /** 本轮附带附件元数据（先经 POST /api/agent/attachments 落盘，run 只带元数据） */
+  attachments?: AgentAttachmentMeta[]
 }
 
 export interface StartAgentLoopRunResponse {

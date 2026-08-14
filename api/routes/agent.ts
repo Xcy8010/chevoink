@@ -16,7 +16,9 @@ import type {
   RewriteSelectionRequest,
   StartAgentLoopRunRequest,
   UpdateAgentSessionRequest,
+  UploadAgentAttachmentRequest,
 } from '../../shared/contracts/index.js'
+import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import { stopActiveRunsInSession } from '../lib/agent/loop.js'
 import {
@@ -180,6 +182,29 @@ router.post('/sessions/:sessionId/messages/:messageId/rollback', async (req: Req
   }
 })
 
+router.post('/attachments', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    // 上传端点仅要求登录态：requireSessionUserId 的鉴权副作用即可
+    requireSessionUserId(req)
+    const body = (req.body ?? {}) as Partial<UploadAgentAttachmentRequest>
+    if (!body.kind || !body.name?.trim() || !body.dataUrl?.trim()) {
+      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '附件参数不完整。'))
+      return
+    }
+
+    const payload = await storeAgentAttachment({
+      kind: body.kind,
+      name: body.name.trim(),
+      dataUrl: body.dataUrl.trim(),
+    })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.post('/runs', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
   const body = (req.body ?? {}) as Partial<CreateAgentRunRequest & StartAgentLoopRunRequest>
@@ -198,9 +223,11 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
         sessionId: body.sessionId,
         novelId: body.novelId,
         chapterId: body.chapterId ?? null,
-        mode: body.mode,
+        // 全权限产品决策：模式选择 UI 已下线，后端恒 build 兜底（mode 管道保留，回退只需还原 UI）
+        mode: 'build',
         prompt: body.prompt.trim(),
         selection: body.selection ?? null,
+        attachments: body.attachments ?? [],
       })
       res.status(200).json(buildSuccess(requestId, payload))
       return

@@ -3,6 +3,7 @@ import {
   Check,
   CircleAlert,
   Copy,
+  FileText,
   History,
   LoaderCircle,
   Pencil,
@@ -18,13 +19,14 @@ import Button from '@/components/ui/Button'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import type {
-  AgentExecutionMode,
+  AgentAttachmentMeta,
   AgentSession,
   AgentStreamEvent,
   AgentUIMessage,
   EntityId,
 } from '../../../../../shared/contracts/index.js'
 import ConfirmDialog from '../../components/ConfirmDialog'
+import ImageLightbox from '../../components/ImageLightbox'
 
 import {
   AgentApiError,
@@ -190,9 +192,10 @@ export function AgentPanel({
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
-  const [mode, setMode] = useState<AgentExecutionMode>('build')
   const [historyLoading, setHistoryLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  /** 用户气泡附件图片的大图预览 */
+  const [attachmentPreview, setAttachmentPreview] = useState<{ url: string; name: string } | null>(null)
 
   // 历史任务对话列表
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -407,7 +410,7 @@ export function AgentPanel({
   }, [])
 
   const handleSend = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, attachments: AgentAttachmentMeta[]) => {
       setActionError(null)
       // 用户主动发言视为回到对话最新处，重新开启自动跟随
       pinnedToBottomRef.current = true
@@ -421,11 +424,13 @@ export function AgentPanel({
           sessionId: ensuredSessionId,
           novelId,
           chapterId: chapterId ?? null,
-          mode,
+          // Agent 默认最大权限：恒以 build 模式运行（后端路由也有强制兜底）
+          mode: 'build',
           prompt,
           selection: selection ?? null,
+          attachments: attachments.length > 0 ? attachments : undefined,
         })
-        useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId)
+        useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId, attachments)
         connect(result.runId)
       } catch (error) {
         // 会话已在服务端被删除（如用户删了历史任务后本地快照残留僵尸 sessionId）：
@@ -440,7 +445,7 @@ export function AgentPanel({
         throw error
       }
     },
-    [sessionId, novelId, chapterId, mode, selection, ensureSession, connect, onNewSession],
+    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession],
   )
 
   const handleStop = useCallback(async () => {
@@ -893,10 +898,49 @@ export function AgentPanel({
                       )}
                     </button>
                   </div>
-                  <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-[20px] bg-[var(--surface-contrast)] px-4 py-3 text-sm leading-7 text-[var(--text-contrast)]">
-                    {message.parts
-                      .map((part) => (part.type === 'text' ? part.text : ''))
-                      .join('')}
+                  <div className="flex max-w-[82%] flex-col items-end gap-1.5">
+                    {message.parts.some((part) => part.type === 'attachment') && (
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {message.parts.map((part, partIndex) => {
+                          if (part.type !== 'attachment') {
+                            return null
+                          }
+                          if (part.kind === 'image') {
+                            return (
+                              <button
+                                key={`${message.id}-attach-${partIndex}`}
+                                type="button"
+                                onClick={() => setAttachmentPreview({ url: part.url, name: part.name })}
+                                className="cursor-zoom-in overflow-hidden rounded-[10px] border border-[var(--border-subtle)] transition hover:opacity-90"
+                                aria-label={`放大查看图片 ${part.name}`}
+                              >
+                                <img
+                                  src={part.url}
+                                  alt={part.name}
+                                  className="h-16 w-16 object-cover"
+                                  loading="lazy"
+                                />
+                              </button>
+                            )
+                          }
+                          return (
+                            <span
+                              key={`${message.id}-attach-${partIndex}`}
+                              className="inline-flex max-w-52 items-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-primary)]"
+                              title={part.name}
+                            >
+                              <FileText className="h-3 w-3 shrink-0 text-[var(--text-secondary)]" />
+                              <span className="truncate">{part.name}</span>
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <div className="whitespace-pre-wrap break-words rounded-[20px] bg-[var(--surface-contrast)] px-4 py-3 text-sm leading-7 text-[var(--text-contrast)]">
+                      {message.parts
+                        .map((part) => (part.type === 'text' ? part.text : ''))
+                        .join('')}
+                    </div>
                   </div>
                 </div>
                 )
@@ -1013,14 +1057,20 @@ export function AgentPanel({
       {/* 输入区 */}
       <div className="px-4 pb-4">
         <AgentComposer
-          mode={mode}
           running={active}
           disabled={historyLoading}
-          onModeChange={setMode}
-          onSend={(prompt) => void handleSend(prompt)}
+          onSend={(prompt, attachments) => void handleSend(prompt, attachments)}
           onStop={() => void handleStop()}
         />
       </div>
+      {attachmentPreview && (
+        <ImageLightbox
+          src={attachmentPreview.url}
+          alt={attachmentPreview.name}
+          downloadName={attachmentPreview.name}
+          onClose={() => setAttachmentPreview(null)}
+        />
+      )}
 
       {/* 消息删除/回退、历史对话删除确认 */}
       <ConfirmDialog

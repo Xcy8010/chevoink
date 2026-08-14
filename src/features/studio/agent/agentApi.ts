@@ -8,6 +8,8 @@ import type {
   ResolveAgentQuestionRequest,
   StartAgentLoopRunRequest,
   StartAgentLoopRunResponse,
+  UploadAgentAttachmentRequest,
+  UploadAgentAttachmentResponse,
 } from '../../../../shared/contracts/index.js'
 
 /** Agent Loop 新链路 API 客户端（与旧 api.ts 并行，迁移完成后旧链路下线） */
@@ -63,6 +65,16 @@ async function requestData<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function startAgentLoopRun(input: StartAgentLoopRunRequest): Promise<StartAgentLoopRunResponse> {
   return requestData<StartAgentLoopRunResponse>('/api/agent/runs', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+/** 上传单个对话附件（选件即传，run 请求只携带返回的元数据） */
+export function uploadAgentAttachment(
+  input: UploadAgentAttachmentRequest,
+): Promise<UploadAgentAttachmentResponse> {
+  return requestData<UploadAgentAttachmentResponse>('/api/agent/attachments', {
     method: 'POST',
     body: JSON.stringify(input),
   })

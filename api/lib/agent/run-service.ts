@@ -103,6 +103,7 @@ export async function startLoopRun(
     mode: input.mode,
     prompt: input.prompt,
     selection: input.selection ?? null,
+    attachments: input.attachments ?? [],
   })
 
   return {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import type {
+  AgentAttachmentMeta,
   AgentMessagePart,
   AgentStreamEvent,
   AgentTodoItem,
@@ -120,6 +121,10 @@ type AgentStoreState = {
   activeSessionId: string | null
   /** 输入框草稿：提升到全局 store，避免面板重挂载时丢失未发送内容 */
   composerDraft: string
+  /** 输入框附件（已上传成功的元数据）：同草稿提升全局，沉浸/普通视图重挂载不丢 */
+  composerAttachments: AgentAttachmentMeta[]
+  /** 正在上传中的附件数量：上传完成前禁止发送 */
+  composerUploading: number
   /** 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文（默认开启） */
   autoFollow: boolean
   /** 当前任务窗口（会话）累计的工作区写入活动（变更区） */
@@ -132,13 +137,17 @@ type AgentStoreState = {
   todosVersion: number
   /** 事件 reducer：live 与 replay 共用同一构建逻辑 */
   applyEvent: (event: AgentStreamEvent) => void
-  beginRun: (runId: string, userPrompt: string, sessionId: string | null) => void
+  beginRun: (runId: string, userPrompt: string, sessionId: string | null, attachments?: AgentAttachmentMeta[]) => void
   /** 续接服务端仍在进行的 run（刷新后恢复）：不追加用户消息，从 seq 0 重放事件重建直播 */
   resumeRun: (runId: string, sessionId: string | null) => void
   restoreMessages: (messages: AgentUIMessage[]) => void
   resetRun: () => void
   clearError: () => void
   setComposerDraft: (value: string) => void
+  setComposerAttachments: (list: AgentAttachmentMeta[]) => void
+  addComposerAttachment: (meta: AgentAttachmentMeta) => void
+  removeComposerAttachment: (id: string) => void
+  bumpComposerUploading: (delta: number) => void
   setAutoFollow: (value: boolean) => void
 }
 
@@ -285,13 +294,15 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   errorMessage: null,
   activeSessionId: null,
   composerDraft: '',
+  composerAttachments: [],
+  composerUploading: 0,
   autoFollow: readStoredAutoFollow(),
   workspaceActivities: [],
   activitiesVersion: 0,
   todos: [],
   todosVersion: 0,
 
-  beginRun: (runId, userPrompt, sessionId) =>
+  beginRun: (runId, userPrompt, sessionId, attachments) =>
     set((state) => ({
       runId,
       phase: 'starting',
@@ -312,7 +323,17 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           id: `local-${Date.now()}`,
           runId,
           role: 'user',
-          parts: [{ type: 'text', text: userPrompt }],
+          // 附件随提示词一起发送：本地用户消息即时回显附件 part
+          parts: [
+            { type: 'text', text: userPrompt },
+            ...(attachments ?? []).map((attachment) => ({
+              type: 'attachment' as const,
+              kind: attachment.kind,
+              name: attachment.name,
+              url: attachment.url,
+              size: attachment.size,
+            })),
+          ],
           createdAt: new Date().toISOString(),
         },
       ],
@@ -365,6 +386,19 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   clearError: () => set({ errorMessage: null }),
 
   setComposerDraft: (value) => set({ composerDraft: value }),
+
+  setComposerAttachments: (list) => set({ composerAttachments: list }),
+
+  addComposerAttachment: (meta) =>
+    set((state) => ({ composerAttachments: [...state.composerAttachments, meta] })),
+
+  removeComposerAttachment: (id) =>
+    set((state) => ({
+      composerAttachments: state.composerAttachments.filter((attachment) => attachment.id !== id),
+    })),
+
+  bumpComposerUploading: (delta) =>
+    set((state) => ({ composerUploading: Math.max(0, state.composerUploading + delta) })),
 
   setAutoFollow: (value) => {
     writeStoredAutoFollow(value)

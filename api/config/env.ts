@@ -71,6 +71,16 @@ export const env = {
   // 单轮 LLM 调用的最大输出 token：不传时 DeepSeek 默认仅 4096，写长章节时工具参数会被截断；
   // deepseek-chat 输出上限 8192，默认拉满，换更强模型时可通过环境变量上调
   aiTextMaxOutputTokens: parsePositiveNumber(process.env.AI_TEXT_MAX_OUTPUT_TOKENS, 8192),
+  // 视觉推理旁路（Agent view_image 工具）：DeepSeek 本体无视觉，图片统一发给 GLM 视觉模型换回文字描述（ds-vision-skill 模式）
+  aiVisionBaseUrl: process.env.AI_VISION_BASE_URL ?? 'https://open.bigmodel.cn/api/paas/v4',
+  aiVisionApiKeyConfigured: isConfigured(process.env.AI_VISION_API_KEY),
+  aiVisionApiKey: process.env.AI_VISION_API_KEY ?? '',
+  aiVisionModel: process.env.AI_VISION_MODEL ?? 'glm-4.1v-thinking-flash',
+  aiVisionTimeoutMs: parsePositiveNumber(process.env.AI_VISION_TIMEOUT_MS, 60000),
+  // 免费档并发 5，进程内信号量留 1 缓冲
+  aiVisionMaxConcurrent: parsePositiveNumber(process.env.AI_VISION_MAX_CONCURRENT, 4),
+  // 全权限开关：'ask' 类工具动作自动批准；置 false 一键回退审批流
+  agentAutoApprove: (process.env.AGENT_AUTO_APPROVE ?? 'true') !== 'false',
   // Agent Loop 引擎：loop = 新内核；legacy = 旧链路；Vercel serverless 不支持长循环，强制 legacy
   agentEngine: process.env.VERCEL ? 'legacy' : (process.env.AGENT_ENGINE ?? 'loop'),
   agentModel: process.env.AI_AGENT_MODEL ?? process.env.AI_TEXT_MODEL ?? 'deepseek-chat',

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   AgentExecutionMode,
   AgentMessagePart,
+  AgentAttachmentMeta,
   AgentTodoItem,
   AgentTokenUsage,
 } from '../../../shared/contracts/index.js'
@@ -108,6 +109,8 @@ export type ExecuteAgentRunParams = {
   mode: AgentExecutionMode
   prompt: string
   selection?: { text: string; start?: number; end?: number } | null
+  /** 本轮附带附件元数据：持久化为用户消息 attachment parts 并注入上下文 */
+  attachments?: AgentAttachmentMeta[]
   agentType?: string
   /** 从 paused 恢复：历史含本 run 已持久化的消息，prompt 换成续跑指令 */
   resume?: boolean
@@ -412,8 +415,11 @@ async function handleToolCall(
     return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。${chapterHint}本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
   }
 
-  // 审批：'ask' 且未被会话级"总是允许"覆盖时，挂起等待前端批复
-  const needAsk = permission === 'ask' && !(hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
+  // 审批：'ask' 且未被会话级“总是允许”覆盖时，挂起等待前端批复；
+  // 全权限开关（默认开）短路审批：产品决策为 agent 自主判断所有动作，翻 env 可回退
+  const needAsk =
+    !env.agentAutoApprove &&
+    permission === 'ask' && !(hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
 
   if (needAsk) {
     const expiresAt = new Date(Date.now() + env.agentApprovalTimeoutMs).toISOString()
@@ -549,7 +555,18 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     })
 
     const prompt = params.resume ? '请继续完成之前的任务。' : params.prompt
-    await persistMessage(randomUUID(), runId, params.sessionId, 'user', [{ type: 'text', text: prompt }])
+    // 附件以 additive attachment parts 随用户消息持久化：气泡缩略图回显 + 历史压缩可见
+    const attachmentParts: AgentMessagePart[] = (params.attachments ?? []).map((attachment) => ({
+      type: 'attachment',
+      kind: attachment.kind,
+      name: attachment.name,
+      url: attachment.url,
+      size: attachment.size,
+    }))
+    await persistMessage(randomUUID(), runId, params.sessionId, 'user', [
+      { type: 'text', text: prompt },
+      ...attachmentParts,
+    ])
 
     // 首次对话且仍是默认标题时异步自动命名（仅一次，不阻塞循环）
     if (!params.resume) {
@@ -572,6 +589,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       chapterId: params.chapterId,
       prompt,
       selection: params.selection,
+      attachments: params.attachments ?? [],
     })
 
     const tools = getToolsForAgent(agent, params.mode)

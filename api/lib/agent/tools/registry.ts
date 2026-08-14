@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { AgentExecutionMode } from '../../../../shared/contracts/index.js'
 import type { OpenAIToolDefinition } from '../../ai-service.js'
 import { coverApplyTool, coverGenerateTool } from './cover-tools.js'
+import { readFileTool, viewImageTool } from './attachment-tools.js'
 import { askUserTool } from './interact-tools.js'
 import {
   chapterListSummariesTool,
@@ -43,6 +44,8 @@ export const allTools: AgentTool<any>[] = [
   planReadTool,
   webSearchTool,
   webReadTool,
+  viewImageTool,
+  readFileTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
