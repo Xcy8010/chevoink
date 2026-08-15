@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { listAdminAuditLogs } from '../api'
-import { AdminCard, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime } from '../AdminLayout'
-import { describeAdminAction } from './AdminDashboardPage'
+import { AdminCard, AdminPageHeader, AdminPager, AdminPanelState } from '../AdminLayout'
+import { describeAdminAction, formatDateTime } from '../admin-shared'
 
 const TARGET_TYPE_LABELS: Record<string, string> = {
   user: '用户',

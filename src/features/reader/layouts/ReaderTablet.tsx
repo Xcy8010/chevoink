@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import { cn } from '@/lib/utils'
 import ReaderArticle from '../components/ReaderArticle'
 import ReaderCommentsPanel from '../components/ReaderCommentsPanel'

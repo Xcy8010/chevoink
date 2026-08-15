@@ -15,7 +15,7 @@ export function isDefaultSessionTitle(title: string): boolean {
 function sanitizeGeneratedTitle(raw: string): string {
   return raw
     .replace(/[\r\n]+/g, ' ')
-    .replace(/["'“”‘’《》【】\[\]（）()<>]/g, '')
+    .replace(/["'“”‘’《》【】[\]（）()<>]/g, '')
     .replace(/^(标题|命名|名称)[:：]\s*/, '')
     .replace(/[，。！？、,.!?:：；;\s]+$/g, '')
     .trim()

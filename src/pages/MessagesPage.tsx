@@ -3,10 +3,10 @@ import { ChevronLeft, UserRoundPlus } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import AppState from '@/components/ui/AppState'
 import { ConversationSkeleton, Skeleton } from '@/components/ui/Skeleton'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import {
   createDirectConversation,

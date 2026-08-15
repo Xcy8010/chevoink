@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import AppImage from '@/components/ui/AppImage'
 import { deletePost, setPostBookmark, setPostLike } from '@/features/community/api'
 import { patchPostInCaches, removePostFromCaches } from '@/features/community/post-cache'

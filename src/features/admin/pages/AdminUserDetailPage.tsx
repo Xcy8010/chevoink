@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import { banAdminUser, getAdminUserDetail, resetAdminUserPassword, setAdminUserRole, unbanAdminUser } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPanelState, formatDateTime, StatusPill, useAdminSession } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime, useAdminSession } from '../admin-shared'
 import { useState } from 'react'
 
 const ROLE_LABELS: Record<string, string> = {

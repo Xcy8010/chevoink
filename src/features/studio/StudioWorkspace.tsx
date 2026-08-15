@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, BookOpenText, ChevronLeft, FileText, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -6,7 +6,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
@@ -80,7 +80,8 @@ import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WritingAgentPanel from './components/WritingAgentPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
-import { PanelResizeHandle, useStudioPanelWidths } from './panel-resize'
+import { PanelResizeHandle } from './panel-resize'
+import { useStudioPanelWidths } from './panel-widths'
 import { SaveStatusPill } from './components/StudioControls'
 import type {
   AgentArtifact,
@@ -231,9 +232,9 @@ function isBootstrapNovel(novel: Pick<Novel, 'title' | 'displayTitle' | 'summary
 function stripLeadingListMarker(value: string) {
   return value
     .trim()
-    .replace(/^[\-\*\u2022]\s*/, '')
-    .replace(/^\d+[\.\、\)]\s*/, '')
-    .replace(/^[一二三四五六七八九十]+[\.\、]\s*/, '')
+    .replace(/^[-*\u2022]\s*/, '')
+    .replace(/^\d+[.、)]\s*/, '')
+    .replace(/^[一二三四五六七八九十]+[.、]\s*/, '')
 }
 
 function extractQuotedTitle(value: string) {
@@ -340,7 +341,7 @@ function extractChapterTitleCandidate(content: string, fallbackOrder: number): s
       return formatGeneratedChapterTitle(labeledTitleMatch[1].trim(), fallbackOrder)
     }
 
-    const chapterHeadingMatch = line.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章(?:\s*[:：\-]\s*.+)?)$/)
+    const chapterHeadingMatch = line.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章(?:\s*[-:：]\s*.+)?)$/)
     if (chapterHeadingMatch?.[1]?.trim() && chapterHeadingMatch[1].trim() !== `第 ${fallbackOrder} 章`) {
       return formatGeneratedChapterTitle(chapterHeadingMatch[1].trim(), fallbackOrder)
     }
@@ -424,7 +425,7 @@ function formatGeneratedChapterTitle(rawTitle: string, fallbackOrder: number) {
     return `第 ${fallbackOrder} 章`
   }
 
-  const chapterHeadingMatch = normalized.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[:：\-]\s*(.+))?$/)
+  const chapterHeadingMatch = normalized.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[-:：]\s*(.+))?$/)
   if (chapterHeadingMatch) {
     const chapterPrefix = chapterHeadingMatch[1].trim()
     const chapterName = chapterHeadingMatch[2]?.trim()
@@ -446,7 +447,7 @@ function extractChapterDraftFromContent(content: string, fallbackOrder: number) 
 
   const firstLine = stripLeadingListMarker(lines[0]).replace(/^#{1,6}\s*/, '').trim()
   const labeledTitleMatch = firstLine.match(/^(?:章节标题|章节名|标题)[:：]\s*(.+)$/)
-  const chapterHeadingMatch = firstLine.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[:：\-]\s*(.+))?$/)
+  const chapterHeadingMatch = firstLine.match(/^(第\s*[0-9一二三四五六七八九十百零]+\s*章)(?:\s*[-:：]\s*(.+))?$/)
 
   if (labeledTitleMatch || chapterHeadingMatch) {
     const rawTitle = labeledTitleMatch?.[1] ?? firstLine
@@ -1472,7 +1473,7 @@ function deriveAgentTaskTitle(promptText: string, artifacts: AgentArtifact[]) {
   const matched = keywordPairs.find(([pattern]) => pattern.test(normalized))
   const baseTitle = matched?.[1] ?? artifacts[0]?.title ?? (promptText.trim() || DEFAULT_AGENT_TASK_TITLE)
   const compact = baseTitle
-    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()\[\]\-_\s]/g, '')
+    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()[\]_\s-]/g, '')
     .trim()
 
   if (compact.length >= AGENT_TASK_TITLE_MIN_LENGTH) {
@@ -1480,7 +1481,7 @@ function deriveAgentTaskTitle(promptText: string, artifacts: AgentArtifact[]) {
   }
 
   const promptCompact = promptText
-    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()\[\]\-_\s]/g, '')
+    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()[\]_\s-]/g, '')
     .trim()
 
   if (promptCompact.length >= AGENT_TASK_TITLE_MIN_LENGTH) {
@@ -2439,7 +2440,7 @@ function buildDefaultPlanTitle(
 
   const promptTitle = (artifact.promptText ?? '')
     .replace(/#[^\s#]+/g, ' ')
-    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()\[\]]/g, ' ')
+    .replace(/[，。！？、,.!?:：；;“”"'‘’《》【】（）()[\]]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^(请|帮我|麻烦|给我|我想|想要|生成|整理|做一份|写一份|规划一份)\s*/u, '')
@@ -3236,7 +3237,7 @@ export default function StudioWorkspace() {
       agentRunAbortControllerRef.current?.abort()
       flushPlanServerSync()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [])
 
   // 计划文件夹云端持久化：作品切换时拉取全量计划（plan_save 已落库，这里跨会话聚合）
@@ -3258,7 +3259,7 @@ export default function StudioWorkspace() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [activeNovelId])
 
   useEffect(() => {

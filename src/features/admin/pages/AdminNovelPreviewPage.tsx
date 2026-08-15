@@ -5,8 +5,8 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Eye } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { getAdminChapterContent, getAdminNovelDetail } from '../api'
-import { AdminCard, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
-import { NOVEL_STATUS_LABELS, isNovelTakenDown } from './AdminNovelsPage'
+import { AdminCard, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime, isNovelTakenDown, NOVEL_STATUS_LABELS } from '../admin-shared'
 
 /**
  * 管理端内部预览：不经过前台可见性过滤，

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import type { AdminUserRow } from '../../../../shared/contracts/index.js'
 import {
@@ -14,7 +14,8 @@ import {
   setAdminUserRole,
   unbanAdminUser,
 } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill, useAdminSession } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime, useAdminSession } from '../admin-shared'
 
 export default function AdminUsersPage() {
   const toast = useToast()

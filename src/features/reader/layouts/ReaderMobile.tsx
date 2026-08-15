@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
 import AuthPromptDialog from '@/components/ui/AuthPromptDialog'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { splitReaderParagraphs } from '@/features/discover/api'
 import { addToShelf } from '@/features/home/local-shelf'
 import { pushShelfAdd } from '@/features/home/reading-sync'
@@ -28,7 +28,8 @@ import {
 } from '@/lib/native-app'
 import { setNativeImmersiveSafeArea } from '@/lib/safe-area'
 import { cn } from '@/lib/utils'
-import AddShelfDialog, { markShelfPrompted, shouldPromptShelf } from '../components/AddShelfDialog'
+import AddShelfDialog from '../components/AddShelfDialog'
+import { markShelfPrompted, shouldPromptShelf } from '../components/shelf-prompt'
 import ParagraphActionBar, { type ParagraphActionAnchor } from '../components/ParagraphActionBar'
 import ReaderArticle from '../components/ReaderArticle'
 import ReaderCommentsPanel from '../components/ReaderCommentsPanel'
@@ -36,8 +37,10 @@ import ReaderCoverPage from '../components/ReaderCoverPage'
 import ReaderDirectory from '../components/ReaderDirectory'
 import ReaderProgressBar from '../components/ReaderProgressBar'
 import ReaderSettingsContent from '../components/ReaderSettingsContent'
-import ReaderPageChrome, { useReaderChromeStatus } from '../pager/ReaderPageChrome'
-import ReaderPagedView, { PAGE_PARAGRAPH_GAP, type BoundaryPageData } from '../pager/ReaderPagedView'
+import ReaderPageChrome from '../pager/ReaderPageChrome'
+import { useReaderChromeStatus } from '../pager/useReaderChromeStatus'
+import ReaderPagedView, { type BoundaryPageData } from '../pager/ReaderPagedView'
+import { PAGE_PARAGRAPH_GAP } from '../pager/page-layout'
 import { findPageForParagraphChar, getPaginationCache, paginateChapterAsync, useChapterPaginator } from '../pager/useChapterPaginator'
 import { useReaderPager } from '../pager/useReaderPager'
 import TtsControlSheet from '../tts/TtsControlSheet'
@@ -184,7 +187,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       if (idleId && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleId)
     }
     // 快照走 ref，effect 只挂一次；预取落地/换章都会经缓存事件或 schedule 补预热
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [queryClient])
 
   // 代入页：仅公开阅读的第一章带（创作区预览不出）
@@ -508,6 +511,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       total += count
     })
     return { before, total }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- renderedChapterId 变化已由 chapterList/currentIndex 联动覆盖；补依赖会在听书翻章过渡期提前切换页码口径导致页码漂移（见上方注释）
   }, [
     paged,
     pages.length,

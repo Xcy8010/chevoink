@@ -3,7 +3,7 @@ import { Check, LoaderCircle, X } from 'lucide-react'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { createDirectConversation, listUserFollowers, sendMessage } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { cn } from '@/lib/utils'

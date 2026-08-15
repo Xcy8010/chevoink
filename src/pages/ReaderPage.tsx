@@ -1,6 +1,6 @@
 import AppState from '@/components/ui/AppState'
 import { ReaderSkeleton } from '@/components/ui/Skeleton'
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import ReaderDesktop from '@/features/reader/layouts/ReaderDesktop'
 import ReaderMobile from '@/features/reader/layouts/ReaderMobile'
 import ReaderTablet from '@/features/reader/layouts/ReaderTablet'

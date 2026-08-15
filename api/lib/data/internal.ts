@@ -8,6 +8,158 @@ import type { Chapter, ChapterListItem, Comment, CommentTargetType, Conversation
 import { hasConfiguredPassword } from '../password.js'
 import { DataAccessError, prisma } from '../prisma.js'
 
+// 行映射器的最小输入结构：字段以映射器实际访问为准，Prisma 查询结果（含对应 include）天然满足
+export type UserRecord = {
+  id: string
+  nickname: string
+  avatarUrl?: string | null
+  profileCoverUrl?: string | null
+  bio?: string | null
+  role: UserSummary['role']
+  isAuthor: boolean
+  email?: string | null
+  phone?: string | null
+  passwordHash?: string | null
+  followerCount?: number | null
+  followingCount?: number | null
+  novelCount?: number | null
+  postCount?: number | null
+  unreadMessageCount?: number | null
+  unreadNotificationCount?: number | null
+  lastActiveAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type NovelRecord = {
+  id: string
+  title: string
+  displayTitle?: string | null
+  slug: string
+  summary: string
+  categoryId?: string | null
+  categoryName?: string | null
+  tagNames?: string[] | null
+  status: Novel['status']
+  visibility: Novel['visibility']
+  coverAsset?: { imageUrl?: string | null } | null
+  coverAssetId?: string | null
+  coverPrompt?: string | null
+  wordCount?: number | null
+  chapterCount?: number | null
+  commentCount?: number | null
+  favoriteCount?: number | null
+  likeCount?: number | null
+  viewCount?: number | null
+  lastChapterTitle?: string | null
+  lastPublishedAt?: Date | string | null
+  publishedAt?: Date | string | null
+  author: UserRecord
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type ChapterRecord = {
+  id: string
+  novelId: string
+  authorId: string
+  title: string
+  summary?: string | null
+  // 列表查询（chapterListItemSelect）不含 content，仅章节数据携带
+  content?: string
+  orderIndex: number
+  wordCount?: number | null
+  status: Chapter['status']
+  visibility: Chapter['visibility']
+  commentCount?: number | null
+  publishedAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type CommentRecord = {
+  id: string
+  targetType: Comment['targetType']
+  targetId: string
+  parentId?: string | null
+  rootId?: string | null
+  content: string
+  rating?: number | null
+  paragraphIndex?: number | null
+  likeCount?: number | null
+  replyCount?: number | null
+  auditStatus: Comment['auditStatus']
+  author: { id: string; nickname: string; avatarUrl?: string | null }
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type TopicRecord = {
+  id: string
+  name: string
+  slug: string
+  postCount?: number | null
+}
+
+type PostRecord = {
+  id: string
+  content: string
+  excerpt: string
+  topic?: TopicRecord | null
+  imageUrls?: string[] | null
+  relatedNovel?: { id: string; title: string; coverAsset?: { imageUrl?: string | null } | null } | null
+  sharedUser?: { id: string; nickname: string; avatarUrl?: string | null; bio?: string | null } | null
+  likeCount?: number | null
+  commentCount?: number | null
+  favoriteCount?: number | null
+  auditStatus: Post['auditStatus']
+  author: { id: string; nickname: string; avatarUrl?: string | null }
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type ConversationMemberRecord = {
+  lastReadAt?: Date | string | null
+  user: { id: string; nickname: string; avatarUrl?: string | null; lastActiveAt?: Date | string | null }
+}
+
+type ConversationRecord = {
+  id: string
+  type: Conversation['type']
+  title?: string | null
+  avatarUrl?: string | null
+  unreadCount?: number | null
+  lastMessagePreview?: string | null
+  lastMessageAt?: Date | string | null
+  members?: ConversationMemberRecord[] | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}
+
+type MessageRecord = {
+  id: string
+  conversationId: string
+  senderId: string
+  type: Message['type']
+  content: string
+  relatedId?: string | null
+  createdAt?: Date | string | null
+}
+
+type CoverAssetRecord = {
+  id: string
+  novelId?: string | null
+  ownerUserId: string
+  sourceType: CoverAsset['sourceType']
+  imageUrl: string
+  prompt?: string | null
+  negativePrompt?: string | null
+  modelName?: string | null
+  width?: number | null
+  height?: number | null
+  createdAt?: Date | string | null
+}
+
 
 
 export const novelInclude = {
@@ -112,7 +264,7 @@ export function buildSlug(title: string): string {
 
 
 
-export function toUserSummary(user: any): UserSummary {
+export function toUserSummary(user: UserRecord): UserSummary {
   return {
     id: user.id,
     nickname: user.nickname,
@@ -126,7 +278,7 @@ export function toUserSummary(user: any): UserSummary {
 
 
 
-export function toUser(user: any): User {
+export function toUser(user: UserRecord): User {
   return {
     ...toUserSummary(user),
     email: user.email ?? null,
@@ -145,7 +297,7 @@ export function toUser(user: any): User {
 
 
 
-function toAuthorSummary(user: any, viewerUserId?: string | null) {
+function toAuthorSummary(user: UserRecord, viewerUserId?: string | null) {
   return {
     ...toUserSummary(user),
     followerCount: user.followerCount ?? 0,
@@ -172,7 +324,7 @@ export function resolveEffectiveNovelTitle(title: string, displayTitle?: string 
 
 
 
-export function toNovel(record: any, viewerUserId?: string | null): Novel {
+export function toNovel(record: NovelRecord, viewerUserId?: string | null): Novel {
   return {
     id: record.id,
     title: resolveEffectiveNovelTitle(record.title, record.displayTitle),
@@ -204,7 +356,7 @@ export function toNovel(record: any, viewerUserId?: string | null): Novel {
 
 
 
-export function toNovelCard(record: any, viewerUserId?: string | null): NovelCard {
+export function toNovelCard(record: NovelRecord, viewerUserId?: string | null): NovelCard {
   const novel = toNovel(record, viewerUserId)
 
   return {
@@ -235,14 +387,14 @@ export function toNovelCard(record: any, viewerUserId?: string | null): NovelCar
 
 
 
-export function toChapter(record: any): Chapter {
+export function toChapter(record: ChapterRecord): Chapter {
   return {
     id: record.id,
     novelId: record.novelId,
     authorId: record.authorId,
     title: record.title,
     summary: record.summary ?? null,
-    content: record.content,
+    content: record.content ?? '',
     orderIndex: record.orderIndex,
     wordCount: record.wordCount ?? 0,
     status: record.status,
@@ -256,7 +408,7 @@ export function toChapter(record: any): Chapter {
 
 
 
-export function toChapterListItem(record: any): ChapterListItem {
+export function toChapterListItem(record: ChapterRecord): ChapterListItem {
   const chapter = toChapter(record)
 
   return {
@@ -294,7 +446,7 @@ export const chapterListItemSelect = {
 
 
 
-export function toComment(record: any): Comment {
+export function toComment(record: CommentRecord): Comment {
   return {
     id: record.id,
     targetType: record.targetType,
@@ -319,7 +471,7 @@ export function toComment(record: any): Comment {
 
 
 
-export function toTopic(record: any): TopicSummary {
+export function toTopic(record: TopicRecord): TopicSummary {
   return {
     id: record.id,
     name: record.name,
@@ -330,7 +482,7 @@ export function toTopic(record: any): TopicSummary {
 
 
 
-export function toPost(record: any): Post {
+export function toPost(record: PostRecord): Post {
   return {
     id: record.id,
     content: record.content,
@@ -368,18 +520,18 @@ export function toPost(record: any): Post {
 
 
 
-export function toConversation(record: any, viewerUserId: string): Conversation {
-  const members = (record.members ?? []).map((member: any) => ({
+export function toConversation(record: ConversationRecord, viewerUserId: string): Conversation {
+  const members = (record.members ?? []).map((member: ConversationMemberRecord) => ({
     id: member.user.id,
     nickname: member.user.nickname,
     avatarUrl: member.user.avatarUrl ?? null,
     // 成员维度的会话已读时间：前端据此判断自己发的消息对方是否已读
     lastReadAt: toIso(member.lastReadAt),
   }))
-  const counterpart = members.find((member: any) => member.id !== viewerUserId) ?? members[0] ?? null
+  const counterpart = members.find((member) => member.id !== viewerUserId) ?? members[0] ?? null
   // 直聊会话的在线状态取自对方的最近活跃时间
   const counterpartUser =
-    (record.members ?? []).find((member: any) => member.user.id !== viewerUserId)?.user ?? null
+    (record.members ?? []).find((member: ConversationMemberRecord) => member.user.id !== viewerUserId)?.user ?? null
 
   return {
     id: record.id,
@@ -443,7 +595,7 @@ export async function attachDirectFollowRelations(conversations: Conversation[],
 
 
 
-export function toMessage(record: any): Message {
+export function toMessage(record: MessageRecord): Message {
   return {
     id: record.id,
     conversationId: record.conversationId,
@@ -588,7 +740,7 @@ export async function attachMessageCards(messages: Message[]): Promise<Message[]
 
 
 
-export function toCoverAsset(record: any): CoverAsset {
+export function toCoverAsset(record: CoverAssetRecord): CoverAsset {
   return {
     id: record.id,
     novelId: record.novelId ?? null,

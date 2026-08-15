@@ -898,7 +898,16 @@ function resolveArtifactApplyStrategies(record: {
   return defaultArtifactApplyStrategies(record.artifactType)
 }
 
-function toAgentSession(record: any): AgentSession {
+function toAgentSession(record: {
+  id: string
+  userId: string
+  novelId: string
+  title: string
+  status: AgentSession['status']
+  lastRunAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentSession {
   return {
     id: record.id,
     userId: record.userId,
@@ -911,7 +920,24 @@ function toAgentSession(record: any): AgentSession {
   }
 }
 
-function toAgentRun(record: any): AgentRun {
+function toAgentRun(record: {
+  id: string
+  sessionId: string
+  userId: string
+  novelId: string
+  chapterId?: string | null
+  mode: AgentRun['mode']
+  action: string | null
+  agentType: AgentRun['agentType']
+  status: AgentRun['status']
+  inputSummary?: string | null
+  outputSummary?: string | null
+  errorMessage?: string | null
+  startedAt?: Date | string | null
+  finishedAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentRun {
   return {
     id: record.id,
     sessionId: record.sessionId,
@@ -919,7 +945,8 @@ function toAgentRun(record: any): AgentRun {
     novelId: record.novelId,
     chapterId: record.chapterId ?? null,
     mode: record.mode,
-    action: record.action,
+    // Prisma 枚举比契约宽（含 workspaceAgent），any 时代即原样透传，此处保持透传语义
+    action: record.action as unknown as AgentRun['action'],
     agentType: record.agentType,
     status: record.status,
     inputSummary: record.inputSummary ?? null,
@@ -932,7 +959,17 @@ function toAgentRun(record: any): AgentRun {
   }
 }
 
-function toAgentArtifact(record: any): AgentArtifact {
+function toAgentArtifact(record: {
+  id: string
+  runId: string
+  artifactType: AgentArtifact['artifactType']
+  title: string
+  summary?: string | null
+  content: string
+  metadata?: unknown
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentArtifact {
   const metadata = asMetadataRecord(record.metadata)
 
   return {
@@ -952,7 +989,19 @@ function toAgentArtifact(record: any): AgentArtifact {
   }
 }
 
-function toProjectMemoryEntry(record: any): ProjectMemoryEntry {
+function toProjectMemoryEntry(record: {
+  id: string
+  runId?: string | null
+  novelId: string
+  sourceChapterId?: string | null
+  memoryType: ProjectMemoryEntry['memoryType']
+  title: string
+  content: string
+  importance?: number | null
+  embeddingRef?: string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): ProjectMemoryEntry {
   return {
     id: record.id,
     runId: record.runId ?? null,

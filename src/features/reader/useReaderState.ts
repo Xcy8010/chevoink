@@ -421,6 +421,7 @@ export function useReaderState() {
       element.scrollTo({ top: max * Math.min(1, target), behavior: 'auto' })
       setScrollPercent(Math.min(1, target))
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 深链定位只在进入章节时执行一次，deepLink 参数变化不应重复触发滚动
   }, [reader, novelId, chapterId, fromStudio])
 
   // 写回本机阅读进度（首页"继续阅读"数据源），创作区预览不记录

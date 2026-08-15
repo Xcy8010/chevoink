@@ -3,13 +3,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type CSSPrope
 
 import type { FontScaleOption, ToneOption } from '../reader-settings'
 import { useParagraphLongPress } from '../useParagraphLongPress'
+import { PAGE_INSET, PAGE_PARAGRAPH_GAP } from './page-layout'
 import { PAGE_TITLE_STYLE, type ReaderPageContent } from './useChapterPaginator'
 import type { ReaderPager } from './useReaderPager'
-
-/** 页边距：必须与分页测量使用的可用宽高完全一致 */
-export const PAGE_INSET = { x: 20, top: 46, bottom: 40 }
-/** 分页模式下的段间距（同步给测量容器） */
-export const PAGE_PARAGRAPH_GAP = 14
 
 const FLIP_DURATION = 260
 const FLIP_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'

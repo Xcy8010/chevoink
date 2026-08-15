@@ -3,7 +3,7 @@ import { AlignLeft, Trash2, X } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { SkeletonText } from '@/components/ui/Skeleton'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { createComment, deleteComment } from '@/features/community/api'
 import { getAuthorName, getCommentBody } from '@/features/discover/api'
 import { useShellStore } from '@/store/useShellStore'

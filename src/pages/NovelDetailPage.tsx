@@ -1,6 +1,6 @@
 import AppState from '@/components/ui/AppState'
 import { Skeleton, SkeletonCover, SkeletonText } from '@/components/ui/Skeleton'
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import EditNovelDialog from '@/features/novel-detail/components/EditNovelDialog'
 import NovelDetailDesktop from '@/features/novel-detail/layouts/NovelDetailDesktop'
 import NovelDetailMobile from '@/features/novel-detail/layouts/NovelDetailMobile'

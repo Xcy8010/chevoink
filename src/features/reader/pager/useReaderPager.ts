@@ -80,7 +80,7 @@ export function useReaderPager({
       landingRef.current = null
       setPageIndexState(Math.min(maxIndex, Math.max(minIndex, target)))
     },
-    [minIndex, maxIndex],
+    [minIndex, maxIndex, landingRef],
   )
 
   const overflowRef = useRef({ onOverflowNext, onOverflowPrev })
@@ -100,7 +100,7 @@ export function useReaderPager({
       overflowRef.current.onOverflowNext()
       return current
     })
-  }, [maxIndex])
+  }, [maxIndex, landingRef])
 
   const requestPrev = useCallback(() => {
     setPageIndexState((current) => {
@@ -111,7 +111,7 @@ export function useReaderPager({
       overflowRef.current.onOverflowPrev()
       return current
     })
-  }, [minIndex])
+  }, [minIndex, landingRef])
 
   return {
     pageIndex,

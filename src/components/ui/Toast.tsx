@@ -1,25 +1,15 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { CheckCircle2, Info, XCircle } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-
-type ToastTone = 'success' | 'error' | 'info'
+import { ToastContext, type ToastContextValue, type ToastTone } from './toast-context'
 
 type ToastItem = {
   id: number
   tone: ToastTone
   message: string
 }
-
-type ToastContextValue = {
-  toast: (message: string, tone?: ToastTone) => void
-  success: (message: string) => void
-  error: (message: string) => void
-  info: (message: string) => void
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null)
 
 const toneConfig: Record<ToastTone, { icon: typeof Info; className: string }> = {
   success: {
@@ -92,14 +82,4 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       )}
     </ToastContext.Provider>
   )
-}
-
-export function useToast(): ToastContextValue {
-  const context = useContext(ToastContext)
-
-  if (!context) {
-    throw new Error('useToast 必须在 ToastProvider 内使用')
-  }
-
-  return context
 }

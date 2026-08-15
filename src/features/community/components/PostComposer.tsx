@@ -3,10 +3,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
 import BottomSheet from '@/components/layout/BottomSheet'
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import AuthPromptDialog from '@/components/ui/AuthPromptDialog'
 import Button from '@/components/ui/Button'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { listRecommendedTopics } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { communityPrompts } from '@/features/community/constants'
@@ -153,7 +153,7 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
     <div className="flex min-h-0 flex-1 flex-col">
       <textarea
         ref={textareaRef}
-        // eslint-disable-next-line jsx-a11y/no-autofocus -- 全屏编辑页打开即输入
+        // 全屏编辑页打开即输入
         autoFocus={isMobile}
         value={content}
         onChange={(event) => setContent(event.target.value)}

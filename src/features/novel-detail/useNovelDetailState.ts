@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { requestJson } from '@/app/api-client'
 import { copyToClipboard } from '@/lib/clipboard'
 import { deleteComment, setNovelFavorite, updateComment } from '@/features/community/api'
@@ -160,11 +160,13 @@ export function useNovelDetailState() {
   const readingProgress = useMemo(
     () => (novelId && !fromStudio ? getReadingProgress(novelId) : null),
     // detailQuery.data 变化时重读一次，保证从阅读器返回后标记及时刷新
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataUpdatedAt 是有意加入的重算信号（详情刷新后重读本地进度）
     [novelId, fromStudio, detailQuery.dataUpdatedAt],
   )
   const inShelf = useMemo(
     () => (novelId ? isInShelf(novelId) : false),
     // shelfVersion 用于本地书架变更后的重渲染
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shelfVersion 是有意加入的重算信号（本地书架变更后重算）
     [novelId, shelfVersion],
   )
   const isStartingThis = Boolean(detail?.novel && isStarting && pendingNovelId === detail.novel.id)

@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { Comment } from '../../../../shared/contracts/index.js'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { createComment, deleteComment, setCommentLike } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import ShareToFriendSheet from '@/features/community/components/ShareToFriendSheet'

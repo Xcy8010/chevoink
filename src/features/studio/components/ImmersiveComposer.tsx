@@ -41,7 +41,8 @@ import PlanSettingsPanel from './PlanSettingsPanel'
 import ConfirmDialog from './ConfirmDialog'
 import { SaveStatusPill } from './StudioControls'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
-import { PanelResizeHandle, useStudioPanelWidths } from '../panel-resize'
+import { PanelResizeHandle } from '../panel-resize'
+import { useStudioPanelWidths } from '../panel-widths'
 
 /** 手机端全屏面板 sheet 的内容页：编辑区是常驻基座，不再参与切换 */
 type MobileSheetPanel = 'agent' | 'chapters' | 'cover' | 'meta'

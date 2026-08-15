@@ -4,11 +4,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import type { AdminCaptchaPayload } from '../../../../shared/contracts/index.js'
 import { adminBindPhone, adminChangeMyPassword, adminLogout, adminSendBindSmsCode, getAdminCaptcha } from '../api'
-import { AdminCard, AdminPageHeader, useAdminSession } from '../AdminLayout'
+import { AdminCard, AdminPageHeader } from '../AdminLayout'
+import { useAdminSession } from '../admin-shared'
 
 export default function AdminSettingsPage() {
   const toast = useToast()

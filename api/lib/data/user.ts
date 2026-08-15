@@ -9,7 +9,7 @@ import { createUnsetPasswordHash, hashPassword, isLegacyPasswordHash, verifyPass
 import { evictUserBanCache } from '../auth-session.js'
 import { normalizePhoneNumber } from '../phone.js'
 import { DataAccessError, prisma } from '../prisma.js'
-import { buildAutoNickname, commentInclude, conversationInclude, ensureNonEmptyText, ensureUserExists, excerptContent, isUserOnline, novelInclude, nowIso, postInclude, resolveEffectiveNovelTitle, toConversation, toCoverAsset, toIso, toNovel, toPost, toUser, toUserSummary } from './internal.js'
+import { buildAutoNickname, commentInclude, conversationInclude, ensureNonEmptyText, ensureUserExists, excerptContent, isUserOnline, novelInclude, nowIso, postInclude, resolveEffectiveNovelTitle, toConversation, toCoverAsset, toIso, toNovel, toPost, toUser, toUserSummary, type UserRecord } from './internal.js'
 import { getViewerLikedCommentIds } from './comment.js'
 import { attachPostViewerFlags, getViewerPostFlags } from './post.js'
 import { searchableNovelWhere } from './search.js'
@@ -212,9 +212,13 @@ export async function setUserFollowData(
 
 const PRIVACY_LEVELS: PrivacyLevel[] = ['public', 'private', 'mutual']
 
+type PrivacyFieldKey = 'privacyFollowers' | 'privacyFollowing' | 'privacyLikes' | 'privacyFavorites' | 'privacyReplies'
 
+type PrivacyFieldsUser = {
+  id: string
+} & Partial<Record<PrivacyFieldKey, string | null>>
 
-function toPrivacySettings(user: any): PrivacySettings {
+function toPrivacySettings(user: PrivacyFieldsUser): PrivacySettings {
   return {
     followers: (user.privacyFollowers ?? 'public') as PrivacyLevel,
     following: (user.privacyFollowing ?? 'public') as PrivacyLevel,
@@ -256,7 +260,7 @@ function canViewByLevel(level: PrivacyLevel, isSelf: boolean, isMutual: boolean)
 
 
 /** 计算目标用户各隐私区块对查看者的可见性；仅在确实需要时才查互关关系 */
-async function resolveProfileVisibility(targetUser: any, viewerUserId: string | null): Promise<ProfileVisibility> {
+async function resolveProfileVisibility(targetUser: PrivacyFieldsUser, viewerUserId: string | null): Promise<ProfileVisibility> {
   const isSelf = Boolean(viewerUserId && viewerUserId === targetUser.id)
   const settings = toPrivacySettings(targetUser)
   const levels = [settings.followers, settings.following, settings.likes, settings.favorites, settings.replies]
@@ -276,7 +280,7 @@ async function resolveProfileVisibility(targetUser: any, viewerUserId: string | 
 
 /** 把一批关注关系记录映射为列表条目，并标记“查看者是否已关注对方/对方是否关注查看者” */
 async function toFollowUserItems(
-  records: Array<{ createdAt: Date; user: any }>,
+  records: Array<{ createdAt: Date; user: UserRecord }>,
   viewerUserId: string | null,
 ): Promise<FollowUserItem[]> {
   const userIds = records.map((record) => record.user.id)
@@ -378,7 +382,7 @@ export async function updateMyPrivacyData(
 ): Promise<PrivacySettings> {
   await ensureUserExists(userId)
 
-  const fieldMap: Record<keyof PrivacySettings, string> = {
+  const fieldMap: Record<keyof PrivacySettings, PrivacyFieldKey> = {
     followers: 'privacyFollowers',
     following: 'privacyFollowing',
     likes: 'privacyLikes',
@@ -386,7 +390,7 @@ export async function updateMyPrivacyData(
     replies: 'privacyReplies',
   }
 
-  const data: Record<string, PrivacyLevel> = {}
+  const data: Partial<Record<PrivacyFieldKey, PrivacyLevel>> = {}
   for (const key of Object.keys(fieldMap) as Array<keyof PrivacySettings>) {
     const value = input[key]
     if (value === undefined) {
@@ -403,7 +407,7 @@ export async function updateMyPrivacyData(
     return toPrivacySettings(user)
   }
 
-  const updated = await prisma.user.update({ where: { id: userId }, data: data as any })
+  const updated = await prisma.user.update({ where: { id: userId }, data })
   return toPrivacySettings(updated)
 }
 
@@ -980,14 +984,14 @@ export async function updateMyProfileCoverData(userId: string, profileCoverUrl: 
     where: { id: userId },
     select: {
       profileCoverUrl: true,
-    } as any,
+    },
   })) as { profileCoverUrl?: string | null } | null
 
   const updated = await prisma.user.update({
     where: { id: userId },
     data: {
       profileCoverUrl,
-    } as any,
+    },
   })
 
   return {

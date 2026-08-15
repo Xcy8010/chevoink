@@ -4,7 +4,7 @@ import { ShieldCheck } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import { cn } from '@/lib/utils'
 import type { AdminCaptchaPayload } from '../../../../shared/contracts/index.js'

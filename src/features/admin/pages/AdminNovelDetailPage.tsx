@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink, Eye } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import {
   deleteAdminChapter,
@@ -13,8 +13,8 @@ import {
   restoreAdminNovel,
   takeDownAdminNovel,
 } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
-import { NOVEL_STATUS_LABELS, isNovelTakenDown } from './AdminNovelsPage'
+import { AdminCard, AdminConfirmDialog, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime, isNovelTakenDown, NOVEL_STATUS_LABELS } from '../admin-shared'
 
 export default function AdminNovelDetailPage() {
   const { novelId = '' } = useParams()

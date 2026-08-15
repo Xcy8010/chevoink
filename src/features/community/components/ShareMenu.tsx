@@ -2,7 +2,7 @@ import { Link2, Send, UserRoundPlus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import ShareToFriendSheet, { type FriendShareMessage } from '@/features/community/components/ShareToFriendSheet'
 import type { CommunityShareDraft } from '@/features/community/share'
 import { copyToClipboard } from '@/lib/clipboard'

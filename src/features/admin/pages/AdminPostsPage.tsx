@@ -4,11 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import type { AdminPostRow } from '../../../../shared/contracts/index.js'
 import { deleteAdminPost, listAdminPosts } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState } from '../AdminLayout'
+import { formatDateTime } from '../admin-shared'
 
 export default function AdminPostsPage() {
   const toast = useToast()

@@ -2,7 +2,7 @@ import { CornerDownRight, Heart, LoaderCircle, MessageSquare, Pencil, Send, Star
 import { useState } from 'react'
 
 import Empty from '@/components/Empty'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { setCommentLike } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { getAuthorName, getCommentBody } from '@/features/discover/api'

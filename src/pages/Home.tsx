@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 import AppState from '@/components/ui/AppState'
 import { HomeSkeleton } from '@/components/ui/Skeleton'
-import { useDevice } from '@/components/layout/DeviceProvider'
+import { useDevice } from '@/components/layout/device-context'
 import HomeDesktopLayout from '@/features/home/layouts/HomeDesktopLayout'
 import HomeMobileLayout from '@/features/home/layouts/HomeMobileLayout'
 import HomeTabletLayout from '@/features/home/layouts/HomeTabletLayout'

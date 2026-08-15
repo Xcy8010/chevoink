@@ -3,27 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { BookOpen, MessageSquare, Newspaper, Users } from 'lucide-react'
 
 import { getAdminDashboard } from '../api'
-import { AdminCard, AdminPageHeader, AdminPanelState, formatDateTime } from '../AdminLayout'
+import { AdminCard, AdminPageHeader, AdminPanelState } from '../AdminLayout'
+import { describeAdminAction, formatDateTime } from '../admin-shared'
 import TrendLineChart from '../components/TrendLineChart'
-
-const ACTION_LABELS: Record<string, string> = {
-  'admin.login': '登录后台',
-  'admin.change_own_password': '修改自己密码',
-  'user.ban': '封禁用户',
-  'user.unban': '解封用户',
-  'user.set_role': '调整角色',
-  'user.reset_password': '重置密码',
-  'novel.take_down': '下架作品',
-  'novel.restore': '恢复作品',
-  'novel.delete': '删除作品',
-  'chapter.delete': '删除章节',
-  'post.delete': '删除帖子',
-  'comment.delete': '删除评论',
-}
-
-export function describeAdminAction(action: string): string {
-  return ACTION_LABELS[action] ?? action
-}
 
 export default function AdminDashboardPage() {
   const query = useQuery({

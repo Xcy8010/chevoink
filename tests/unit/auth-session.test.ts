@@ -83,7 +83,6 @@ describe('v1 存量令牌双读兼容', () => {
 
   it('签名不匹配的 v1 令牌拒绝', () => {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
-    const token = signV1(USER_ID, expiresAt)
     expect(verifySessionToken(`${USER_ID}.${expiresAt}.deadbeef`, 'access')).toBeNull()
   })
 })

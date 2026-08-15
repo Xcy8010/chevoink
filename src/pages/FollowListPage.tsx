@@ -5,7 +5,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
 import Button from '@/components/ui/Button'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { createDirectConversation, getInteractionBadges, getMe, getUser, listUserFollowers, listUserFollowing, markInteractionSeen, setUserFollow } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
 import { formatRelativeTime } from '@/features/community/utils'

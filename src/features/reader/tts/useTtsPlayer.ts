@@ -620,7 +620,9 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
         audio.removeAttribute('src')
       }
       blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 卸载清理须读 ref 最新值，拷贝进 effect 反而读到注册时的旧值
       blobUrlsRef.current.clear()
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 同上：清理时读 ref 最新值
       fetchingRef.current.clear()
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = null

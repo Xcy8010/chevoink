@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import type { AdminCommentRow } from '../../../../shared/contracts/index.js'
 import { deleteAdminComment, listAdminComments } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime } from '../admin-shared'
 
 const TARGET_TYPE_LABELS: Record<string, string> = {
   novel: '作品评论',

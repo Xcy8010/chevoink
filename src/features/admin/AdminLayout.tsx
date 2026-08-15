@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
 import {
   BookOpen,
   ChevronLeft,
@@ -18,7 +17,6 @@ import {
   Users,
 } from 'lucide-react'
 
-import { ApiClientError } from '@/app/api-client'
 import BottomSheet from '@/components/layout/BottomSheet'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
@@ -26,38 +24,8 @@ import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
 import type { Pagination } from '../../../shared/contracts/index.js'
-import { adminLogout, getAdminMe } from './api'
-
-/* ---------------- 会话守卫 ---------------- */
-
-/**
- * 管理后台会话守卫：拉取 /api/admin/me。
- * 401 时跳转登录页；加载中渲染骨架；其余错误就地提示。
- */
-export function useAdminSession() {
-  const query = useQuery({
-    queryKey: ['admin', 'me'],
-    queryFn: getAdminMe,
-    retry: false,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const denied = query.error instanceof ApiClientError && (query.error.status === 401 || query.error.status === 403)
-
-  return { admin: query.data ?? null, isLoading: query.isLoading, denied }
-}
-
-/* ---------------- 时间格式化 ---------------- */
-
-export function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '—'
-  }
-
-  const date = new Date(value)
-  const pad = (num: number) => String(num).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
+import { adminLogout } from './api'
+import { useAdminSession } from './admin-shared'
 
 /* ---------------- 布局 ---------------- */
 

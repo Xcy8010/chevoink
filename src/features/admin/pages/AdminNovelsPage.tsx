@@ -4,22 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
-import { useToast } from '@/components/ui/Toast'
+import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import { listAdminNovels, restoreAdminNovel, takeDownAdminNovel } from '../api'
-import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { AdminCard, AdminConfirmDialog, AdminPageHeader, AdminPager, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime, isNovelTakenDown, NOVEL_STATUS_LABELS } from '../admin-shared'
 import type { AdminNovelRow } from '../../../../shared/contracts/index.js'
-
-export const NOVEL_STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  published: '连载中',
-  completed: '已完结',
-  archived: '已归档',
-}
-
-export function isNovelTakenDown(novel: AdminNovelRow): boolean {
-  return novel.visibility === 'private' || novel.status === 'archived'
-}
 
 export default function AdminNovelsPage() {
   const toast = useToast()

@@ -7,7 +7,8 @@ import TextInput from '@/components/ui/TextInput'
 import { cn } from '@/lib/utils'
 import type { AdminConversationRow } from '../../../../shared/contracts/index.js'
 import { getAdminConversationMessages, listAdminConversations } from '../api'
-import { AdminCard, AdminPageHeader, AdminPager, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { AdminCard, AdminPageHeader, AdminPager, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime } from '../admin-shared'
 
 const CONVERSATION_TYPE_LABELS: Record<string, string> = {
   direct: '私聊',

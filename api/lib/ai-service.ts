@@ -70,7 +70,14 @@ async function recordUsage(input: {
   })
 }
 
-async function parseJsonResponse(response: Response) {
+type JsonProviderPayload = {
+  error?: { message?: unknown }
+  data?: unknown
+  choices?: Array<{ message?: { content?: unknown } }>
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+}
+
+async function parseJsonResponse(response: Response): Promise<JsonProviderPayload> {
   const text = await response.text()
 
   if (!text) {
@@ -78,7 +85,7 @@ async function parseJsonResponse(response: Response) {
   }
 
   try {
-    return JSON.parse(text) as Record<string, any>
+    return JSON.parse(text) as JsonProviderPayload
   } catch {
     throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型返回了无法解析的内容。')
   }
@@ -227,7 +234,17 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   const reader = response.body.getReader()
   let buffer = ''
 
-  const handleDelta = (parsed: Record<string, any>) => {
+  const handleDelta = (parsed: {
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    choices?: Array<{
+      finish_reason?: unknown
+      delta?: {
+        reasoning_content?: unknown
+        content?: unknown
+        tool_calls?: Array<{ index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } }>
+      }
+    }>
+  }) => {
     if (parsed.usage) {
       usage.promptTokens = parsed.usage.prompt_tokens ?? usage.promptTokens
       usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
@@ -243,7 +260,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       finishReason = choice.finish_reason
     }
 
-    const delta = choice.delta ?? {}
+    const delta = choice.delta ?? ({} as NonNullable<NonNullable<Parameters<typeof handleDelta>[0]['choices']>[number]['delta']>)
 
     if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
       reasoning += delta.reasoning_content
@@ -444,7 +461,7 @@ async function generateImageUrls(
 
   const images = Array.isArray(payload.data) ? payload.data : []
   const imageUrls = images
-    .map((item: any) => {
+    .map((item: { url?: unknown; b64_json?: unknown }) => {
       if (typeof item?.url === 'string') {
         return item.url
       }

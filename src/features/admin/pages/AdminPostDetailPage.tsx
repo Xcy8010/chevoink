@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 
 import { getAdminPostDetail } from '../api'
-import { AdminCard, AdminPanelState, formatDateTime, StatusPill } from '../AdminLayout'
+import { AdminCard, AdminPanelState, StatusPill } from '../AdminLayout'
+import { formatDateTime } from '../admin-shared'
 
 export default function AdminPostDetailPage() {
   const { postId = '' } = useParams()
