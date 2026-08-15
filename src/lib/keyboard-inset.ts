@@ -3,7 +3,8 @@
  * - 监听 visualViewport，把键盘占高写入根节点 CSS 变量 --keyboard-inset，
  *   供应用壳（高度收缩）与各 fixed 弹层（bottom/padding 偏移）消费；
  * - 键盘打开时给 <html> 挂 keyboard-open 类，CSS 侧可收起底部导航预留的留白；
- * - focusin 兜底：键盘动画结束后把仍被遮挡的输入框滚到可视区中部，
+ * - focusin 兜底：键盘动画结束后把仍被遮挡的输入框最小滚动顶到键盘上方
+ *   （只移被遮的一段，不把评论等周围内容顶进可视区），
  *   覆盖文档流中的评论框、回复框等没有独立避让逻辑的输入位。
  *
  * Android Chrome 108+ 由 viewport meta 的 interactive-widget=resizes-content
@@ -69,9 +70,30 @@ export function setupKeyboardInsetWatcher() {
         if (document.activeElement !== target) return
         const visibleHeight = (window.visualViewport?.height ?? window.innerHeight) - vkInset
         const rect = target.getBoundingClientRect()
-        // 输入框底部已在键盘上方可见时不动，避免无意义的滚动跳动
-        if (rect.bottom <= visibleHeight - 8 && rect.top >= 0) return
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        // 最小滚动：只上移被键盘遮住的那一段，让输入框刚好落在键盘上方；
+        // 不用 scrollIntoView center——过度滚动会把输入框下方的评论列表顶进可视区
+        let delta = 0
+        if (rect.bottom > visibleHeight - 8) {
+          delta = rect.bottom - (visibleHeight - 8)
+        } else if (rect.top < 0) {
+          delta = rect.top - 8
+        }
+        if (delta === 0) return
+        // 从最近的可滚动祖先开始分摊滚动量（弹层/抽屉内的输入框），window 兜底
+        let remaining = delta
+        let node: HTMLElement | null = target.parentElement
+        while (node && remaining !== 0) {
+          const overflowY = getComputedStyle(node).overflowY
+          if (overflowY === 'auto' || overflowY === 'scroll') {
+            const before = node.scrollTop
+            node.scrollTop += remaining
+            remaining -= node.scrollTop - before
+          }
+          node = node.parentElement
+        }
+        if (remaining !== 0) {
+          window.scrollBy({ top: remaining, behavior: 'smooth' })
+        }
       }
 
       if (
