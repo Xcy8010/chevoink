@@ -1,6 +1,14 @@
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  // 与 tsconfig paths 对齐：前端模块（如 panel-helpers）内部使用 @/ 别名
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   test: {
     environment: 'node',
     // forks 池每 worker 独立进程：进程内缓存（封禁/令牌版本/限流 Map）互不串扰，

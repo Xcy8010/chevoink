@@ -23,7 +23,6 @@ import type {
   AgentAttachmentMeta,
   AgentSession,
   AgentStreamEvent,
-  AgentUIMessage,
   EntityId,
 } from '../../../../../shared/contracts/index.js'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -44,12 +43,14 @@ import {
   stopAgentLoopRun,
 } from '../agentApi'
 import { isRunActive, useAgentStore } from '../agentStore'
+import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
 import { AgentMessageParts } from './AgentMessageParts'
 import { AgentPermissionCard } from './AgentPermissionCard'
 import { AgentQuestionCard } from './AgentQuestionCard'
+import { ProcessingHint } from './ProcessingHint'
 
 /**
  * Agent Loop 主面板（plan/13 §5）：
@@ -82,82 +83,6 @@ type AgentPanelProps = {
   onWorkspaceRollback?: () => void
   onClose?: () => void
   className?: string
-}
-
-const phaseLabel: Record<string, string> = {
-  starting: '启动中',
-  running: '运行中',
-  awaiting_approval: '等待确认',
-  awaiting_input: '等待回答',
-  paused: '已暂停',
-  succeeded: '已完成',
-  failed: '已失败',
-  cancelled: '已取消',
-}
-
-/** 提取消息纯文本（复制用） */
-function getMessageText(parts: AgentUIMessage['parts']): string {
-  return parts
-    .map((part) => (part.type === 'text' ? part.text : ''))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-}
-
-function formatSessionTime(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) {
-    return ''
-  }
-  return date.toDateString() === new Date().toDateString()
-    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-/** 当前 run 的助手消息是否已有输出（思考/动作/文本）：决定「正在处理...」占位的消失时机 */
-function assistantHasParts(messages: AgentUIMessage[], runId: string | null): boolean {
-  if (!runId) {
-    return false
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message.role === 'assistant' && message.runId === runId) {
-      return message.parts.length > 0
-    }
-  }
-  return false
-}
-
-/** 「正在处理...」占位：无容器、银色文字光泽；首个思考/动作事件到达后 visible 翻假，自然淡出再卸载 */
-function ProcessingHint({ visible }: { visible: boolean }) {
-  const [leaving, setLeaving] = useState(false)
-  const wasVisibleRef = useRef(false)
-
-  useEffect(() => {
-    if (visible) {
-      wasVisibleRef.current = true
-      setLeaving(false)
-    } else if (wasVisibleRef.current) {
-      setLeaving(true)
-    }
-  }, [visible])
-
-  if (!visible && !leaving) {
-    return null
-  }
-
-  return (
-    <p
-      className={cn('px-1 text-xs', leaving ? 'animate-agent-fade-out' : 'animate-fade-in')}
-      onAnimationEnd={(event) => {
-        if (leaving && event.animationName === 'agent-fade-out') {
-          setLeaving(false)
-        }
-      }}
-    >
-      <span className="agent-processing-shimmer">正在处理...</span>
-    </p>
-  )
 }
 
 export function AgentPanel({
