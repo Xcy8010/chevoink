@@ -214,7 +214,28 @@ interface UserAuthState {
 }
 
 const AUTH_STATE_CACHE_TTL_MS = 60_000
+/** DB 故障时允许复用历史成功状态的最大年龄：吊销/封禁失效窗口有界（10 分钟） */
+const AUTH_STATE_STALE_MAX_MS = 10 * 60_000
+/** 缓存容量上限：超出时淘汰最旧 checkedAt 项，防长尾用户导致无界增长 */
+const AUTH_STATE_CACHE_MAX_ENTRIES = 5000
 const userAuthStateCache = new Map<string, UserAuthState>()
+
+function evictOldestAuthStateIfOverLimit(): void {
+  while (userAuthStateCache.size > AUTH_STATE_CACHE_MAX_ENTRIES) {
+    let oldestKey: string | null = null
+    let oldestCheckedAt = Number.POSITIVE_INFINITY
+    for (const [key, value] of userAuthStateCache) {
+      if (value.checkedAt < oldestCheckedAt) {
+        oldestCheckedAt = value.checkedAt
+        oldestKey = key
+      }
+    }
+    if (!oldestKey) {
+      return
+    }
+    userAuthStateCache.delete(oldestKey)
+  }
+}
 const BANNED_FLAG_KEY = Symbol('chevoinkBannedSession')
 const RESOLVED_USER_ID_KEY = Symbol('chevoinkResolvedUserId')
 
@@ -243,11 +264,14 @@ function warnAuthDegrade(scope: string, detail: Record<string, unknown>): void {
 }
 
 /**
- * 读取用户会话状态。查询异常时返回 null 且不写缓存：
- * 调用方按「未封禁 + 跳过令牌版本比对」放行本次请求（故障不能打挂全站登录态），
- * 下一次请求会重试查询——故障结果不再被缓存放大。
+ * 读取用户会话状态：
+ * - 60s 内的缓存直接复用（DB 正常路径语义不变）；
+ * - 查询失败时，若存在年龄 ≤ stale 窗口（10 分钟）的历史成功状态则复用
+ *   （封禁与 tokenVersion 照常比对），吊销失效窗口有界且打点留痕；
+ * - 无可用历史状态才返回 null，由调用方按「未封禁 + 跳过令牌版本比对」降级放行。
+ * 导出仅供单元测试使用。
  */
-async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
+export async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
   const cached = userAuthStateCache.get(userId)
   if (cached && Date.now() - cached.checkedAt < AUTH_STATE_CACHE_TTL_MS) {
     return cached
@@ -258,7 +282,12 @@ async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
     .catch((): null => null)
 
   if (!user) {
-    // 查询失败：不缓存故障结果，交由调用方降级（告警节流防故障期刷屏）
+    // 查询失败：优先复用新鲜的历史成功状态（封禁/吊销照常生效），避免故障期完全失明
+    if (cached && Date.now() - cached.checkedAt <= AUTH_STATE_STALE_MAX_MS) {
+      warnAuthDegrade('stale-fallback', { userId, ageMs: Date.now() - cached.checkedAt })
+      return cached
+    }
+    // 无历史状态：不缓存故障结果，交由调用方降级（告警节流防故障期刷屏）
     warnAuthDegrade('db-unreachable', { userId })
     return null
   }
@@ -269,6 +298,7 @@ async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
     checkedAt: Date.now(),
   }
   userAuthStateCache.set(userId, state)
+  evictOldestAuthStateIfOverLimit()
   return state
 }
 

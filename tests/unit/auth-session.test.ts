@@ -1,8 +1,23 @@
 import { createHmac } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildSessionTokens, verifySessionToken } from '../../api/lib/auth-session.js'
+import { buildSessionTokens, evictUserBanCache, getUserAuthState, verifySessionToken } from '../../api/lib/auth-session.js'
 import { env } from '../../api/config/env.js'
+import { prisma } from '../../api/lib/prisma.js'
+
+/** P2 用例需控制 DB 行为：替换 prisma 为桩（保留 DataAccessError 等真实导出） */
+vi.mock('../../api/lib/prisma.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/lib/prisma.js')>()
+  return {
+    ...actual,
+    prisma: {
+      user: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
+      },
+    },
+  }
+})
 
 const USER_ID = 'user_test_123'
 const TOKEN_VERSION = 3
@@ -84,5 +99,78 @@ describe('v1 存量令牌双读兼容', () => {
   it('签名不匹配的 v1 令牌拒绝', () => {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
     expect(verifySessionToken(`${USER_ID}.${expiresAt}.deadbeef`, 'access')).toBeNull()
+  })
+})
+
+describe('P2 会话状态 stale fallback 与缓存上限', () => {
+  const findUnique = vi.mocked(prisma.user.findUnique)
+
+  beforeEach(() => {
+    vi.useRealTimers()
+    findUnique.mockReset()
+  })
+
+  it('DB 正常路径：成功状态写缓存，60s 内复用不重复查库', async () => {
+    findUnique.mockResolvedValue({ bannedAt: null, tokenVersion: 3 } as never)
+    const first = await getUserAuthState('p2-normal')
+    expect(first).toEqual(expect.objectContaining({ banned: false, tokenVersion: 3 }))
+    const second = await getUserAuthState('p2-normal')
+    expect(second?.tokenVersion).toBe(3)
+    expect(findUnique).toHaveBeenCalledTimes(1)
+    evictUserBanCache('p2-normal')
+  })
+
+  it('DB 故障 + 新鲜缓存（60s~10 分钟）→ stale fallback 按旧状态判定', async () => {
+    vi.useFakeTimers()
+    const base = Date.now()
+    findUnique.mockResolvedValueOnce({ bannedAt: new Date(), tokenVersion: 5 } as never)
+    const warm = await getUserAuthState('p2-stale')
+    expect(warm?.banned).toBe(true)
+
+    // 5 分钟后 DB 故障：超过 60s TTL（会尝试查库）但在 stale 窗口内 → 复用旧状态
+    vi.setSystemTime(base + 5 * 60_000)
+    findUnique.mockRejectedValueOnce(new Error('db down'))
+    const fallback = await getUserAuthState('p2-stale')
+    expect(fallback).toEqual(expect.objectContaining({ banned: true, tokenVersion: 5 }))
+    vi.useRealTimers()
+    evictUserBanCache('p2-stale')
+  })
+
+  it('DB 故障 + 缓存年龄超 stale 窗口（>10 分钟）→ 降级放行（null）', async () => {
+    vi.useFakeTimers()
+    const base = Date.now()
+    findUnique.mockResolvedValueOnce({ bannedAt: null, tokenVersion: 2 } as never)
+    await getUserAuthState('p2-expired')
+
+    vi.setSystemTime(base + 11 * 60_000)
+    findUnique.mockRejectedValueOnce(new Error('db down'))
+    expect(await getUserAuthState('p2-expired')).toBeNull()
+    vi.useRealTimers()
+    evictUserBanCache('p2-expired')
+  })
+
+  it('DB 故障 + 无历史缓存 → 降级放行（null）', async () => {
+    findUnique.mockRejectedValueOnce(new Error('db down'))
+    expect(await getUserAuthState('p2-cold')).toBeNull()
+  })
+
+  it('缓存超 5000 条淘汰最旧项：最旧用户失去 stale fallback，最新用户保留', async () => {
+    findUnique.mockImplementation(async () => ({ bannedAt: null, tokenVersion: 1 }) as never)
+    for (let index = 0; index < 5001; index += 1) {
+      await getUserAuthState(`p2-cap-${index}`)
+    }
+
+    // 最旧的 p2-cap-0 已被淘汰：DB 故障时无历史状态可复用
+    findUnique.mockRejectedValueOnce(new Error('db down'))
+    expect(await getUserAuthState('p2-cap-0')).toBeNull()
+
+    // 最新的 p2-cap-5000 仍在缓存：DB 故障时 stale fallback 生效
+    findUnique.mockRejectedValueOnce(new Error('db down'))
+    const last = await getUserAuthState('p2-cap-5000')
+    expect(last?.tokenVersion).toBe(1)
+
+    for (let index = 1; index <= 5000; index += 1) {
+      evictUserBanCache(`p2-cap-${index}`)
+    }
   })
 })
