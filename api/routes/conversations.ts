@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
-import type { CreateConversationRequest, SendMessageRequest } from '../../shared/contracts/index.js'
+import type { SendMessageRequest } from '../../shared/contracts/index.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import {
   createDirectConversationData,
@@ -10,9 +11,23 @@ import {
   sendMessageData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
+
+/** 非空文本：对齐路由原 `!body.x?.trim()` 判定（空串与纯空白均拒绝，值原样透传） */
+const nonEmptyText = z.string().refine((value) => value.trim().length > 0)
+
+const createConversationSchema = z.object({
+  targetUserId: nonEmptyText,
+})
+
+const sendMessageSchema = z.object({
+  type: z.string().min(1),
+  content: nonEmptyText,
+  relatedId: z.string().optional(),
+})
 
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -30,15 +45,10 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateConversationRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.targetUserId?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请指定要私信的用户。'))
-      return
-    }
+    const body = parseBody(createConversationSchema, req.body, '请指定要私信的用户。')
 
     const conversation = await createDirectConversationData(userId, body.targetUserId.trim())
 
@@ -75,18 +85,13 @@ router.get('/:conversationId/messages', async (req: Request, res: Response): Pro
 
 router.post('/:conversationId/messages', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<SendMessageRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.content?.trim() || !body.type) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '消息内容不能为空。'))
-      return
-    }
+    const body = parseBody(sendMessageSchema, req.body, '消息内容不能为空。')
 
     const message = await sendMessageData(userId, req.params.conversationId, {
-      type: body.type,
+      type: body.type as SendMessageRequest['type'],
       content: body.content.trim(),
       relatedId: body.relatedId,
     })

@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 
-import type { UpdatePrivacyRequest } from '../../shared/contracts/index.js'
 import { removeManagedAvatar, storeAvatarDataUrl } from '../lib/avatar-storage.js'
 import { createSession, getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { removeManagedProfileCover, storeProfileCoverDataUrl } from '../lib/profile-cover-storage.js'
@@ -62,6 +61,16 @@ const updatePasswordSchema = z.object({
   password: nonEmptyText,
   oldPassword: z.string().optional(),
   code: z.string().optional(),
+})
+
+const privacyLevelSchema = z.enum(['public', 'mutual', 'private'])
+
+const updatePrivacySchema = z.object({
+  followers: privacyLevelSchema.optional(),
+  following: privacyLevelSchema.optional(),
+  likes: privacyLevelSchema.optional(),
+  favorites: privacyLevelSchema.optional(),
+  replies: privacyLevelSchema.optional(),
 })
 
 const saveReadingProgressSchema = z.object({
@@ -438,10 +447,10 @@ router.post('/me/interaction-badges/seen', async (req: Request, res: Response): 
 
 router.patch('/me/privacy', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as UpdatePrivacyRequest
 
   try {
     const userId = requireSessionUserId(req)
+    const body = parseBody(updatePrivacySchema, req.body, '隐私级别不合法。')
     const payload = await updateMyPrivacyData(userId, {
       followers: body.followers,
       following: body.following,

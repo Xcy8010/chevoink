@@ -78,6 +78,10 @@ const adminSetRoleSchema = z.object({
   role: z.enum(['user', 'admin']),
 })
 
+const adminDeleteNovelSchema = z.object({
+  confirmTitle: nonEmptyText,
+})
+
 /** 强密码校验：至少 12 位，含大小写、数字与符号 */
 function validateStrongPassword(password: string): string | null {
   if (password.length < 12) {
@@ -599,7 +603,6 @@ router.post('/novels/:novelId/restore', async (req: Request, res: Response): Pro
 
 router.delete('/novels/:novelId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { confirmTitle?: string }
 
   try {
     const admin = await requireAdmin(req)
@@ -610,7 +613,8 @@ router.delete('/novels/:novelId', async (req: Request, res: Response): Promise<v
     }
 
     const expectedTitle = detail.novel.displayTitle ?? detail.novel.title
-    if (!body.confirmTitle || body.confirmTitle.trim() !== expectedTitle) {
+    const body = parseBody(adminDeleteNovelSchema, req.body, '请输入正确的作品名以确认删除。')
+    if (body.confirmTitle.trim() !== expectedTitle) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入正确的作品名以确认删除。'))
       return
     }
