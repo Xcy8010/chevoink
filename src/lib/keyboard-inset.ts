@@ -60,10 +60,12 @@ export function setupKeyboardInsetWatcher() {
 
   // 键盘弹出动画结束后把聚焦输入框最小滚动顶到键盘上方（只移被遮的一段，
   // 不把评论等周围内容顶进可视区）。各设备键盘弹出/布局收缩完成时机不一
-  // （有的 500ms+ 才收缩），单次检查容易落空：聚焦时登记目标，之后 1.5s
-  // 窗口内每次 visualViewport / window resize 都复查补滚，直到输入框可见。
+  // （有的 500ms+ 才收缩），且部分内核 resize 事件不可靠：聚焦时登记目标，
+  // 之后 2s 窗口内定时轮询 + 每次 visualViewport / window resize 都复查补滚，
+  // 直到输入框可见或失焦。
   let revealTarget: HTMLElement | null = null
   let revealDeadline = 0
+  let revealTimer = 0
 
   const revealEditableNow = () => {
     const target = revealTarget
@@ -77,13 +79,14 @@ export function setupKeyboardInsetWatcher() {
     const visibleHeight =
       Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight) - vkInset
     const rect = target.getBoundingClientRect()
-    // 最小滚动：只上移被键盘遮住的那一段，让输入框刚好落在键盘上方；
+    // 最小滚动：只上移被键盘遮住的那一段，让输入框落在键盘上方并留少量余量；
     // 不用 scrollIntoView center——过度滚动会把输入框下方的评论列表顶进可视区
+    const VISIBLE_MARGIN = 16
     let delta = 0
-    if (rect.bottom > visibleHeight - 8) {
-      delta = rect.bottom - (visibleHeight - 8)
+    if (rect.bottom > visibleHeight - VISIBLE_MARGIN) {
+      delta = rect.bottom - (visibleHeight - VISIBLE_MARGIN)
     } else if (rect.top < 0) {
-      delta = rect.top - 8
+      delta = rect.top - VISIBLE_MARGIN
     }
     if (delta === 0) return
     // 从最近的可滚动祖先开始分摊滚动量（弹层/抽屉内的输入框），window 兜底
@@ -109,7 +112,18 @@ export function setupKeyboardInsetWatcher() {
 
   const ensureEditableVisible = (target: HTMLElement) => {
     revealTarget = target
-    revealDeadline = Date.now() + 1500
+    revealDeadline = Date.now() + 2000
+    // 定时轮询兜底：布局收缩可能晚于聚焦发生、resize 事件也可能不触发，
+    // 轮询持续复查直到输入框可见 / 失焦 / 超窗后自清
+    if (revealTimer) window.clearInterval(revealTimer)
+    revealTimer = window.setInterval(() => {
+      if (!revealTarget || Date.now() > revealDeadline) {
+        window.clearInterval(revealTimer)
+        revealTimer = 0
+        return
+      }
+      revealEditableNow()
+    }, 200)
     window.setTimeout(() => {
       // 微信/QQ 等不支持 VirtualKeyboard API 的内核全屏下拿不到键盘高度，兜底退出全屏；
       // 退出全屏触发视口重排，resize 监听会接力复查滚动
