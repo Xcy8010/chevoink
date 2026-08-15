@@ -145,6 +145,15 @@ html.keyboard-open .app-messages-main {
   padding-bottom: 12px;
 }
 
+/* 帖子详情手机端评论栏：键盘收起时 sticky 悬浮在底部导航上方；
+   键盘打开时底栏隐藏，评论栏贴住滚动容器底，随容器收缩顶到键盘上方 */
+.post-composer-bar {
+  bottom: calc(72px + var(--safe-bottom));
+}
+html.keyboard-open .post-composer-bar {
+  bottom: 0;
+}
+
 /* 创作区移动端底部导航（退出/对话/写作/章节/更多）：
    键盘弹起时隐藏，避免在 Android resizes-content 模式下被顶到键盘上方占位，
    让 Agent 输入框直接落在键盘上方 */

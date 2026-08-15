@@ -133,8 +133,8 @@ export default function PostDetailPage() {
               </span>
             </h2>
 
-            {/* 输入区：单层轻量输入框，聚焦时描边提亮 */}
-            <div className="mt-4 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/50 transition-colors focus-within:border-[var(--color-brand)] focus-within:bg-[var(--surface-default)]">
+            {/* 输入区：单层轻量输入框，聚焦时描边提亮（仅桌面；手机端改用底部评论栏） */}
+            <div className="mt-4 hidden rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/50 transition-colors focus-within:border-[var(--color-brand)] focus-within:bg-[var(--surface-default)] xl:block">
               <textarea
                 value={draftComment}
                 onChange={(event) => setDraftComment(event.target.value)}
@@ -196,6 +196,28 @@ export default function PostDetailPage() {
             )}
           </div>
         </aside>
+      </div>
+
+      {/* 手机端评论栏：与评论列表拆成两个区域，sticky 贴住滚动容器底部——
+          键盘弹起时容器随视口收缩，评论栏整体被顶到键盘上方（与聊天页同一布局机制，
+          不依赖任何滚动 JS）；键盘收起时避开底部导航悬浮在列表上方 */}
+      <div className="post-composer-bar sticky z-20 mt-4 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 pb-[calc(10px+var(--safe-bottom))] pt-3 backdrop-blur xl:hidden">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={draftComment}
+            onChange={(event) => setDraftComment(event.target.value)}
+            rows={2}
+            placeholder="写下你的想法，让讨论继续展开。"
+            className="min-h-0 flex-1 resize-none rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/50 px-3 py-2 text-sm leading-6 text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--color-brand)] focus:bg-[var(--surface-default)]"
+          />
+          <Button
+            variant="primary"
+            onClick={handleCreateComment}
+            disabled={!draftComment.trim() || createCommentMutation.isPending}
+          >
+            {createCommentMutation.isPending ? '发布中' : '发表评论'}
+          </Button>
+        </div>
       </div>
     </div>
   )
