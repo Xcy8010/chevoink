@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: check / lint / test / build / audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 测试库容器：迁移与集成测试共用（库名含 test，过 tests/setup.ts 守卫）
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chevoink_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chevoink_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/chevoink_test
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 生成 Prisma Client
+        run: npx prisma generate
+
+      - name: 应用数据库迁移
+        run: npx prisma migrate deploy
+
+      - name: 准备测试环境变量
+        run: |
+          cp tests/.env.test.example tests/.env.test
+          sed -i 's|postgresql://127.0.0.1:5432/chevoink_test|postgresql://postgres:postgres@127.0.0.1:5432/chevoink_test|' tests/.env.test
+
+      - name: 类型检查
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      # 覆盖率仅产出报告，不设阈值门禁（待 CI 跑出真实基线后再锚定）
+      - name: 测试（含覆盖率报告）
+        run: npx vitest run --coverage
+
+      - name: 构建
+        run: npm run build
+
+      - name: 生产依赖安全审计
+        run: npm audit --omit=dev --audit-level=high
