@@ -167,6 +167,8 @@ model User {
   postCount               Int                  @default(0) @map("post_count")
   unreadMessageCount      Int                  @default(0) @map("unread_message_count")
   unreadNotificationCount Int                  @default(0) @map("unread_notification_count")
+  /** 会话令牌版本：改密/登出/封禁时 +1，即刻吊销该用户全部 v2 会话令牌 */
+  tokenVersion             Int                  @default(0) @map("token_version")
   interactionsSeenAt      DateTime?            @map("interactions_seen_at")
   followersSeenAt         DateTime?            @map("followers_seen_at")
   lastActiveAt            DateTime?            @map("last_active_at")

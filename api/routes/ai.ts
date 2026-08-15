@@ -1,9 +1,8 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
 import type {
   ChapterAssistRequest,
-  GenerateCoverImageRequest,
-  GenerateCoverPromptRequest,
   GenerateOutlineRequest,
   TtsSynthesizeRequest,
 } from '../../shared/contracts/index.js'
@@ -17,10 +16,26 @@ import {
   getAiConfigPayload,
 } from '../lib/ai-service.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { getTtsVoicesPayload, synthesizeTtsBatchData } from '../lib/tts-service.js'
 
 const router = Router()
+
+const coverPromptSchema = z.object({
+  novelTitle: z.string().min(1),
+  summary: z.string().min(1),
+  genre: z.string().min(1),
+  protagonist: z.string().optional(),
+  stylePreference: z.string().optional(),
+})
+
+const coverImageSchema = z.object({
+  prompt: z.string().min(1),
+  count: z.number().int().min(1),
+  novelId: z.string().nullable().optional(),
+  negativePrompt: z.string().nullable().optional(),
+})
 
 router.get('/config', async (_req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -83,21 +98,17 @@ router.post('/chapter-assist', async (req: Request, res: Response): Promise<void
 
 router.post('/cover-prompt', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<GenerateCoverPromptRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.novelTitle?.trim() || !body.summary?.trim() || !body.genre?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品标题、简介和题材。'))
-      return
-    }
+    const body = parseBody(coverPromptSchema, req.body, '请提供作品标题、简介和题材。')
 
     const payload = await generateCoverPromptData(userId, {
       novelTitle: body.novelTitle.trim(),
       summary: body.summary.trim(),
       genre: body.genre.trim(),
-      protagonist: body.protagonist,
-      stylePreference: body.stylePreference,
+      protagonist: body.protagonist?.trim() || undefined,
+      stylePreference: body.stylePreference?.trim() || undefined,
     })
 
     res.status(200).json(buildSuccess(requestId, payload))
@@ -108,17 +119,13 @@ router.post('/cover-prompt', async (req: Request, res: Response): Promise<void> 
 
 router.post('/cover-image', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<GenerateCoverImageRequest & { novelId?: string | null; negativePrompt?: string | null }>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.prompt?.trim() || !body.count) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供提示词和生成张数。'))
-      return
-    }
+    const body = parseBody(coverImageSchema, req.body, '请提供提示词和生成张数。')
 
     // 生成张数钳制在 1-4：count 直传付费 API 的 n 参数，无上限会单请求烧钱
-    const count = Math.min(Math.max(1, Math.floor(Number(body.count) || 1)), 4)
+    const count = Math.min(body.count, 4)
 
     const payload = await generateCoverImageData(userId, {
       prompt: body.prompt.trim(),

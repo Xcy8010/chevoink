@@ -10,7 +10,7 @@ import type {
   UpdatePrivacyRequest,
 } from '../../shared/contracts/index.js'
 import { removeManagedAvatar, storeAvatarDataUrl } from '../lib/avatar-storage.js'
-import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
+import { createSession, getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { removeManagedProfileCover, storeProfileCoverDataUrl } from '../lib/profile-cover-storage.js'
 import {
   getInteractionBadgesData,
@@ -219,7 +219,9 @@ router.patch('/me/password', async (req: Request, res: Response): Promise<void> 
     }
 
     const user = await updateMyPasswordData(userId, body.password)
-    res.status(200).json(buildSuccess(requestId, { user }))
+    // 改密已吊销全部旧令牌（tokenVersion+1）：为当前设备静默重签，避免本人立即掉线
+    const tokens = await createSession(userId, res)
+    res.status(200).json(buildSuccess(requestId, { user, tokens }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

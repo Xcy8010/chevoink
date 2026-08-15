@@ -76,8 +76,9 @@ export const useShellStore = create<ShellState>()(
           unreadNotificationCount: 0,
         }),
       setAuthenticated: ({ user, tokens = null, unreadMessageCount, unreadNotificationCount }) => {
-        // 登录令牌落盘：安卓壳 cookie 未及时刷盘时以 Authorization 头做备选通道，避免杀后台丢登录态
-        setSessionToken(tokens?.accessToken ?? null)
+        // 登录令牌落盘：安卓壳 cookie 未及时刷盘时以 Authorization 头做备选通道，避免杀后台丢登录态；
+        // 优先存长效 refresh 令牌（30 天），服务端闸口会静默重签 access，Bearer 备选通道寿命不缩短
+        setSessionToken(tokens?.refreshToken ?? tokens?.accessToken ?? null)
         set({
           authStatus: 'authenticated',
           sessionUser: user,

@@ -26,6 +26,11 @@ export function hasConfiguredPassword(passwordHash: string | null | undefined): 
   return !passwordHash.startsWith(`${UNSET_PREFIX}:`)
 }
 
+/** 存量明文哈希（local: 前缀）：登录验证通过后应立即升级为 scrypt 重写入库 */
+export function isLegacyPasswordHash(passwordHash: string | null | undefined): boolean {
+  return typeof passwordHash === 'string' && passwordHash.startsWith(`${LEGACY_PREFIX}:`)
+}
+
 export function verifyPassword(password: string, passwordHash: string): boolean {
   if (passwordHash.startsWith(`${UNSET_PREFIX}:`)) {
     return false

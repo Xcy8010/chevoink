@@ -5,7 +5,36 @@ import { env } from '../config/env.js'
 import { prisma, DataAccessError } from './prisma.js'
 
 const SESSION_COOKIE_NAME = 'chevoink_session'
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
+const REFRESH_COOKIE_NAME = 'chevoink_refresh'
+
+/**
+ * v1 存量令牌格式：`${userId}.${expiresAt}.${sig}`（30 天有效期，兼容双读直至自然过期）
+ * v2 令牌格式：`v2.${userId}.${expiresAt}.${tokenVersion}.${kind}.${sig}`
+ * kind 区分 access / refresh；tokenVersion 与 User.tokenVersion 比对实现即刻吊销。
+ */
+const TOKEN_VERSION_PREFIX = 'v2'
+
+/** 解析 env 中 "15m" / "24h" / "30d" / "90s" 形式的时长配置为秒数 */
+function parseDurationSeconds(value: string | undefined, fallbackSeconds: number): number {
+  const match = /^(\d+)\s*(s|m|h|d)$/i.exec((value ?? '').trim())
+  if (!match) {
+    return fallbackSeconds
+  }
+
+  const amount = Number(match[1])
+  const unit = match[2].toLowerCase()
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return fallbackSeconds
+  }
+
+  const unitSeconds = { s: 1, m: 60, h: 3600, d: 86400 }[unit] ?? 1
+  return Math.floor(amount * unitSeconds)
+}
+
+// 短效访问令牌 + 长效刷新令牌：泄漏的 access 最多存活 24h；
+// refresh 命中时由登录闸口静默重签双 cookie，前端无感知
+const ACCESS_TTL_SECONDS = parseDurationSeconds(env.authAccessTokenExpiresIn, 60 * 60 * 24)
+const REFRESH_TTL_SECONDS = parseDurationSeconds(env.authRefreshTokenExpiresIn, 60 * 60 * 24 * 30)
 
 function getSessionSecret(): string {
   if (!env.authSessionSecret) {
@@ -41,9 +70,9 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
     }, {})
 }
 
-function serializeSessionCookie(value: string, maxAgeSeconds: number): string {
+function serializeCookie(name: string, value: string, maxAgeSeconds: number): string {
   const parts = [
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(value)}`,
+    `${name}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
@@ -72,74 +101,158 @@ function safeEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer)
 }
 
-export function buildSessionTokens(userId: string) {
-  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
-  const payload = `${userId}.${expiresAt}`
-  const signature = signPayload(payload)
-  const token = `${payload}.${signature}`
+type SessionTokenKind = 'access' | 'refresh'
+
+interface VerifiedToken {
+  userId: string
+  /** v1 存量令牌无版本号，无法参与吊销比对（30 天内自然淘汰） */
+  tokenVersion: number | null
+}
+
+function buildToken(userId: string, expiresAt: number, tokenVersion: number, kind: SessionTokenKind): string {
+  const payload = `${TOKEN_VERSION_PREFIX}.${userId}.${expiresAt}.${tokenVersion}.${kind}`
+  return `${payload}.${signPayload(payload)}`
+}
+
+export function buildSessionTokens(userId: string, tokenVersion: number) {
+  const now = Math.floor(Date.now() / 1000)
+  const accessToken = buildToken(userId, now + ACCESS_TTL_SECONDS, tokenVersion, 'access')
+  const refreshToken = buildToken(userId, now + REFRESH_TTL_SECONDS, tokenVersion, 'refresh')
 
   return {
-    accessToken: token,
-    refreshToken: token,
-    expiresInSeconds: SESSION_TTL_SECONDS,
+    accessToken,
+    refreshToken,
+    expiresInSeconds: ACCESS_TTL_SECONDS,
   }
 }
 
-export function createSession(userId: string, res: Response) {
-  const tokens = buildSessionTokens(userId)
-  res.append('Set-Cookie', serializeSessionCookie(tokens.accessToken, tokens.expiresInSeconds))
+function writeSessionCookies(userId: string, tokenVersion: number, res: Response) {
+  const tokens = buildSessionTokens(userId, tokenVersion)
+  res.append('Set-Cookie', serializeCookie(SESSION_COOKIE_NAME, tokens.accessToken, ACCESS_TTL_SECONDS))
+  res.append('Set-Cookie', serializeCookie(REFRESH_COOKIE_NAME, tokens.refreshToken, REFRESH_TTL_SECONDS))
   return tokens
 }
 
-export function clearSession(res: Response) {
-  res.append('Set-Cookie', serializeSessionCookie('', 0))
+/** 登录/重签会话：实时读库取最新 tokenVersion（不能走 60s 缓存，否则可能签出即刻失效的令牌） */
+export async function createSession(userId: string, res: Response) {
+  const user = await prisma.user
+    .findUnique({ where: { id: userId }, select: { tokenVersion: true } })
+    .catch(() => null)
+  return writeSessionCookies(userId, user?.tokenVersion ?? 0, res)
 }
 
-export function getSessionUserId(req: Request): string | null {
-  // 全局中间件已判定本请求属于被封禁会话：直接视为未登录
-  if (isSessionMarkedBanned(req)) {
+export function clearSession(res: Response) {
+  res.append('Set-Cookie', serializeCookie(SESSION_COOKIE_NAME, '', 0))
+  res.append('Set-Cookie', serializeCookie(REFRESH_COOKIE_NAME, '', 0))
+}
+
+function verifySessionToken(token: string | undefined | null, kind: SessionTokenKind): VerifiedToken | null {
+  if (!token) {
     return null
   }
 
-  const fromCookie = verifySessionToken(parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME])
-  if (fromCookie) {
-    return fromCookie
+  const segments = token.split('.')
+
+  // v1 存量令牌：userId.expiresAt.sig（无 kind / version，按 access 语义兼容读取）
+  if (segments.length === 3) {
+    const [userId, expiresAtRaw, signature] = segments
+    if (!userId || !expiresAtRaw || !signature) {
+      return null
+    }
+
+    const expiresAt = Number(expiresAtRaw)
+    if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+      return null
+    }
+
+    if (!safeEqual(signature, signPayload(`${userId}.${expiresAtRaw}`))) {
+      return null
+    }
+
+    return { userId, tokenVersion: null }
   }
 
-  // 安卓 WebView 的 CookieManager 懒刷盘，登录后立刻杀进程会丢会话 cookie；
-  // 登录响应里的令牌与 cookie 同值，这里接受 Bearer 头作为备选方式恢复会话
-  const authHeader = req.headers.authorization
-  if (authHeader?.startsWith('Bearer ')) {
-    return verifySessionToken(authHeader.slice('Bearer '.length).trim())
+  if (segments.length !== 6 || segments[0] !== TOKEN_VERSION_PREFIX) {
+    return null
   }
 
-  return null
+  const [, userId, expiresAtRaw, tokenVersionRaw, kindSegment, signature] = segments
+  if (!userId || !expiresAtRaw || !tokenVersionRaw || !signature) {
+    return null
+  }
+
+  if (kindSegment !== kind) {
+    return null
+  }
+
+  const expiresAt = Number(expiresAtRaw)
+  const tokenVersion = Number(tokenVersionRaw)
+  if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+    return null
+  }
+  if (!Number.isInteger(tokenVersion) || tokenVersion < 0) {
+    return null
+  }
+
+  const expectedSignature = signPayload(
+    `${TOKEN_VERSION_PREFIX}.${userId}.${expiresAtRaw}.${tokenVersionRaw}.${kindSegment}`,
+  )
+  if (!safeEqual(signature, expectedSignature)) {
+    return null
+  }
+
+  return { userId, tokenVersion }
 }
 
-/* ---------------- 封禁生效（后台管理封禁后全站登录态失效） ---------------- */
+/* ---------------- 用户会话状态（封禁 + 令牌版本，60 秒进程内缓存） ---------------- */
 
-/** 封禁状态进程内缓存：60 秒内的重复请求不打库，封禁/解封操作会主动清缓存 */
-const BAN_CACHE_TTL_MS = 60_000
-const banStateCache = new Map<string, { banned: boolean; checkedAt: number }>()
+interface UserAuthState {
+  banned: boolean
+  tokenVersion: number
+  checkedAt: number
+}
+
+const AUTH_STATE_CACHE_TTL_MS = 60_000
+const userAuthStateCache = new Map<string, UserAuthState>()
 const BANNED_FLAG_KEY = Symbol('chevoinkBannedSession')
+const RESOLVED_USER_ID_KEY = Symbol('chevoinkResolvedUserId')
 
 export function evictUserBanCache(userId: string): void {
-  banStateCache.delete(userId)
+  userAuthStateCache.delete(userId)
+}
+
+/**
+ * 读取用户会话状态。查询异常时返回 null 且不写缓存：
+ * 调用方按「未封禁 + 跳过令牌版本比对」放行本次请求（故障不能打挂全站登录态），
+ * 下一次请求会重试查询——故障结果不再被缓存放大。
+ */
+async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
+  const cached = userAuthStateCache.get(userId)
+  if (cached && Date.now() - cached.checkedAt < AUTH_STATE_CACHE_TTL_MS) {
+    return cached
+  }
+
+  const user = await prisma.user
+    .findUnique({ where: { id: userId }, select: { bannedAt: true, tokenVersion: true } })
+    .catch(() => null)
+
+  if (!user) {
+    // 查询失败：不缓存故障结果，交由调用方降级
+    return null
+  }
+
+  const state: UserAuthState = {
+    banned: user.bannedAt !== null,
+    tokenVersion: user.tokenVersion,
+    checkedAt: Date.now(),
+  }
+  userAuthStateCache.set(userId, state)
+  return state
 }
 
 export async function isUserBanned(userId: string): Promise<boolean> {
-  const cached = banStateCache.get(userId)
-  if (cached && Date.now() - cached.checkedAt < BAN_CACHE_TTL_MS) {
-    return cached.banned
-  }
-
-  // 查询异常按未封禁处理：管理功能故障不能把全站登录态打挂
-  const user = await prisma.user
-    .findUnique({ where: { id: userId }, select: { bannedAt: true } })
-    .catch(() => null)
-  const banned = user ? user.bannedAt !== null : false
-  banStateCache.set(userId, { banned, checkedAt: Date.now() })
-  return banned
+  const state = await getUserAuthState(userId)
+  return state?.banned ?? false
 }
 
 /** 全局中间件判定封禁后打标：后续 getSessionUserId / requireSessionUserId 一律视为未登录 */
@@ -151,27 +264,96 @@ function isSessionMarkedBanned(req: Request): boolean {
   return Boolean((req as Request & { [key: symbol]: unknown })[BANNED_FLAG_KEY])
 }
 
-function verifySessionToken(token: string | undefined | null): string | null {
-  if (!token) {
+function setResolvedUserId(req: Request, userId: string | null): void {
+  ;(req as Request & { [key: symbol]: unknown })[RESOLVED_USER_ID_KEY] = userId
+}
+
+function getResolvedUserId(req: Request): string | null | undefined {
+  const value = (req as Request & { [key: symbol]: unknown })[RESOLVED_USER_ID_KEY]
+  return typeof value === 'string' ? value : value === null ? null : undefined
+}
+
+/**
+ * 登录闸口（app.ts 全局中间件调用）：
+ * 1. 按 access cookie → Bearer access → refresh cookie → Bearer refresh 顺序识别会话；
+ * 2. 封禁检查（60s 缓存）：命中打标 + 清 cookie，后续一律视为未登录；
+ * 3. v2 令牌与库中 tokenVersion 比对，不一致（改密/登出/封禁后）视为已吊销；
+ * 4. refresh 命中时静默重签双 cookie（滑动续期 30 天），前端无感知。
+ * 判定结果写入 req 标记，getSessionUserId 直接读取，避免下游重复验签。
+ */
+export async function resolveSessionGate(req: Request, res: Response): Promise<void> {
+  const cookies = parseCookies(req.headers.cookie)
+  const authHeader = req.headers.authorization
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : null
+
+  const accessCandidate =
+    verifySessionToken(cookies[SESSION_COOKIE_NAME], 'access') ?? verifySessionToken(bearerToken, 'access')
+  const candidate =
+    accessCandidate ??
+    verifySessionToken(cookies[REFRESH_COOKIE_NAME], 'refresh') ??
+    verifySessionToken(bearerToken, 'refresh')
+
+  if (!candidate) {
+    setResolvedUserId(req, null)
+    return
+  }
+
+  const state = await getUserAuthState(candidate.userId)
+
+  if (state?.banned) {
+    markSessionBanned(req)
+    clearSession(res)
+    setResolvedUserId(req, null)
+    return
+  }
+
+  if (candidate.tokenVersion !== null && state && candidate.tokenVersion !== state.tokenVersion) {
+    // 已被吊销的 v2 令牌：清 cookie 并按未登录处理
+    clearSession(res)
+    setResolvedUserId(req, null)
+    return
+  }
+
+  if (!accessCandidate && candidate) {
+    // refresh 命中（access 过期/丢失）：滚动续签
+    writeSessionCookies(candidate.userId, state?.tokenVersion ?? candidate.tokenVersion ?? 0, res)
+  }
+
+  setResolvedUserId(req, candidate.userId)
+}
+
+export function getSessionUserId(req: Request): string | null {
+  // 全局中间件已判定本请求属于被封禁会话：直接视为未登录
+  if (isSessionMarkedBanned(req)) {
     return null
   }
 
-  const [userId, expiresAtRaw, signature] = token.split('.')
-  if (!userId || !expiresAtRaw || !signature) {
-    return null
+  // 闸口已识别会话（string=登录用户，null=明确未登录）
+  const resolved = getResolvedUserId(req)
+  if (resolved !== undefined) {
+    return resolved
   }
 
-  const expiresAt = Number(expiresAtRaw)
-  if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
-    return null
-  }
+  // 闸口未覆盖（自身异常放行）时退回本地验签，保持鉴权可用
+  const cookies = parseCookies(req.headers.cookie)
+  const authHeader = req.headers.authorization
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : null
 
-  const expectedSignature = signPayload(`${userId}.${expiresAtRaw}`)
-  if (!safeEqual(signature, expectedSignature)) {
-    return null
-  }
+  const candidate =
+    verifySessionToken(cookies[SESSION_COOKIE_NAME], 'access') ??
+    verifySessionToken(bearerToken, 'access') ??
+    verifySessionToken(cookies[REFRESH_COOKIE_NAME], 'refresh') ??
+    verifySessionToken(bearerToken, 'refresh')
 
-  return userId
+  return candidate?.userId ?? null
+}
+
+/** 吊销用户全部 v2 会话令牌（改密/登出/封禁时调用）：tokenVersion+1 并清缓存即刻生效 */
+export async function revokeUserSessions(userId: string): Promise<void> {
+  await prisma.user
+    .update({ where: { id: userId }, data: { tokenVersion: { increment: 1 } } })
+    .catch(() => {})
+  evictUserBanCache(userId)
 }
 
 export function requireSessionUserId(req: Request): string {

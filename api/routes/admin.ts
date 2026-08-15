@@ -8,7 +8,11 @@ import {
   recordAdminLoginFailure,
   requireAdmin,
 } from '../lib/admin-auth.js'
-import { clearSession, createSession } from '../lib/auth-session.js'
+import {
+  clearSession,
+  createSession,
+  revokeUserSessions,
+} from '../lib/auth-session.js'
 import {
   adminChangeMyPasswordData,
   adminDeleteChapterData,
@@ -130,7 +134,7 @@ router.post('/auth/login', async (req: Request, res: Response): Promise<void> =>
     }
 
     clearAdminLoginFailures(rateLimitKey)
-    const tokens = createSession(result.userId, res)
+    const tokens = await createSession(result.userId, res)
     await recordAdminAuditLog({
       adminId: result.userId,
       action: 'admin.login',
@@ -199,6 +203,15 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
 router.post('/logout', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
+  try {
+    // 登出即吊销该管理员全部 v2 会话令牌
+    const admin = await requireAdmin(req).catch(() => null)
+    if (admin) {
+      await revokeUserSessions(admin.id)
+    }
+  } catch {
+    // 吊销失败不阻断登出
+  }
   clearSession(res)
   res.status(200).json(buildSuccess(requestId, { ok: true }))
 })
@@ -233,7 +246,9 @@ router.post('/me/change-password', async (req: Request, res: Response): Promise<
       targetId: admin.id,
       ip: getRequestIp(req),
     })
-    res.status(200).json(buildSuccess(requestId, { ok: true }))
+    // 改密已吊销全部旧令牌：为当前设备静默重签，避免本人立即掉线
+    const tokens = await createSession(admin.id, res)
+    res.status(200).json(buildSuccess(requestId, { ok: true, tokens }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

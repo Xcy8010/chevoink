@@ -49,7 +49,7 @@ import type {
 } from '../../shared/contracts/index.js'
 import { ALL_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../shared/contracts/novel-tags.js'
 import { extractTopicNames } from '../../shared/contracts/topic-parse.js'
-import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, verifyPassword } from './password.js'
+import { createUnsetPasswordHash, hashPassword, hasConfiguredPassword, isLegacyPasswordHash, verifyPassword } from './password.js'
 import { evictUserBanCache } from './auth-session.js'
 import { paginate } from './http.js'
 import { storeMessageImageDataUrl } from './message-image-storage.js'
@@ -3656,6 +3656,13 @@ export async function loginUserData(phone: string, password: string): Promise<Us
     return null
   }
 
+  // 存量明文（local:）哈希验证通过后立即升级为 scrypt 重写入库，逐步清退明文存储
+  if (isLegacyPasswordHash(user.passwordHash)) {
+    void prisma.user
+      .update({ where: { id: user.id }, data: { passwordHash: hashPassword(normalizedPassword) } })
+      .catch(() => {})
+  }
+
   return toUser(user)
 }
 
@@ -3682,8 +3689,11 @@ export async function updateMyPasswordData(userId: string, password: string): Pr
     where: { id: userId },
     data: {
       passwordHash: hashPassword(normalizedPassword),
+      // 改密吊销全部旧会话令牌；调用方（路由层）会为当前设备静默重签
+      tokenVersion: { increment: 1 },
     },
   })
+  evictUserBanCache(userId)
 
   return toUser(updated)
 }
@@ -4220,6 +4230,13 @@ export async function adminLoginByEmailData(
     return null
   }
 
+  // 存量明文哈希验证通过后升级为 scrypt
+  if (isLegacyPasswordHash(user.passwordHash)) {
+    void prisma.user
+      .update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } })
+      .catch(() => {})
+  }
+
   return { userId: user.id, nickname: user.nickname }
 }
 
@@ -4237,6 +4254,13 @@ export async function adminLoginByPhoneData(
   }
   if (password !== undefined && !verifyPassword(password, user.passwordHash)) {
     return null
+  }
+
+  // 存量明文哈希验证通过后升级为 scrypt
+  if (password !== undefined && isLegacyPasswordHash(user.passwordHash)) {
+    void prisma.user
+      .update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } })
+      .catch(() => {})
   }
 
   return { userId: user.id, nickname: user.nickname }
@@ -4324,8 +4348,13 @@ export async function adminChangeMyPasswordData(
 
   await prisma.user.update({
     where: { id: userId },
-    data: { passwordHash: hashPassword(newPassword) },
+    data: {
+      passwordHash: hashPassword(newPassword),
+      // 改密吊销全部旧会话令牌；调用方（路由层）会为当前设备静默重签
+      tokenVersion: { increment: 1 },
+    },
   })
+  evictUserBanCache(userId)
   return true
 }
 
@@ -4339,8 +4368,13 @@ export async function resetUserPasswordData(userId: string): Promise<string | nu
   const tempPassword = `Cv-${randomBytes(9).toString('base64url')}`
   await prisma.user.update({
     where: { id: userId },
-    data: { passwordHash: hashPassword(tempPassword) },
+    data: {
+      passwordHash: hashPassword(tempPassword),
+      // 管理员重置密码后原会话全部吊销，用户凭临时密码重新登录
+      tokenVersion: { increment: 1 },
+    },
   })
+  evictUserBanCache(userId)
   return tempPassword
 }
 
@@ -4355,7 +4389,11 @@ export async function setUserBannedData(
 
   await prisma.user.update({
     where: { id: userId },
-    data: { bannedAt: banned ? new Date() : null },
+    data: {
+      bannedAt: banned ? new Date() : null,
+      // 封禁即吊销全部会话令牌；解封也 +1，避免解封后旧会话自动复活
+      tokenVersion: { increment: 1 },
+    },
   })
   evictUserBanCache(userId)
   return { nickname: user.nickname }

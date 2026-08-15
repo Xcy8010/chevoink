@@ -18,7 +18,7 @@ import searchRoutes from './routes/search.js'
 import topicsRoutes from './routes/topics.js'
 import usersRoutes from './routes/users.js'
 import { env } from './config/env.js'
-import { clearSession, getSessionUserId, isUserBanned, markSessionBanned } from './lib/auth-session.js'
+import { getSessionUserId, resolveSessionGate } from './lib/auth-session.js'
 import { getUploadsStaticDirectory } from './lib/avatar-storage.js'
 import { prisma } from './lib/prisma.js'
 
@@ -43,30 +43,27 @@ app.use(
 )
 
 // 登录态统一闸口：
-// 1. 封禁检查（60s 缓存）——被封禁会话打标 + 清 cookie，后续所有鉴权一律视为未登录；
+// 1. 会话识别（access 优先，refresh 兜底）+ 封禁检查（60s 缓存）+ v2 令牌吊销比对；
+//    refresh 命中时静默重签双 cookie，前端无感知；
 // 2. 在线状态：每次请求刷新 lastActiveAt（内存节流 60s 写一次库），5 分钟内活跃视为在线
 const lastActiveWriteAt = new Map<string, number>()
 const LAST_ACTIVE_WRITE_INTERVAL_MS = 60_000
 app.use(async (req: Request, res: Response, next: NextFunction) => {
   try {
+    await resolveSessionGate(req, res)
     const userId = getSessionUserId(req)
     if (userId) {
-      if (await isUserBanned(userId)) {
-        markSessionBanned(req)
-        clearSession(res)
-      } else {
-        const now = Date.now()
-        if (now - (lastActiveWriteAt.get(userId) ?? 0) >= LAST_ACTIVE_WRITE_INTERVAL_MS) {
-          lastActiveWriteAt.set(userId, now)
-          // 异步落库不阻塞请求；用户不存在等异常静默忽略
-          prisma.user
-            .updateMany({ where: { id: userId }, data: { lastActiveAt: new Date(now) } })
-            .catch(() => {})
-        }
+      const now = Date.now()
+      if (now - (lastActiveWriteAt.get(userId) ?? 0) >= LAST_ACTIVE_WRITE_INTERVAL_MS) {
+        lastActiveWriteAt.set(userId, now)
+        // 异步落库不阻塞请求；用户不存在等异常静默忽略
+        prisma.user
+          .updateMany({ where: { id: userId }, data: { lastActiveAt: new Date(now) } })
+          .catch(() => {})
       }
     }
   } catch {
-    // 闸口自身异常放行：管理功能故障不能把全站请求打挂
+    // 闸口自身异常放行：管理功能故障不能把全站请求打挂（下游退回本地验签）
   }
   next()
 })
