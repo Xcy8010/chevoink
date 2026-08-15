@@ -209,7 +209,6 @@ try {
     "start-local-server.bat",
     "tailwind.config.js",
     "tsconfig.json",
-    "vercel.json",
     "vite.config.ts"
   )
   Invoke-CheckedCommand -FilePath "tar.exe" -ArgumentList $TarArgs -WorkingDirectory $ProjectRoot

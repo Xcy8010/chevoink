@@ -2,18 +2,11 @@ import { Router, type Request, type Response } from 'express'
 
 import type {
   ApplyAgentArtifactRequest,
-  ContinueChapterRequest,
   CreateAgentRunRequest,
   CreateAgentSessionRequest,
-  DraftChapterRequest,
   ExecuteWorkspaceAgentRequest,
-  GenerateAgentCoverPromptRequest,
-  PlanChapterRequest,
-  PolishSelectionRequest,
   ResolveAgentApprovalRequest,
     ResolveAgentQuestionRequest,
-  ReviewContinuityRequest,
-  RewriteSelectionRequest,
   StartAgentLoopRunRequest,
   UpdateAgentSessionRequest,
   UploadAgentAttachmentRequest,
@@ -42,7 +35,6 @@ import {
   createAgentSessionData,
   deleteAgentSessionData,
   deleteAgentRunData,
-  executeAgentActionData,
   executeWorkspaceAgentData,
   getAgentRunData,
   listAgentArtifactsData,
@@ -497,240 +489,40 @@ router.post('/artifacts/:artifactId/apply', async (req: Request, res: Response):
   }
 })
 
-router.post('/actions/plan-chapter', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<PlanChapterRequest>
+// 阶段 F-25：以下 7 个细分 action 端点前端已零调用（写作助手统一走 /actions/execute，
+// loop 引擎走 /runs），先 410+DEPRECATED 过渡观察一个版本（确认安卓壳无引用）后物理删除。
+function replyActionDeprecated(res: Response): void {
+  res
+    .status(410)
+    .json(buildError(createRequestId(), 'DEPRECATED', '该端点已下线，请改用 /api/agent/actions/execute 或 /api/agent/runs。'))
+}
 
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.prompt?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID 和任务说明。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'planChapter',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      title: body.title,
-      prompt: body.prompt.trim(),
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/plan-chapter', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/draft-chapter', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<DraftChapterRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.prompt?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID 和任务说明。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'draftChapter',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      title: body.title,
-      prompt: body.prompt.trim(),
-      selectedText: body.selectedText,
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/draft-chapter', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/continue-chapter', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ContinueChapterRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'continueChapter',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      title: body.title,
-      prompt: body.prompt,
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/continue-chapter', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/rewrite-selection', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<RewriteSelectionRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.chapterId || !body.selectedText?.trim() || !body.instruction?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供完整的改写参数。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'rewriteSelection',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      selectedText: body.selectedText.trim(),
-      instruction: body.instruction.trim(),
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/rewrite-selection', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/polish-selection', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<PolishSelectionRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.chapterId || !body.selectedText?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供完整的润色参数。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'polishSelection',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      selectedText: body.selectedText.trim(),
-      prompt: body.prompt,
-      instruction: body.instruction,
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/polish-selection', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/review-continuity', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ReviewContinuityRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.prompt?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID 和审查要求。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'reviewContinuity',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      prompt: body.prompt.trim(),
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/review-continuity', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
-router.post('/actions/generate-cover-prompt', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<GenerateAgentCoverPromptRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID。'))
-      return
-    }
-
-    const payload = await executeAgentActionData(userId, {
-      kind: 'generateCoverPrompt',
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      prompt: body.prompt,
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+router.post('/actions/generate-cover-prompt', (_req: Request, res: Response): void => {
+  replyActionDeprecated(res)
 })
 
 router.post('/actions/execute', async (req: Request, res: Response): Promise<void> => {

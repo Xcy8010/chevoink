@@ -1,8 +1,9 @@
 /**
- * @deprecated legacy Agent 链路（AGENT_ENGINE=legacy 时的旧执行引擎）。
- * 新代码禁止 import 本文件；Agent 执行链路统一走 ./agent/run-service.js（AGENT_ENGINE=loop）。
- * 淘汰节奏见 plan/14 与工程治理方案阶段 F：确认 Vercel serverless 形态去留与安卓壳无引用后，
- * 将由 routes/agent.ts 端点返回 410 过渡一个版本，再物理删除整条链路。
+ * @deprecated legacy Agent 执行引擎（AGENT_ENGINE=legacy 时的旧链路）。
+ * 新代码禁止 import 本文件；Agent 主链路统一走 ./agent/run-service.js（AGENT_ENGINE=loop）。
+ * 现状（阶段 F-25）：仅写作助手（AssistPanel）的 execute/apply/rollback/sessions 短动作
+ * 仍经 routes/agent.ts 调用本文件；7 个细分 action 端点已 410 下线。
+ * 待写作助手迁移 loop 后，本文件与 agent-workspace-tools.ts 整体物理删除（约 3700 行）。
  */
 import type { Prisma } from '@prisma/client'
 import type {

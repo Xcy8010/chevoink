@@ -83,8 +83,9 @@ export const env = {
   aiVisionMaxConcurrent: parsePositiveNumber(process.env.AI_VISION_MAX_CONCURRENT, 4),
   // 全权限开关：'ask' 类工具动作自动批准；置 false 一键回退审批流
   agentAutoApprove: (process.env.AGENT_AUTO_APPROVE ?? 'true') !== 'false',
-  // Agent Loop 引擎：loop = 新内核；legacy = 旧链路；Vercel serverless 不支持长循环，强制 legacy
-  agentEngine: process.env.VERCEL ? 'legacy' : (process.env.AGENT_ENGINE ?? 'loop'),
+  // Agent Loop 引擎：loop = 新内核；legacy 仅写作助手（AssistPanel）短动作链路仍在用，
+  // 已随 Vercel serverless 形态下线移除强制回退，默认恒 loop（阶段 F-25）
+  agentEngine: process.env.AGENT_ENGINE ?? 'loop',
   agentModel: process.env.AI_AGENT_MODEL ?? process.env.AI_TEXT_MODEL ?? 'deepseek-chat',
   // 长任务（如连写六章）需要更多轮次与 token 预算，配合待办机制保证连续执行不早停；
   // 对齐主流 Agent 单任务消耗量级（百轮/百万 token），配合循环内的上下文瘦身机制防爆窗
