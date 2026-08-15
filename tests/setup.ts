@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { config } from 'dotenv'
 import { fileURLToPath } from 'node:url'
 
@@ -7,8 +8,19 @@ import { fileURLToPath } from 'node:url'
  * 2. 显式预加载同一份文件做守卫检查：凡 DATABASE_URL 存在，其库名必须包含 test，
  *    防止任何测试/迁移/seed 误指开发库或生产库；
  * 3. vitest pool:'forks' 进程级隔离（见 vitest.config.ts）。
+ *
+ * 开箱即用兜底：tests/.env.test 已被 .gitignore 排除（含密钥不入库），clone 后首次跑测试时
+ * 文件不存在 —— 就地注入最小可用环境（??= 不覆盖外部已设值），让纯单测无需任何配置即可全绿；
+ * 库指向本地 chevoink_test（含 test 过守卫），本地无 DB 时集成组由 skipIf 自动降级。
  */
 const envTestPath = fileURLToPath(new URL('./.env.test', import.meta.url))
+
+if (!existsSync(envTestPath)) {
+  process.env.APP_ENV ??= 'test'
+  process.env.AUTH_SESSION_SECRET ??= 'chevoink-test-session-secret-placeholder'
+  process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/chevoink_test'
+}
+
 process.env.DOTENV_PATH = envTestPath
 config({ path: envTestPath, override: true })
 
