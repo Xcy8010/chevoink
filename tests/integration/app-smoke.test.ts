@@ -1,0 +1,78 @@
+import request from 'supertest'
+import { afterAll, describe, expect, it } from 'vitest'
+
+import app from '../../api/app.js'
+import { prisma } from '../../api/lib/prisma.js'
+
+/**
+ * 集成冒烟：不依赖数据库的用例无条件执行（health/校验层）；
+ * 需要数据库的用例在 DB 不可达时整组跳过（本地无 PG 时不误报）。
+ * 顶层 await 探测：文件加载阶段完成，describe 收集时条件已就绪。
+ */
+const dbAvailable = await prisma.$queryRaw`SELECT 1`
+  .then(() => true)
+  .catch(() => false)
+
+afterAll(async () => {
+  await prisma.$disconnect().catch(() => {})
+})
+
+describe('应用冒烟（无 DB 依赖）', () => {
+  it('GET /api/health 返回 ok', async () => {
+    const res = await request(app).get('/api/health')
+    expect(res.status).toBe(200)
+    expect(res.body.success).toBe(true)
+    expect(res.body.data.status).toBe('ok')
+  })
+
+  it('未知路由返回 404 标准结构', async () => {
+    const res = await request(app).get('/api/definitely-not-exist')
+    expect(res.status).toBe(404)
+    expect(res.body.success).toBe(false)
+  })
+
+  it('登录缺参返回 400 且不触库（zod 校验层）', async () => {
+    const res = await request(app).post('/api/auth/login').send({})
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('VALIDATION_ERROR')
+    expect(res.body.error.message).toBe('请输入手机号和密码。')
+  })
+
+  it('发码缺参返回 400', async () => {
+    const res = await request(app).post('/api/auth/sms/send-code').send({ phone: '13800138000' })
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+describe.skipIf(!dbAvailable)('应用冒烟（需 DB）', () => {
+  it('注册→登录→登出全链路', async () => {
+    const phone = `+861398${Date.now().toString().slice(-7)}`
+    const password = 'Smoke-Test-123!'
+
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({ phone, nickname: '冒烟测试用户', password })
+    expect(registerRes.status).toBe(201)
+    expect(registerRes.body.data.tokens.accessToken).toContain('v2.')
+    // v2 双 cookie：access + refresh 同时下发
+    const setCookies = registerRes.headers['set-cookie']
+    const cookies = Array.isArray(setCookies) ? setCookies : setCookies ? [setCookies] : []
+    expect(cookies.some((c) => c.startsWith('chevoink_session='))).toBe(true)
+    expect(cookies.some((c) => c.startsWith('chevoink_refresh='))).toBe(true)
+
+    const loginRes = await request(app).post('/api/auth/login').send({ phone, password })
+    expect(loginRes.status).toBe(200)
+
+    const logoutRes = await request(app)
+      .post('/api/auth/logout')
+      .set('Cookie', `chevoink_refresh=${loginRes.body.data.tokens.refreshToken}`)
+    expect(logoutRes.status).toBe(200)
+
+    // 登出后 refresh 已吊销（tokenVersion 已 +1）
+    const revoked = await request(app)
+      .post('/api/auth/logout')
+      .set('Cookie', `chevoink_refresh=${loginRes.body.data.tokens.refreshToken}`)
+    expect(revoked.status).toBe(200)
+  })
+})

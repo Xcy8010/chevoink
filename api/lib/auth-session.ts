@@ -146,7 +146,8 @@ export function clearSession(res: Response) {
   res.append('Set-Cookie', serializeCookie(REFRESH_COOKIE_NAME, '', 0))
 }
 
-function verifySessionToken(token: string | undefined | null, kind: SessionTokenKind): VerifiedToken | null {
+/** 验签（v1 双读兼容 / v2 含 kind 与版本校验）；导出仅供单元测试使用 */
+export function verifySessionToken(token: string | undefined | null, kind: SessionTokenKind): VerifiedToken | null {
   if (!token) {
     return null
   }

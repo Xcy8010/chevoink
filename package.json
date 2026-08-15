@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "build:client": "vite build",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "deploy:prod": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-production.ps1",
@@ -53,6 +55,7 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/supertest": "^7.2.1",
     "@vercel/node": "^5.3.6",
     "@vitejs/plugin-react": "^4.4.1",
     "autoprefixer": "^10.4.21",
@@ -64,12 +67,14 @@
     "nodemon": "^3.1.10",
     "postcss": "^8.5.3",
     "prisma": "^6.14.0",
+    "supertest": "^7.2.2",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.3",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.30.1",
     "vite": "^6.3.5",
-    "vite-tsconfig-paths": "^5.1.4"
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.2.7"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

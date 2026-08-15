@@ -1,6 +1,8 @@
 import dotenv from 'dotenv'
 
-dotenv.config({ override: true })
+// DOTENV_PATH：测试等场景指向独立 env 文件，
+// 避免测试进程以 override:true 误读开发 .env（覆盖注入变量/误连开发库）
+dotenv.config({ path: process.env.DOTENV_PATH ?? '.env', override: true })
 
 function parsePositiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
