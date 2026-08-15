@@ -40,8 +40,12 @@ export const coverGenerateTool = defineTool({
       return { output: '封面生成失败：图像服务没有返回结果，可稍后重试或调整提示词。' }
     }
 
+    const candidates = images
+      .map((image, index) => `候选${index + 1}：coverAssetId ${image.id}，候选图 url ${image.imageUrl}`)
+      .join('；')
+
     return {
-      output: `已生成 ${images.length} 张封面候选图（coverAssetId：${images.map((image) => image.id).join('、')}）。接下来必须先对每张候选调用 view_image 校验画面（主体/文字/构图是否符合提示词「${args.prompt.slice(0, 120)}」），校验通过后再用 ask_user 询问作者是否应用（多张时问选哪张），得到确认后用 cover_apply 带对应 ID 应用；不要不问就结束任务。`,
+      output: `已生成 ${images.length} 张封面候选图：${candidates}。接下来必须先对每张候选调用 view_image（url 传上面给出的候选图 url，也可直传 coverAssetId）校验画面（主体/文字/构图是否符合提示词「${args.prompt.slice(0, 120)}」），校验通过后再用 ask_user 询问作者是否应用（多张时问选哪张），得到确认后用 cover_apply 带对应 ID 应用；不要不问就结束任务。`,
       summary: `生成 ${images.length} 张封面候选`,
       display: {
         kind: 'coverImages',

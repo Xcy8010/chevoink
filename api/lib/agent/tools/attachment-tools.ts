@@ -9,6 +9,7 @@ import {
   resolveManagedAttachmentPath,
 } from '../../agent-attachment-storage.js'
 import { extractFileText } from '../../file-extract.js'
+import { prisma } from '../../prisma.js'
 import { describeImageWithVision } from '../../vision-service.js'
 import { defineTool } from './types.js'
 
@@ -157,9 +158,11 @@ export const viewImageTool = defineTool({
   name: 'view_image',
   title: '查看图片',
   description:
-    '查看并理解一张图片（作者附带的参考图、cover_generate 返回的封面候选图、novel_get_context 返回的正式封面地址，含历史遗留的外网封面链接）。你是纯文本模型，看不到图片像素；本工具把图片发给视觉推理模型，返回文字描述。作者消息附带参考图时必须先逐张调用本工具理解图片再开始任务；cover_generate 生成封面后必须对每张候选调用本工具校验画面是否符合提示词；作者询问当前封面效果时用正式封面地址调用本工具查看。url 接受本站附件/封面地址或 https 外网图片地址。',
+    '查看并理解一张图片（作者附带的参考图、cover_generate 返回的封面候选图、novel_get_context 返回的正式封面地址，含历史遗留的外网封面链接）。你是纯文本模型，看不到图片像素；本工具把图片发给视觉推理模型，返回文字描述。作者消息附带参考图时必须先逐张调用本工具理解图片再开始任务；cover_generate 生成封面后必须对每张候选调用本工具校验画面是否符合提示词；作者询问当前封面效果时用正式封面地址调用本工具查看。url 接受本站附件/封面地址、封面候选的 coverAssetId 或 https 外网图片地址。',
   parameters: z.object({
-    url: z.string().describe('图片地址（作者附件 url、cover_generate 候选图 url、正式封面 url 或 https 外网图片 url）'),
+    url: z
+      .string()
+      .describe('图片地址（作者附件 url、cover_generate 候选图 url 或 coverAssetId、正式封面 url 或 https 外网图片 url）'),
     focus: z
       .string()
       .max(500)
@@ -168,7 +171,7 @@ export const viewImageTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(_ctx, args) {
+  async execute(ctx, args) {
     let buffer: Buffer | null = null
     let mime: string | undefined
 
@@ -184,11 +187,23 @@ export const viewImageTool = defineTool({
       buffer = remote.buffer
       mime = remote.mime
     } else {
-      const diskPath = resolveReadableImagePath(args.url)
+      let diskPath = resolveReadableImagePath(args.url)
+
+      if (!diskPath) {
+        // 容错：历史压缩可能只剩 coverAssetId，按归属反查候选图 url（防越权：仅限本人资源）
+        const asset = await prisma.coverAsset.findFirst({
+          where: { id: args.url, ownerUserId: ctx.userId },
+          select: { imageUrl: true },
+        })
+
+        if (asset) {
+          diskPath = resolveReadableImagePath(asset.imageUrl)
+        }
+      }
 
       if (!diskPath) {
         return {
-          output: `view_image 被拒绝：${args.url} 不是可读图片地址（仅允许本会话附件、封面候选或 https 外网图片）。请使用附件元数据、cover_generate 或 novel_get_context 返回的 url。`,
+          output: `view_image 被拒绝：${args.url} 不是可读图片地址（仅允许本会话附件、封面候选、封面候选 coverAssetId 或 https 外网图片）。请使用附件元数据、cover_generate 或 novel_get_context 返回的 url 或 coverAssetId。`,
         }
       }
 
