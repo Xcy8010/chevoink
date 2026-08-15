@@ -265,6 +265,8 @@ model Novel {
   @@index([authorId])
   @@index([status, visibility])
   @@index([categoryId])
+  @@index([status, visibility, lastPublishedAt])
+  @@index([authorId, updatedAt])
   @@map("novels")
 }
 
@@ -325,6 +327,7 @@ model Comment {
   likes       CommentLike[]
 
   @@index([targetType, targetId])
+  @@index([targetType, targetId, createdAt])
   @@index([parentId])
   @@index([novelId])
   @@index([chapterId])
@@ -388,6 +391,9 @@ model Post {
   @@index([topicId])
   @@index([relatedNovelId])
   @@index([sharedUserId])
+  @@index([createdAt])
+  @@index([topicId, createdAt])
+  @@index([userId, createdAt])
   @@map("posts")
 }
 

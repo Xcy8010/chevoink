@@ -30,6 +30,9 @@ app.use(
     credentials: true,
   }),
 )
+// nginx 反代单跳：让 req.ip 取 X-Forwarded-For 首值，
+// 限流/审计按真实客户端 IP 分桶（否则反代下全站共享 127.0.0.1 同一桶）
+app.set('trust proxy', 1)
 // 发帖最多 9 张 base64 配图，预留到 40mb
 app.use(express.json({ limit: '40mb' }))
 app.use(express.urlencoded({ extended: true, limit: '40mb' }))
@@ -94,11 +97,13 @@ app.get('/api/health', (_req: Request, res: Response): void => {
 })
 
 app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+  // 内部异常细节（可能含 DB 错误/文件路径）只落日志，不回传客户端
+  console.error('[unhandled]', error)
   res.status(500).json({
     success: false,
     error: {
       code: 'INTERNAL_SERVER_ERROR',
-      message: error.message || '服务端内部错误',
+      message: '服务暂时不可用，请稍后重试。',
     },
   })
 })

@@ -190,7 +190,6 @@ try {
     "--exclude=.git",
     "--exclude=.deploy-production.tar.gz",
     "api",
-    "cert",
     "deploy",
     "plan",
     "prisma",

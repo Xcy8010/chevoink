@@ -117,10 +117,13 @@ router.post('/cover-image', async (req: Request, res: Response): Promise<void> =
       return
     }
 
+    // 生成张数钳制在 1-4：count 直传付费 API 的 n 参数，无上限会单请求烧钱
+    const count = Math.min(Math.max(1, Math.floor(Number(body.count) || 1)), 4)
+
     const payload = await generateCoverImageData(userId, {
       prompt: body.prompt.trim(),
       size: FIXED_NOVEL_COVER_SIZE,
-      count: body.count,
+      count,
       novelId: body.novelId ?? null,
       negativePrompt: body.negativePrompt ?? null,
     })
