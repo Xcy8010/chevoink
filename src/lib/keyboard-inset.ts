@@ -110,7 +110,7 @@ export function setupKeyboardInsetWatcher() {
       const estimated =
         rememberedKeyboardHeight >= MIN_KEYBOARD_INSET
           ? rememberedKeyboardHeight
-          : Math.round(baselineHeight * 0.5)
+          : Math.round(baselineHeight * 0.55)
       visibleHeight =
         baselineHeight - Math.min(estimated, Math.round(baselineHeight * 0.7))
     }
