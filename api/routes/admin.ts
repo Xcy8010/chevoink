@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
 import { createAuthCaptchaChallenge, verifyAuthCaptchaChallenge } from '../lib/auth-captcha.js'
 import {
@@ -45,11 +46,37 @@ import {
   takeDownNovelData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { normalizePhoneNumber } from '../lib/phone.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { sendAuthSmsCode, verifyAuthSmsCode } from '../lib/sms-service.js'
 
 const router = Router()
+
+/* ---------------- 请求体校验 schema（文案与历史提示保持一致） ---------------- */
+
+/** 非空文本：对齐路由原 `!body.x?.trim()` 判定（空串与纯空白均拒绝，值原样透传） */
+const nonEmptyText = z.string().refine((value) => value.trim().length > 0)
+
+const adminSmsSendCodeSchema = z.object({
+  phone: nonEmptyText,
+  captchaId: nonEmptyText,
+  captchaAnswer: nonEmptyText,
+})
+
+const adminChangePasswordSchema = z.object({
+  oldPassword: z.string().min(1),
+  newPassword: z.string().min(1),
+})
+
+const adminBindPhoneSchema = z.object({
+  phone: nonEmptyText,
+  code: nonEmptyText,
+})
+
+const adminSetRoleSchema = z.object({
+  role: z.enum(['user', 'admin']),
+})
 
 /** 强密码校验：至少 12 位，含大小写、数字与符号 */
 function validateStrongPassword(password: string): string | null {
@@ -157,13 +184,9 @@ router.post('/auth/login', async (req: Request, res: Response): Promise<void> =>
 /** 管理后台手机号登录发码：必须先过人机验证，且手机号已绑定有效管理员 */
 router.post('/auth/sms/send-code', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { phone?: string; captchaId?: string; captchaAnswer?: string }
 
   try {
-    if (!body.phone?.trim() || !body.captchaId?.trim() || !body.captchaAnswer?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入手机号并完成人机验证。'))
-      return
-    }
+    const body = parseBody(adminSmsSendCodeSchema, req.body, '请输入手机号并完成人机验证。')
 
     const phone = normalizePhoneNumber(body.phone)
     const rateLimitKey = `${getRequestIp(req) ?? 'unknown'}:${phone}`
@@ -218,14 +241,10 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/me/change-password', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { oldPassword?: string; newPassword?: string }
 
   try {
     const admin = await requireAdmin(req)
-    if (!body.oldPassword || !body.newPassword) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入旧密码和新密码。'))
-      return
-    }
+    const body = parseBody(adminChangePasswordSchema, req.body, '请输入旧密码和新密码。')
 
     const strengthError = validateStrongPassword(body.newPassword)
     if (strengthError) {
@@ -257,14 +276,10 @@ router.post('/me/change-password', async (req: Request, res: Response): Promise<
 /** 管理员绑定手机号发码：人机验证 + 手机号未被占用 */
 router.post('/me/sms/send-code', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { phone?: string; captchaId?: string; captchaAnswer?: string }
 
   try {
     const admin = await requireAdmin(req)
-    if (!body.phone?.trim() || !body.captchaId?.trim() || !body.captchaAnswer?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入手机号并完成人机验证。'))
-      return
-    }
+    const body = parseBody(adminSmsSendCodeSchema, req.body, '请输入手机号并完成人机验证。')
 
     const phone = normalizePhoneNumber(body.phone)
     verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
@@ -286,14 +301,10 @@ router.post('/me/sms/send-code', async (req: Request, res: Response): Promise<vo
 /** 管理员绑定手机号：校验短信码后写入 */
 router.post('/me/bind-phone', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { phone?: string; code?: string }
 
   try {
     const admin = await requireAdmin(req)
-    if (!body.phone?.trim() || !body.code?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入手机号和短信验证码。'))
-      return
-    }
+    const body = parseBody(adminBindPhoneSchema, req.body, '请输入手机号和短信验证码。')
 
     const phone = normalizePhoneNumber(body.phone)
     await verifyAuthSmsCode({ phone, purpose: 'admin_bind', code: body.code.trim() })
@@ -418,7 +429,6 @@ router.post('/users/:userId/unban', async (req: Request, res: Response): Promise
 
 router.post('/users/:userId/role', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { role?: string }
 
   try {
     const admin = await requireAdmin(req)
@@ -431,13 +441,9 @@ router.post('/users/:userId/role', async (req: Request, res: Response): Promise<
       return
     }
 
-    const role = body.role
-    if (role !== 'user' && role !== 'admin') {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '不支持的角色，仅可设置用户或管理。'))
-      return
-    }
+    const body = parseBody(adminSetRoleSchema, req.body, '不支持的角色，仅可设置用户或管理。')
 
-    const result = await setUserRoleData(req.params.userId, role)
+    const result = await setUserRoleData(req.params.userId, body.role)
     if (result === null) {
       res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
       return

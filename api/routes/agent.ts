@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
-import type { CreateAgentSessionRequest, UpdateAgentSessionRequest } from '../../shared/contracts/index.js'
 import {
   resolveAgentApprovalSchema,
   resolveAgentQuestionSchema,
@@ -35,6 +35,31 @@ import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
 
+/* ---------------- 请求体校验 schema（文案与历史提示保持一致） ---------------- */
+
+const createAgentSessionSchema = z.object({
+  novelId: z.string().min(1),
+  title: z.string().optional(),
+})
+
+const updateAgentSessionSchema = z.object({
+  title: z.string().refine((value) => value.trim().length > 0),
+})
+
+const createAgentPlanSchema = z.object({
+  novelId: z.string().refine((value) => value.trim().length > 0),
+  title: z.string().optional(),
+})
+
+/** 计划改名/改正文：至少携带一个可更新字段（strip 后空对象拒绝） */
+const updateAgentPlanSchema = z
+  .object({
+    title: z.string().optional(),
+    content: z.string().optional(),
+    saved: z.boolean().optional(),
+  })
+  .refine((patch) => patch.title !== undefined || patch.content !== undefined || patch.saved !== undefined)
+
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
@@ -50,14 +75,10 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateAgentSessionRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.novelId) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID。'))
-      return
-    }
+    const body = parseBody(createAgentSessionSchema, req.body, '请提供作品 ID。')
 
     const payload = await createAgentSessionData(userId, {
       novelId: body.novelId,
@@ -71,14 +92,10 @@ router.post('/sessions', async (req: Request, res: Response): Promise<void> => {
 
 router.patch('/sessions/:sessionId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateAgentSessionRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.title?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供会话标题。'))
-      return
-    }
+    const body = parseBody(updateAgentSessionSchema, req.body, '请提供会话标题。')
 
     const payload = await updateAgentSessionData(userId, req.params.sessionId, {
       title: body.title,
@@ -299,21 +316,12 @@ router.get('/plans', async (req: Request, res: Response): Promise<void> => {
 // 计划文件夹：作者手工新建一份空白计划
 router.post('/plans', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { novelId?: unknown; title?: unknown }
 
   try {
     const userId = requireSessionUserId(req)
-    const novelId = typeof body.novelId === 'string' ? body.novelId.trim() : ''
-    if (!novelId) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID。'))
-      return
-    }
+    const body = parseBody(createAgentPlanSchema, req.body, '请提供作品 ID。')
 
-    const payload = await createNovelPlanArtifact(
-      userId,
-      novelId,
-      typeof body.title === 'string' ? body.title : undefined,
-    )
+    const payload = await createNovelPlanArtifact(userId, body.novelId, body.title)
     res.status(201).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -323,24 +331,10 @@ router.post('/plans', async (req: Request, res: Response): Promise<void> => {
 // 计划文件夹：改名/改正文，saved=false 从文件夹移除
 router.patch('/plans/:artifactId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as { title?: unknown; content?: unknown; saved?: unknown }
 
   try {
     const userId = requireSessionUserId(req)
-    const patch: { title?: string; content?: string; saved?: boolean } = {}
-    if (typeof body.title === 'string') {
-      patch.title = body.title
-    }
-    if (typeof body.content === 'string') {
-      patch.content = body.content
-    }
-    if (typeof body.saved === 'boolean') {
-      patch.saved = body.saved
-    }
-    if (Object.keys(patch).length === 0) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供需要更新的字段。'))
-      return
-    }
+    const patch = parseBody(updateAgentPlanSchema, req.body, '请提供需要更新的字段。')
 
     const payload = await updateNovelPlanArtifact(userId, req.params.artifactId, patch)
     res.status(200).json(buildSuccess(requestId, payload))

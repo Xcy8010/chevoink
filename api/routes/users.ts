@@ -1,14 +1,7 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
-import type {
-  SaveParagraphUnderlineRequest,
-  SaveReadingProgressRequest,
-  UpdateMyAvatarRequest,
-  UpdateMyCoverRequest,
-  UpdateMyPasswordRequest,
-  UpdateMyProfileRequest,
-  UpdatePrivacyRequest,
-} from '../../shared/contracts/index.js'
+import type { UpdatePrivacyRequest } from '../../shared/contracts/index.js'
 import { removeManagedAvatar, storeAvatarDataUrl } from '../lib/avatar-storage.js'
 import { createSession, getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { removeManagedProfileCover, storeProfileCoverDataUrl } from '../lib/profile-cover-storage.js'
@@ -40,11 +33,59 @@ import {
   updateMyProfileData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { hasConfiguredPassword, verifyPassword } from '../lib/password.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { sendAuthSmsCode, verifyAuthSmsCode } from '../lib/sms-service.js'
 
 const router = Router()
+
+/* ---------------- 请求体校验 schema（文案与历史提示保持一致） ---------------- */
+
+/** 非空文本：对齐路由原 `!body.x?.trim()` 判定（空串与纯空白均拒绝，值原样透传） */
+const nonEmptyText = z.string().refine((value) => value.trim().length > 0)
+
+const updateProfileSchema = z.object({
+  nickname: nonEmptyText,
+  bio: z.string().optional(),
+})
+
+const updateAvatarSchema = z.object({
+  avatarDataUrl: z.string().nullable(),
+})
+
+const updateCoverSchema = z.object({
+  coverDataUrl: z.string().nullable(),
+})
+
+const updatePasswordSchema = z.object({
+  password: nonEmptyText,
+  oldPassword: z.string().optional(),
+  code: z.string().optional(),
+})
+
+const saveReadingProgressSchema = z.object({
+  novelId: nonEmptyText,
+  novelTitle: nonEmptyText,
+  coverUrl: z.string().nullable().optional(),
+  chapterId: z.string().nullable().optional(),
+  chapterTitle: z.string().nullable().optional(),
+  chapterOrder: z.number().optional(),
+  totalChapters: z.number().optional(),
+  scrollPercent: z.number().optional(),
+  scrollOnly: z.boolean().optional(),
+  shelfOnly: z.boolean().optional(),
+})
+
+const saveUnderlineSchema = z.object({
+  novelId: nonEmptyText,
+  chapterId: nonEmptyText,
+  paragraphIndex: z.number().int().min(0),
+})
+
+const markInteractionSeenSchema = z.object({
+  target: z.enum(['interactions', 'followers']),
+})
 
 router.get('/me', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -60,15 +101,10 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
 
 router.patch('/me/profile', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateMyProfileRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.nickname?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入昵称。'))
-      return
-    }
+    const body = parseBody(updateProfileSchema, req.body, '请输入昵称。')
 
     const user = await updateMyProfileData(userId, {
       nickname: body.nickname,
@@ -82,15 +118,10 @@ router.patch('/me/profile', async (req: Request, res: Response): Promise<void> =
 
 router.patch('/me/avatar', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateMyAvatarRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (typeof body.avatarDataUrl !== 'string' && body.avatarDataUrl !== null) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请上传头像图片。'))
-      return
-    }
+    const body = parseBody(updateAvatarSchema, req.body, '请上传头像图片。')
 
     const nextAvatarUrl = body.avatarDataUrl ? await storeAvatarDataUrl(body.avatarDataUrl) : null
     let previousAvatarUrl: string | null = null
@@ -118,15 +149,10 @@ router.patch('/me/avatar', async (req: Request, res: Response): Promise<void> =>
 
 router.patch('/me/cover', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateMyCoverRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (typeof body.coverDataUrl !== 'string' && body.coverDataUrl !== null) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请上传封面图片。'))
-      return
-    }
+    const body = parseBody(updateCoverSchema, req.body, '请上传封面图片。')
 
     const nextProfileCoverUrl = body.coverDataUrl ? await storeProfileCoverDataUrl(body.coverDataUrl) : null
     let previousProfileCoverUrl: string | null = null
@@ -177,15 +203,10 @@ router.post('/me/password/sms-code', async (req: Request, res: Response): Promis
 
 router.patch('/me/password', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateMyPasswordRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.password?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入登录密码。'))
-      return
-    }
+    const body = parseBody(updatePasswordSchema, req.body, '请输入登录密码。')
 
     if (body.password.trim().length < 6) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '登录密码至少需要 6 位。'))
@@ -287,17 +308,12 @@ router.get('/me/reading-progress', async (req: Request, res: Response): Promise<
 
 router.post('/me/reading-progress', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<SaveReadingProgressRequest>
 
   try {
     const userId = requireSessionUserId(req)
+    const body = parseBody(saveReadingProgressSchema, req.body, '缺少作品信息。')
 
-    if (!body.novelId?.trim() || !body.novelTitle?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '缺少作品信息。'))
-      return
-    }
-
-    const item = await saveReadingProgressData(userId, body as SaveReadingProgressRequest)
+    const item = await saveReadingProgressData(userId, body)
     if (!item) {
       res.status(404).json(buildError(requestId, 'NOVEL_NOT_FOUND', '未找到作品。'))
       return
@@ -342,21 +358,10 @@ router.get('/me/underlines', async (req: Request, res: Response): Promise<void> 
 
 router.put('/me/underlines', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<SaveParagraphUnderlineRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (
-      !body.novelId?.trim() ||
-      !body.chapterId?.trim() ||
-      typeof body.paragraphIndex !== 'number' ||
-      !Number.isInteger(body.paragraphIndex) ||
-      body.paragraphIndex < 0
-    ) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '划线参数不完整。'))
-      return
-    }
+    const body = parseBody(saveUnderlineSchema, req.body, '划线参数不完整。')
 
     const saved = await saveParagraphUnderlineData(userId, {
       novelId: body.novelId,
@@ -419,17 +424,12 @@ router.get('/me/interaction-badges', async (req: Request, res: Response): Promis
 
 router.post('/me/interaction-badges/seen', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const target = (req.body ?? {}).target
 
   try {
     const userId = requireSessionUserId(req)
+    const body = parseBody(markInteractionSeenSchema, req.body, '无效的已读标记目标。')
 
-    if (target !== 'interactions' && target !== 'followers') {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '无效的已读标记目标。'))
-      return
-    }
-
-    const payload = await markInteractionSeenData(userId, target)
+    const payload = await markInteractionSeenData(userId, body.target)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

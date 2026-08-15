@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
-import type { UpdateCommentRequest } from '../../shared/contracts/index.js'
 import { createCommentSchema } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import {
@@ -15,6 +15,13 @@ import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
+
+/* ---------------- 请求体校验 schema（文案与历史提示保持一致） ---------------- */
+
+const updateCommentSchema = z.object({
+  content: z.string().refine((value) => value.trim().length > 0),
+  rating: z.number().optional(),
+})
 
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -87,14 +94,10 @@ router.delete('/:commentId/like', (req, res) => handleCommentLike(req, res, fals
 
 router.patch('/:commentId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateCommentRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.content?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请填写评论内容。'))
-      return
-    }
+    const body = parseBody(updateCommentSchema, req.body, '请填写评论内容。')
 
     const comment = await updateCommentData(userId, req.params.commentId, {
       content: body.content.trim(),

@@ -1,18 +1,11 @@
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 
-import type {
-  ChapterAssistRequest,
-  GenerateOutlineRequest,
-  TtsSynthesizeRequest,
-} from '../../shared/contracts/index.js'
 import { FIXED_NOVEL_COVER_SIZE } from '../../shared/contracts/index.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import {
-  chapterAssistData,
   generateCoverImageData,
   generateCoverPromptData,
-  generateOutlineData,
   getAiConfigPayload,
 } from '../lib/ai-service.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
@@ -37,6 +30,16 @@ const coverImageSchema = z.object({
   negativePrompt: z.string().nullable().optional(),
 })
 
+/** 非空文本：对齐路由原 `!body.x?.trim()` 判定（空串与纯空白均拒绝，值原样透传） */
+const nonEmptyText = z.string().refine((value) => value.trim().length > 0)
+
+const ttsSynthesizeSchema = z.object({
+  novelId: nonEmptyText,
+  chapterId: nonEmptyText,
+  voiceId: nonEmptyText,
+  batchIndex: z.number().int().min(0),
+})
+
 router.get('/config', async (_req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
@@ -48,52 +51,16 @@ router.get('/config', async (_req: Request, res: Response): Promise<void> => {
   }
 })
 
-router.post('/outline', async (req: Request, res: Response): Promise<void> => {
+// 已下线：前端零调用的死端点改 410（观察期，生产日志确认无命中后可物理删除路由）
+router.post('/outline', (_req: Request, res: Response): void => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<GenerateOutlineRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.theme?.trim() || !body.genre?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供主题和题材。'))
-      return
-    }
-
-    const payload = await generateOutlineData(userId, {
-      theme: body.theme.trim(),
-      genre: body.genre.trim(),
-      tone: body.tone,
-      targetLength: body.targetLength,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+  res.status(410).json(buildError(requestId, 'ENDPOINT_DEPRECATED', '该功能已下线。'))
 })
 
-router.post('/chapter-assist', async (req: Request, res: Response): Promise<void> => {
+// 已下线：前端零调用的死端点改 410（观察期，生产日志确认无命中后可物理删除路由）
+router.post('/chapter-assist', (_req: Request, res: Response): void => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ChapterAssistRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.mode || !body.content?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供任务模式和正文内容。'))
-      return
-    }
-
-    const payload = await chapterAssistData(userId, {
-      mode: body.mode,
-      content: body.content,
-      novelId: body.novelId,
-      chapterId: body.chapterId,
-    })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
+  res.status(410).json(buildError(requestId, 'ENDPOINT_DEPRECATED', '该功能已下线。'))
 })
 
 router.post('/cover-prompt', async (req: Request, res: Response): Promise<void> => {
@@ -180,20 +147,9 @@ function isTtsRateLimited(key: string): boolean {
 /** 听书批次合成：返回 audio/mpeg 二进制，错误仍走 JSON 错误结构 */
 router.post('/tts/synthesize', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<TtsSynthesizeRequest>
 
   try {
-    if (
-      !body.novelId?.trim() ||
-      !body.chapterId?.trim() ||
-      !body.voiceId?.trim() ||
-      typeof body.batchIndex !== 'number' ||
-      !Number.isInteger(body.batchIndex) ||
-      body.batchIndex < 0
-    ) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供完整的听书合成参数。'))
-      return
-    }
+    const body = parseBody(ttsSynthesizeSchema, req.body, '请提供完整的听书合成参数。')
 
     const rateKey = req.ip ?? 'unknown'
     if (isTtsRateLimited(rateKey)) {
