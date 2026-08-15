@@ -1,12 +1,11 @@
 import { Router, type Request, type Response } from 'express'
 
-import type {
-  CreateAgentSessionRequest,
-  ResolveAgentApprovalRequest,
-    ResolveAgentQuestionRequest,
-  StartAgentLoopRunRequest,
-  UpdateAgentSessionRequest,
-  UploadAgentAttachmentRequest,
+import type { CreateAgentSessionRequest, UpdateAgentSessionRequest } from '../../shared/contracts/index.js'
+import {
+  resolveAgentApprovalSchema,
+  resolveAgentQuestionSchema,
+  startAgentLoopRunSchema,
+  uploadAgentAttachmentSchema,
 } from '../../shared/contracts/index.js'
 import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
@@ -31,6 +30,7 @@ import {
   updateNovelPlanArtifact,
 } from '../lib/agent/run-service.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
@@ -160,11 +160,7 @@ router.post('/attachments', async (req: Request, res: Response): Promise<void> =
   try {
     // 上传端点仅要求登录态：requireSessionUserId 的鉴权副作用即可
     requireSessionUserId(req)
-    const body = (req.body ?? {}) as Partial<UploadAgentAttachmentRequest>
-    if (!body.kind || !body.name?.trim() || !body.dataUrl?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '附件参数不完整。'))
-      return
-    }
+    const body = parseBody(uploadAgentAttachmentSchema, req.body, '附件参数不完整。')
 
     const payload = await storeAgentAttachment({
       kind: body.kind,
@@ -179,15 +175,10 @@ router.post('/attachments', async (req: Request, res: Response): Promise<void> =
 
 router.post('/runs', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<StartAgentLoopRunRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.sessionId || !body.novelId || !body.mode || !body.prompt?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写运行参数。'))
-      return
-    }
+    const body = parseBody(startAgentLoopRunSchema, req.body, '请完整填写运行参数。')
 
     const payload = await startLoopRun(userId, {
       sessionId: body.sessionId,
@@ -227,14 +218,10 @@ router.get('/runs/:runId/stream', async (req: Request, res: Response): Promise<v
 // 新链路：工具审批批复
 router.post('/runs/:runId/approvals', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ResolveAgentApprovalRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.callId || typeof body.approved !== 'boolean') {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供 callId 与 approved。'))
-      return
-    }
+    const body = parseBody(resolveAgentApprovalSchema, req.body, '请提供 callId 与 approved。')
 
     const payload = await resolveLoopRunApproval(
       userId,
@@ -252,14 +239,10 @@ router.post('/runs/:runId/approvals', async (req: Request, res: Response): Promi
 // 新链路：ask_user 提问批复（作者作答后唤醒挂起的工具）
 router.post('/runs/:runId/questions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ResolveAgentQuestionRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.callId || typeof body.answer !== 'string' || !body.answer.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供 callId 与回答内容。'))
-      return
-    }
+    const body = parseBody(resolveAgentQuestionSchema, req.body, '请提供 callId 与回答内容。')
 
     const payload = await resolveLoopRunQuestion(userId, req.params.runId, body.callId, body.answer.trim())
     res.status(200).json(buildSuccess(requestId, payload))

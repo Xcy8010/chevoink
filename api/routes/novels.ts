@@ -1,14 +1,15 @@
 import { Router, type Request, type Response } from 'express'
 
-import type {
-  CreateChapterRequest,
-  CreateNovelRequest,
-  PublishNovelRequest,
-  UploadNovelCoverRequest,
-  UpdateChapterRequest,
-  UpdateNovelRequest,
+import {
+  FIXED_NOVEL_COVER_HEIGHT,
+  FIXED_NOVEL_COVER_WIDTH,
+  createChapterSchema,
+  createNovelSchema,
+  publishNovelSchema,
+  updateChapterSchema,
+  updateNovelSchema,
+  uploadNovelCoverSchema,
 } from '../../shared/contracts/index.js'
-import { FIXED_NOVEL_COVER_HEIGHT, FIXED_NOVEL_COVER_WIDTH } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import {
   createChapterData,
@@ -29,6 +30,7 @@ import {
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { storeNovelCoverDataUrl } from '../lib/novel-cover-storage.js'
+import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
@@ -67,22 +69,17 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateNovelRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.title?.trim() || !body.summary?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写作品标题和简介。'))
-      return
-    }
+    const body = parseBody(createNovelSchema, req.body, '请完整填写作品标题和简介。')
 
     const novel = await createNovelData(userId, {
       title: body.title.trim(),
       displayTitle: body.displayTitle,
       summary: body.summary.trim(),
       categoryId: body.categoryId,
-      tags: body.tags ?? [],
+      tags: body.tags,
       visibility: body.visibility,
       status: body.status,
     })
@@ -117,10 +114,11 @@ router.get('/:novelId', async (req: Request, res: Response): Promise<void> => {
 
 router.patch('/:novelId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateNovelRequest>
 
   try {
     const userId = requireSessionUserId(req)
+    // 原零校验透传：schema 仅做错型拦截与字段白名单 strip，空值校验仍在 data 层
+    const body = parseBody(updateNovelSchema, req.body, '作品信息格式不正确。')
     const novel = await updateNovelData(userId, req.params.novelId, body)
 
     if (!novel) {
@@ -136,15 +134,10 @@ router.patch('/:novelId', async (req: Request, res: Response): Promise<void> => 
 
 router.patch('/:novelId/cover', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UploadNovelCoverRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.coverDataUrl?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品封面图片。'))
-      return
-    }
+    const body = parseBody(uploadNovelCoverSchema, req.body, '请提供作品封面图片。')
 
     const imageUrl = await storeNovelCoverDataUrl(body.coverDataUrl.trim())
     const asset = await createUploadedCoverAssetData({
@@ -190,16 +183,13 @@ router.delete('/:novelId/favorite', (req, res) => handleNovelFavorite(req, res, 
 
 router.post('/:novelId/publish', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<PublishNovelRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    const chapterIds = Array.isArray(body.chapterIds)
-      ? body.chapterIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
-      : []
+    const body = parseBody(publishNovelSchema, req.body, '发布参数不正确。')
     const visibility = body.visibility ?? 'public'
 
-    const payload = await publishNovelData(userId, req.params.novelId, chapterIds, visibility)
+    const payload = await publishNovelData(userId, req.params.novelId, body.chapterIds, visibility)
 
     if (!payload) {
       res.status(404).json(buildError(requestId, 'NOVEL_NOT_FOUND', '未找到作品。'))
@@ -265,15 +255,10 @@ router.get('/:novelId/reader/:chapterId', async (req: Request, res: Response): P
 
 router.post('/:novelId/chapters', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateChapterRequest>
 
   try {
     const userId = requireSessionUserId(req)
-
-    if (!body.title?.trim() || body.content === undefined || !body.status) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写章节信息。'))
-      return
-    }
+    const body = parseBody(createChapterSchema, req.body, '请完整填写章节信息。')
 
     const chapter = await createChapterData(
       userId,
@@ -319,10 +304,11 @@ router.get('/:novelId/chapters/:chapterId', async (req: Request, res: Response):
 
 router.patch('/:novelId/chapters/:chapterId', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<UpdateChapterRequest>
 
   try {
     const userId = requireSessionUserId(req)
+    // 原零校验透传：schema 仅做错型拦截与字段白名单 strip，空值校验仍在 data 层
+    const body = parseBody(updateChapterSchema, req.body, '章节信息格式不正确。')
     const chapter = await updateChapterData(userId, req.params.novelId, req.params.chapterId, body)
 
     if (!chapter) {

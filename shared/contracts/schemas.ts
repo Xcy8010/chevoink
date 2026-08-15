@@ -1,0 +1,143 @@
+import { z } from 'zod'
+
+/**
+ * P0 写操作路由请求体 schema（阶段 L 收编）
+ *
+ * 设计约定：
+ * - Create 类必填字段保持必填；Update 类全 optional，未知字段静默剔除（strip 与 data 层字段白名单对齐）
+ * - 400 文案由路由层 parseBody 的 fallbackMessage 统一提供（逐字保留历史文案），schema 自身不携带对外文案
+ * - 枚举值与 contracts 手写类型一一对应，由 tests/unit/schemas.test.ts 的 expectTypeOf
+ *   全等断言锁死，防止两处漂移
+ */
+
+/** 非空文本：对齐路由原 `!body.x?.trim()` 判定（空串与纯空白均拒绝，数值原样透传不做 trim 变换） */
+const nonEmptyText = z.string().refine((value) => value.trim().length > 0)
+
+const visibilitySchema = z.enum(['public', 'followers', 'private'])
+const novelStatusSchema = z.enum(['draft', 'published', 'completed', 'archived'])
+const chapterStatusSchema = z.enum(['draft', 'published', 'scheduled', 'archived'])
+
+/* ---------------- novels ---------------- */
+
+/** POST /api/novels（原校验：标题与简介 trim 后非空） */
+export const createNovelSchema = z.object({
+  title: nonEmptyText,
+  displayTitle: z.string().optional(),
+  summary: nonEmptyText,
+  categoryId: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  visibility: visibilitySchema.optional(),
+  status: z.enum(['draft', 'published']).optional(),
+})
+
+/** PATCH /api/novels/:novelId（原路由零校验透传：仅错型拦截 + 字段白名单 strip，空值校验留在 data 层） */
+export const updateNovelSchema = z.object({
+  title: z.string().optional(),
+  displayTitle: z.string().optional(),
+  summary: z.string().optional(),
+  categoryId: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  visibility: visibilitySchema.optional(),
+  status: novelStatusSchema.optional(),
+  coverAssetId: z.string().nullable().optional(),
+  coverPrompt: z.string().nullable().optional(),
+})
+
+/** PATCH /api/novels/:novelId/cover（原校验：coverDataUrl trim 后非空） */
+export const uploadNovelCoverSchema = z.object({
+  coverDataUrl: nonEmptyText,
+})
+
+/** POST /api/novels/:novelId/publish（chapterIds 缺省视为 []，visibility 缺省由路由补 'public'） */
+export const publishNovelSchema = z.object({
+  chapterIds: z.array(z.string().min(1)).default([]),
+  visibility: visibilitySchema.optional(),
+})
+
+/** POST /api/novels/:novelId/chapters（原校验：标题 trim 后非空、content 仅拒缺省、status 必填） */
+export const createChapterSchema = z.object({
+  title: nonEmptyText,
+  summary: z.string().optional(),
+  content: z.string(),
+  status: chapterStatusSchema,
+  visibility: visibilitySchema.optional(),
+})
+
+/** PATCH /api/novels/:novelId/chapters/:chapterId（原路由零校验透传：同 updateNovelSchema 策略） */
+export const updateChapterSchema = z.object({
+  title: z.string().optional(),
+  summary: z.string().optional(),
+  content: z.string().optional(),
+  status: chapterStatusSchema.optional(),
+  visibility: visibilitySchema.optional(),
+})
+
+/* ---------------- posts / comments ---------------- */
+
+/** POST /api/posts（配图张数上限校验留在路由层：文案含动态数量） */
+export const createPostSchema = z.object({
+  content: nonEmptyText,
+  topicId: z.string().optional(),
+  imageUrls: z.array(z.string()).optional(),
+  imageDataUrls: z.array(z.string()).optional(),
+  relatedNovelId: z.string().optional(),
+  sharedUserId: z.string().optional(),
+})
+
+/** POST /api/comments（rating/paragraphIndex 的业务校验留在 data 层） */
+export const createCommentSchema = z.object({
+  targetType: z.enum(['novel', 'chapter', 'post']),
+  targetId: nonEmptyText,
+  content: nonEmptyText,
+  parentId: z.string().optional(),
+  rating: z.number().optional(),
+  paragraphIndex: z.number().nullable().optional(),
+})
+
+/* ---------------- agent ---------------- */
+
+const agentAttachmentMetaSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['image', 'file']),
+  name: z.string(),
+  url: z.string(),
+  size: z.number().optional(),
+})
+
+/** POST /api/agent/runs（原校验：四字段齐全；mode 管道保留但后端恒 build，见 agent.ts） */
+export const startAgentLoopRunSchema = z.object({
+  sessionId: z.string().min(1),
+  novelId: z.string().min(1),
+  chapterId: z.string().nullable().optional(),
+  mode: z.enum(['plan', 'build', 'review']),
+  prompt: nonEmptyText,
+  selection: z
+    .object({
+      text: z.string(),
+      start: z.number().optional(),
+      end: z.number().optional(),
+    })
+    .nullable()
+    .optional(),
+  attachments: z.array(agentAttachmentMetaSchema).optional(),
+})
+
+/** POST /api/agent/runs/:runId/approvals（原校验：callId 真值 + approved 为布尔） */
+export const resolveAgentApprovalSchema = z.object({
+  callId: z.string().min(1),
+  approved: z.boolean(),
+  alwaysAllow: z.boolean().optional(),
+})
+
+/** POST /api/agent/runs/:runId/questions（原校验：callId 真值 + answer trim 后非空） */
+export const resolveAgentQuestionSchema = z.object({
+  callId: z.string().min(1),
+  answer: nonEmptyText,
+})
+
+/** POST /api/agent/attachments（原校验：kind 真值 + name/dataUrl trim 后非空；kind 枚举收紧为 image|file） */
+export const uploadAgentAttachmentSchema = z.object({
+  kind: z.enum(['image', 'file']),
+  name: nonEmptyText,
+  dataUrl: nonEmptyText,
+})

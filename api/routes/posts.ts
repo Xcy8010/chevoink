@@ -1,9 +1,10 @@
 import { Router, type Request, type Response } from 'express'
 
-import type { CreatePostRequest } from '../../shared/contracts/index.js'
+import { createPostSchema } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import { createPostData, deletePostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { MAX_POST_IMAGE_COUNT, storePostImageDataUrls } from '../lib/post-image-storage.js'
 import { sendRouteError } from '../lib/route-error.js'
 
@@ -44,18 +45,12 @@ router.get('/:postId', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreatePostRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (!body.content?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请输入动态内容。'))
-      return
-    }
+    const body = parseBody(createPostSchema, req.body, '请输入动态内容。')
 
-    const imageDataUrls = Array.isArray(body.imageDataUrls)
-      ? body.imageDataUrls.filter((item): item is string => typeof item === 'string')
-      : []
+    const imageDataUrls = body.imageDataUrls ?? []
 
     if (imageDataUrls.length > MAX_POST_IMAGE_COUNT) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', `讨论配图最多上传 ${MAX_POST_IMAGE_COUNT} 张。`))

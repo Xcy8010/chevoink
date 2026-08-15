@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 
-import type { CreateCommentRequest, UpdateCommentRequest } from '../../shared/contracts/index.js'
+import type { UpdateCommentRequest } from '../../shared/contracts/index.js'
+import { createCommentSchema } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import {
   createCommentData,
@@ -10,6 +11,7 @@ import {
   updateCommentData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
@@ -40,18 +42,10 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateCommentRequest>
 
   try {
     const userId = requireSessionUserId(req)
-    if (
-      (body.targetType !== 'novel' && body.targetType !== 'chapter' && body.targetType !== 'post') ||
-      !body.targetId?.trim() ||
-      !body.content?.trim()
-    ) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写评论内容。'))
-      return
-    }
+    const body = parseBody(createCommentSchema, req.body, '请完整填写评论内容。')
 
     const comment = await createCommentData(userId, {
       targetType: body.targetType,
