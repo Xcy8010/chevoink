@@ -1,0 +1,203 @@
+/**
+ * 创作区工作区常量与会话窗装配
+ * 由 StudioWorkspace.tsx 模块级拆分而来（声明顺序与原文件一致）。
+ */
+import type { Novel, AgentSession } from '../../../../shared/contracts/index.js'
+import type { AgentTaskWindowState } from './workspace-types.js'
+
+
+
+export const DEFAULT_NOVEL_ID = 'novel-aurora'
+
+
+// 新建默认名；旧名「我的第一部作品」保留识别，兼容存量引导作品
+export const BOOTSTRAP_NOVEL_TITLE = '未命名作品'
+
+
+export const BOOTSTRAP_NOVEL_TITLES = new Set([BOOTSTRAP_NOVEL_TITLE, '我的第一部作品'])
+
+
+export const BOOTSTRAP_NOVEL_SUMMARY = '先创建一部作品，再继续完善简介、章节和封面。'
+
+
+export const AGENT_WORKSPACE_STORAGE_PREFIX = 'studio-agent-workspace'
+
+
+export const STUDIO_LAST_NOVEL_STORAGE_KEY = 'studio-last-novel-id'
+
+
+export const DEFAULT_AGENT_TASK_TITLE = '新任务'
+
+
+
+export function formatWordCount(value: number): string {
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(1)} 万字`
+  }
+
+  return `${value} 字`
+}
+
+
+
+export function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return '待更新'
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+
+
+export function resolveNovelTitleState(novel: Novel): { title: string; missing: boolean } {
+  const displayTitle = novel.displayTitle?.trim()
+
+  if (displayTitle) {
+    return {
+      title: displayTitle,
+      missing: false,
+    }
+  }
+
+  const title = novel.title?.trim() ?? ''
+  if (title && !BOOTSTRAP_NOVEL_TITLES.has(title)) {
+    return {
+      title,
+      missing: false,
+    }
+  }
+
+  return {
+    title: '还没给这部作品命名',
+    missing: true,
+  }
+}
+
+
+
+export function isBootstrapNovel(novel: Pick<Novel, 'title' | 'displayTitle' | 'summary' | 'chapterCount' | 'wordCount'>) {
+  return (
+    !novel.displayTitle?.trim() &&
+    BOOTSTRAP_NOVEL_TITLES.has(novel.title) &&
+    novel.summary === BOOTSTRAP_NOVEL_SUMMARY &&
+    novel.chapterCount === 0 &&
+    novel.wordCount === 0
+  )
+}
+
+
+
+export function getAgentWorkspaceStorageKey(novelId: string) {
+  return `${AGENT_WORKSPACE_STORAGE_PREFIX}:${novelId}`
+}
+
+
+
+export function createLocalAgentTaskWindow(overrides?: Partial<AgentTaskWindowState>): AgentTaskWindowState {
+  const createdAt = overrides?.createdAt ?? new Date().toISOString()
+
+  return {
+    id: overrides?.id ?? `local-agent-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sessionId: overrides?.sessionId ?? null,
+    title: overrides?.title?.trim() || DEFAULT_AGENT_TASK_TITLE,
+    prompt: overrides?.prompt ?? '',
+    artifacts: overrides?.artifacts ?? [],
+    activeArtifactId: overrides?.activeArtifactId ?? overrides?.artifacts?.[0]?.id ?? null,
+    loaded: overrides?.loaded ?? false,
+    temporary: overrides?.temporary ?? true,
+    customNamed: overrides?.customNamed ?? false,
+    firstPromptSubmitted: overrides?.firstPromptSubmitted ?? false,
+    createdAt,
+    updatedAt: overrides?.updatedAt ?? createdAt,
+  }
+}
+
+
+
+export function buildAgentTaskWindowFromSession(session: AgentSession): AgentTaskWindowState {
+  return createLocalAgentTaskWindow({
+    id: session.id,
+    sessionId: session.id,
+    title: session.title,
+    temporary: false,
+    loaded: false,
+    customNamed: session.title.trim() !== DEFAULT_AGENT_TASK_TITLE && !session.title.includes('写作会话'),
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  })
+}
+
+
+
+export function getAgentTaskWindowTimestamp(taskWindow: Pick<AgentTaskWindowState, 'updatedAt' | 'createdAt'>) {
+  const timestamp = new Date(taskWindow.updatedAt || taskWindow.createdAt).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+
+
+export function choosePreferredAgentTaskWindow(
+  left: AgentTaskWindowState,
+  right: AgentTaskWindowState,
+): AgentTaskWindowState {
+  const preferredByTime =
+    getAgentTaskWindowTimestamp(right) > getAgentTaskWindowTimestamp(left) ? right : left
+  const alternate = preferredByTime === right ? left : right
+
+  return {
+    ...alternate,
+    ...preferredByTime,
+    title: preferredByTime.customNamed ? preferredByTime.title : alternate.customNamed ? alternate.title : preferredByTime.title,
+    prompt:
+      preferredByTime.prompt.trim().length >= alternate.prompt.trim().length ? preferredByTime.prompt : alternate.prompt,
+    artifacts:
+      preferredByTime.artifacts.length >= alternate.artifacts.length ? preferredByTime.artifacts : alternate.artifacts,
+    activeArtifactId: preferredByTime.activeArtifactId ?? alternate.activeArtifactId,
+    loaded: preferredByTime.loaded || alternate.loaded,
+    temporary: preferredByTime.temporary && alternate.temporary,
+    customNamed: preferredByTime.customNamed || alternate.customNamed,
+    firstPromptSubmitted: preferredByTime.firstPromptSubmitted || alternate.firstPromptSubmitted,
+  }
+}
+
+
+
+export function dedupeAgentTaskWindows(taskWindows: AgentTaskWindowState[]) {
+  const deduped = new Map<string, AgentTaskWindowState>()
+
+  for (const taskWindow of taskWindows) {
+    const key = taskWindow.sessionId ? `session:${taskWindow.sessionId}` : `local:${taskWindow.id}`
+    const existingTaskWindow = deduped.get(key)
+
+    if (!existingTaskWindow) {
+      deduped.set(key, taskWindow)
+      continue
+    }
+
+    deduped.set(key, choosePreferredAgentTaskWindow(existingTaskWindow, taskWindow))
+  }
+
+  return Array.from(deduped.values()).sort(
+    (left, right) => getAgentTaskWindowTimestamp(right) - getAgentTaskWindowTimestamp(left),
+  )
+}
+
+
+
+export function shouldDisplayListedAgentSession(
+  session: Pick<AgentSession, 'title' | 'lastRunAt'>,
+  hasLocalMatch: boolean,
+) {
+  if (hasLocalMatch) {
+    return true
+  }
+
+  const normalizedTitle = session.title.trim()
+  return Boolean(session.lastRunAt) || (normalizedTitle && normalizedTitle !== DEFAULT_AGENT_TASK_TITLE)
+}
