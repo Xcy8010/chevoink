@@ -66,6 +66,29 @@ export function setupKeyboardInsetWatcher() {
   let revealTarget: HTMLElement | null = null
   let revealDeadline = 0
   let revealTimer = 0
+  let revealStartedAt = 0
+
+  // 无信号兜底：个别内核（部分国产 WebView）键盘纯覆盖、innerHeight 与
+  // visualViewport 均不收缩，收缩检测全部失效。此时用「历史实测键盘高度
+  // （localStorage 持久化）→ 屏高 50%」的估计值顶起输入框；能测到收缩的
+  // 设备永远走实测值，并把实测值写回供无信号场景使用。
+  const KB_HEIGHT_KEY = 'chevoink-keyboard-height'
+  let rememberedKeyboardHeight = 0
+  try {
+    rememberedKeyboardHeight = Number(localStorage.getItem(KB_HEIGHT_KEY)) || 0
+  } catch {
+    rememberedKeyboardHeight = 0
+  }
+  const rememberKeyboardHeight = (height: number) => {
+    if (height < MIN_KEYBOARD_INSET) return
+    if (Math.abs(height - rememberedKeyboardHeight) < 24) return
+    rememberedKeyboardHeight = height
+    try {
+      localStorage.setItem(KB_HEIGHT_KEY, String(Math.round(height)))
+    } catch {
+      /* 隐私模式等写入失败忽略 */
+    }
+  }
 
   const revealEditableNow = () => {
     const target = revealTarget
@@ -76,8 +99,21 @@ export function setupKeyboardInsetWatcher() {
     }
     // 两路高度取小：Android resizes-content 只缩 innerHeight，iOS 只缩
     // visualViewport，全屏 overlay 模式再扣 vkInset——兼容只缩一路信号的内核
-    const visibleHeight =
+    const measuredVisible =
       Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight) - vkInset
+    // 无信号兜底：聚焦 700ms 后仍检测不到任何收缩（纯覆盖内核，键盘高度不可测），
+    // 改用估计键盘高度顶起，保证输入框一定被顶上来；能测到收缩的设备永远走实测值
+    const shrinkDetected =
+      vkInset >= MIN_KEYBOARD_INSET || baselineHeight - measuredVisible >= MIN_KEYBOARD_INSET
+    let visibleHeight = measuredVisible
+    if (!shrinkDetected && Date.now() - revealStartedAt > 700) {
+      const estimated =
+        rememberedKeyboardHeight >= MIN_KEYBOARD_INSET
+          ? rememberedKeyboardHeight
+          : Math.round(baselineHeight * 0.5)
+      visibleHeight =
+        baselineHeight - Math.min(estimated, Math.round(baselineHeight * 0.7))
+    }
     const rect = target.getBoundingClientRect()
     // 最小滚动：只上移被键盘遮住的那一段，让输入框落在键盘上方并留少量余量；
     // 不用 scrollIntoView center——过度滚动会把输入框下方的评论列表顶进可视区
@@ -112,7 +148,8 @@ export function setupKeyboardInsetWatcher() {
 
   const ensureEditableVisible = (target: HTMLElement) => {
     revealTarget = target
-    revealDeadline = Date.now() + 2000
+    revealStartedAt = Date.now()
+    revealDeadline = revealStartedAt + 2000
     // 定时轮询兜底：布局收缩可能晚于聚焦发生、resize 事件也可能不触发，
     // 轮询持续复查直到输入框可见 / 失焦 / 超窗后自清
     if (revealTimer) window.clearInterval(revealTimer)
@@ -162,6 +199,7 @@ export function setupKeyboardInsetWatcher() {
       ) {
         focusOpen = true
         sawKeyboardShrink = true
+        rememberKeyboardHeight(baselineHeight - height)
         // 保留焦点二次弹起不触发 focusin，这里补一次「输入框可见」兜底
         ensureEditableVisible(active)
         return
@@ -173,6 +211,7 @@ export function setupKeyboardInsetWatcher() {
     }
     if (baselineHeight - height >= MIN_KEYBOARD_INSET) {
       sawKeyboardShrink = true
+      rememberKeyboardHeight(baselineHeight - height)
     } else if (sawKeyboardShrink) {
       focusOpen = false
       sawKeyboardShrink = false
@@ -189,6 +228,7 @@ export function setupKeyboardInsetWatcher() {
     const update = () => {
       const raw = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
       viewportInset = raw < MIN_KEYBOARD_INSET ? 0 : Math.round(raw)
+      rememberKeyboardHeight(viewportInset)
       syncFocusOpenByLayout()
       applyInset()
       runPendingReveal()
