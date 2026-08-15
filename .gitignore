@@ -31,6 +31,10 @@ cert/
 keystore.properties
 *.apk
 
+# 测试本地环境与产物（模板见 tests/.env.test.example，不入库）
+.env.test
+coverage/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

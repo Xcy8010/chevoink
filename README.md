@@ -21,7 +21,7 @@
 两种方式任选其一：
 
 1. **GitHub Releases（推荐）**
-   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.06`）；
+   - 打开 [Releases 页面](https://github.com/Xcy8010/chevoink/releases)，进入最新版本（如 `v1.07`）；
    - 在 Assets 中下载 `chevoink-vX.XX.apk` 到手机；
    - 点击安装。系统若提示「未知来源应用」，在弹窗中允许「本次安装」即可（APK 已使用发布密钥签名）。
 2. **官网直装**
@@ -63,6 +63,7 @@
 | 前端 | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | 后端 | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek 文本生成 · 智谱 GLM-4.1V 图像理解 · OpenAI 兼容图像生成 · Edge TTS 语音合成 · 博查联网搜索（多引擎降级） |
+| 测试 | Vitest + Supertest（单元与集成冒烟；无测试库时 DB 用例自动跳过） |
 | 部署 | PM2 + nginx（生产）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
 ## 目录结构
@@ -72,6 +73,7 @@
 ├── src/               # React 前端（app 壳与路由、features 业务域、components 通用组件）
 ├── shared/contracts/  # 前后端共享的类型契约
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
+├── tests/             # Vitest 测试（单元 + 集成冒烟，环境见 tests/.env.test.example）
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
 └── public/            # 静态资源
@@ -101,6 +103,7 @@ npm run dev
 | --- | --- |
 | `npm run dev` | 前后端并行开发 |
 | `npm run check` | TypeScript 类型检查 |
+| `npm run test` | 运行测试（Vitest） |
 | `npm run lint` | ESLint 检查 |
 | `npm run build` | 生产构建 |
 | `npm run deploy:prod` | 一键部署到生产服务器 |
@@ -108,7 +111,7 @@ npm run dev
 ## 部署与发布
 
 - **生产部署**：`npm run deploy:prod`（本地检查 → 构建 → 打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
-- **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.06 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
+- **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.07 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
 ## 环境变量
