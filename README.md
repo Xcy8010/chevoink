@@ -16,7 +16,7 @@
 | 了解功能 | [功能一览](#功能一览) |
 | 本地跑起来 | [快速开始](#快速开始) |
 | 了解架构 | [技术栈](#技术栈) · [目录结构](#目录结构) |
-| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md) |
+| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md) · 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md) |
 | 部署上线 | [部署与发布](#部署与发布) · [环境变量](#环境变量) |
 
 ## 下载与安装（安卓 APP）
@@ -78,7 +78,8 @@
 ├── shared/contracts/  # 前后端共享的类型契约
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
 ├── tests/             # Vitest 测试（单元 + 集成冒烟，环境见 tests/.env.test.example）
-├── docs/              # 工程文档（架构、技术决策、测试与 CI、部署、安全策略）
+├── docs/              # 工程文档（工程现状 ENGINEERING + 开发规范 DEVELOPMENT-STANDARDS）
+├── plan/              # 各阶段规划方案快照（24 篇 + 并行执行清单）
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
 └── public/            # 静态资源
