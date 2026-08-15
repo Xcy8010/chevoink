@@ -375,7 +375,14 @@ async function handleToolCall(
     return { observation, part: { ...basePart, args: null, status: 'failed', summary: '参数解析失败' } }
   }
 
-  bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: parsedArgs })
+  // 审批预判（与下方执行前判定同一公式）：提前给事件流打标，供前端与审计识别自动批准的工具调用
+  const autoApproved =
+    env.agentAutoApprove ||
+    tool === undefined ||
+    tool.permission[ctx.mode] !== 'ask' ||
+    (hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
+
+  bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: parsedArgs, autoApproved })
 
   const fail = (summary: string, observation: string, status: 'failed' | 'denied'): ToolCallOutcome => {
     bus.emit({
@@ -446,6 +453,11 @@ async function handleToolCall(
     if (decision.alwaysAllow && !tool.dangerous) {
       grantAlwaysAllow(ctx.sessionId, tool.name)
     }
+  }
+
+  // 高危工具审计（发布/归档/删除类）：未经用户挂起审批即执行时在服务端日志留痕，供事后核查
+  if (!needAsk && tool.dangerous) {
+    console.warn('[agent-loop] 高危工具自动批准执行', { runId, userId: ctx.userId, novelId: ctx.novelId, toolName: tool.name })
   }
 
   try {

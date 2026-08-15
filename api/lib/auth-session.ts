@@ -223,6 +223,26 @@ export function evictUserBanCache(userId: string): void {
 }
 
 /**
+ * 认证降级告警（60s 进程内节流）：DB 故障期间放行会话不中断站点，
+ * 但必须在服务端日志留下可检索痕迹（含被抑制次数），供事后审计降级窗口的规模。
+ */
+const AUTH_DEGRADE_WARN_WINDOW_MS = 60_000
+let lastAuthDegradeWarnAt = 0
+let suppressedAuthDegradeCount = 0
+
+function warnAuthDegrade(scope: string, detail: Record<string, unknown>): void {
+  const now = Date.now()
+  if (now - lastAuthDegradeWarnAt >= AUTH_DEGRADE_WARN_WINDOW_MS) {
+    const suppressed = suppressedAuthDegradeCount
+    suppressedAuthDegradeCount = 0
+    lastAuthDegradeWarnAt = now
+    console.warn(`[auth] 会话状态降级放行（${scope}）`, { ...detail, suppressedSinceLastWarn: suppressed })
+  } else {
+    suppressedAuthDegradeCount += 1
+  }
+}
+
+/**
  * 读取用户会话状态。查询异常时返回 null 且不写缓存：
  * 调用方按「未封禁 + 跳过令牌版本比对」放行本次请求（故障不能打挂全站登录态），
  * 下一次请求会重试查询——故障结果不再被缓存放大。
@@ -238,7 +258,8 @@ async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
     .catch((): null => null)
 
   if (!user) {
-    // 查询失败：不缓存故障结果，交由调用方降级
+    // 查询失败：不缓存故障结果，交由调用方降级（告警节流防故障期刷屏）
+    warnAuthDegrade('db-unreachable', { userId })
     return null
   }
 
@@ -313,6 +334,11 @@ export async function resolveSessionGate(req: Request, res: Response): Promise<v
     clearSession(res)
     setResolvedUserId(req, null)
     return
+  }
+
+  if (!state) {
+    // DB 故障降级放行：跳过封禁与吊销比对（吊销失效窗口 = 故障持续时长），打点留痕供审计
+    warnAuthDegrade('session-gate-fallback', { userId: candidate.userId, path: req.path })
   }
 
   if (!accessCandidate && candidate) {

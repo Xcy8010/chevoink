@@ -99,6 +99,8 @@ export type AgentStreamEventBody =
       toolName: string
       title: string
       args: unknown
+      /** 该调用是否未经用户挂起审批即自动批准（AGENT_AUTO_APPROVE 或白名单短路时为 true）；旧事件无此字段 */
+      autoApproved?: boolean
     }
   | {
       /** 工具参数流式生成中的进度：模型仍在产出参数（如章节正文），argsChars 为已生成的参数字符数 */
