@@ -2,8 +2,9 @@
 
 > 本文档统一汇总系统架构、关键技术决策、测试与 CI、部署方案、性能数据、安全策略与风险取舍、技术债务及演进计划。
 > 全部内容基于当前仓库代码与 `plan/` 目录内的真实方案文档，随工程演进持续更新。
+> `plan/` 目录已入库公开：24 篇方案为各阶段的真实规划快照，其中引用的历史文件路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
 >
-> 最近更新：2026-08-16（85→90 分工程冲刺收官：zod 收编收尾、认证降级加固、后端大文件拆分、前端模块级抽取）
+> 最近更新：2026-08-16
 
 ## 目录
 
@@ -77,11 +78,48 @@
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
   - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
-  - `tools/`：29 个注册工具（章节读写、作品管理、封面、附件视觉、联网搜索/网页阅读、记忆、计划、待办、ask_user）；
+  - `tools/`：29 个注册工具（清单见 [1.5](#15-agent-工具清单29-个)），按依赖拆分为 chapter/novel/write/read/cover/search/interact/todo/attachment 九组文件；
   - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次每 run）；
   - `knowledge/` + `skills/`：写作知识与操作知识集（对应 `plan/14` 幻觉治理方案）。
 
-### 1.4 数据模型概览（prisma/schema.prisma）
+### 1.4 Agent SSE 事件协议（shared/contracts/agent-events.ts）
+
+run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同源**：全部事件按 `seq` 持久化到 `AgentRunEvent` 表，断线重连用 `Last-Event-ID` 续传，刷新页面可完整回放。事件以 `{ seq, runId, ts }` 为公共头，共 13 种事件体：
+
+| 事件 | 语义 |
+| --- | --- |
+| `run.started` | run 启动（Agent 摘要、执行模式、任务标题） |
+| `message.start` | 助手消息开始 |
+| `text.delta` / `reasoning.delta` | 正文 / 思考流式增量 |
+| `tool.call` | 工具调用开始（含 `autoApproved` 标记是否自动批准） |
+| `tool.delta` | 工具参数流式生成进度（如章节正文逐字产出） |
+| `tool.result` | 工具调用结果（成功摘要 / 展示载荷 / 耗时） |
+| `permission.ask` / `permission.resolved` | 审批请求与结果（高危操作禁止「总是允许」，带过期时间） |
+| `step.finish` | 单轮结束（轮次号 + token 用量） |
+| `run.paused` | 暂停（用户停止 / 审批超时） |
+| `run.finished` | 结束（succeeded/failed/cancelled + 总用量 + 工件清单 + 输出摘要） |
+| `error` | 可恢复性错误 |
+
+前端消息分部模型 `AgentMessagePart`（text / reasoning / tool-call / attachment）由上述事件构建，写操作工具额外携带回滚快照（仅服务端持久化，消息列表接口返回前剥离），支撑「对话内一键回退」。
+
+### 1.5 Agent 工具清单（29 个）
+
+| 分组 | 工具 | 说明 |
+| --- | --- | --- |
+| 读（5） | novelGetContext · chapterRead · chapterListSummaries · memorySearch · planRead | 作品上下文、章节内容、跨会话记忆、计划工件 |
+| 调研（2） | webSearch · webRead | 博查为主的多级降级搜索；网页深读带 SSRF 防护 |
+| 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
+| 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | 冲突检测 + 409 语义 + 回滚快照 |
+| 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |
+| 计划工件（3） | planSave · planRename · planDelete | 大纲计划的保存/重命名/删除 |
+| 封面（3） | coverPromptSet · coverGenerate · coverApply | 提示词、生成、应用落盘 |
+| 高危（3） | novelPublish · novelArchive · novelDelete | 发布/下架/删除，权限守卫最严级别 |
+| 记忆与交互（3） | memorySave · todoWrite · askUser | 跨会话偏好记忆、待办自驱、向用户提问（每 run 3 次预算） |
+| 收尾（1） | planExit | 退出计划编辑态 |
+
+工具注册表统一出口 `api/lib/agent/tools/registry.ts`，name/description/参数 schema 逐字稳定（schema 即模型可见契约，改动等同行为变化）。
+
+### 1.6 数据模型概览（prisma/schema.prisma）
 
 27 张表，按域划分：
 
@@ -103,6 +141,8 @@
 | 认证降级 | DB 故障时优先复用 ≤10 分钟历史会话状态（stale fallback），超窗才降级放行 | 可用性优先是既有设计基线；完全 fail-closed 会因 DB 抖动打挂全站登录态 |
 | Agent 执行模式 | 默认最大权限自主执行（`AGENT_AUTO_APPROVE=true`） | 产品决策：零打扰创作流（README 卖点）；`false` 一键回退审批流，见 [第 6 节](#6-安全策略与风险取舍) |
 | Agent 引擎 | 统一 loop 调度内核 + 工具注册表 + 事件流 | 对标 opencode 高保真复刻（`plan/11`），前端只消费标准事件流 |
+| 事件流架构 | SSE 事件全量按 seq 持久化，live 与 replay 同源，Last-Event-ID 续传 | 断线/刷新不丢消息；历史回放与直播共用一条代码路径，消除双实现漂移 |
+| API 响应结构 | 成功统一 `{ success, data }`，失败统一 `{ code, message }` 且必返 JSON | 前端错误处理单路径；校验文案逐字锚定于集成测试（p0/p1/p2-validation） |
 | 幻觉治理 | 知识集（世界观/人物卡）+ Skill 注入 + 联网调研预算 | `plan/14`：先读事实再动笔，预算防跑飞 |
 | 联网搜索 | 博查为主引擎的多级降级策略 | 单一引擎故障时自动切换，保证调研链路可用 |
 | 图像理解 | 智谱 GLM-4.1V 视觉旁路 + 进程内并发信号量（默认 4） | 免费档并发 5，留 1 缓冲（`api/config/env.ts`） |
@@ -115,12 +155,19 @@
 
 ### 3.1 测试矩阵（Vitest + Supertest）
 
-| 类别 | 文件 | 说明 |
-| --- | --- | --- |
-| 单元 | `tests/unit/` 8 个文件 | schemas / parse-body / phone / password / auth-session（含 stale fallback 三态与缓存上限）/ active-runs / panel-helpers / studio-lib |
-| 集成 | `tests/integration/` 4 个文件 | app-smoke 冒烟 + p0/p1/p2 三代校验文案逐字对照（含 401 优先于 400、不误拒例） |
+| 类别 | 文件 | 用例数 | 覆盖要点 |
+| --- | --- | --- | --- |
+| 单元 | studio-lib | 24 | 创作区表单/审查纯逻辑 |
+| 单元 | auth-session | 14 | 会话状态缓存、封禁驱逐、stale fallback 三态、缓存容量上限 |
+| 单元 | schemas | 9 | zod schema 正/反例 |
+| 单元 | panel-helpers | 7 | AgentPanel 抽取的纯声明（阶段文案逐字锚定） |
+| 单元 | phone / password | 6 / 6 | 手机号与密码规则 |
+| 单元 | active-runs | 5 | Agent 运行登记表（注册/计数/停止） |
+| 单元 | parse-body | 5 | 请求体解析与 400/401 边界 |
+| 集成 | p0/p1/p2-validation | 27 / 21 / 15 | 三代校验文案逐字对照（DB 组）+ 401 优先顺序（无 DB 组） |
+| 集成 | app-smoke | 5 | 健康检查与基础路由冒烟 |
 
-- 最近一次全量结果：**12 个测试文件全部通过，92 passed / 52 skipped**（skipped 为本地无 PostgreSQL 时 DB 组按 `describe.skipIf(!dbAvailable)` 自动跳过——clone 后 `npm test` 开箱即用）。
+- 最近一次全量结果：**12 个测试文件全部通过，92 passed / 52 skipped**（skipped 为本地无 PostgreSQL 时 DB 组按 `describe.skipIf(!dbAvailable)` 自动跳过——clone 后 `npm test` 开箱即用；CI 带 postgres:16 服务容器则全量执行）。
 - vitest 采用 forks 池：进程内缓存（封禁/令牌版本/限流 Map）互不串扰，也避免全局 PrismaClient 单例跨文件复用连接。
 
 ### 3.2 CI 流水线（.github/workflows/ci.yml）
@@ -171,6 +218,22 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 安卓端 | Capacitor 壳加载远程站点，启动时应用内检测更新 |
 
 > 运维已知项：部署脚本覆盖服务器 nginx 配置会清掉 certbot SSL 配置导致 HTTPS 中断，改 nginx 配置必须同步维护证书段（历史事故沉淀）。
+
+### 4.3 环境变量体系（.env.example）
+
+全部配置经 `.env` 注入，按域分组（模板即权威清单）：
+
+| 域 | 变量 | 说明 |
+| --- | --- | --- |
+| 应用 | `APP_NAME` / `APP_ENV` / `APP_PORT` / `APP_WEB_URL` / `APP_SERVER_URL` | 服务标识与跨域基址 |
+| 数据库与会话 | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma 连接串与 Cookie 会话签名 |
+| 短信 | `SMS_TENCENT_*` + 发码策略（长度 6 / 有效期 300s / 冷却 60s / 小时限 5） | 腾讯云 SMS 登录验证码 |
+| 文本生成 | `AI_TEXT_BASE_URL` / `AI_TEXT_API_KEY` / `AI_TEXT_MODEL` / `AI_TEXT_MAX_OUTPUT_TOKENS` | DeepSeek；单轮输出上限默认 8192 防长章截断 |
+| Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS`（默认 100）/ `AGENT_RUN_TOKEN_BUDGET`（默认 200 万）/ `AGENT_AUTO_APPROVE` | 轮次与 token 预算配合上下文瘦身防爆窗 |
+| 图像生成 | `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` / `AI_IMAGE_MODEL` | OpenAI 兼容封面生成 |
+| 视觉 | `AI_VISION_*`（超时 60s / 并发 4） | GLM-4.1V 旁路，未配置时工具回填观察不阻塞 run |
+| 听书 | `TTS_PROVIDER`（edge / disabled）/ `TTS_DEFAULT_VOICE` / 缓存上限 2 GB | Edge TTS 免密钥 |
+| 联网搜索 | `WEB_SEARCH_PROVIDER`（auto = 博查 → 搜狗 → Bing 降级）/ `WEB_READER_FALLBACK`（off/jina/firecrawl） | 深读 readability 主线 + 托管 Reader 兜底 |
 
 ---
 
@@ -267,23 +330,50 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ## 9. plan/ 方案文档索引
 
-| 文档 | 主题 |
+`plan/` 目录为各阶段的**真实规划快照**（24 篇 + 并行执行清单），编号即立项顺序；**同编号多篇 = 同一阶段并行推进的独立工作流**（如 18 号后台管理与社区升级并行、20 号三篇性能/阅读区并行），非版本覆盖关系。所有方案均已落地，实现过程有正常演进，与当前代码的路径对应见 [9.2](#92-历史路径对照方案引用--当前实现)。
+
+### 9.1 方案清单
+
+| 文档 | 主题 | 状态 |
+| --- | --- | --- |
+| `plan/00` | 参考产品与市场调研 | 立项依据 |
+| `plan/01` | 产品方案与 PRD | 已落地 |
+| `plan/02` | 技术架构方案（架构设计、技术栈、路由、API、数据模型、三端策略） | 已落地（细节以本文档为准） |
+| `plan/03` · `plan/05` | 品牌与界面规范 · UI/UX 设计规范 | 已落地 |
+| `plan/04` | 三端适配与分阶段上线方案 | 已落地 |
+| `plan/06` | 本地测试与并行协作规范 | 执行规范 |
+| `plan/07` · `plan/08` | AI 配置安全与长上下文方案 · env 变量设计与密钥托管规范 | 已落地（env 清单见 [4.3](#43-环境变量体系envexample)） |
+| `plan/09` | 数据模型与接口契约初稿 | 已落地（演进至 27 表，见 [1.6](#16-数据模型概览prismaschemaprisma)） |
+| `plan/10` · `plan/11` | 写作 Agent 设计方案 · opencode Agent 高保真复刻专项 | 已落地（实现有演进，见 9.2） |
+| `plan/12` · `plan/16` | 前端 UI/UX 产品级优化 · 手机端创作区深度优化 | 已落地（布局方案有演进，见 9.2） |
+| `plan/13` | 创作区 Agent 深度重构与前端产品级优化 | 已落地（含后续 P3/P4 模块级拆分） |
+| `plan/14` | Agent 幻觉治理与知识集/Skill 深度优化 | 已落地 |
+| `plan/15` | 发布链路与 Agent 体验修复及全站加载优化 | 已落地 |
+| `plan/17` | 阅读区听书功能（TTS 朗读） | 已落地 |
+| `plan/18`（两篇） | 后台管理系统 · 社区推荐算法与话题系统升级 | 已落地 |
+| `plan/19` | 安卓 APK 客户端打包（Capacitor 壳工程） | 已落地 |
+| `plan/20`（三篇） | 全站加载性能与 Agent 执行期卡顿修复 · 手机端沉浸式阅读区重构 · 阅读区全屏沉浸（安卓壳安全区体系重构） | 已落地 |
+| `plan/list/` | 多窗口并行执行规范与总控审查清单 | 执行规范 |
+
+### 9.2 历史路径对照（方案引用 → 当前实现）
+
+方案撰写时引用的 16 处文件路径在后续重构中已迁移/合并，对照如下（2026-08-16 自动化校验结果，其余 156 处路径引用均与当前仓库一致）：
+
+| 方案中的历史路径 | 当前实现 |
 | --- | --- |
-| `plan/00` | 参考产品与市场调研 |
-| `plan/01` | 产品方案与 PRD |
-| `plan/02` | 技术架构方案（架构设计、技术栈、路由、API、数据模型、三端策略） |
-| `plan/03` · `plan/05` | 品牌与界面规范 · UI/UX 设计规范 |
-| `plan/04` | 三端适配与分阶段上线方案 |
-| `plan/06` | 本地测试与并行协作规范 |
-| `plan/07` · `plan/08` | AI 配置安全与长上下文方案 · env 变量设计与密钥托管规范 |
-| `plan/09` | 数据模型与接口契约初稿 |
-| `plan/10` · `plan/11` | 写作 Agent 设计方案 · opencode Agent 高保真复刻专项 |
-| `plan/12` · `plan/16` | 前端 UI/UX 产品级优化 · 手机端创作区深度优化 |
-| `plan/13` | 创作区 Agent 深度重构与前端产品级优化 |
-| `plan/14` | Agent 幻觉治理与知识集/Skill 深度优化 |
-| `plan/15` | 发布链路与 Agent 体验修复及全站加载优化 |
-| `plan/17` | 阅读区听书功能（TTS 朗读） |
-| `plan/18`（两篇） | 后台管理系统 · 社区推荐算法与话题系统升级 |
-| `plan/19` | 安卓 APK 客户端打包（Capacitor 壳工程） |
-| `plan/20`（三篇） | 全站加载性能与 Agent 执行期卡顿修复 · 手机端沉浸式阅读区重构 · 阅读区全屏沉浸（安卓壳安全区体系重构） |
-| `plan/list/` | 多窗口并行执行规范与总控审查清单 |
+| `api/lib/agent-service.ts` | `api/lib/agent/loop.ts`（执行内核）+ `run-service.ts`（run 生命周期），plan/13 重构拆分 |
+| `api/lib/agent-workspace-tools.ts` | `api/lib/agent/tools/` 九组文件（chapter/novel/write/read/cover/search/interact/todo/attachment） |
+| `api/index.ts` | `api/server.ts`（启动）+ `api/app.ts`（Express 装配） |
+| `src/features/studio/components/WritingAgentPanel.tsx` | `src/features/studio/agent/components/AgentPanel.tsx` |
+| `src/features/studio/store/agentStore.ts` | `src/features/studio/agent/agentStore.ts` |
+| `src/features/studio/layouts/StudioMobile/Tablet/Desktop.tsx` | 三文件布局方案未采用，终态为单一响应式 `StudioWorkspace.tsx`（移动端用 BottomSheet/抽屉自适应） |
+| `src/features/reader/components/ReaderSettingsSheet.tsx` | `reader/components/ReaderSettingsContent.tsx` + `ReaderSettingsPopover.tsx` + `reader-settings.ts` |
+| `src/features/reader/components/ParagraphComment.tsx` | 段落互动演进为划线体系：`useParagraphUnderlines.ts` + `ParagraphActionBar.tsx` |
+| `src/features/reader/underlines.ts` | `src/features/reader/useParagraphUnderlines.ts` |
+| `src/features/reader/tts/splitTtsBatches.ts` | 分批逻辑并入 `reader/tts/useTtsPlayer.ts` + `tts-api.ts` |
+| `src/features/community/PostComposer.tsx` | `src/features/community/components/PostComposer.tsx` |
+| `src/components/layout/MobileTabBar.tsx` | 底部导航并入 `components/layout/AppShell.tsx` + `device-context.ts` |
+| `src/components/ui/UnderlineTabs.tsx` | `src/components/ui/SegmentedTabs.tsx` |
+| `prisma/migrations/2026xxxx_admin_console/` | `prisma/migrations/20260812190000_admin_console/`（占位时间戳已落地为实际值） |
+
+> 注：阅读区三端布局（`reader/layouts/ReaderMobile/Tablet/Desktop.tsx`）保留了三端拆分形态，与创作区的选择不同——阅读器交互差异大、创作区需要面板联动，属有意为之的架构差异。

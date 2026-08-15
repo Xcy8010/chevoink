@@ -23,8 +23,7 @@ cookies.txt
 *.tgz
 *.tar.gz
 
-# 内部资料与敏感文件（不上传 GitHub）
-plan/
+# 敏感文件（不上传 GitHub）；plan/ 方案文档已开放入库
 cert/
 *.pem
 *.keystore
