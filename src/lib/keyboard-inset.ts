@@ -58,44 +58,61 @@ export function setupKeyboardInsetWatcher() {
   // 仅触摸设备需要聚焦信号与滚动兜底，桌面端聚焦不应引起视图变化
   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
 
-  // 键盘弹出动画结束后确保聚焦输入框可见（只送输入框进可视区，不顶起周围内容）：
-  // 全屏 overlay 模式下 visualViewport 不缩小，真实可见高要再扣掉 vkInset；
-  // 微信/QQ 等不支持 VirtualKeyboard API 的内核全屏下拿不到键盘高度，兜底退出全屏
-  const ensureEditableVisible = (target: HTMLElement) => {
-    window.setTimeout(() => {
-      // 键盘动画期间可能已切换焦点或收起键盘
-      if (document.activeElement !== target) return
+  // 键盘弹出动画结束后把聚焦输入框最小滚动顶到键盘上方（只移被遮的一段，
+  // 不把评论等周围内容顶进可视区）。各设备键盘弹出/布局收缩完成时机不一
+  // （有的 500ms+ 才收缩），单次检查容易落空：聚焦时登记目标，之后 1.5s
+  // 窗口内每次 visualViewport / window resize 都复查补滚，直到输入框可见。
+  let revealTarget: HTMLElement | null = null
+  let revealDeadline = 0
 
-      const scrollIntoViewIfCovered = () => {
-        if (document.activeElement !== target) return
-        const visibleHeight = (window.visualViewport?.height ?? window.innerHeight) - vkInset
-        const rect = target.getBoundingClientRect()
-        // 最小滚动：只上移被键盘遮住的那一段，让输入框刚好落在键盘上方；
-        // 不用 scrollIntoView center——过度滚动会把输入框下方的评论列表顶进可视区
-        let delta = 0
-        if (rect.bottom > visibleHeight - 8) {
-          delta = rect.bottom - (visibleHeight - 8)
-        } else if (rect.top < 0) {
-          delta = rect.top - 8
-        }
-        if (delta === 0) return
-        // 从最近的可滚动祖先开始分摊滚动量（弹层/抽屉内的输入框），window 兜底
-        let remaining = delta
-        let node: HTMLElement | null = target.parentElement
-        while (node && remaining !== 0) {
-          const overflowY = getComputedStyle(node).overflowY
-          if (overflowY === 'auto' || overflowY === 'scroll') {
-            const before = node.scrollTop
-            node.scrollTop += remaining
-            remaining -= node.scrollTop - before
-          }
-          node = node.parentElement
-        }
-        if (remaining !== 0) {
-          window.scrollBy({ top: remaining, behavior: 'smooth' })
-        }
+  const revealEditableNow = () => {
+    const target = revealTarget
+    if (!target) return
+    if (Date.now() > revealDeadline || document.activeElement !== target) {
+      revealTarget = null
+      return
+    }
+    // 两路高度取小：Android resizes-content 只缩 innerHeight，iOS 只缩
+    // visualViewport，全屏 overlay 模式再扣 vkInset——兼容只缩一路信号的内核
+    const visibleHeight =
+      Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight) - vkInset
+    const rect = target.getBoundingClientRect()
+    // 最小滚动：只上移被键盘遮住的那一段，让输入框刚好落在键盘上方；
+    // 不用 scrollIntoView center——过度滚动会把输入框下方的评论列表顶进可视区
+    let delta = 0
+    if (rect.bottom > visibleHeight - 8) {
+      delta = rect.bottom - (visibleHeight - 8)
+    } else if (rect.top < 0) {
+      delta = rect.top - 8
+    }
+    if (delta === 0) return
+    // 从最近的可滚动祖先开始分摊滚动量（弹层/抽屉内的输入框），window 兜底
+    let remaining = delta
+    let node: HTMLElement | null = target.parentElement
+    while (node && remaining !== 0) {
+      const overflowY = getComputedStyle(node).overflowY
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        const before = node.scrollTop
+        node.scrollTop += remaining
+        remaining -= node.scrollTop - before
       }
+      node = node.parentElement
+    }
+    if (remaining !== 0) {
+      window.scrollBy({ top: remaining })
+    }
+  }
 
+  const runPendingReveal = () => {
+    if (revealTarget) revealEditableNow()
+  }
+
+  const ensureEditableVisible = (target: HTMLElement) => {
+    revealTarget = target
+    revealDeadline = Date.now() + 1500
+    window.setTimeout(() => {
+      // 微信/QQ 等不支持 VirtualKeyboard API 的内核全屏下拿不到键盘高度，兜底退出全屏；
+      // 退出全屏触发视口重排，resize 监听会接力复查滚动
       if (
         document.fullscreenElement &&
         viewportInset === 0 &&
@@ -103,12 +120,8 @@ export function setupKeyboardInsetWatcher() {
         window.matchMedia('(pointer: coarse)').matches
       ) {
         document.exitFullscreen?.().catch(() => {})
-        // 退出全屏触发视口重排，稍等稳定后再做一次滚动兜底
-        window.setTimeout(scrollIntoViewIfCovered, SCROLL_FALLBACK_DELAY)
-        return
       }
-
-      scrollIntoViewIfCovered()
+      runPendingReveal()
     }, SCROLL_FALLBACK_DELAY)
   }
 
@@ -164,6 +177,7 @@ export function setupKeyboardInsetWatcher() {
       viewportInset = raw < MIN_KEYBOARD_INSET ? 0 : Math.round(raw)
       syncFocusOpenByLayout()
       applyInset()
+      runPendingReveal()
     }
 
     update()
@@ -175,6 +189,7 @@ export function setupKeyboardInsetWatcher() {
   window.addEventListener('resize', () => {
     syncFocusOpenByLayout()
     applyInset()
+    runPendingReveal()
   })
 
   const virtualKeyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
@@ -194,6 +209,7 @@ export function setupKeyboardInsetWatcher() {
     virtualKeyboard.addEventListener('geometrychange', () => {
       vkInset = Math.max(0, Math.round(virtualKeyboard.boundingRect.height))
       applyInset()
+      runPendingReveal()
     })
   }
 
@@ -217,6 +233,7 @@ export function setupKeyboardInsetWatcher() {
   document.addEventListener('focusout', (event) => {
     const target = event.target
     if (!(target instanceof HTMLElement) || !target.matches(EDITABLE_SELECTOR)) return
+    revealTarget = null
     // 延迟移除：在两个输入框间切换焦点时避免布局闪烁
     window.clearTimeout(focusOutTimer)
     focusOutTimer = window.setTimeout(() => {
