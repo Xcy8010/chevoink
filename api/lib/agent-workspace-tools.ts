@@ -1,3 +1,7 @@
+/**
+ * @deprecated legacy Agent 链路配套的工具注册表，仅被 agent-service.ts（同样 @deprecated）引用。
+ * 新代码禁止 import 本文件；loop 链路的工具定义见 api/lib/agent/ 目录。
+ */
 import type {
   AgentType,
   AgentExecutionMode,
