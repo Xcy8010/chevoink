@@ -1,0 +1,308 @@
+import { z } from 'zod'
+
+import { prisma } from '../../prisma.js'
+import { getChapterBaseline, getLastTouchedChapter, recordChapterBaseline } from '../baseline.js'
+import { recalcNovelStats } from './novel-tools.js'
+import { defineTool, type ToolContext, type ToolResult } from './types.js'
+
+/**
+ * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
+ * 新建/覆盖/追加/区间改写/重命名，统一走基线冲突检测与作品统计重算。
+ */
+
+const WRITE_PERMISSION = { plan: 'deny', build: 'allow', review: 'deny' } as const
+
+async function findOwnedChapter(ctx: ToolContext, chapterId: string) {
+  return prisma.chapter.findFirst({
+    where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
+  })
+}
+
+/** chapterId 兜底：模型写长正文时经常漏传 chapterId，与其打回重试（重发整章又贵又易错），
+ * 不如服务端直接补：优先本 run 最近读/写过的章节，其次作者当前打开的章节 */
+function resolveChapterId(ctx: ToolContext, chapterId: string | undefined): string | null {
+  const trimmed = chapterId?.trim()
+  if (trimmed) {
+    return trimmed
+  }
+  return getLastTouchedChapter(ctx.runId) ?? ctx.chapterId
+}
+
+const MISSING_CHAPTER_HINT =
+  '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId，或用 chapter_create 新建章节。'
+
+/** 章节不存在时附带当前章节提示，帮模型一次性纠错而不是盲猜 */
+function buildChapterNotFound(ctx: ToolContext, chapterId: string): ToolResult {
+  const hint = ctx.chapterId && ctx.chapterId !== chapterId ? `作者当前打开的章节是 chapterId=${ctx.chapterId}。` : ''
+  return {
+    output: `章节 ${chapterId} 不存在或不属于当前作品。${hint}请用 novel_get_context 查看章节列表确认后重试。`,
+  }
+}
+
+/** 基线冲突检测：用户在 Agent 运行期间手动改过正文时不盲写 */
+function buildConflictResult(chapterTitle: string): ToolResult {
+  return {
+    output: `冲突：章节《${chapterTitle}》的正文在你上次读取后已被用户手动修改。请先用 chapter_read 重新读取最新内容，再决定如何写入，避免覆盖用户的修改。`,
+    summary: `《${chapterTitle}》存在编辑冲突，已阻止写入`,
+  }
+}
+
+async function writeChapterContent(
+  ctx: ToolContext,
+  chapterId: string,
+  buildNextContent: (current: string) => string,
+  actionLabel: string,
+): Promise<ToolResult> {
+  const chapter = await findOwnedChapter(ctx, chapterId)
+
+  if (!chapter) {
+    return buildChapterNotFound(ctx, chapterId)
+  }
+
+  const baseline = getChapterBaseline(ctx.runId, chapter.id)
+  if (baseline && baseline !== chapter.updatedAt.toISOString()) {
+    return buildConflictResult(chapter.title)
+  }
+
+  const before = chapter.content
+  const after = buildNextContent(before)
+
+  const updated = await prisma.chapter.update({
+    where: { id: chapter.id },
+    data: { content: after, wordCount: after.length },
+  })
+  await recalcNovelStats(ctx.novelId)
+  recordChapterBaseline(ctx.runId, chapter.id, updated.updatedAt)
+
+  return {
+    output: `已${actionLabel}章节《${chapter.title}》，当前正文 ${after.length} 字。`,
+    summary: `${actionLabel}《${chapter.title}》 · ${after.length} 字`,
+    display: {
+      kind: 'chapterDiff',
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      before,
+      after,
+      appliedDirectly: true,
+    },
+    snapshot: { target: 'chapter', targetId: chapter.id, field: 'content', previousValue: before },
+  }
+}
+
+export const chapterCreateTool = defineTool({
+  name: 'chapter_create',
+  title: '新建章节',
+  description:
+    '在当前作品创建一个新章节，默认追加到末尾；传 position 可插入到指定位置（原第 position 章及之后的章节编号自动 +1），用于补写作者删掉的中间章节。仅用于新增章节；重写/重新生成已有章节必须用 chapter_write 覆盖原章节，绝不要另建重复章节（会导致章节编号错乱）。推荐两步流程：先只传 title 创建空章节（作者立刻能在章节树看到新章），再用 chapter_write 写入正文；也可以带 content 一次性创建。返回新章节的 chapterId。',
+  parameters: z.object({
+    title: z.string().min(1).max(120).describe('章节标题'),
+    content: z.string().optional().describe('章节正文，可留空'),
+    position: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('插入位置（第 N 章）。缺省或超过现有章节数时追加到末尾；否则插入该位置，原第 N 章及之后的章节整体后移一位'),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    // 用「最大编号+1」而不是「总数+1」：删过中间章节后总数+1 会撞 novelId+orderIndex 唯一约束
+    const lastChapter = await prisma.chapter.findFirst({
+      where: { novelId: ctx.novelId },
+      orderBy: { orderIndex: 'desc' },
+      select: { orderIndex: true },
+    })
+    const maxOrder = lastChapter?.orderIndex ?? 0
+    const content = args.content ?? ''
+    // position 超界或缺省都退化为末尾追加
+    const inserting = args.position !== undefined && args.position <= maxOrder
+    const targetOrder = inserting ? (args.position as number) : maxOrder + 1
+
+    const chapter = await prisma.$transaction(async (tx) => {
+      if (inserting) {
+        // 中间插入：把排位 ≥ position 的章节按编号降序逐个 +1，先挪最大号避免撞 novelId+orderIndex 唯一约束
+        const shifting = await tx.chapter.findMany({
+          where: { novelId: ctx.novelId, orderIndex: { gte: targetOrder } },
+          orderBy: { orderIndex: 'desc' },
+          select: { id: true, orderIndex: true },
+        })
+        for (const item of shifting) {
+          await tx.chapter.update({ where: { id: item.id }, data: { orderIndex: item.orderIndex + 1 } })
+        }
+      }
+      return tx.chapter.create({
+        data: {
+          novelId: ctx.novelId,
+          authorId: ctx.userId,
+          title: args.title.trim(),
+          content,
+          orderIndex: targetOrder,
+          wordCount: content.length,
+          status: 'draft',
+          visibility: 'public',
+        },
+      })
+    })
+    await recalcNovelStats(ctx.novelId)
+    recordChapterBaseline(ctx.runId, chapter.id, chapter.updatedAt)
+
+    return {
+      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}${inserting ? '，原该位置及之后的章节已自动后移一位' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
+      summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》`,
+      // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
+      display: content
+        ? {
+            kind: 'chapterDiff',
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            before: '',
+            after: content,
+            appliedDirectly: true,
+          }
+        : { kind: 'chapterRef', chapterId: chapter.id, title: chapter.title, wordCount: 0 },
+      ...(content
+        ? { snapshot: { target: 'chapter' as const, targetId: chapter.id, field: 'content', previousValue: '' } }
+        : {}),
+    }
+  },
+})
+
+export const chapterWriteTool = defineTool({
+  name: 'chapter_write',
+  title: '写入章节正文',
+  description:
+    '用新内容整体覆盖指定章节的正文。需要已存在的 chapterId（新章节请先 chapter_create）。覆盖前建议先 chapter_read 了解现有内容；如只是接着写请用 chapter_append。覆盖前必须确认该章节确实是作者所指：作者按「第N章」指称时，若该排位章节的标题序号对不上（作者删过章导致错位），不要覆盖，改用 chapter_create 传 position 在正确位置插入。',
+  parameters: z.object({
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认写入最近操作/当前正在编辑的章节'),
+    content: z.string().min(1).describe('完整的新正文'),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    return writeChapterContent(ctx, chapterId, () => args.content, '覆盖写入')
+  },
+})
+
+export const chapterAppendTool = defineTool({
+  name: 'chapter_append',
+  title: '追加章节正文',
+  description: '把生成的内容追加到指定章节正文末尾（自动补一个空行分隔），用于续写场景。',
+  parameters: z.object({
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认追加到最近操作/当前正在编辑的章节'),
+    content: z.string().min(1).describe('要追加的内容'),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    return writeChapterContent(
+      ctx,
+      chapterId,
+      (current) => (current.trim() ? `${current.replace(/\s+$/, '')}\n\n${args.content}` : args.content),
+      '追加',
+    )
+  },
+})
+
+export const chapterEditRangeTool = defineTool({
+  name: 'chapter_edit_range',
+  title: '改写章节片段',
+  description:
+    '按字符区间替换章节正文的一个片段（选区级改写/润色），避免整章覆盖。start/end 为字符下标（含头不含尾），与用户选中文本或 chapter_read 返回的定位一致。',
+  parameters: z.object({
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
+    start: z.number().int().min(0).describe('片段起始字符位置'),
+    end: z.number().int().min(0).describe('片段结束字符位置（不含）'),
+    newText: z.string().describe('替换后的新文本'),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    const chapter = await findOwnedChapter(ctx, chapterId)
+
+    if (!chapter) {
+      return buildChapterNotFound(ctx, chapterId)
+    }
+
+    if (args.end < args.start || args.start > chapter.content.length) {
+      return { output: `区间 [${args.start}, ${args.end}) 无效：章节正文总长 ${chapter.content.length} 字。请先 chapter_read 确认定位。` }
+    }
+
+    const baseline = getChapterBaseline(ctx.runId, chapter.id)
+    if (baseline && baseline !== chapter.updatedAt.toISOString()) {
+      return buildConflictResult(chapter.title)
+    }
+
+    const before = chapter.content
+    const end = Math.min(args.end, before.length)
+    const after = before.slice(0, args.start) + args.newText + before.slice(end)
+
+    const updated = await prisma.chapter.update({
+      where: { id: chapter.id },
+      data: { content: after, wordCount: after.length },
+    })
+    await recalcNovelStats(ctx.novelId)
+    recordChapterBaseline(ctx.runId, chapter.id, updated.updatedAt)
+
+    return {
+      output: `已改写《${chapter.title}》第 ${args.start}-${end} 字的片段（原 ${end - args.start} 字 → 新 ${args.newText.length} 字）。`,
+      summary: `改写《${chapter.title}》片段 · ${args.newText.length} 字`,
+      display: {
+        kind: 'chapterDiff',
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        // 必须返回完整正文：前端审查态直接把 before/after 当整章内容构建 diff 视图与回滚快照，
+        // 若只截片段会导致审查视图缺失未修改部分、撤销时整章被错误替换成片段
+        before,
+        after,
+        appliedDirectly: true,
+      },
+      snapshot: { target: 'chapter', targetId: chapter.id, field: 'content', previousValue: before },
+    }
+  },
+})
+
+export const chapterRenameTool = defineTool({
+  name: 'chapter_rename',
+  title: '重命名章节',
+  description: '修改指定章节的标题。',
+  parameters: z.object({
+    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
+    title: z.string().min(1).max(120).describe('新的章节标题'),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    const chapterId = resolveChapterId(ctx, args.chapterId)
+    if (!chapterId) {
+      return { output: MISSING_CHAPTER_HINT }
+    }
+    const chapter = await findOwnedChapter(ctx, chapterId)
+
+    if (!chapter) {
+      return buildChapterNotFound(ctx, chapterId)
+    }
+
+    const previousTitle = chapter.title
+    await prisma.chapter.update({ where: { id: chapter.id }, data: { title: args.title.trim() } })
+    await recalcNovelStats(ctx.novelId)
+
+    return {
+      output: `已把章节《${previousTitle}》重命名为《${args.title.trim()}》。`,
+      summary: `章节改名《${args.title.trim()}》`,
+      snapshot: { target: 'chapter', targetId: chapter.id, field: 'title', previousValue: previousTitle },
+    }
+  },
+})

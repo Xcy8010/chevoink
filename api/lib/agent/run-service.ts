@@ -1,7 +1,6 @@
 import type { Response } from 'express'
 
 import type { AgentRun as AgentRunRecord } from '@prisma/client'
-import type { Prisma } from '@prisma/client'
 
 import type {
   AgentActionHandoff,
@@ -11,14 +10,12 @@ import type {
   AgentArtifactApplyStrategy,
   AgentExecutionAgent,
   AgentExecutionMode,
-  AgentRollbackSnapshot,
   AgentRouteDecision,
   AgentRuleBundle,
   AgentRun,
   AgentSession,
   AgentStoryMemoryDigest,
   AgentStreamEvent,
-  AgentUIMessage,
   AgentWorkspaceToolPolicy,
   CreateAgentSessionRequest,
   ProjectMemoryEntry,
@@ -26,18 +23,16 @@ import type {
   StartAgentLoopRunResponse,
   UpdateAgentSessionRequest,
 } from '../../../shared/contracts/index.js'
-import type { AgentMessagePart } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { getRunEventBus, loadPersistedEvents } from './events.js'
 import {
   countActiveRunsByUser,
-  executeAgentRun,
   getActiveRun,
-  getActiveRunIdBySession,
   hasActiveRunInSession,
   stopAgentRun,
-} from './loop.js'
+} from './active-runs.js'
+import { executeAgentRun } from './loop.js'
 import { resolveApproval, resolveQuestionAnswer } from './permissions.js'
 import { isDefaultSessionTitle } from './session-title.js'
 
@@ -45,6 +40,7 @@ import { isDefaultSessionTitle } from './session-title.js'
  * Agent Loop 新链路的路由服务层（plan/13 §4.9）。
  * 阶段 K：legacy 链路（agent-service.ts）已物理删除，本文件是 Agent 服务层唯一入口；
  * sessions CRUD 与历史回放自 legacy 迁入（行为原样保留，供任务窗口体系消费）。
+ * 阶段 P3：计划产物拆至 plan-artifacts.ts、会话消息/删除/回滚拆至 session-messages.ts。
  */
 
 export async function startLoopRun(
@@ -367,406 +363,6 @@ export async function continueLoopRun(
     status: 'running',
     streamUrl: `/api/agent/runs/${run.id}/stream`,
   }
-}
-
-export type NovelPlanArtifact = {
-  id: string
-  runId: string
-  title: string
-  content: string
-  createdAt: string
-  updatedAt: string
-}
-
-function toNovelPlanArtifact(artifact: {
-  id: string
-  runId: string
-  title: string
-  content: string
-  createdAt: Date
-  updatedAt: Date
-}): NovelPlanArtifact {
-  return {
-    id: artifact.id,
-    runId: artifact.runId,
-    title: artifact.title,
-    content: artifact.content,
-    createdAt: artifact.createdAt.toISOString(),
-    updatedAt: artifact.updatedAt.toISOString(),
-  }
-}
-
-/** 作品维度拉取“计划文件夹”内容：跨会话/跨任务窗口聚合 savedAsPlan 的产物 */
-export async function listNovelPlanArtifacts(
-  userId: string,
-  novelId: string,
-): Promise<{ items: NovelPlanArtifact[] }> {
-  const novel = await prisma.novel.findFirst({
-    where: { id: novelId, authorId: userId },
-    select: { id: true },
-  })
-
-  if (!novel) {
-    throw new DataAccessError(404, 'NOT_FOUND', '作品不存在或无权访问。')
-  }
-
-  const artifacts = await prisma.agentArtifact.findMany({
-    where: {
-      artifactType: 'chapterPlan',
-      metadata: { path: ['savedAsPlan'], equals: true },
-      run: { userId, novelId },
-    },
-    orderBy: { createdAt: 'asc' },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
-  })
-
-  // 同名去重（plan/14 §四 B3）：历史重复落盘的同名计划只保留最后更新的一份，无需数据迁移
-  const latestByTitle = new Map<string, (typeof artifacts)[number]>()
-  for (const artifact of artifacts) {
-    const kept = latestByTitle.get(artifact.title)
-    if (!kept || artifact.updatedAt >= kept.updatedAt) {
-      latestByTitle.set(artifact.title, artifact)
-    }
-  }
-  const deduped = artifacts.filter((artifact) => latestByTitle.get(artifact.title)?.id === artifact.id)
-
-  return { items: deduped.map(toNovelPlanArtifact) }
-}
-
-/** 手工新建计划：作者在作品树点「新建计划」时落一份空白计划，挂到该作品最近的 Agent 任务上 */
-export async function createNovelPlanArtifact(
-  userId: string,
-  novelId: string,
-  title?: string,
-): Promise<{ item: NovelPlanArtifact }> {
-  const novel = await prisma.novel.findFirst({
-    where: { id: novelId, authorId: userId },
-    select: { id: true, title: true },
-  })
-
-  if (!novel) {
-    throw new DataAccessError(404, 'NOT_FOUND', '作品不存在或无权访问。')
-  }
-
-  // 计划产物必须挂在 AgentRun 上：优先复用该作品最近一次任务，还没跑过任务时补一条载体
-  let run = await prisma.agentRun.findFirst({
-    where: { userId, novelId },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-
-  if (!run) {
-    const session = await prisma.agentSession.create({
-      data: {
-        userId,
-        novelId,
-        // 标题保留默认命名且不写 lastRunAt，这条载体不会出现在任务会话列表里
-        title: `${novel.title} 写作会话`,
-        status: 'active',
-      },
-      select: { id: true },
-    })
-
-    run = await prisma.agentRun.create({
-      data: {
-        sessionId: session.id,
-        userId,
-        novelId,
-        mode: 'plan',
-        action: 'planChapter',
-        agentType: 'storyPlanner',
-        status: 'completed',
-        inputSummary: '作者手工新建计划',
-        finishedAt: new Date(),
-      },
-      select: { id: true },
-    })
-  }
-
-  // listNovelPlanArtifacts 会按标题折叠同名计划，这里自动排号，避免新建的空白计划与旧计划互相吞掉
-  const existing = await prisma.agentArtifact.findMany({
-    where: {
-      artifactType: 'chapterPlan',
-      metadata: { path: ['savedAsPlan'], equals: true },
-      run: { userId, novelId },
-    },
-    select: { title: true },
-  })
-  const usedTitles = new Set(existing.map((artifact) => artifact.title.trim()))
-
-  const baseTitle = title?.trim().slice(0, 60) || '未命名计划'
-  let nextTitle = baseTitle
-  let suffix = 2
-  while (usedTitles.has(nextTitle)) {
-    nextTitle = `${baseTitle} ${suffix}`
-    suffix += 1
-  }
-
-  const artifact = await prisma.agentArtifact.create({
-    data: {
-      runId: run.id,
-      artifactType: 'chapterPlan',
-      title: nextTitle,
-      content: '',
-      metadata: { savedAsPlan: true, manualCreated: true },
-    },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
-  })
-
-  return { item: toNovelPlanArtifact(artifact) }
-}
-
-/** 更新计划：改名/改正文，或 saved=false 从计划文件夹移除（保留产物本体与任务历史） */
-export async function updateNovelPlanArtifact(
-  userId: string,
-  artifactId: string,
-  patch: { title?: string; content?: string; saved?: boolean },
-): Promise<{ item: NovelPlanArtifact }> {
-  const artifact = await prisma.agentArtifact.findFirst({
-    where: { id: artifactId, artifactType: 'chapterPlan', run: { userId } },
-  })
-
-  if (!artifact) {
-    throw new DataAccessError(404, 'NOT_FOUND', '计划不存在或无权访问。')
-  }
-
-  const metadata =
-    artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
-      ? { ...(artifact.metadata as Record<string, unknown>) }
-      : {}
-
-  if (typeof patch.saved === 'boolean') {
-    metadata.savedAsPlan = patch.saved
-  }
-
-  const updated = await prisma.agentArtifact.update({
-    where: { id: artifact.id },
-    data: {
-      ...(typeof patch.title === 'string' ? { title: patch.title.slice(0, 160) || '未命名计划' } : {}),
-      ...(typeof patch.content === 'string' ? { content: patch.content } : {}),
-      metadata: metadata as Prisma.InputJsonValue,
-    },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
-  })
-
-  return { item: toNovelPlanArtifact(updated) }
-}
-
-/** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；
- * 附带 activeRunId：前端刷新后据此续接进行中的任务直播 */
-export async function listLoopSessionMessages(
-  userId: string,
-  sessionId: string,
-): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null }> {
-  const session = await prisma.agentSession.findFirst({
-    where: { id: sessionId, userId },
-    select: { id: true },
-  })
-
-  if (!session) {
-    throw new DataAccessError(404, 'NOT_FOUND', '会话不存在或无权访问。')
-  }
-
-  const records = await prisma.agentMessage.findMany({
-    where: { sessionId },
-    orderBy: { createdAt: 'asc' },
-    take: 200,
-  })
-
-  return {
-    messages: records.map((record) => ({
-      id: record.id,
-      runId: record.runId,
-      role: record.role as 'user' | 'assistant',
-      parts: (record.parts as unknown as AgentMessagePart[]).map((part) =>
-        part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
-      ),
-      createdAt: record.createdAt.toISOString(),
-    })),
-    activeRunId: getActiveRunIdBySession(sessionId),
-  }
-}
-
-async function findOwnedSessionMessage(userId: string, sessionId: string, messageId: string) {
-  const session = await prisma.agentSession.findFirst({
-    where: { id: sessionId, userId },
-    select: { id: true, novelId: true },
-  })
-
-  if (!session) {
-    throw new DataAccessError(404, 'NOT_FOUND', '会话不存在或无权访问。')
-  }
-
-  const message = await prisma.agentMessage.findFirst({
-    where: { id: messageId, sessionId },
-  })
-
-  if (!message) {
-    throw new DataAccessError(404, 'NOT_FOUND', '消息不存在或已被删除。')
-  }
-
-  if (hasActiveRunInSession(sessionId)) {
-    throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话有任务正在执行，请先停止后再操作。')
-  }
-
-  return { session, message }
-}
-
-/** 删除一轮对话：按消息所属 run 整轮删除（级联清理消息/事件），不恢复工作区内容 */
-export async function deleteLoopSessionMessage(
-  userId: string,
-  sessionId: string,
-  messageId: string,
-): Promise<{ deleted: true; runId: string }> {
-  const { message } = await findOwnedSessionMessage(userId, sessionId, messageId)
-
-  await prisma.$transaction(async (tx) => {
-    await tx.projectMemoryEntry.deleteMany({ where: { runId: message.runId } })
-    await tx.agentArtifact.deleteMany({ where: { runId: message.runId } })
-    await tx.agentRun.delete({ where: { id: message.runId } }).catch(() => {})
-  })
-
-  return { deleted: true, runId: message.runId }
-}
-
-type CollectedRollback =
-  | { kind: 'snapshot'; snapshot: AgentRollbackSnapshot }
-  | { kind: 'created_chapter'; chapterId: string }
-
-/** 从一批消息中按时间正序收集可回滚动作（快照 + 新建章节） */
-function collectRollbackActions(records: Array<{ parts: unknown }>): CollectedRollback[] {
-  const actions: CollectedRollback[] = []
-
-  for (const record of records) {
-    const parts = record.parts as AgentMessagePart[]
-    if (!Array.isArray(parts)) {
-      continue
-    }
-    for (const part of parts) {
-      if (part.type !== 'tool-call' || part.status !== 'success') {
-        continue
-      }
-      if (part.toolName === 'chapter_create' && part.display?.kind === 'chapterRef') {
-        actions.push({ kind: 'created_chapter', chapterId: part.display.chapterId })
-        continue
-      }
-      if (part.snapshot) {
-        actions.push({ kind: 'snapshot', snapshot: part.snapshot })
-      }
-    }
-  }
-
-  return actions
-}
-
-/**
- * 回退到某轮对话之前：逆序重放该轮及之后所有写操作的快照（新建章节直接删除），
- * 然后删除这些 run（级联清理消息/事件/记忆/产物）。
- */
-export async function rollbackLoopSessionFromMessage(
-  userId: string,
-  sessionId: string,
-  messageId: string,
-): Promise<{ rolledBack: true; removedRunCount: number }> {
-  const { session, message } = await findOwnedSessionMessage(userId, sessionId, messageId)
-
-  const targetRun = await prisma.agentRun.findUnique({
-    where: { id: message.runId },
-    select: { id: true, createdAt: true },
-  })
-
-  if (!targetRun) {
-    throw new DataAccessError(404, 'NOT_FOUND', '对应的任务记录不存在。')
-  }
-
-  const runs = await prisma.agentRun.findMany({
-    where: { sessionId, createdAt: { gte: targetRun.createdAt } },
-    select: { id: true },
-  })
-  const runIds = runs.map((run) => run.id)
-
-  const records = await prisma.agentMessage.findMany({
-    where: { runId: { in: runIds } },
-    orderBy: { createdAt: 'asc' },
-    select: { parts: true },
-  })
-
-  // 后发生的先恢复：同一字段多次写入时最终回到最早的 previousValue
-  const actions = collectRollbackActions(records).reverse()
-
-  await prisma.$transaction(async (tx) => {
-    for (const action of actions) {
-      if (action.kind === 'created_chapter') {
-        await tx.chapter.deleteMany({ where: { id: action.chapterId, novelId: session.novelId } })
-        continue
-      }
-
-      const { snapshot } = action
-      if (snapshot.target === 'chapter') {
-        const exists = await tx.chapter.findFirst({
-          where: { id: snapshot.targetId, novelId: session.novelId },
-          select: { id: true },
-        })
-        if (!exists) {
-          continue
-        }
-        if (snapshot.field === 'content') {
-          const content = snapshot.previousValue ?? ''
-          await tx.chapter.update({
-            where: { id: snapshot.targetId },
-            data: { content, wordCount: content.length },
-          })
-        } else if (snapshot.field === 'title') {
-          await tx.chapter.update({
-            where: { id: snapshot.targetId },
-            data: { title: snapshot.previousValue ?? '' },
-          })
-        }
-        continue
-      }
-
-      // novel 字段快照：白名单内逐字段恢复，status 需要枚举合法才写回
-      if (snapshot.field === 'title' && snapshot.previousValue !== null) {
-        await tx.novel.update({ where: { id: session.novelId }, data: { title: snapshot.previousValue } })
-      } else if (snapshot.field === 'summary') {
-        await tx.novel.update({ where: { id: session.novelId }, data: { summary: snapshot.previousValue ?? '' } })
-      } else if (snapshot.field === 'coverPrompt') {
-        await tx.novel.update({ where: { id: session.novelId }, data: { coverPrompt: snapshot.previousValue } })
-      } else if (snapshot.field === 'coverAssetId') {
-        await tx.novel.update({ where: { id: session.novelId }, data: { coverAssetId: snapshot.previousValue } })
-      } else if (
-        snapshot.field === 'status' &&
-        (snapshot.previousValue === 'draft' ||
-          snapshot.previousValue === 'published' ||
-          snapshot.previousValue === 'completed' ||
-          snapshot.previousValue === 'archived')
-      ) {
-        await tx.novel.update({
-          where: { id: session.novelId },
-          data: { status: snapshot.previousValue },
-        })
-      }
-    }
-
-    // 重算作品统计（章节数/总字数）
-    const chapters = await tx.chapter.findMany({
-      where: { novelId: session.novelId },
-      select: { wordCount: true },
-    })
-    await tx.novel.update({
-      where: { id: session.novelId },
-      data: {
-        chapterCount: chapters.length,
-        wordCount: chapters.reduce((total, chapter) => total + chapter.wordCount, 0),
-      },
-    })
-
-    await tx.projectMemoryEntry.deleteMany({ where: { runId: { in: runIds } } })
-    await tx.agentArtifact.deleteMany({ where: { runId: { in: runIds } } })
-    await tx.agentRun.deleteMany({ where: { id: { in: runIds } } })
-  })
-
-  return { rolledBack: true, removedRunCount: runIds.length }
 }
 
 // ---------------------------------------------------------------------------

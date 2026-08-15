@@ -11,6 +11,7 @@ import { env } from '../../config/env.js'
 import { chatWithTools, type ChatMessage, type ToolCallRequest } from '../ai-service.js'
 import { prisma } from '../prisma.js'
 import { getAgentDefinition, getToolsForAgent, type AgentDefinition } from './agents.js'
+import { deregisterActiveRun, registerActiveRun } from './active-runs.js'
 import { clearRunBaselines } from './baseline.js'
 import { assembleContext } from './context.js'
 import { createRunEventBus, disposeRunEventBus, type RunEventBus } from './events.js'
@@ -32,73 +33,8 @@ import { autoNameSession } from './session-title.js'
  * - 错误即观察：工具失败不中断 run，错误信息回填给模型自愈
  * - 审批暂停-恢复：'ask' 工具挂起循环等待前端批复，超时视为拒绝
  * - maxTurns + token 预算双保险防失控计费
+ * 进行中 run 的登记表（activeRuns Map 及查询/停止函数）已拆至 active-runs.ts。
  */
-
-type ActiveRun = {
-  controller: AbortController
-  bus: RunEventBus
-  sessionId: string
-  userId: string
-}
-
-const activeRuns = new Map<string, ActiveRun>()
-
-export function getActiveRun(runId: string): ActiveRun | undefined {
-  return activeRuns.get(runId)
-}
-
-export function countActiveRunsByUser(userId: string): number {
-  let count = 0
-  for (const run of activeRuns.values()) {
-    if (run.userId === userId) {
-      count += 1
-    }
-  }
-  return count
-}
-
-export function hasActiveRunInSession(sessionId: string): boolean {
-  for (const run of activeRuns.values()) {
-    if (run.sessionId === sessionId) {
-      return true
-    }
-  }
-  return false
-}
-
-/** 查询会话内进行中的 run id：前端刷新后恢复直播/停止入口用 */
-export function getActiveRunIdBySession(sessionId: string): string | null {
-  for (const [runId, run] of activeRuns) {
-    if (run.sessionId === sessionId) {
-      return runId
-    }
-  }
-  return null
-}
-
-/** 停止会话内全部进行中的 run：删除会话前清理，避免孤儿任务阻塞删除或继续写库 */
-export function stopActiveRunsInSession(sessionId: string): number {
-  let stopped = 0
-  for (const run of activeRuns.values()) {
-    if (run.sessionId === sessionId) {
-      run.controller.abort()
-      stopped += 1
-    }
-  }
-  return stopped
-}
-
-/** 用户点击停止：abort 上游请求 + 唤醒挂起审批，循环自行收尾为 paused */
-export function stopAgentRun(runId: string): boolean {
-  const active = activeRuns.get(runId)
-
-  if (!active) {
-    return false
-  }
-
-  active.controller.abort()
-  return true
-}
 
 export type ExecuteAgentRunParams = {
   runId: string
@@ -533,7 +469,7 @@ async function finalizeRun(
   if (status !== 'paused') {
     clearRunBaselines(runId)
   }
-  activeRuns.delete(runId)
+  deregisterActiveRun(runId)
   await disposeRunEventBus(runId)
 }
 
@@ -544,7 +480,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const controller = new AbortController()
   const bus = createRunEventBus(runId)
 
-  activeRuns.set(runId, { controller, bus, sessionId: params.sessionId, userId: params.userId })
+  registerActiveRun(runId, { controller, bus, sessionId: params.sessionId, userId: params.userId })
 
   const usage = emptyUsage()
   let turn = 0

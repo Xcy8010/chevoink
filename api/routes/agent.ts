@@ -9,26 +9,30 @@ import {
 } from '../../shared/contracts/index.js'
 import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
-import { stopActiveRunsInSession } from '../lib/agent/loop.js'
+import { stopActiveRunsInSession } from '../lib/agent/active-runs.js'
+import {
+  createNovelPlanArtifact,
+  listNovelPlanArtifacts,
+  updateNovelPlanArtifact,
+} from '../lib/agent/plan-artifacts.js'
 import {
   continueLoopRun,
   createAgentSessionData,
-  createNovelPlanArtifact,
   deleteAgentSessionData,
-  deleteLoopSessionMessage,
   listAgentSessionHistoryData,
   listAgentSessionsData,
-  listLoopSessionMessages,
-  listNovelPlanArtifacts,
   resolveLoopRunApproval,
   resolveLoopRunQuestion,
-  rollbackLoopSessionFromMessage,
   startLoopRun,
   stopLoopRun,
   streamLoopRun,
   updateAgentSessionData,
-  updateNovelPlanArtifact,
 } from '../lib/agent/run-service.js'
+import {
+  deleteLoopSessionMessage,
+  listLoopSessionMessages,
+  rollbackLoopSessionFromMessage,
+} from '../lib/agent/session-messages.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'

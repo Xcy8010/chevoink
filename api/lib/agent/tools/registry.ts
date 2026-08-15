@@ -4,7 +4,22 @@ import type { AgentExecutionMode } from '../../../../shared/contracts/index.js'
 import type { OpenAIToolDefinition } from '../../ai-service.js'
 import { coverApplyTool, coverGenerateTool } from './cover-tools.js'
 import { readFileTool, viewImageTool } from './attachment-tools.js'
+import {
+  chapterAppendTool,
+  chapterCreateTool,
+  chapterEditRangeTool,
+  chapterRenameTool,
+  chapterWriteTool,
+} from './chapter-tools.js'
 import { askUserTool } from './interact-tools.js'
+import {
+  coverPromptSetTool,
+  novelArchiveTool,
+  novelDeleteTool,
+  novelPublishTool,
+  novelRenameTool,
+  novelUpdateMetaTool,
+} from './novel-tools.js'
 import {
   chapterListSummariesTool,
   chapterReadTool,
@@ -15,24 +30,7 @@ import {
 import { webReadTool, webSearchTool } from './search-tools.js'
 import type { AgentTool } from './types.js'
 import { todoWriteTool } from './todo-tools.js'
-import {
-  chapterAppendTool,
-  chapterCreateTool,
-  chapterEditRangeTool,
-  chapterRenameTool,
-  chapterWriteTool,
-  coverPromptSetTool,
-  memorySaveTool,
-  novelArchiveTool,
-  novelDeleteTool,
-  novelPublishTool,
-  novelRenameTool,
-  novelUpdateMetaTool,
-  planDeleteTool,
-  planExitTool,
-  planRenameTool,
-  planSaveTool,
-} from './write-tools.js'
+import { memorySaveTool, planDeleteTool, planExitTool, planRenameTool, planSaveTool } from './write-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
