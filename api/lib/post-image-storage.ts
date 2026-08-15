@@ -62,7 +62,7 @@ async function removeStoredPostImage(imageUrl: string): Promise<void> {
 
   // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
   if (filePath.endsWith('.webp')) {
-    await unlink(filePath.replace(/\.webp$/, '.thumb.webp')).catch(() => undefined)
+    await unlink(filePath.replace(/\.webp$/, '.thumb.webp')).catch((): undefined => undefined)
   }
 
   try {

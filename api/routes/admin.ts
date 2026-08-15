@@ -205,7 +205,7 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
 
   try {
     // 登出即吊销该管理员全部 v2 会话令牌
-    const admin = await requireAdmin(req).catch(() => null)
+    const admin = await requireAdmin(req).catch((): null => null)
     if (admin) {
       await revokeUserSessions(admin.id)
     }

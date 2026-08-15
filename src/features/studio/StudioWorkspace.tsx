@@ -1,13 +1,11 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, BookOpen, BookOpenText, ChevronLeft, Clock3, FileText, Globe2, ImagePlus, LoaderCircle, Lock, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, Users, WandSparkles, X } from 'lucide-react'
+import { BookOpen, BookOpenText, ChevronLeft, FileText, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
-import Tag from '@/components/ui/Tag'
-import TextInput from '@/components/ui/TextInput'
 import { useToast } from '@/components/ui/Toast'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { copyToClipboard } from '@/lib/clipboard'
@@ -83,7 +81,7 @@ import WritingAgentPanel from './components/WritingAgentPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle, useStudioPanelWidths } from './panel-resize'
-import { ActionCommandButton, InputLabel, SaveStatusPill } from './components/StudioControls'
+import { SaveStatusPill } from './components/StudioControls'
 import type {
   AgentArtifact,
   AgentLocalRollbackChapterSnapshot,
@@ -110,7 +108,6 @@ import type {
 import {
   agentTaskLabelMap,
   chapterStatusLabelMap,
-  novelStatusLabelMap,
 } from './types'
 
 const DEFAULT_NOVEL_ID = 'novel-aurora'
@@ -1362,66 +1359,6 @@ function resolveFallbackExecutionPlanFromTask(
   }
 }
 
-function shouldAutoApplyWriteFromStrategies(
-  task: AgentTaskType,
-  availableApplyStrategies?: string[] | null,
-  options?: {
-    hasSelectedPersistedChapter?: boolean
-    hasAnyChapter?: boolean
-  },
-) {
-  const strategyWriteStep = resolveWriteStepFromApplyStrategies(availableApplyStrategies)
-
-  if (!strategyWriteStep) {
-    return null
-  }
-
-  if (task === 'draft-chapter' || task === 'continue-chapter' || task === 'rewrite-selection' || task === 'polish-selection') {
-    return strategyWriteStep
-  }
-
-  if (task === 'workspace-agent') {
-    const hasSelectedPersistedChapter = options?.hasSelectedPersistedChapter ?? false
-    const hasAnyChapter = options?.hasAnyChapter ?? false
-    if (strategyWriteStep.kind === 'write_chapter' && strategyWriteStep.forceWriteMode === 'append') {
-      return {
-        kind: 'write_chapter',
-        forceWriteMode: hasSelectedPersistedChapter || hasAnyChapter ? 'append' : 'create',
-      }
-    }
-  }
-
-  return null
-}
-
-function shouldAppendToExistingChapter(promptText: string, task: AgentTaskType, currentContent: string) {
-  const normalized = promptText.trim()
-
-  if (task === 'continue-chapter') {
-    return true
-  }
-
-  if (!currentContent.trim()) {
-    return false
-  }
-
-  return containsAnyKeyword(normalized, [
-    '续写',
-    '接着写',
-    '往后写',
-    '补在后面',
-    '追加',
-    '补写',
-    '多写一点',
-    '多写一些',
-    '再写一点',
-    '再写一些',
-    '扩充',
-    '丰富',
-    '展开',
-  ])
-}
-
 function getAgentWorkspaceStorageKey(novelId: string) {
   return `${AGENT_WORKSPACE_STORAGE_PREFIX}:${novelId}`
 }
@@ -1609,9 +1546,9 @@ function readStoredAgentWorkspace(novelId: string): StoredAgentWorkspaceSnapshot
     return {
       tasks,
       activeTaskId: typeof parsed?.activeTaskId === 'string' ? parsed.activeTaskId : tasks[0]?.id ?? null,
-      selectedTreeItemId: typeof parsed.selectedTreeItemId === 'string' ? parsed.selectedTreeItemId : null,
+      selectedTreeItemId: typeof parsed?.selectedTreeItemId === 'string' ? parsed.selectedTreeItemId : null,
       catalogDocument:
-        parsed.catalogDocument && typeof parsed.catalogDocument === 'object'
+        parsed?.catalogDocument && typeof parsed.catalogDocument === 'object'
           ? {
               title: typeof parsed.catalogDocument.title === 'string' ? parsed.catalogDocument.title : '目录',
               content: typeof parsed.catalogDocument.content === 'string' ? parsed.catalogDocument.content : '',
@@ -2583,19 +2520,6 @@ function shouldMarkCatalogUpdated(options: {
   return Boolean(nextTitle) && previousTitle !== nextTitle
 }
 
-function buildBlankChapterDraft(orderIndex: number): ChapterDraftState {
-  return {
-    id: `local-${Date.now()}`,
-    title: '',
-    summary: '',
-    content: '',
-    status: 'draft',
-    visibility: 'private',
-    orderIndex,
-    localOnly: true,
-  }
-}
-
 function buildRollbackSnapshotFromChapter(chapter: Chapter): AgentLocalRollbackChapterSnapshot {
   return {
     id: chapter.id,
@@ -3024,20 +2948,6 @@ export default function StudioWorkspace() {
     )
     setAgentRunStatusMode(latestArtifact?.runStatusMode ?? 'none')
     setAgentRunStatuses(latestArtifact?.runStatuses ?? [])
-  }
-
-  function syncActiveTaskWindowState(updater: (taskWindow: AgentTaskWindowState) => AgentTaskWindowState) {
-    if (!activeAgentTaskWindowId) {
-      return
-    }
-
-    setAgentTaskWindows((current) =>
-      current.map((taskWindow) =>
-        taskWindow.id === activeAgentTaskWindowId
-          ? updater(taskWindow)
-          : taskWindow,
-      ),
-    )
   }
 
   async function hydrateAgentTaskWindow(taskWindow: AgentTaskWindowState) {
@@ -4605,10 +4515,10 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       title: step.title,
       status: 'pending',
       target: step.target,
-      resultSummary: null,
-      errorMessage: null,
-      startedAt: null,
-      finishedAt: null,
+      resultSummary: null as string | null,
+      errorMessage: null as string | null,
+      startedAt: null as string | null,
+      finishedAt: null as string | null,
     }))
   }
 
@@ -4623,10 +4533,10 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
       title: step.title,
       status: 'skipped',
       target: step.target,
-      resultSummary: null,
+      resultSummary: null as string | null,
       errorMessage: step.requiresConfirm ? '该步骤需要确认后才能执行。' : '当前策略不允许自动执行该步骤。',
-      startedAt: null,
-      finishedAt: null,
+      startedAt: null as string | null,
+      finishedAt: null as string | null,
     }))
   }
 
@@ -5405,7 +5315,6 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
   const saveNovelMutation = useMutation({
     mutationFn: async ({
-      reason,
       statusOverride,
     }: {
       reason: 'manual' | 'auto' | 'publish'
@@ -7134,7 +7043,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
   async function handleCopyAgentPrompt(artifactId: string) {
     const targetArtifact = agentArtifacts.find((artifact) => artifact.id === artifactId)
-    const copyText = targetArtifact?.promptText?.trim() ?? ''
+    if (!targetArtifact) {
+      return
+    }
+
+    const copyText = targetArtifact.promptText?.trim() ?? ''
 
     if (!copyText) {
       return
@@ -7573,8 +7486,11 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
   async function handleCopyActiveArtifact(artifactId: string) {
     const targetArtifact = agentArtifacts.find((artifact) => artifact.id === artifactId)
+    if (!targetArtifact) {
+      return
+    }
 
-    const copyText = (targetArtifact?.rawContent ?? targetArtifact?.content ?? '').trim()
+    const copyText = (targetArtifact.rawContent ?? targetArtifact.content ?? '').trim()
 
     if (!copyText) {
       return
@@ -8967,6 +8883,10 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
   }
 
   function renderCoverToolPanel(close?: () => void) {
+    if (!coverForm || !currentNovel) {
+      return null
+    }
+
     return (
       <Surface as="section" padding="md" className="flex h-full min-h-0 flex-col overflow-hidden md:w-[24rem] xl:w-[26rem]">
         <CoverPanel
@@ -9006,7 +8926,7 @@ function resolveNovelMetaUpdateFromContent(promptText: string, content: string):
 
     return (
       <Surface as="section" padding="md" className="flex h-full min-h-0 flex-col overflow-hidden">
-        {activeToolPanel === 'meta' ? (
+        {activeToolPanel === 'meta' && novelForm ? (
           <MetaPanel
             novelForm={novelForm}
             wordCountLabel={wordCountLabel}

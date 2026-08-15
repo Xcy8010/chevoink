@@ -729,7 +729,11 @@ export async function recalculateNovelStats(tx: Prisma.TransactionClient, novelI
 
 
 
-export function buildCommentTargetIds(targetType: CommentTargetType, targetId: string) {
+export function buildCommentTargetIds(targetType: CommentTargetType, targetId: string): {
+  novelId: string | null
+  chapterId: string | null
+  postId: string | null
+} {
   if (targetType === 'novel') {
     return { novelId: targetId, chapterId: null, postId: null }
   }

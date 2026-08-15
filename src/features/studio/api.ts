@@ -30,7 +30,6 @@ import type {
   GenerateCoverPromptRequest,
   GenerateCoverPromptResponse,
   GetChapterResponse,
-  GetReaderResponse,
   ListAgentSessionHistoryResponse,
   ListAgentSessionsResponse,
   Novel,
@@ -793,16 +792,6 @@ async function readAgentRunStreamResponse(
   }
 }
 
-async function fetchAgentRunStream(url: string): Promise<Response> {
-  return fetch(resolveAgentStreamUrl(url), {
-    method: 'GET',
-    credentials: 'include',
-    headers: {
-      Accept: 'text/event-stream',
-    },
-  })
-}
-
 async function fetchAgentRunStreamWithSignal(
   url: string,
   signal?: AbortSignal,
@@ -1033,7 +1022,7 @@ function buildAgentRuntimeContext(request: WritingAgentRequest): Record<string, 
     protagonist: request.protagonist?.trim(),
     tone: request.tone?.trim(),
     stylePreference: request.stylePreference?.trim(),
-  }).filter(([, value]) => typeof value === 'string' && value.length > 0)
+  }).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
 
   return Object.fromEntries(entries)
 }

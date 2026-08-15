@@ -254,7 +254,7 @@ export default function AppShell({ title, description, children }: AppShellProps
     navRefreshAtRef.current.set(target, now)
     setBottomNavRefreshing(true)
     Promise.all(refreshKeys.map((queryKey) => queryClient.invalidateQueries({ queryKey })))
-      .catch(() => undefined)
+      .catch((): undefined => undefined)
       .finally(() => setBottomNavRefreshing(false))
   }
 

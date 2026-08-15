@@ -31,7 +31,9 @@ export default function AdminNovelDetailPage() {
     enabled: Boolean(novelId),
   })
 
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['admin', 'novels'] })
+  const invalidate = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'novels'] })
+  }
 
   const takeDownMutation = useMutation({
     mutationFn: () => takeDownAdminNovel(novelId),

@@ -60,8 +60,8 @@ export default function AppProviders({ children }: PropsWithChildren) {
 
           syncSessionUser({
             user: payload.user,
-            unreadMessageCount: payload.unreadMessageCount,
-            unreadNotificationCount: payload.unreadNotificationCount,
+            unreadMessageCount: payload.unreadMessageCount ?? 0,
+            unreadNotificationCount: payload.unreadNotificationCount ?? 0,
           })
 
           // 登录后水合书架/阅读进度：拉取云端并合并本地，变更后刷新 /me 让书架列表重算

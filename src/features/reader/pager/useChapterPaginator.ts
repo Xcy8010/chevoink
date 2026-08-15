@@ -339,7 +339,7 @@ export function paginateChapterAsync(
     return result
   })
   // 队列失败不阻断后续预热任务
-  warmQueue = task.catch(() => undefined)
+  warmQueue = task.catch((): undefined => undefined)
   return task
 }
 

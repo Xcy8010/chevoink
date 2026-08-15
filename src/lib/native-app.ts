@@ -99,7 +99,7 @@ export function syncNativeSystemBars(backgroundColor: string, dark: boolean): vo
 let immersiveChain: Promise<unknown> = Promise.resolve()
 
 function enqueueImmersive<T>(step: () => Promise<T>): Promise<T | null> {
-  const next = immersiveChain.then(step, step).catch(() => null)
+  const next = immersiveChain.then(step, step).catch((): null => null)
   immersiveChain = next
   return next
 }

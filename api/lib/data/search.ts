@@ -150,7 +150,7 @@ export async function searchSuggestData(keyword: string): Promise<SearchSuggestP
       id: post.id,
       text: excerptContent(post.content),
       subText: post.author?.nickname ? `${post.author.nickname} 的讨论` : '讨论',
-      imageUrl: null,
+      imageUrl: null as string | null,
     })),
   ]
 

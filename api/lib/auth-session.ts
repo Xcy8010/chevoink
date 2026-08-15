@@ -137,7 +137,7 @@ function writeSessionCookies(userId: string, tokenVersion: number, res: Response
 export async function createSession(userId: string, res: Response) {
   const user = await prisma.user
     .findUnique({ where: { id: userId }, select: { tokenVersion: true } })
-    .catch(() => null)
+    .catch((): null => null)
   return writeSessionCookies(userId, user?.tokenVersion ?? 0, res)
 }
 
@@ -235,7 +235,7 @@ async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
 
   const user = await prisma.user
     .findUnique({ where: { id: userId }, select: { bannedAt: true, tokenVersion: true } })
-    .catch(() => null)
+    .catch((): null => null)
 
   if (!user) {
     // 查询失败：不缓存故障结果，交由调用方降级

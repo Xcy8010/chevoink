@@ -48,7 +48,9 @@ export default function AdminUsersPage() {
     setPage(1)
   }
 
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+  const invalidate = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+  }
 
   const banMutation = useMutation({
     mutationFn: (userId: string) => banAdminUser(userId),

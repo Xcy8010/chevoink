@@ -46,7 +46,6 @@ export default function StudioToolbar({
   novelTitleMissing = false,
   novelOptions,
   chapterTitle,
-  chapterStatusLabel,
   wordCountLabel,
   saveState,
   saveMessage,

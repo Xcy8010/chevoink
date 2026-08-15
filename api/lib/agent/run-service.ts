@@ -729,7 +729,7 @@ export async function rollbackLoopSessionFromMessage(
       if (snapshot.field === 'title' && snapshot.previousValue !== null) {
         await tx.novel.update({ where: { id: session.novelId }, data: { title: snapshot.previousValue } })
       } else if (snapshot.field === 'summary') {
-        await tx.novel.update({ where: { id: session.novelId }, data: { summary: snapshot.previousValue } })
+        await tx.novel.update({ where: { id: session.novelId }, data: { summary: snapshot.previousValue ?? '' } })
       } else if (snapshot.field === 'coverPrompt') {
         await tx.novel.update({ where: { id: session.novelId }, data: { coverPrompt: snapshot.previousValue } })
       } else if (snapshot.field === 'coverAssetId') {

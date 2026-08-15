@@ -68,7 +68,6 @@ export default function EditorCanvas({
   chapterSaveState,
   chapterSaveMessage,
   latestWordCountLabel,
-  selectedCommentCount,
   onSelectionChange,
   onSave,
   onEnterImmersive,

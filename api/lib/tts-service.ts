@@ -103,7 +103,7 @@ export async function synthesizeTtsBatchData(input: SynthesizeTtsInput): Promise
     const fileStat = await stat(filePath)
     if (fileStat.size > 0) {
       const now = new Date()
-      await utimes(filePath, now, now).catch(() => undefined)
+      await utimes(filePath, now, now).catch((): undefined => undefined)
       return filePath
     }
   } catch {
@@ -118,7 +118,7 @@ export async function synthesizeTtsBatchData(input: SynthesizeTtsInput): Promise
   const task = (async () => {
     await mkdir(cacheDirectory, { recursive: true })
     await synthesizeWithRetry(batch.text, input.voiceId, filePath)
-    void cleanupTtsCache(cacheDirectory).catch(() => undefined)
+    void cleanupTtsCache(cacheDirectory).catch((): undefined => undefined)
     return filePath
   })()
 
@@ -152,7 +152,7 @@ async function synthesizeWithRetry(text: string, voiceId: string, filePath: stri
       return
     } catch (error) {
       lastError = error
-      await unlink(filePath).catch(() => undefined)
+      await unlink(filePath).catch((): undefined => undefined)
     }
   }
 
@@ -175,7 +175,7 @@ async function cleanupTtsCache(cacheDirectory: string): Promise<void> {
         .filter((name) => name.endsWith('.mp3'))
         .map(async (name) => {
           const filePath = path.join(cacheDirectory, name)
-          const fileStat = await stat(filePath).catch(() => null)
+          const fileStat = await stat(filePath).catch((): null => null)
           return fileStat ? { filePath, size: fileStat.size, mtimeMs: fileStat.mtimeMs } : null
         }),
     )
@@ -189,7 +189,7 @@ async function cleanupTtsCache(cacheDirectory: string): Promise<void> {
 
     for (const file of validFiles) {
       if (totalBytes <= maxBytes) break
-      await unlink(file.filePath).catch(() => undefined)
+      await unlink(file.filePath).catch((): undefined => undefined)
       totalBytes -= file.size
     }
   } finally {

@@ -266,11 +266,11 @@ export default function SettingsPage() {
     let cancelled = false
     getMe()
       .then((payload) => {
-        if (!cancelled && payload.user.privacy) {
+        if (!cancelled && payload.user?.privacy) {
           setPrivacy({ ...DEFAULT_PRIVACY, ...payload.user.privacy })
         }
       })
-      .catch(() => undefined)
+      .catch((): undefined => undefined)
 
     return () => {
       cancelled = true

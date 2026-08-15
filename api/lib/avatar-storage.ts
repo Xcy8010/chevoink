@@ -93,7 +93,7 @@ export async function removeManagedAvatar(avatarUrl: string | null | undefined):
 
   // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
   if (filename.endsWith('.webp')) {
-    await unlink(path.join(getAvatarDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch(() => undefined)
+    await unlink(path.join(getAvatarDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch((): undefined => undefined)
   }
 
   try {

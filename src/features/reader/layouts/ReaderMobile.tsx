@@ -215,12 +215,13 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
     if (!landingChapterId) return
     renderLandedRef.current = landingChapterId
     // 章边界跟手跨章：边界页已随翻页动画滑到位，落点即当前画面，跳过进场动画
+    const pendingEnter = pendingEnterRef.current
     if (suppressEnterRef.current) {
       suppressEnterRef.current = false
       setChapterEnter(null)
-    } else if (pendingEnterRef.current?.targetId === state.chapterId) {
+    } else if (pendingEnter && pendingEnter.targetId === state.chapterId) {
       // 新章分页就绪：有指向本章的换章意图就此起动进场动画
-      setChapterEnter(pendingEnterRef.current.direction)
+      setChapterEnter(pendingEnter.direction)
       pendingEnterRef.current = null
     }
     // 优先级：听书自动翻章钉第 1 页 > 左滑换章第 1 页 > 右滑回来末页 > 上次读到的位置 > 代入页。

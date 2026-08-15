@@ -52,7 +52,6 @@ export default function ChapterSidebar({
   savedPlans,
   selectedChapterId,
   selectedTreeItemId,
-  catalogPreview,
   chapterCountLabel,
   novelTitle,
   onCreateChapter,

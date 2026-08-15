@@ -45,7 +45,6 @@ type AssistPanelProps = {
 
 export default function AssistPanel({
   projectNotes: _projectNotes,
-  assistMode,
   assistPrompt,
   assistantResult,
   assistantMessage,

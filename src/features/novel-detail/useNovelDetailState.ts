@@ -197,7 +197,7 @@ export function useNovelDetailState() {
 
       return updateNovelMeta(detail.novel.id, {
         title: editForm.title.trim(),
-        displayTitle: editForm.displayTitle.trim() || null,
+        displayTitle: editForm.displayTitle.trim() || undefined,
         summary: editForm.summary.trim(),
         tags: parseTagInput(editForm.tagsText),
       })

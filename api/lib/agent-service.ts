@@ -3318,7 +3318,14 @@ export async function applyAgentArtifactData(
         coverPrompt: updatedNovel.coverPrompt ?? null,
         updatedAt: toIso(updatedNovel.updatedAt) ?? new Date().toISOString(),
       },
-      chapter: null,
+      chapter: null as {
+        id: string
+        title: string
+        summary: string | null
+        content: string
+        wordCount: number
+        updatedAt: string
+      } | null,
     }
   }
 
@@ -3397,7 +3404,7 @@ export async function applyAgentArtifactData(
       wordCount: updatedChapter.wordCount ?? updatedChapter.content.length,
       updatedAt: toIso(updatedChapter.updatedAt) ?? new Date().toISOString(),
     },
-    novel: null,
+    novel: null as { id: string; coverPrompt: string | null; updatedAt: string } | null,
   }
 }
 

@@ -20,7 +20,7 @@ function loadSharp(): Promise<SharpModule | null> {
   if (!sharpModulePromise) {
     sharpModulePromise = import('sharp')
       .then((mod) => mod.default)
-      .catch((error) => {
+      .catch((error): null => {
         console.warn('[image-transcode] sharp 加载失败，图片将原样落盘：', error)
         return null
       })
@@ -54,7 +54,7 @@ export async function transcodeAvatarImage(buffer: Buffer): Promise<TranscodedIm
       const trimmed = await sharp(await base.toBuffer())
         .trim({ threshold: AVATAR_TRIM_THRESHOLD })
         .toBuffer({ resolveWithObject: true })
-        .catch(() => null)
+        .catch((): null => null)
 
       // 裁切过狠（可能是纯色背景的正常照片）时放弃 trim
       if (trimmed && trimmed.info.width * trimmed.info.height >= sourceArea * AVATAR_TRIM_MIN_AREA_RATIO) {

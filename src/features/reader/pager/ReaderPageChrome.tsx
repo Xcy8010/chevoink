@@ -33,14 +33,14 @@ function useBatteryLevel(): { level: number; charging: boolean } | null {
 
     void getBattery
       .call(navigator)
-      .then((result) => {
+      .then((result: BatteryLike) => {
         if (disposed) return
         handle = result
         sync()
         handle.addEventListener('levelchange', sync)
         handle.addEventListener('chargingchange', sync)
       })
-      .catch(() => undefined)
+      .catch((): undefined => undefined)
 
     return () => {
       disposed = true

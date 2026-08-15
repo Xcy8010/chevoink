@@ -255,7 +255,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
 
         // 预取下一批，批间隙无缝续播
         if (batchIndex + 1 < stateRef.current.batches.length) {
-          void getBatchAudio(batchIndex + 1).catch(() => undefined)
+          void getBatchAudio(batchIndex + 1).catch((): undefined => undefined)
         }
       } catch (error) {
         if (sessionRef.current !== session) return
@@ -353,7 +353,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     // iOS：首次 play 必须发生在用户手势调用栈内
     if (!unlockedRef.current) {
       audio.src = SILENT_WAV
-      void audio.play().catch(() => undefined)
+      void audio.play().catch((): undefined => undefined)
       unlockedRef.current = true
     }
 
@@ -395,7 +395,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       // iOS：首次 play 必须发生在用户手势调用栈内
       if (!unlockedRef.current) {
         audio.src = SILENT_WAV
-        void audio.play().catch(() => undefined)
+        void audio.play().catch((): undefined => undefined)
         unlockedRef.current = true
       }
 
@@ -420,7 +420,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const resume = useCallback(() => {
     const { status: currentStatus, currentBatchIndex: index } = stateRef.current
     if (currentStatus === 'paused' && audioRef.current?.src) {
-      void audioRef.current.play().then(() => setStatus('playing')).catch(() => undefined)
+      void audioRef.current.play().then(() => setStatus('playing')).catch((): undefined => undefined)
       return
     }
     if (currentStatus === 'ended' || currentStatus === 'error') {

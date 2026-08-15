@@ -27,7 +27,7 @@ const feedModes = [
  * - 电脑：左话题 + 中单列(max 640px) + 右热门话题/社区数据三栏
  */
 export default function CommunityPage() {
-  const { isMobile, isTablet, isDesktop } = useDevice()
+  const { isMobile, isTablet } = useDevice()
   const queryClient = useQueryClient()
   const toast = useToast()
   const location = useLocation()

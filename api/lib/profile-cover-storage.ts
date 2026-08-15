@@ -92,7 +92,7 @@ export async function removeManagedProfileCover(profileCoverUrl: string | null |
 
   // 同步清理约定式命名的缩略图（存在才删，失败不阻断）
   if (filename.endsWith('.webp')) {
-    await unlink(path.join(getProfileCoverDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch(() => undefined)
+    await unlink(path.join(getProfileCoverDirectory(), filename.replace(/\.webp$/, '.thumb.webp'))).catch((): undefined => undefined)
   }
 
   try {
