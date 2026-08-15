@@ -54,6 +54,9 @@ export function setupKeyboardInsetWatcher() {
     root.classList.toggle(KEYBOARD_OPEN_CLASS, inset > 0 || focusOpen)
   }
 
+  // 仅触摸设备需要聚焦信号与滚动兜底，桌面端聚焦不应引起视图变化
+  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+
   // Android resizes-content 模式下键盘只缩小布局视口、不改 visualViewport 偏移，
   // 且用键盘自带「收起」按钮关闭键盘时输入框仍保持焦点（不触发 focusout），
   // 单靠焦点信号会让 keyboard-open 类一直挂着（底部导航被永久隐藏）。
@@ -64,6 +67,21 @@ export function setupKeyboardInsetWatcher() {
   const syncFocusOpenByLayout = () => {
     const height = window.innerHeight
     if (!focusOpen) {
+      // 保留焦点下键盘二次弹起：原生收起按钮关掉键盘后焦点仍留在输入框，
+      // 再点输入框不会触发 focusin——若此时把压缩后的高度校准成基线，
+      // keyboard-open 类将永远挂不上，底部导航被顶到键盘上方（APP WebView 高频）。
+      // 故「可编辑元素持有焦点 + 布局明显压缩」直接视为键盘已打开。
+      const active = document.activeElement
+      if (
+        isTouch &&
+        active instanceof HTMLElement &&
+        active.matches(EDITABLE_SELECTOR) &&
+        baselineHeight - height >= MIN_KEYBOARD_INSET
+      ) {
+        focusOpen = true
+        sawKeyboardShrink = true
+        return
+      }
       // 无键盘时持续校准完整高度基线（涵盖地址栏收放、横竖屏切换）
       baselineHeight = height
       sawKeyboardShrink = false
@@ -75,6 +93,10 @@ export function setupKeyboardInsetWatcher() {
       focusOpen = false
       sawKeyboardShrink = false
       applyInset()
+    } else if (height > baselineHeight) {
+      // 基线只升不降：极端事件顺序下（resize 先于 focusin）基线可能被压缩高度污染，
+      // 此后高度回升到更大值时以实际高度修正，避免 focusOpen 永远清不掉
+      baselineHeight = height
     }
   }
 
@@ -119,7 +141,6 @@ export function setupKeyboardInsetWatcher() {
   }
 
   // 仅触摸设备需要聚焦信号与滚动兜底，桌面端聚焦不应引起视图变化
-  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
   if (!isTouch) return
 
   let focusOutTimer = 0
