@@ -173,6 +173,8 @@ try {
   if (-not $SkipLocalChecks) {
     Write-Step "Running local checks"
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "check") -WorkingDirectory $ProjectRoot
+    Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("test") -WorkingDirectory $ProjectRoot
+    Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("audit", "--omit=dev", "--audit-level=high") -WorkingDirectory $ProjectRoot
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "build") -WorkingDirectory $ProjectRoot
   }
 

@@ -4,6 +4,8 @@
 
 线上地址：<https://chevoink.chevolink.com>
 
+[![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
+
 ## 快速导航
 
 | 想做什么 | 去哪里 |
@@ -63,8 +65,9 @@
 | 前端 | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | 后端 | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek 文本生成 · 智谱 GLM-4.1V 图像理解 · OpenAI 兼容图像生成 · Edge TTS 语音合成 · 博查联网搜索（多引擎降级） |
-| 测试 | Vitest + Supertest（单元与集成冒烟；无测试库时 DB 用例自动跳过） |
-| 部署 | PM2 + nginx（生产）· 安卓 Capacitor 壳工程（独立仓库目录） |
+| Agent | 统一写作 loop 引擎（`api/lib/agent`）：loop 调度内核 + 工具集 + 权限守卫 + 知识集 Skill，前端消费标准事件流 |
+| 测试 | Vitest + Supertest（单元与集成冒烟；开箱即用——clone 后直接 `npm test`，无测试库时 DB 用例自动跳过） |
+| 部署 | PM2 + nginx（生产）· GitHub Actions CI（push 即跑类型检查/lint/单测/集成测试）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
 ## 目录结构
 
@@ -110,7 +113,7 @@ npm run dev
 
 ## 部署与发布
 
-- **生产部署**：`npm run deploy:prod`（本地检查 → 构建 → 打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
+- **生产部署**：`npm run deploy:prod`（本地闸门：类型检查 → 测试 → 生产依赖安全审计 → 构建；然后打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
 - **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.07 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
