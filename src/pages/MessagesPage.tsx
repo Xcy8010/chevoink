@@ -7,6 +7,7 @@ import { useDevice } from '@/components/layout/DeviceProvider'
 import AppState from '@/components/ui/AppState'
 import { ConversationSkeleton, Skeleton } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/Toast'
+import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import {
   createDirectConversation,
   getInteractionBadges,
@@ -235,6 +236,9 @@ export default function MessagesPage() {
       element.scrollTop = element.scrollHeight
     }
   }, [selectedConversationId, activeMessages.length, activePending.length])
+
+  // 键盘弹起时微信/QQ 式把聊天对话顶上去（消息区加载完成后才挂载，ready 翻真重绑）
+  useKeyboardPushScroll(messageScrollRef, !messagesQuery.isLoading && !messagesQuery.isError)
 
   const dispatchMessage = (
     conversationId: string,

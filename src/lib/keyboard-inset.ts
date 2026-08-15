@@ -100,6 +100,30 @@ export function setupKeyboardInsetWatcher() {
     }
   }
 
+  // 文档流页面微信/QQ 式顶起：键盘打开期间可见高度每收缩一步，就把聚焦输入框的
+  // 可滚动祖先链同步上移等量，当前可见内容（帖子正文、评论线程等）不被键盘裁掉；
+  // 聊天式容器由各组件的 useKeyboardPushScroll 顶起（消息流不在输入栏祖先链上，不会双滚）。
+  // 键盘收起时不回滚滚动位置，与聊天软件体验一致。
+  const visibleHeightNow = () => (window.visualViewport?.height ?? window.innerHeight) - vkInset
+  let lastVisibleHeight = visibleHeightNow()
+  const pushAncestorsByShrink = () => {
+    const visible = visibleHeightNow()
+    const delta = lastVisibleHeight - visible
+    lastVisibleHeight = visible
+    if (delta <= 0 || !focusOpen || !isTouch) {
+      return
+    }
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement) || !active.matches(EDITABLE_SELECTOR)) {
+      return
+    }
+    for (let el = active.parentElement; el; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight + 1) {
+        el.scrollTop += delta
+      }
+    }
+  }
+
   const viewport = window.visualViewport
   if (viewport) {
     const update = () => {
@@ -107,6 +131,7 @@ export function setupKeyboardInsetWatcher() {
       viewportInset = raw < MIN_KEYBOARD_INSET ? 0 : Math.round(raw)
       syncFocusOpenByLayout()
       applyInset()
+      pushAncestorsByShrink()
     }
 
     update()
@@ -118,6 +143,7 @@ export function setupKeyboardInsetWatcher() {
   window.addEventListener('resize', () => {
     syncFocusOpenByLayout()
     applyInset()
+    pushAncestorsByShrink()
   })
 
   const virtualKeyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
@@ -137,6 +163,7 @@ export function setupKeyboardInsetWatcher() {
     virtualKeyboard.addEventListener('geometrychange', () => {
       vkInset = Math.max(0, Math.round(virtualKeyboard.boundingRect.height))
       applyInset()
+      pushAncestorsByShrink()
     })
   }
 

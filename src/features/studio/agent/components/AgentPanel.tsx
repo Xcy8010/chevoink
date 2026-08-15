@@ -17,6 +17,7 @@ import {
 
 import Button from '@/components/ui/Button'
 import { copyToClipboard } from '@/lib/clipboard'
+import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import { cn } from '@/lib/utils'
 import type {
   AgentAttachmentMeta,
@@ -409,32 +410,8 @@ export function AgentPanel({
     }
   }, [])
 
-  // 键盘弹起 / 底部导航隐藏使消息容器变矮时，像微信/QQ 一样把对话顶上去：
-  // 贴底跟随中直接滚到最新；浏览历史时按变矮量上移，保持当前可见内容不被裁出视口。
-  // 容器变高（键盘收起）时不动滚动位置，与聊天软件的体验一致。
-  useEffect(() => {
-    const node = scrollRef.current
-    if (!node) {
-      return
-    }
-    let previousHeight = node.clientHeight
-    const observer = new ResizeObserver(() => {
-      const nextHeight = node.clientHeight
-      const shrink = previousHeight - nextHeight
-      previousHeight = nextHeight
-      if (shrink <= 0) {
-        return
-      }
-      if (pinnedToBottomRef.current) {
-        node.scrollTop = node.scrollHeight
-      } else {
-        node.scrollTop += shrink
-      }
-      lastScrollTopRef.current = node.scrollTop
-    })
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
+  // 键盘弹起 / 底部导航隐藏使消息容器变矮时，像微信/QQ 一样把对话顶上去
+  useKeyboardPushScroll(scrollRef)
 
   const handleSend = useCallback(
     async (prompt: string, attachments: AgentAttachmentMeta[]) => {
