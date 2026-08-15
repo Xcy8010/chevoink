@@ -6,7 +6,8 @@ import type { RefObject } from 'react'
  * 滚动位置按变矮量上移——原本贴底的内容仍贴底，浏览历史时当前可见
  * 内容不被裁出视口；容器变高（键盘收起）时不动滚动位置。
  * 供「上消息流 + 下输入栏」的聊天式布局滚动容器使用；
- * 文档流页面（输入框在页面中部）由 lib/keyboard-inset.ts 的祖先链顶起覆盖。
+ * 文档流页面（帖子评论等）不顶起内容，由 lib/keyboard-inset.ts 的
+ * ensureEditableVisible 只把输入框送进可视区。
  *
  * ready 用于容器延迟挂载的场景（如消息区加载完成后才渲染）：
  * ready 翻真时重新绑定观察器。

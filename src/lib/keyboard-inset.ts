@@ -57,6 +57,39 @@ export function setupKeyboardInsetWatcher() {
   // 仅触摸设备需要聚焦信号与滚动兜底，桌面端聚焦不应引起视图变化
   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
 
+  // 键盘弹出动画结束后确保聚焦输入框可见（只送输入框进可视区，不顶起周围内容）：
+  // 全屏 overlay 模式下 visualViewport 不缩小，真实可见高要再扣掉 vkInset；
+  // 微信/QQ 等不支持 VirtualKeyboard API 的内核全屏下拿不到键盘高度，兜底退出全屏
+  const ensureEditableVisible = (target: HTMLElement) => {
+    window.setTimeout(() => {
+      // 键盘动画期间可能已切换焦点或收起键盘
+      if (document.activeElement !== target) return
+
+      const scrollIntoViewIfCovered = () => {
+        if (document.activeElement !== target) return
+        const visibleHeight = (window.visualViewport?.height ?? window.innerHeight) - vkInset
+        const rect = target.getBoundingClientRect()
+        // 输入框底部已在键盘上方可见时不动，避免无意义的滚动跳动
+        if (rect.bottom <= visibleHeight - 8 && rect.top >= 0) return
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      }
+
+      if (
+        document.fullscreenElement &&
+        viewportInset === 0 &&
+        vkInset === 0 &&
+        window.matchMedia('(pointer: coarse)').matches
+      ) {
+        document.exitFullscreen?.().catch(() => {})
+        // 退出全屏触发视口重排，稍等稳定后再做一次滚动兜底
+        window.setTimeout(scrollIntoViewIfCovered, SCROLL_FALLBACK_DELAY)
+        return
+      }
+
+      scrollIntoViewIfCovered()
+    }, SCROLL_FALLBACK_DELAY)
+  }
+
   // Android resizes-content 模式下键盘只缩小布局视口、不改 visualViewport 偏移，
   // 且用键盘自带「收起」按钮关闭键盘时输入框仍保持焦点（不触发 focusout），
   // 单靠焦点信号会让 keyboard-open 类一直挂着（底部导航被永久隐藏）。
@@ -80,6 +113,8 @@ export function setupKeyboardInsetWatcher() {
       ) {
         focusOpen = true
         sawKeyboardShrink = true
+        // 保留焦点二次弹起不触发 focusin，这里补一次「输入框可见」兜底
+        ensureEditableVisible(active)
         return
       }
       // 无键盘时持续校准完整高度基线（涵盖地址栏收放、横竖屏切换）
@@ -100,30 +135,6 @@ export function setupKeyboardInsetWatcher() {
     }
   }
 
-  // 文档流页面微信/QQ 式顶起：键盘打开期间可见高度每收缩一步，就把聚焦输入框的
-  // 可滚动祖先链同步上移等量，当前可见内容（帖子正文、评论线程等）不被键盘裁掉；
-  // 聊天式容器由各组件的 useKeyboardPushScroll 顶起（消息流不在输入栏祖先链上，不会双滚）。
-  // 键盘收起时不回滚滚动位置，与聊天软件体验一致。
-  const visibleHeightNow = () => (window.visualViewport?.height ?? window.innerHeight) - vkInset
-  let lastVisibleHeight = visibleHeightNow()
-  const pushAncestorsByShrink = () => {
-    const visible = visibleHeightNow()
-    const delta = lastVisibleHeight - visible
-    lastVisibleHeight = visible
-    if (delta <= 0 || !focusOpen || !isTouch) {
-      return
-    }
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement) || !active.matches(EDITABLE_SELECTOR)) {
-      return
-    }
-    for (let el = active.parentElement; el; el = el.parentElement) {
-      if (el.scrollHeight > el.clientHeight + 1) {
-        el.scrollTop += delta
-      }
-    }
-  }
-
   const viewport = window.visualViewport
   if (viewport) {
     const update = () => {
@@ -131,7 +142,6 @@ export function setupKeyboardInsetWatcher() {
       viewportInset = raw < MIN_KEYBOARD_INSET ? 0 : Math.round(raw)
       syncFocusOpenByLayout()
       applyInset()
-      pushAncestorsByShrink()
     }
 
     update()
@@ -143,7 +153,6 @@ export function setupKeyboardInsetWatcher() {
   window.addEventListener('resize', () => {
     syncFocusOpenByLayout()
     applyInset()
-    pushAncestorsByShrink()
   })
 
   const virtualKeyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
@@ -163,7 +172,6 @@ export function setupKeyboardInsetWatcher() {
     virtualKeyboard.addEventListener('geometrychange', () => {
       vkInset = Math.max(0, Math.round(virtualKeyboard.boundingRect.height))
       applyInset()
-      pushAncestorsByShrink()
     })
   }
 
@@ -181,38 +189,7 @@ export function setupKeyboardInsetWatcher() {
     focusOpen = true
     sawKeyboardShrink = false
     applyInset()
-
-    window.setTimeout(() => {
-      // 键盘动画期间可能已切换焦点或收起键盘
-      if (document.activeElement !== target) return
-
-      const scrollIntoViewIfCovered = () => {
-        if (document.activeElement !== target) return
-        // 全屏 overlay 模式下 visualViewport 不缩小，真实可见高要再扣掉 vkInset
-        const visibleHeight = (window.visualViewport?.height ?? window.innerHeight) - vkInset
-        const rect = target.getBoundingClientRect()
-        // 输入框底部已在键盘上方可见时不动，避免无意义的滚动跳动
-        if (rect.bottom <= visibleHeight - 8 && rect.top >= 0) return
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      }
-
-      // 微信/QQ 等不支持 VirtualKeyboard API 的内核：全屏下键盘弹出后仍拿不到
-      // 任何键盘高度，唯一可行的兜底是退出全屏，让布局视口恢复 resize 把输入框顶起；
-      // 限定 coarse pointer（手机/平板），避免触屏笔记本全屏点输入框被误退
-      if (
-        document.fullscreenElement &&
-        viewportInset === 0 &&
-        vkInset === 0 &&
-        window.matchMedia('(pointer: coarse)').matches
-      ) {
-        document.exitFullscreen?.().catch(() => {})
-        // 退出全屏触发视口重排，稍等稳定后再做一次滚动兜底
-        window.setTimeout(scrollIntoViewIfCovered, SCROLL_FALLBACK_DELAY)
-        return
-      }
-
-      scrollIntoViewIfCovered()
-    }, SCROLL_FALLBACK_DELAY)
+    ensureEditableVisible(target)
   })
 
   document.addEventListener('focusout', (event) => {
