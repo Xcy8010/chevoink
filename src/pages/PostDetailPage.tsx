@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, MessageSquareMore } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { ChevronLeft, MessageSquareMore, Send, X } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
+import type { Comment } from '../../shared/contracts/index.js'
 import AppState from '@/components/ui/AppState'
 import { PostDetailSkeleton } from '@/components/ui/Skeleton'
 import Button from '@/components/ui/Button'
@@ -10,6 +11,7 @@ import { createComment, getPostDetail, listPosts } from '@/features/community/ap
 import { formatCompactCount, formatRelativeTime } from '@/features/community/utils'
 import CommentList from '@/features/community/components/CommentList'
 import PostCard from '@/features/community/components/PostCard'
+import { useDeviceType } from '@/hooks/useDeviceType'
 
 /**
  * 帖子详情页：正文平铺为页面主体，评论线程与输入框保持单层结构，
@@ -19,6 +21,10 @@ export default function PostDetailPage() {
   const queryClient = useQueryClient()
   const { postId } = useParams()
   const [draftComment, setDraftComment] = useState('')
+  // 手机端回复目标：非空时底部评论栏切换为「回复 @xx」模式（桌面端仍用评论列表内联回复框）
+  const [replyTarget, setReplyTarget] = useState<{ id: string; nickname: string } | null>(null)
+  const mobileComposerRef = useRef<HTMLTextAreaElement>(null)
+  const isDesktop = useDeviceType() === 'desktop'
 
   const detailQuery = useQuery({
     queryKey: ['community', 'post-detail', postId],
@@ -35,6 +41,7 @@ export default function PostDetailPage() {
     mutationFn: createComment,
     onSuccess: async () => {
       setDraftComment('')
+      setReplyTarget(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['community', 'post-detail', postId] }),
         queryClient.invalidateQueries({ queryKey: ['community', 'posts'] }),
@@ -72,8 +79,17 @@ export default function PostDetailPage() {
     createCommentMutation.mutate({
       targetType: 'post',
       targetId: postId,
+      parentId: replyTarget?.id,
       content,
     })
+  }
+
+  // 手机端点评论的回复按钮：先把被回复评论滚到可视区中部（键盘弹起视口收缩后
+  // 仍保持在键盘上方），再聚焦底部评论栏弹起键盘，占位符切换为「回复 @xx」
+  const handleReplyComment = (comment: Comment, anchor: HTMLElement) => {
+    setReplyTarget({ id: comment.id, nickname: comment.author.nickname })
+    anchor.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    window.setTimeout(() => mobileComposerRef.current?.focus(), 250)
   }
 
   if (!postId) {
@@ -160,6 +176,7 @@ export default function PostDetailPage() {
                   onReplied={() => {
                     void queryClient.invalidateQueries({ queryKey: ['community', 'post-detail', postId] })
                   }}
+                  onReply={isDesktop ? undefined : handleReplyComment}
                 />
               ) : (
                 <p className="py-12 text-center text-sm text-[var(--text-tertiary)]">
@@ -204,23 +221,40 @@ export default function PostDetailPage() {
           形态为横向胶囊输入框 + 发表按钮，无背景卡片层；
           data-kb-reveal="off" 让 reveal 补滚跳过它（齐平贴底会被误判为遮挡） */}
       <div className="post-composer-bar sticky z-20 mt-4 px-4 pb-[calc(10px+var(--safe-bottom))] pt-2 xl:hidden">
+        {replyTarget ? (
+          <div className="mb-2 flex w-fit max-w-full items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-solid)] px-3 py-1 text-xs text-[var(--text-secondary)] shadow-[0_2px_8px_rgba(0,0,0,0.12)]">
+            <span className="truncate">
+              回复 <span className="text-[var(--color-brand)]">@{replyTarget.nickname}</span>
+            </span>
+            <button
+              type="button"
+              aria-label="取消回复"
+              onClick={() => setReplyTarget(null)}
+              className="press-feedback shrink-0 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <textarea
+            ref={mobileComposerRef}
             value={draftComment}
             onChange={(event) => setDraftComment(event.target.value)}
             rows={1}
             data-kb-reveal="off"
-            placeholder="写下你的想法…"
-            className="h-10 max-h-24 flex-1 resize-none overflow-y-auto rounded-full border border-[var(--border-strong)] bg-[var(--surface-solid)] px-4 py-2.5 text-sm leading-5 text-[var(--text-primary)] shadow-[0_2px_12px_rgba(0,0,0,0.16)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--color-brand)]"
+            placeholder={replyTarget ? `回复 @${replyTarget.nickname}` : '写下你的想法…'}
+            className="scrollbar-none h-10 max-h-24 flex-1 resize-none overflow-y-auto rounded-full border border-[var(--border-strong)] bg-[var(--surface-solid)] px-4 py-2.5 text-sm leading-5 text-[var(--text-primary)] shadow-[0_2px_12px_rgba(0,0,0,0.16)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--color-brand)]"
           />
           <Button
             variant="primary"
             size="sm"
+            aria-label="发表评论"
             onClick={handleCreateComment}
             disabled={!draftComment.trim() || createCommentMutation.isPending}
-            className="h-10 shrink-0 px-4"
+            className="h-10 w-10 shrink-0 px-0"
           >
-            {createCommentMutation.isPending ? '发布中' : '发表'}
+            <Send className="h-4 w-4" />
           </Button>
         </div>
       </div>

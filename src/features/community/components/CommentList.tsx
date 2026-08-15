@@ -15,6 +15,8 @@ type CommentListProps = {
   comments: Comment[]
   /** 回复成功后的回调（供上层刷新评论列表） */
   onReplied?: () => void
+  /** 提供时（手机端）回复按钮交给上层底部评论栏接管，不再展开内联回复框 */
+  onReply?: (comment: Comment, anchor: HTMLElement) => void
 }
 
 type CommentThread = {
@@ -70,7 +72,7 @@ function buildThreads(comments: Comment[]): { threads: CommentThread[]; byId: Ma
   }
 }
 
-export default function CommentList({ comments, onReplied }: CommentListProps) {
+export default function CommentList({ comments, onReplied, onReply }: CommentListProps) {
   const toast = useToast()
   const sessionUser = useShellStore((shell) => shell.sessionUser)
   // 点赞乐观状态：key=commentId，未记录时以服务端 likedByViewer 为准
@@ -203,7 +205,10 @@ export default function CommentList({ comments, onReplied }: CommentListProps) {
             </button>
             <button
               type="button"
-              onClick={() => handleToggleReply(comment)}
+              onClick={(event) => {
+                if (onReply) onReply(comment, event.currentTarget)
+                else handleToggleReply(comment)
+              }}
               className={cn(
                 'press-feedback inline-flex items-center gap-1 transition-colors',
                 replyTargetId === comment.id
@@ -235,7 +240,7 @@ export default function CommentList({ comments, onReplied }: CommentListProps) {
             ) : null}
           </div>
 
-          {replyTargetId === comment.id ? (
+          {replyTargetId === comment.id && !onReply ? (
             <div className="mt-3 space-y-2">
               <textarea
                 value={replyDraft}
