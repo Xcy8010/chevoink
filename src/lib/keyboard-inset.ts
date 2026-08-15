@@ -201,7 +201,8 @@ export function setupKeyboardInsetWatcher() {
         sawKeyboardShrink = true
         rememberKeyboardHeight(baselineHeight - height)
         // 保留焦点二次弹起不触发 focusin，这里补一次「输入框可见」兜底
-        ensureEditableVisible(active)
+        // （贴底 sticky 输入栏由布局自身顶起，reveal 补滚会误判齐平为遮挡，跳过）
+        if (!active.closest('[data-kb-reveal="off"]')) ensureEditableVisible(active)
         return
       }
       // 无键盘时持续校准完整高度基线（涵盖地址栏收放、横竖屏切换）
@@ -281,7 +282,9 @@ export function setupKeyboardInsetWatcher() {
     focusOpen = true
     sawKeyboardShrink = false
     applyInset()
-    ensureEditableVisible(target)
+    // 贴底 sticky 输入栏（帖子评论栏）由布局随容器收缩整体顶到键盘上方，
+    // reveal 最小滚动会把「齐平容器底」误判为仍被遮 16px 而反复补滚，需跳过
+    if (!target.closest('[data-kb-reveal="off"]')) ensureEditableVisible(target)
   })
 
   document.addEventListener('focusout', (event) => {
