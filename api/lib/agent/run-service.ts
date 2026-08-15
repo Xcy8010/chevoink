@@ -1,13 +1,30 @@
 import type { Response } from 'express'
 
+import type { AgentRun as AgentRunRecord } from '@prisma/client'
 import type { Prisma } from '@prisma/client'
 
 import type {
+  AgentActionHandoff,
+  AgentActionPlan,
+  AgentActionResponse,
+  AgentArtifact,
+  AgentArtifactApplyStrategy,
+  AgentExecutionAgent,
+  AgentExecutionMode,
   AgentRollbackSnapshot,
+  AgentRouteDecision,
+  AgentRuleBundle,
+  AgentRun,
+  AgentSession,
+  AgentStoryMemoryDigest,
   AgentStreamEvent,
   AgentUIMessage,
+  AgentWorkspaceToolPolicy,
+  CreateAgentSessionRequest,
+  ProjectMemoryEntry,
   StartAgentLoopRunRequest,
   StartAgentLoopRunResponse,
+  UpdateAgentSessionRequest,
 } from '../../../shared/contracts/index.js'
 import type { AgentMessagePart } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
@@ -22,28 +39,18 @@ import {
   stopAgentRun,
 } from './loop.js'
 import { resolveApproval, resolveQuestionAnswer } from './permissions.js'
+import { isDefaultSessionTitle } from './session-title.js'
 
 /**
  * Agent Loop 新链路的路由服务层（plan/13 §4.9）。
- * 旧 legacy 链路继续走 agent-service.ts，由 AGENT_ENGINE 开关分流。
+ * 阶段 K：legacy 链路（agent-service.ts）已物理删除，本文件是 Agent 服务层唯一入口；
+ * sessions CRUD 与历史回放自 legacy 迁入（行为原样保留，供任务窗口体系消费）。
  */
-
-export function assertLoopEngineEnabled() {
-  if (env.agentEngine !== 'loop') {
-    throw new DataAccessError(
-      501,
-      'AGENT_ENGINE_DISABLED',
-      '当前部署形态不支持 Agent 循环引擎（serverless 请使用本地/PM2 部署）。',
-    )
-  }
-}
 
 export async function startLoopRun(
   userId: string,
   input: StartAgentLoopRunRequest,
 ): Promise<StartAgentLoopRunResponse> {
-  assertLoopEngineEnabled()
-
   const session = await prisma.agentSession.findFirst({
     where: { id: input.sessionId, userId },
   })
@@ -124,12 +131,6 @@ async function findOwnedLoopRun(userId: string, runId: string) {
   }
 
   return run
-}
-
-/** 路由分流依据：新链路 run 走事件总线 SSE，legacy 走旧版回放 */
-export async function getRunEngine(userId: string, runId: string): Promise<'loop' | 'legacy'> {
-  const run = await findOwnedLoopRun(userId, runId)
-  return run.engine === 'loop' ? 'loop' : 'legacy'
 }
 
 /**
@@ -335,7 +336,6 @@ export async function continueLoopRun(
   userId: string,
   runId: string,
 ): Promise<StartAgentLoopRunResponse> {
-  assertLoopEngineEnabled()
   const run = await findOwnedLoopRun(userId, runId)
 
   if (run.engine !== 'loop') {
@@ -767,4 +767,680 @@ export async function rollbackLoopSessionFromMessage(
   })
 
   return { rolledBack: true, removedRunCount: runIds.length }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段 K2：sessions CRUD 与历史回放（自 legacy agent-service.ts 迁入，行为原样保留）
+// ---------------------------------------------------------------------------
+
+function toIso(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+
+  return typeof value === 'string' ? value : value.toISOString()
+}
+
+function asMetadataRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  return value as Record<string, unknown>
+}
+
+function asAgentActionPlan(value: unknown): AgentActionPlan | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const plan = value as Record<string, unknown>
+  if (
+    (plan.mode !== 'plan' && plan.mode !== 'execute' && plan.mode !== 'review') ||
+    typeof plan.summary !== 'string' ||
+    !Array.isArray(plan.steps)
+  ) {
+    return null
+  }
+
+  return plan as unknown as AgentActionPlan
+}
+
+function asAgentWorkspaceToolPolicy(value: unknown): AgentWorkspaceToolPolicy | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const policy = value as Record<string, unknown>
+  if (
+    (policy.mode !== 'plan' && policy.mode !== 'build' && policy.mode !== 'review') ||
+    !Array.isArray(policy.tools)
+  ) {
+    return null
+  }
+
+  return policy as unknown as AgentWorkspaceToolPolicy
+}
+
+function asAgentExecutionAgent(value: unknown): AgentExecutionAgent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  const validAgentType = [
+    'writingOrchestrator',
+    'storyPlanner',
+    'draftWriter',
+    'continuityEditor',
+    'styleEditor',
+    'loreLibrarian',
+    'coverPromptAgent',
+  ].includes(String(candidate.agentType))
+
+  if (!validAgentType || (candidate.role !== 'primary' && candidate.role !== 'specialist')) {
+    return null
+  }
+
+  if (typeof candidate.title !== 'string' || typeof candidate.description !== 'string') {
+    return null
+  }
+
+  return candidate as unknown as AgentExecutionAgent
+}
+
+function buildExecutionAgent(agentType: AgentRun['agentType']): AgentExecutionAgent {
+  switch (agentType) {
+    case 'writingOrchestrator':
+      return {
+        agentType,
+        role: 'primary',
+        title: '主控 Agent',
+        description: '负责理解当前指令、组织工作区上下文，并决定交给哪个专职代理处理。',
+      }
+    case 'storyPlanner':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '剧情规划 Agent',
+        description: '负责章节规划、结构拆解、书名与章节名提案等前置设计任务。',
+      }
+    case 'draftWriter':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '正文写作 Agent',
+        description: '负责起草正文、续写章节，并把可执行写作结果交回工作台。',
+      }
+    case 'continuityEditor':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '连续性审阅 Agent',
+        description: '负责检查设定冲突、时间线问题和章节之间的连续性。',
+      }
+    case 'styleEditor':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '文风编辑 Agent',
+        description: '负责改写、润色和局部表达优化，不直接承担全章规划。',
+      }
+    case 'loreLibrarian':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '设定检索 Agent',
+        description: '负责读取作品上下文、设定摘要和历史记忆，为当前任务补全背景。',
+      }
+    case 'coverPromptAgent':
+      return {
+        agentType,
+        role: 'specialist',
+        title: '封面提示词 Agent',
+        description: '负责整理封面画面描述和视觉提示词，不介入正文写作接口。',
+      }
+  }
+}
+
+function asAgentRouteDecision(value: unknown): AgentRouteDecision | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  const sourceAgent = asAgentExecutionAgent(candidate.sourceAgent)
+  const targetAgent = asAgentExecutionAgent(candidate.targetAgent)
+
+  if (!sourceAgent || !targetAgent) {
+    return null
+  }
+
+  if (
+    typeof candidate.task !== 'string' ||
+    typeof candidate.intentLabel !== 'string' ||
+    typeof candidate.summary !== 'string'
+  ) {
+    return null
+  }
+
+  return {
+    sourceAgent,
+    targetAgent,
+    task: candidate.task,
+    intentLabel: candidate.intentLabel,
+    summary: candidate.summary,
+    factors: Array.isArray(candidate.factors)
+      ? candidate.factors.filter((item): item is string => typeof item === 'string')
+      : [],
+  }
+}
+
+function asAgentRuleBundle(value: unknown): AgentRuleBundle | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.rules)) {
+    return null
+  }
+
+  const rules = candidate.rules.filter((rule): rule is string => typeof rule === 'string')
+  return {
+    summary: candidate.summary,
+    rules,
+  }
+}
+
+function asAgentStoryMemoryDigest(value: unknown): AgentStoryMemoryDigest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.summary !== 'string' || !Array.isArray(candidate.items)) {
+    return null
+  }
+
+  const items = candidate.items.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return []
+    }
+
+    const entry = item as Record<string, unknown>
+    if (
+      typeof entry.title !== 'string' ||
+      typeof entry.memoryType !== 'string' ||
+      typeof entry.excerpt !== 'string'
+    ) {
+      return []
+    }
+
+    return [
+      {
+        title: entry.title,
+        memoryType: entry.memoryType as ProjectMemoryEntry['memoryType'],
+        excerpt: entry.excerpt,
+      },
+    ]
+  })
+
+  return {
+    summary: candidate.summary,
+    items,
+  }
+}
+
+function asAgentActionHandoff(value: unknown): AgentActionHandoff | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Partial<AgentActionHandoff>
+  if (
+    (candidate.sourceMode !== 'plan' && candidate.sourceMode !== 'build' && candidate.sourceMode !== 'review') ||
+    (candidate.targetMode !== 'plan' && candidate.targetMode !== 'build' && candidate.targetMode !== 'review') ||
+    typeof candidate.title !== 'string' ||
+    typeof candidate.summary !== 'string' ||
+    typeof candidate.confirmLabel !== 'string'
+  ) {
+    return null
+  }
+
+  return candidate as AgentActionHandoff
+}
+
+function hydrateHandoffSource(
+  handoff: AgentActionHandoff | null,
+  runId: string,
+  artifactId: string,
+): AgentActionHandoff | null {
+  if (!handoff) {
+    return null
+  }
+
+  return {
+    ...handoff,
+    sourceRunId: handoff.sourceRunId ?? runId,
+    sourceArtifactId: handoff.sourceArtifactId ?? artifactId,
+  }
+}
+
+function defaultArtifactApplyStrategies(
+  artifactType: AgentArtifact['artifactType'],
+): AgentArtifactApplyStrategy[] {
+  if (artifactType === 'chapterDraft') {
+    return ['replaceChapterContent', 'appendChapterContent']
+  }
+
+  if (artifactType === 'chapterContinuation') {
+    return ['appendChapterContent', 'replaceChapterContent']
+  }
+
+  if (artifactType === 'rewriteSelection' || artifactType === 'polishSelection') {
+    return ['replaceChapterContent']
+  }
+
+  if (artifactType === 'chapterPlan' || artifactType === 'continuityReview') {
+    return ['saveChapterSummary']
+  }
+
+  if (artifactType === 'coverPrompt') {
+    return ['setNovelCoverPrompt']
+  }
+
+  return []
+}
+
+function resolveArtifactApplyStrategies(record: {
+  artifactType: AgentArtifact['artifactType']
+  metadata?: Record<string, unknown> | null
+}): AgentArtifactApplyStrategy[] {
+  const metadata = record.metadata ?? null
+
+  if (Array.isArray(metadata?.availableApplyStrategies)) {
+    return metadata.availableApplyStrategies.filter(
+      (strategy): strategy is AgentArtifactApplyStrategy => typeof strategy === 'string',
+    )
+  }
+
+  const task = typeof metadata?.workspaceTask === 'string' ? metadata.workspaceTask : null
+  if (
+    task === 'generate-novel-title' ||
+    task === 'generate-chapter-titles' ||
+    task === 'read-story-context' ||
+    task === 'workspace-agent'
+  ) {
+    return []
+  }
+
+  return defaultArtifactApplyStrategies(record.artifactType)
+}
+
+function toAgentSession(record: {
+  id: string
+  userId: string
+  novelId: string
+  title: string
+  status: AgentSession['status']
+  lastRunAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentSession {
+  return {
+    id: record.id,
+    userId: record.userId,
+    novelId: record.novelId,
+    title: record.title,
+    status: record.status,
+    lastRunAt: toIso(record.lastRunAt),
+    createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
+    updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
+  }
+}
+
+function toAgentRun(record: {
+  id: string
+  sessionId: string
+  userId: string
+  novelId: string
+  chapterId?: string | null
+  mode: AgentRun['mode']
+  action: string | null
+  agentType: AgentRun['agentType']
+  status: AgentRun['status']
+  inputSummary?: string | null
+  outputSummary?: string | null
+  errorMessage?: string | null
+  startedAt?: Date | string | null
+  finishedAt?: Date | string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentRun {
+  return {
+    id: record.id,
+    sessionId: record.sessionId,
+    userId: record.userId,
+    novelId: record.novelId,
+    chapterId: record.chapterId ?? null,
+    mode: record.mode,
+    // Prisma 枚举比契约宽（含 workspaceAgent），any 时代即原样透传，此处保持透传语义
+    action: record.action as unknown as AgentRun['action'],
+    agentType: record.agentType,
+    status: record.status,
+    inputSummary: record.inputSummary ?? null,
+    outputSummary: record.outputSummary ?? null,
+    errorMessage: record.errorMessage ?? null,
+    startedAt: toIso(record.startedAt),
+    finishedAt: toIso(record.finishedAt),
+    createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
+    updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
+  }
+}
+
+function toAgentArtifact(record: {
+  id: string
+  runId: string
+  artifactType: AgentArtifact['artifactType']
+  title: string
+  summary?: string | null
+  content: string
+  metadata?: unknown
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): AgentArtifact {
+  const metadata = asMetadataRecord(record.metadata)
+
+  return {
+    id: record.id,
+    runId: record.runId,
+    artifactType: record.artifactType,
+    title: record.title,
+    summary: record.summary ?? null,
+    content: record.content,
+    metadata,
+    availableApplyStrategies: resolveArtifactApplyStrategies({
+      artifactType: record.artifactType,
+      metadata,
+    }),
+    createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
+    updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
+  }
+}
+
+function toProjectMemoryEntry(record: {
+  id: string
+  runId?: string | null
+  novelId: string
+  sourceChapterId?: string | null
+  memoryType: ProjectMemoryEntry['memoryType']
+  title: string
+  content: string
+  importance?: number | null
+  embeddingRef?: string | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+}): ProjectMemoryEntry {
+  return {
+    id: record.id,
+    runId: record.runId ?? null,
+    novelId: record.novelId,
+    sourceChapterId: record.sourceChapterId ?? null,
+    memoryType: record.memoryType,
+    title: record.title,
+    content: record.content,
+    importance: record.importance ?? 50,
+    embeddingRef: record.embeddingRef ?? null,
+    createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
+    updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
+  }
+}
+
+async function ensureOwnedNovel(userId: string, novelId: string) {
+  const novel = await prisma.novel.findUnique({
+    where: { id: novelId },
+  })
+
+  if (!novel) {
+    throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '未找到作品。')
+  }
+
+  if (novel.authorId !== userId) {
+    throw new DataAccessError(403, 'NOVEL_FORBIDDEN', '当前账号无权访问该作品。')
+  }
+
+  return novel
+}
+
+async function ensureOwnedSession(userId: string, sessionId: string) {
+  const session = await prisma.agentSession.findUnique({
+    where: { id: sessionId },
+  })
+
+  if (!session) {
+    throw new DataAccessError(404, 'AGENT_SESSION_NOT_FOUND', '未找到会话。')
+  }
+
+  if (session.userId !== userId) {
+    throw new DataAccessError(403, 'AGENT_SESSION_FORBIDDEN', '当前账号无权访问该会话。')
+  }
+
+  return session
+}
+
+function buildAgentRunResultPayload(
+  run: AgentRunRecord,
+  artifacts: Awaited<ReturnType<typeof prisma.agentArtifact.findMany>>,
+  memoryEntries: Awaited<ReturnType<typeof prisma.projectMemoryEntry.findMany>>,
+): AgentActionResponse['data'] {
+  const artifactItems = artifacts.map(toAgentArtifact)
+  const memoryItems = memoryEntries.map(toProjectMemoryEntry)
+  const firstArtifact = artifactItems[0] ?? null
+  const executionMode =
+    firstArtifact?.metadata && typeof firstArtifact.metadata === 'object'
+      ? ((firstArtifact.metadata as Record<string, unknown>).executionMode as AgentExecutionMode | null | undefined) ?? null
+      : null
+  const activeAgent =
+    asAgentExecutionAgent(firstArtifact?.metadata?.activeAgent) ?? buildExecutionAgent(run.agentType)
+  const routeDecision = asAgentRouteDecision(firstArtifact?.metadata?.routeDecision)
+  const ruleBundle = asAgentRuleBundle(firstArtifact?.metadata?.ruleBundle)
+  const storyMemoryDigest = asAgentStoryMemoryDigest(firstArtifact?.metadata?.storyMemoryDigest)
+  const actionPlan = asAgentActionPlan(firstArtifact?.metadata?.actionPlan)
+  const toolPolicy = asAgentWorkspaceToolPolicy(firstArtifact?.metadata?.toolPolicy)
+  const stepResults =
+    firstArtifact?.metadata && typeof firstArtifact.metadata === 'object'
+      ? ((firstArtifact.metadata as Record<string, unknown>).stepResults as AgentActionResponse['data']['stepResults']) ?? null
+      : null
+  const handoff = hydrateHandoffSource(
+    asAgentActionHandoff(firstArtifact?.metadata?.handoff),
+    run.id,
+    firstArtifact?.id ?? '',
+  )
+
+  return {
+    run: toAgentRun(run),
+    artifacts: artifactItems,
+    memoryEntries: memoryItems,
+    artifact: firstArtifact,
+    title: firstArtifact?.title ?? 'Agent 结果',
+    content: firstArtifact?.content ?? '',
+    summary: firstArtifact?.summary ?? null,
+    artifactType: firstArtifact?.artifactType ?? null,
+    activeAgent,
+    routeDecision,
+    ruleBundle,
+    storyMemoryDigest,
+    executionMode,
+    actionPlan,
+    stepResults,
+    handoff,
+    toolPolicy,
+    stream: {
+      liveUrl: `/api/agent/runs/${run.id}/stream`,
+      replayUrl: `/api/agent/runs/${run.id}/stream`,
+    },
+    result: firstArtifact?.content ?? '',
+    prompt: run.inputSummary ?? undefined,
+    outline: firstArtifact?.artifactType === 'chapterPlan' ? firstArtifact.content : undefined,
+  }
+}
+
+export async function listAgentSessionsData(userId: string, novelId?: string) {
+  const items = await prisma.agentSession.findMany({
+    where: {
+      userId,
+      ...(novelId ? { novelId } : {}),
+    },
+    orderBy: [{ updatedAt: 'desc' }],
+  })
+
+  // 空且未命名的会话不进入列表：只有产生过对话（lastRunAt）或已被命名的会话才保留展示
+  const visible = items.filter((session) => session.lastRunAt || !isDefaultSessionTitle(session.title))
+
+  return {
+    items: visible.map(toAgentSession),
+  }
+}
+
+export async function createAgentSessionData(userId: string, input: CreateAgentSessionRequest) {
+  const novel = await ensureOwnedNovel(userId, input.novelId)
+
+  const session = await prisma.agentSession.create({
+    data: {
+      userId,
+      novelId: input.novelId,
+      title: input.title?.trim() || `${novel.title} 写作会话`,
+      status: 'active',
+    },
+  })
+
+  return {
+    session: toAgentSession(session),
+  }
+}
+
+export async function updateAgentSessionData(
+  userId: string,
+  sessionId: string,
+  input: UpdateAgentSessionRequest,
+) {
+  const session = await ensureOwnedSession(userId, sessionId)
+  const nextTitle = input.title?.trim()
+
+  if (!nextTitle) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '请提供会话标题。')
+  }
+
+  const updatedSession = await prisma.agentSession.update({
+    where: { id: session.id },
+    data: {
+      title: nextTitle.slice(0, 160),
+    },
+  })
+
+  return {
+    session: toAgentSession(updatedSession),
+  }
+}
+
+export async function deleteAgentSessionData(userId: string, sessionId: string) {
+  const session = await ensureOwnedSession(userId, sessionId)
+
+  await prisma.$transaction(async (tx) => {
+    const runs = await tx.agentRun.findMany({
+      where: { sessionId: session.id },
+      select: { id: true },
+    })
+    const runIds = runs.map((run) => run.id)
+
+    if (runIds.length > 0) {
+      await tx.projectMemoryEntry.deleteMany({
+        where: {
+          runId: { in: runIds },
+        },
+      })
+
+      await tx.agentArtifact.deleteMany({
+        where: {
+          runId: { in: runIds },
+        },
+      })
+
+      await tx.agentRun.deleteMany({
+        where: { sessionId: session.id },
+      })
+    }
+
+    await tx.agentSession.delete({
+      where: { id: session.id },
+    })
+  })
+
+  return {
+    sessionId: session.id,
+    deleted: true as const,
+  }
+}
+
+/** 任务窗口体系的历史回放：按 run 聚合产物与记忆，恢复历史计划/大纲等工件 */
+export async function listAgentSessionHistoryData(userId: string, sessionId: string) {
+  await ensureOwnedSession(userId, sessionId)
+
+  const runs = await prisma.agentRun.findMany({
+    where: {
+      sessionId,
+    },
+    orderBy: [{ createdAt: 'asc' }],
+  })
+
+  if (runs.length === 0) {
+    return {
+      items: [],
+    }
+  }
+
+  const runIds = runs.map((run) => run.id)
+  const [artifacts, memoryEntries] = await prisma.$transaction([
+    prisma.agentArtifact.findMany({
+      where: {
+        runId: {
+          in: runIds,
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+    }),
+    prisma.projectMemoryEntry.findMany({
+      where: {
+        runId: {
+          in: runIds,
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+    }),
+  ])
+
+  const artifactMap = new Map<string, typeof artifacts>()
+  for (const artifact of artifacts) {
+    const existing = artifactMap.get(artifact.runId) ?? []
+    existing.push(artifact)
+    artifactMap.set(artifact.runId, existing)
+  }
+
+  const memoryMap = new Map<string, typeof memoryEntries>()
+  for (const entry of memoryEntries) {
+    if (!entry.runId) {
+      continue
+    }
+
+    const existing = memoryMap.get(entry.runId) ?? []
+    existing.push(entry)
+    memoryMap.set(entry.runId, existing)
+  }
+
+  return {
+    items: runs.map((run) =>
+      buildAgentRunResultPayload(run, artifactMap.get(run.id) ?? [], memoryMap.get(run.id) ?? []),
+    ),
+  }
 }

@@ -720,20 +720,6 @@ export interface AuthorPagePayload {
   [key: string]: unknown
 }
 
-export interface AgentActionRuntimeContext {
-  novelTitle?: string
-  novelSummary?: string
-  chapterTitle?: string
-  chapterSummary?: string
-  chapterContent?: string
-  selectedText?: string
-  genre?: string
-  protagonist?: string
-  tone?: string
-  stylePreference?: string
-  [key: string]: unknown
-}
-
 export interface AgentActionPlanStep {
   id: string
   toolName: AgentWorkspaceToolName
@@ -887,28 +873,5 @@ export interface ProjectMemoryEntry {
   embeddingRef: string | null
   createdAt: string
   updatedAt: string
-  [key: string]: unknown
-}
-
-export interface AgentRunStreamPayload {
-  id?: string
-  type?: string
-  event?: string
-  stage?: string
-  mode?: 'live' | 'replay' | string
-  replay?: boolean
-  message?: string
-  delta?: string
-  title?: string
-  content?: string
-  result?: string
-  prompt?: string
-  outline?: string
-  createdAt?: string
-  data?: Record<string, unknown>
-  run?: Partial<AgentRun>
-  artifact?: Partial<AgentArtifact> | null
-  artifacts?: Array<Partial<AgentArtifact>>
-  memoryEntries?: ProjectMemoryEntry[]
   [key: string]: unknown
 }

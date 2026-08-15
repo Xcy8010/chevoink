@@ -2,13 +2,8 @@ import type {
   AiImageSize,
   AiProviderMode,
   AiUsageLog,
-  AgentActionKind,
   AgentArtifact,
-  AgentArtifactApplyStrategy,
-  AgentActionRuntimeContext,
   AgentRun,
-  AgentRunMode,
-  AgentRunStreamPayload,
   AgentSession,
   AuthorPagePayload,
   AuthorSummary,
@@ -505,17 +500,6 @@ export type DeleteAgentSessionResponse = ApiSuccess<{
   deleted: true
 }>
 
-export type CreateAgentRunRequest = {
-  sessionId: string
-  chapterId?: string
-  mode: AgentRunMode
-  action: AgentActionKind
-  prompt: string
-  selectedText?: string
-  metadata?: Record<string, unknown>
-  runtimeContext?: AgentActionRuntimeContext
-}
-
 export type AgentRunResultPayload = {
   run: AgentRun
   artifacts: AgentArtifact[]
@@ -546,136 +530,9 @@ export type AgentActionResultPayload = AgentRunResultPayload & {
   outline?: string
 }
 
-export type CreateAgentRunResponse = ApiSuccess<AgentActionResultPayload>
-
-export type GetAgentRunResponse = ApiSuccess<AgentActionResultPayload>
-
 export type ListAgentSessionHistoryResponse = ApiSuccess<{
   items: AgentActionResultPayload[]
 }>
-
-export type RollbackAgentRunResponse = ApiSuccess<{
-  runId: string
-  sessionId: string
-  rolledBack: true
-  chapter?: {
-    id: string
-    title: string
-    summary: string | null
-    content: string
-    wordCount: number
-    updatedAt: string
-  } | null
-  novel?: {
-    id: string
-    coverPrompt: string | null
-    updatedAt: string
-  } | null
-}>
-
-export type DeleteAgentRunResponse = ApiSuccess<{
-  runId: string
-  sessionId: string
-  deleted: true
-}>
-
-export type AgentRunStreamChunk = AgentRunStreamPayload
-
-export type ListAgentArtifactsResponse = ApiSuccess<{
-  items: AgentArtifact[]
-}>
-
-export type ApplyAgentArtifactRequest = {
-  strategy?: AgentArtifactApplyStrategy
-  chapterId?: string
-}
-
-export type ApplyAgentArtifactResponse = ApiSuccess<{
-  artifact: AgentArtifact
-  applied: boolean
-  strategy: AgentArtifactApplyStrategy
-  targetType: 'chapter' | 'novel'
-  targetId: string
-  chapter?: {
-    id: string
-    title: string
-    summary: string | null
-    content: string
-    wordCount: number
-    updatedAt: string
-  } | null
-  novel?: {
-    id: string
-    coverPrompt: string | null
-    updatedAt: string
-  } | null
-}>
-
-export type PlanChapterRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  title?: string
-  prompt: string
-}
-
-export type DraftChapterRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  title?: string
-  prompt: string
-  selectedText?: string
-} & AgentActionRuntimeContext
-
-export type ContinueChapterRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  title?: string
-  prompt?: string
-} & AgentActionRuntimeContext
-
-export type RewriteSelectionRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId: string
-  selectedText: string
-  instruction: string
-} & AgentActionRuntimeContext
-
-export type PolishSelectionRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId: string
-  selectedText: string
-  prompt?: string
-  instruction?: string
-} & AgentActionRuntimeContext
-
-export type ReviewContinuityRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  prompt: string
-} & AgentActionRuntimeContext
-
-export type GenerateAgentCoverPromptRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  prompt?: string
-} & AgentActionRuntimeContext
-
-export type ExecuteWorkspaceAgentRequest = {
-  novelId: string
-  sessionId?: string
-  chapterId?: string
-  prompt: string
-  selectedText?: string
-  actionHint?: string
-  handoff?: import('./models.js').AgentActionHandoff | null
-} & AgentActionRuntimeContext
 
 export type AgentActionResponse = ApiSuccess<AgentActionResultPayload>
 
@@ -754,19 +611,7 @@ export const apiEndpointCatalog: ApiEndpointDefinition[] = [
   { method: 'PATCH', path: '/api/agent/sessions/:sessionId', summary: '更新 Agent 会话标题' },
   { method: 'DELETE', path: '/api/agent/sessions/:sessionId', summary: '删除 Agent 会话' },
   { method: 'POST', path: '/api/agent/runs', summary: '创建并执行一次 Agent 任务' },
-  { method: 'GET', path: '/api/agent/runs/:runId', summary: '获取 Agent 执行详情' },
   { method: 'GET', path: '/api/agent/runs/:runId/stream', summary: '以 SSE 获取 Agent 执行流' },
-  { method: 'GET', path: '/api/agent/runs/:runId/artifacts', summary: '获取 Agent 执行产物' },
-  { method: 'POST', path: '/api/agent/runs/:runId/rollback', summary: '回退最近一次 Agent 运行与上下文' },
-  { method: 'POST', path: '/api/agent/artifacts/:artifactId/apply', summary: '将 Agent 产物应用到小说内容' },
-  { method: 'POST', path: '/api/agent/actions/plan-chapter', summary: '生成章节计划' },
-  { method: 'POST', path: '/api/agent/actions/draft-chapter', summary: '起草章节正文' },
-  { method: 'POST', path: '/api/agent/actions/continue-chapter', summary: '续写当前章节' },
-  { method: 'POST', path: '/api/agent/actions/rewrite-selection', summary: '改写选中文本' },
-  { method: 'POST', path: '/api/agent/actions/polish-selection', summary: '润色选中文本' },
-  { method: 'POST', path: '/api/agent/actions/review-continuity', summary: '执行连续性审阅' },
-  { method: 'POST', path: '/api/agent/actions/generate-cover-prompt', summary: '生成 Agent 封面提示词' },
-  { method: 'POST', path: '/api/agent/actions/execute', summary: '统一调度创作 Agent 能力' },
 ]
 
 export const contractEntityNames = [

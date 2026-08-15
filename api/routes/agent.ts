@@ -1,10 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 
 import type {
-  ApplyAgentArtifactRequest,
-  CreateAgentRunRequest,
   CreateAgentSessionRequest,
-  ExecuteWorkspaceAgentRequest,
   ResolveAgentApprovalRequest,
     ResolveAgentQuestionRequest,
   StartAgentLoopRunRequest,
@@ -16,9 +13,12 @@ import { requireSessionUserId } from '../lib/auth-session.js'
 import { stopActiveRunsInSession } from '../lib/agent/loop.js'
 import {
   continueLoopRun,
+  createAgentSessionData,
   createNovelPlanArtifact,
+  deleteAgentSessionData,
   deleteLoopSessionMessage,
-  getRunEngine,
+  listAgentSessionHistoryData,
+  listAgentSessionsData,
   listLoopSessionMessages,
   listNovelPlanArtifacts,
   resolveLoopRunApproval,
@@ -27,33 +27,13 @@ import {
   startLoopRun,
   stopLoopRun,
   streamLoopRun,
+  updateAgentSessionData,
   updateNovelPlanArtifact,
 } from '../lib/agent/run-service.js'
-import {
-  applyAgentArtifactData,
-  createAgentRunData,
-  createAgentSessionData,
-  deleteAgentSessionData,
-  deleteAgentRunData,
-  executeWorkspaceAgentData,
-  getAgentRunData,
-  listAgentArtifactsData,
-  listAgentSessionHistoryData,
-  listAgentSessionsData,
-  rollbackAgentRunData,
-  streamAgentRunData,
-  updateAgentSessionData,
-} from '../lib/agent-service.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
-
-function writeSse(res: Response, event: string, payload: unknown) {
-  res.write(`event: ${event}\n`)
-  res.write(`data: ${JSON.stringify(payload)}\n\n`)
-  ;(res as Response & { flush?: () => void }).flush?.()
-}
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -199,60 +179,26 @@ router.post('/attachments', async (req: Request, res: Response): Promise<void> =
 
 router.post('/runs', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<CreateAgentRunRequest & StartAgentLoopRunRequest>
+  const body = (req.body ?? {}) as Partial<StartAgentLoopRunRequest>
 
   try {
     const userId = requireSessionUserId(req)
 
-    // 新链路：不带 action（模型自主决策），入参 { sessionId, novelId, chapterId?, mode, prompt, selection? }
-    if (!body.action) {
-      if (!body.sessionId || !body.novelId || !body.mode || !body.prompt?.trim()) {
-        res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写运行参数。'))
-        return
-      }
-
-      const payload = await startLoopRun(userId, {
-        sessionId: body.sessionId,
-        novelId: body.novelId,
-        chapterId: body.chapterId ?? null,
-        // 全权限产品决策：模式选择 UI 已下线，后端恒 build 兜底（mode 管道保留，回退只需还原 UI）
-        mode: 'build',
-        prompt: body.prompt.trim(),
-        selection: body.selection ?? null,
-        attachments: body.attachments ?? [],
-      })
-      res.status(200).json(buildSuccess(requestId, payload))
-      return
-    }
-
-    if (!body.sessionId || !body.mode || !body.prompt?.trim()) {
+    if (!body.sessionId || !body.novelId || !body.mode || !body.prompt?.trim()) {
       res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请完整填写运行参数。'))
       return
     }
 
-    const payload = await createAgentRunData(userId, {
+    const payload = await startLoopRun(userId, {
       sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      mode: body.mode,
-      action: body.action,
+      novelId: body.novelId,
+      chapterId: body.chapterId ?? null,
+      // 全权限产品决策：模式选择 UI 已下线，后端恒 build 兜底（mode 管道保留，回退只需还原 UI）
+      mode: 'build',
       prompt: body.prompt.trim(),
-      selectedText: body.selectedText,
-      metadata: body.metadata,
-      runtimeContext: body.runtimeContext,
+      selection: body.selection ?? null,
+      attachments: body.attachments ?? [],
     })
-
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
-router.get('/runs/:runId', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-
-  try {
-    const userId = requireSessionUserId(req)
-    const payload = await getAgentRunData(userId, req.params.runId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -263,32 +209,15 @@ router.get('/runs/:runId/stream', async (req: Request, res: Response): Promise<v
   try {
     const userId = requireSessionUserId(req)
 
-    // 新链路：live/replay 同源，支持 Last-Event-ID 续传
-    if ((await getRunEngine(userId, req.params.runId)) === 'loop') {
-      const lastEventId = req.headers['last-event-id']
-      const sinceQuery = typeof req.query.since === 'string' ? req.query.since : ''
-      const sinceSeq = Number.parseInt(
-        (typeof lastEventId === 'string' ? lastEventId : lastEventId?.[0]) ?? sinceQuery,
-        10,
-      )
+    // live/replay 同源事件流，支持 Last-Event-ID 续传
+    const lastEventId = req.headers['last-event-id']
+    const sinceQuery = typeof req.query.since === 'string' ? req.query.since : ''
+    const sinceSeq = Number.parseInt(
+      (typeof lastEventId === 'string' ? lastEventId : lastEventId?.[0]) ?? sinceQuery,
+      10,
+    )
 
-      await streamLoopRun(userId, req.params.runId, Number.isFinite(sinceSeq) ? sinceSeq : 0, res)
-      return
-    }
-
-    const events = await streamAgentRunData(userId, req.params.runId)
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    })
-
-    for (const event of events) {
-      writeSse(res, String(event.stage ?? 'message'), event)
-    }
-
-    res.end()
+    await streamLoopRun(userId, req.params.runId, Number.isFinite(sinceSeq) ? sinceSeq : 0, res)
   } catch (error) {
     const requestId = createRequestId()
     sendRouteError(res, requestId, error)
@@ -365,18 +294,6 @@ router.post('/runs/:runId/continue', async (req: Request, res: Response): Promis
   }
 })
 
-router.get('/runs/:runId/artifacts', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-
-  try {
-    const userId = requireSessionUserId(req)
-    const payload = await listAgentArtifactsData(userId, req.params.runId)
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
 // 计划文件夹：作品维度拉取已存入的创作计划（跨会话聚合）
 router.get('/plans', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -443,154 +360,6 @@ router.patch('/plans/:artifactId', async (req: Request, res: Response): Promise<
     }
 
     const payload = await updateNovelPlanArtifact(userId, req.params.artifactId, patch)
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
-router.delete('/runs/:runId', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-
-  try {
-    const userId = requireSessionUserId(req)
-    const payload = await deleteAgentRunData(userId, req.params.runId)
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
-router.post('/runs/:runId/rollback', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-
-  try {
-    const userId = requireSessionUserId(req)
-    const payload = await rollbackAgentRunData(userId, req.params.runId)
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
-router.post('/artifacts/:artifactId/apply', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ApplyAgentArtifactRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    const payload = await applyAgentArtifactData(userId, req.params.artifactId, {
-      strategy: body.strategy,
-      chapterId: body.chapterId,
-    })
-    res.status(200).json(buildSuccess(requestId, payload))
-  } catch (error) {
-    sendRouteError(res, requestId, error)
-  }
-})
-
-// 阶段 F-25：以下 7 个细分 action 端点前端已零调用（写作助手统一走 /actions/execute，
-// loop 引擎走 /runs），先 410+DEPRECATED 过渡观察一个版本（确认安卓壳无引用）后物理删除。
-function replyActionDeprecated(res: Response): void {
-  res
-    .status(410)
-    .json(buildError(createRequestId(), 'DEPRECATED', '该端点已下线，请改用 /api/agent/actions/execute 或 /api/agent/runs。'))
-}
-
-router.post('/actions/plan-chapter', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/draft-chapter', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/continue-chapter', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/rewrite-selection', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/polish-selection', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/review-continuity', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/generate-cover-prompt', (_req: Request, res: Response): void => {
-  replyActionDeprecated(res)
-})
-
-router.post('/actions/execute', async (req: Request, res: Response): Promise<void> => {
-  const requestId = createRequestId()
-  const body = (req.body ?? {}) as Partial<ExecuteWorkspaceAgentRequest>
-
-  try {
-    const userId = requireSessionUserId(req)
-    if (!body.novelId || !body.prompt?.trim()) {
-      res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '请提供作品 ID 和 Agent 指令。'))
-      return
-    }
-
-    const acceptsEventStream = String(req.headers.accept ?? '').includes('text/event-stream')
-
-    if (acceptsEventStream) {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      })
-      res.flushHeaders?.()
-    }
-
-    const payload = await executeWorkspaceAgentData(userId, {
-      novelId: body.novelId,
-      sessionId: body.sessionId,
-      chapterId: body.chapterId,
-      prompt: body.prompt.trim(),
-      selectedText: body.selectedText,
-      actionHint: body.actionHint,
-      novelTitle: body.novelTitle,
-      novelSummary: body.novelSummary,
-      chapterTitle: body.chapterTitle,
-      chapterSummary: body.chapterSummary,
-      chapterContent: body.chapterContent,
-      genre: body.genre,
-      protagonist: body.protagonist,
-      tone: body.tone,
-      stylePreference: body.stylePreference,
-    }, acceptsEventStream
-      ? {
-          onProgress: (event) => {
-            writeSse(res, String(event.stage ?? 'status'), {
-              type: event.type ?? 'status',
-              stage: event.stage,
-              message: event.message,
-              runId: event.runId ?? null,
-              createdAt: event.createdAt,
-              data: event.data ?? {},
-            })
-          },
-        }
-      : undefined)
-
-    if (acceptsEventStream) {
-      writeSse(res, 'result', {
-        type: 'result',
-        ...payload,
-      })
-      writeSse(res, 'done', {
-        type: 'done',
-      })
-      res.end()
-      return
-    }
-
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
