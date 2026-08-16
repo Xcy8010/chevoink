@@ -8,6 +8,40 @@ import { getActiveRunIdBySession, hasActiveRunInSession } from './active-runs.js
  * 历史消息拉取、单轮删除与快照回滚。
  */
 
+/** 旧版 view_image 把 coverAssetId 直接存进 display 图片地址，前端渲染即破图；
+ * 读侧按归属批量反查真实图片地址替换（只读自愈，不改库） */
+async function normalizeLegacyViewedImageUrls(userId: string, parts: AgentMessagePart[]): Promise<AgentMessagePart[]> {
+  const candidateIds = new Set<string>()
+  for (const part of parts) {
+    if (part.type !== 'tool-call' || part.display?.kind !== 'viewedImage') continue
+    for (const image of part.display.images) {
+      if (!image.url.startsWith('http://') && !image.url.startsWith('https://') && !image.url.startsWith('/')) {
+        candidateIds.add(image.url)
+      }
+    }
+  }
+  if (candidateIds.size === 0) return parts
+
+  const assets = await prisma.coverAsset.findMany({
+    where: { id: { in: Array.from(candidateIds) }, ownerUserId: userId },
+    select: { id: true, imageUrl: true },
+  })
+  if (assets.length === 0) return parts
+  const urlById = new Map(assets.map((asset) => [asset.id, asset.imageUrl] as const))
+
+  return parts.map((part) => {
+    if (part.type !== 'tool-call' || part.display?.kind !== 'viewedImage') return part
+    let changed = false
+    const images = part.display.images.map((image) => {
+      const resolved = urlById.get(image.url)
+      if (!resolved) return image
+      changed = true
+      return { ...image, url: resolved }
+    })
+    return changed ? { ...part, display: { ...part.display, images } } : part
+  })
+}
+
 /** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；
  * 附带 activeRunId：前端刷新后据此续接进行中的任务直播 */
 export async function listLoopSessionMessages(
@@ -29,18 +63,21 @@ export async function listLoopSessionMessages(
     take: 200,
   })
 
-  return {
-    messages: records.map((record) => ({
+  const messages: AgentUIMessage[] = []
+  for (const record of records) {
+    const stripped = (record.parts as unknown as AgentMessagePart[]).map((part) =>
+      part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
+    )
+    messages.push({
       id: record.id,
       runId: record.runId,
       role: record.role as 'user' | 'assistant',
-      parts: (record.parts as unknown as AgentMessagePart[]).map((part) =>
-        part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
-      ),
+      parts: await normalizeLegacyViewedImageUrls(userId, stripped),
       createdAt: record.createdAt.toISOString(),
-    })),
-    activeRunId: getActiveRunIdBySession(sessionId),
+    })
   }
+
+  return { messages, activeRunId: getActiveRunIdBySession(sessionId) }
 }
 
 async function findOwnedSessionMessage(userId: string, sessionId: string, messageId: string) {
