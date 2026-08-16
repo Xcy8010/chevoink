@@ -174,6 +174,8 @@ export const viewImageTool = defineTool({
   async execute(ctx, args) {
     let buffer: Buffer | null = null
     let mime: string | undefined
+    // display 用真实图片地址：入参可能是 coverAssetId（UUID），直接展示会 404 破图
+    let displayUrl = args.url
 
     if (args.url.startsWith('http://') || args.url.startsWith('https://')) {
       // 外网图片（历史 AI 生图直存的远程封面等）：安全校验后下载
@@ -198,6 +200,7 @@ export const viewImageTool = defineTool({
 
         if (asset) {
           diskPath = resolveReadableImagePath(asset.imageUrl)
+          displayUrl = asset.imageUrl
         }
       }
 
@@ -232,7 +235,7 @@ export const viewImageTool = defineTool({
         summary: '查看 1 张图片',
         display: {
           kind: 'viewedImage',
-          images: [{ id: path.basename(args.url), url: args.url }],
+          images: [{ id: path.basename(displayUrl), url: displayUrl }],
           description,
         },
       }
