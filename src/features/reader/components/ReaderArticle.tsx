@@ -63,7 +63,13 @@ export default function ReaderArticle({
     <article
       key={reader.currentChapter.id}
       className={cn('animate-fade-in-up', className)}
-      style={{ color: toneOption.text }}
+      style={{
+        color: toneOption.text,
+        // 长按选段走应用内自定义手势（复制也走段操作条）：禁掉系统文本选取与
+        // iOS 气泡菜单，避免长按时弹出系统「复制/分享/全选/翻译」蓝色选取框
+        userSelect: 'none',
+        WebkitTouchCallout: 'none',
+      }}
     >
       {header === 'full' ? (
         <header className="border-b pb-6" style={{ borderColor: 'color-mix(in srgb, currentColor 15%, transparent)' }}>

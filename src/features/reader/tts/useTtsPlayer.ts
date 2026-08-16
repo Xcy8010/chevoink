@@ -216,6 +216,9 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
         if (sessionRef.current !== session) return
 
         audio.src = url
+        // 同一 src 复用（缓存 blob 重播）不会重置进度：显式归零，
+        // 避免带着上次的播放位置开播；下方有 seek 需求时会再按目标位置覆盖
+        audio.currentTime = 0
         audio.playbackRate = stateRef.current.rate
 
         const batch = stateRef.current.batches[batchIndex]
@@ -271,6 +274,11 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
 
   /** 一批播完：推进下一批 / 播完本章停 / 自动翻章 / 全书完 */
   const handleBatchEnded = useCallback(() => {
+    // 只有 playing 中的 ended 才是真实批次播完：首次起播时用静音 wav 解锁 iOS 音频，
+    // 静音 wav 会在合成等待期（status=loading）先播完触发 ended，若不拦截会把播放
+    // 提前推进到下一批，与本批合成完成后的播放竞态，表现为「起播直接读后面段落」
+    if (stateRef.current.status !== 'playing') return
+
     const { batches: allBatches, currentBatchIndex: index, autoNext: shouldAutoNext, timerOption: timer, nextHref: next } =
       stateRef.current
 

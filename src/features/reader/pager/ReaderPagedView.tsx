@@ -645,7 +645,16 @@ export default function ReaderPagedView({
     sourceTitle: string,
     interactive: boolean,
   ): ReactNode => (
-    <div className="absolute" style={insetStyle}>
+    <div
+      className="absolute"
+      style={{
+        ...insetStyle,
+        // 长按听书/选段走应用内自定义手势：禁掉系统文本选取与 iOS 气泡菜单，
+        // 避免长按时弹出系统「复制/分享/全选/翻译」蓝色选取框
+        userSelect: 'none',
+        WebkitTouchCallout: 'none',
+      }}
+    >
       {page.showTitle && sourceTitle.length > 0 ? (
         <div
           style={{
