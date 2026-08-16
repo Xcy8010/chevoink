@@ -163,6 +163,15 @@ export async function updateNovelData(
     include: novelInclude,
   })
 
+  // 封面变更同步云端书架快照：ReadingProgress.coverUrl 是各设备书架的封面来源，
+  // 不跟随更新会导致换封面后所有设备的书架继续显示旧路径（旧域名失效即封面消失）
+  if (input.coverAssetId !== undefined && input.coverAssetId !== existing.coverAssetId) {
+    await prisma.readingProgress.updateMany({
+      where: { novelId },
+      data: { coverUrl: updated.coverAsset?.imageUrl ?? null },
+    })
+  }
+
   return toNovel(updated, userId)
 }
 

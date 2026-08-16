@@ -9,6 +9,31 @@ export type LocalShelfEntry = {
 
 const STORAGE_KEY = 'chevoink-shelf'
 
+/**
+ * 书架变更订阅：任何写入（手动加/移除、云端水合注入、封面回填）都会通知订阅方，
+ * 作品详情页据此重算「在架/收藏」按钮态，解决云同步落地后界面仍旧态的问题
+ */
+type ShelfChangeListener = () => void
+const shelfChangeListeners = new Set<ShelfChangeListener>()
+
+export function subscribeShelfChange(listener: ShelfChangeListener): () => void {
+  shelfChangeListeners.add(listener)
+  return () => {
+    shelfChangeListeners.delete(listener)
+  }
+}
+
+function notifyShelfChange() {
+  shelfChangeListeners.forEach((listener) => listener())
+}
+
+// 其它标签页/WebView 写入 localStorage 时同步感知（storage 事件只在非写入方触发）
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY) notifyShelfChange()
+  })
+}
+
 function readStore(): LocalShelfEntry[] {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -26,6 +51,7 @@ function writeStore(entries: LocalShelfEntry[]) {
   } catch {
     // localStorage 不可用时静默失败
   }
+  notifyShelfChange()
 }
 
 export function getLocalShelf(): LocalShelfEntry[] {

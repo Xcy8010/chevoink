@@ -81,13 +81,15 @@ async function doHydrate(): Promise<boolean> {
 
   let changed = false
   const serverIds = new Set(items.map((item) => item.novelId))
+  // 本地封面兜底：云端快照封面为空时保留本地已有封面，不让空值把本地图覆盖掉
+  const localCoverByNovelId = new Map(getLocalShelf().map((entry) => [entry.novelId, entry.coverUrl] as const))
 
   // 1) 服务端 → 本地：书架成员身份 + 阅读进度（进度按 updatedAt 取新）
   for (const item of items) {
     upsertShelfRaw({
       novelId: item.novelId,
       title: item.novelTitle,
-      coverUrl: item.coverUrl ?? null,
+      coverUrl: item.coverUrl ?? localCoverByNovelId.get(item.novelId) ?? null,
       addedAt: Date.parse(item.addedAt) || Date.now(),
     })
     changed = true

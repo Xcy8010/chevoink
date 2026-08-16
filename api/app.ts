@@ -42,6 +42,13 @@ app.use(
   express.static(getUploadsStaticDirectory(), { fallthrough: false, maxAge: '30d', immutable: true }),
 )
 
+// 动态接口一律禁缓存：WebView/代理缓存 JSON 会让跨设备刷新读到旧的书架/收藏态
+// （uploads 静态资源在上面单独挂载，不经过本中间件，强缓存不受影响）
+app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'no-store')
+  next()
+})
+
 // 登录态统一闸口：
 // 1. 会话识别（access 优先，refresh 兜底）+ 封禁检查（60s 缓存）+ v2 令牌吊销比对；
 //    refresh 命中时静默重签双 cookie，前端无感知；

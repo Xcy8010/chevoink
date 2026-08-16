@@ -1,4 +1,4 @@
-﻿﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, BookOpenText, ChevronLeft, FileText, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import { useToast } from '@/components/ui/toast-context'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
+import { updateShelfCover } from '@/features/home/local-shelf'
 import { cn } from '@/lib/utils'
 import { FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type { AgentStreamEvent, Chapter, CoverAsset, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
@@ -919,6 +920,10 @@ export default function StudioWorkspace() {
       }
       if ((payload.novel.coverAssetId ?? null) !== previousCoverAssetId) {
         setSelectedCoverId(payload.novel.coverAssetId ?? payload.coverAssets[0]?.id ?? null)
+        // Agent 换过封面：同步本机书架快照，书架不再停留在旧封面路径
+        if (payload.novel.coverUrl) {
+          updateShelfCover(payload.novel.id, payload.novel.coverUrl)
+        }
       }
 
       // 站内其它页面（作品详情/个人中心/创作中心列表）同步看到 Agent 的修改
@@ -1994,6 +1999,12 @@ export default function StudioWorkspace() {
       setCoverMessage('本地封面已按固定书封比例上传，并设为当前作品封面。')
       setActiveToolPanel('cover')
       setMobileView('cover')
+      // 封面更换后同步本机书架快照与站内缓存列表，避免书架/收藏/详情继续显示旧封面
+      updateShelfCover(novel.id, asset.imageUrl)
+      void queryClient.invalidateQueries({ queryKey: ['novel-detail', novel.id] })
+      void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
+      void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+      void queryClient.invalidateQueries({ queryKey: ['home'] })
       syncStudioPayload((current) =>
         current
           ? {
@@ -2040,6 +2051,12 @@ export default function StudioWorkspace() {
       )
       setSelectedCoverId(asset.id)
       setCoverMessage('作品封面已更新。')
+      // 封面更换后同步本机书架快照与站内缓存列表，避免书架/收藏/详情继续显示旧封面
+      updateShelfCover(updatedNovel.id, asset.imageUrl)
+      void queryClient.invalidateQueries({ queryKey: ['novel-detail', updatedNovel.id] })
+      void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
+      void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+      void queryClient.invalidateQueries({ queryKey: ['home'] })
       syncStudioPayload((current) =>
         current
           ? {

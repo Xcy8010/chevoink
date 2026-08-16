@@ -12,9 +12,9 @@ import TextInput from '@/components/ui/TextInput'
 import { useToast } from '@/components/ui/toast-context'
 import { getMe, listFavoriteNovels, listPosts } from '@/features/community/api'
 import Avatar from '@/features/community/components/Avatar'
-import { getCoverUrl, getNovelDetailPayload } from '@/features/discover/api'
+import { getCoverUrl, listNovelCardsByIds } from '@/features/discover/api'
 import { getAllReadingProgress } from '@/features/home/reading-progress'
-import { getLocalShelf, updateShelfCover } from '@/features/home/local-shelf'
+import { getLocalShelf, subscribeShelfChange, updateShelfCover } from '@/features/home/local-shelf'
 import { prepareAvatarImage } from '@/lib/image-compress'
 import CreationPanel from '@/features/profile/components/CreationPanel'
 import ProfileHeader from '@/features/profile/components/ProfileHeader'
@@ -160,7 +160,9 @@ export default function ProfilePage() {
     [hiddenBootstrapNovelIds, mePayload?.drafts],
   )
 
-  /** 本地阅读进度与书架（页面渲染时读取，me 数据刷新后重读） */
+  /** 本地阅读进度与书架（页面渲染时读取，me 数据刷新/书架变更落地后重读） */
+  const [shelfVersion, setShelfVersion] = useState(0)
+  useEffect(() => subscribeShelfChange(() => setShelfVersion((version) => version + 1)), [])
   const progressMap = useMemo(
     () => getAllReadingProgress(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -169,7 +171,7 @@ export default function ProfilePage() {
   const localShelf = useMemo(
     () => getLocalShelf(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [meQuery.dataUpdatedAt],
+    [meQuery.dataUpdatedAt, shelfVersion],
   )
 
   /** 合并服务端书架 + 本地书架 + 仅有阅读进度的作品 */
@@ -222,34 +224,39 @@ export default function ProfilePage() {
     return items
   }, [localShelf, mePayload?.shelf, progressMap])
 
-  /** 缺封面条目回源补拉：收藏/阅读时作品还没封面，之后生成了封面也能显示出来 */
-  const missingCoverIds = useMemo(
-    () => mergedShelf.filter((item) => item.novelId && !item.coverUrl).map((item) => item.novelId as string),
+  /**
+   * 书架封面回源同步：既补「当时没封面」的空位，也刷「已换封面」的旧快照；
+   * 换封面后本地/云端快照里的旧路径会一直显示旧图（旧域名失效即封面消失），
+   * 这里用轻量批量卡片接口对齐全站真实封面，差异即回写本地书架自愈
+   */
+  const shelfCoverSyncIds = useMemo(
+    () => Array.from(new Set(mergedShelf.map((item) => item.novelId).filter((id): id is string => Boolean(id)))),
     [mergedShelf],
   )
   const coverBackfillQuery = useQuery({
-    queryKey: ['profile', 'shelf-cover-backfill', missingCoverIds],
-    enabled: missingCoverIds.length > 0,
+    queryKey: ['profile', 'shelf-cover-sync', shelfCoverSyncIds],
+    enabled: shelfCoverSyncIds.length > 0,
     staleTime: 5 * 60 * 1000,
     queryFn: async () => {
-      const results = await Promise.allSettled(missingCoverIds.map((id) => getNovelDetailPayload(id)))
+      const cards = await listNovelCardsByIds(shelfCoverSyncIds)
       const covers: Record<string, string> = {}
-      results.forEach((result, index) => {
-        if (result.status !== 'fulfilled') return
-        const cover = getCoverUrl(result.value.novel.coverUrl)
+      cards.forEach((card) => {
+        const cover = getCoverUrl(card.coverUrl)
         if (!cover) return
-        covers[missingCoverIds[index]] = cover
-        // 同步回写本地书架，下次进页无需再补拉
-        updateShelfCover(missingCoverIds[index], cover)
+        covers[card.id] = cover
+        // 与本地快照不一致（缺失或换过封面）即回写，下次进页无需再同步
+        updateShelfCover(card.id, cover)
       })
       return covers
     },
   })
   const shelfItems = useMemo<ShelfBook[]>(() => {
     const covers = coverBackfillQuery.data ?? {}
-    return mergedShelf.map((item) =>
-      item.coverUrl || !item.novelId || !covers[item.novelId] ? item : { ...item, coverUrl: covers[item.novelId] },
-    )
+    return mergedShelf.map((item) => {
+      const synced = item.novelId ? covers[item.novelId] : undefined
+      // 服务端封面与本地快照不同时以服务端为准（含旧封面刷新），否则保持原样
+      return synced && synced !== item.coverUrl ? { ...item, coverUrl: synced } : item
+    })
   }, [coverBackfillQuery.data, mergedShelf])
 
   // 个人封面只使用用户自己设置的封面，不再兜底展示作品封面（避免误显示）

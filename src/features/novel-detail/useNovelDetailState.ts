@@ -19,7 +19,7 @@ import {
 } from '@/features/discover/api'
 import { useStartReading } from '@/features/discover/useStartReading'
 import { getReadingProgress } from '@/features/home/reading-progress'
-import { isInShelf, toggleShelf } from '@/features/home/local-shelf'
+import { isInShelf, subscribeShelfChange, toggleShelf, updateShelfCover } from '@/features/home/local-shelf'
 import { pushShelfAdd, pushShelfRemove } from '@/features/home/reading-sync'
 import { getStudioPayload, updateNovelMeta, uploadNovelCover } from '@/features/studio/api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from '@/features/studio/cover-image'
@@ -93,6 +93,9 @@ export function useNovelDetailState() {
     tagsText: '',
   })
   const [shelfVersion, setShelfVersion] = useState(0)
+  // 书架变更订阅：云端水合落地/其它页面加减书架/封面回填后重算「加入书架」按钮态，
+  // 不依赖页面内手动 bump，跨设备同步后刷新页面按钮也能跟上
+  useEffect(() => subscribeShelfChange(() => setShelfVersion((version) => version + 1)), [])
   const [commentDraft, setCommentDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<Comment | null>(null)
   // 正在编辑的自己的评论；非空时发表按钮变为保存修改
@@ -249,6 +252,11 @@ export function useNovelDetailState() {
           : current,
       )
       setPendingCoverUploadFile(null)
+      // 封面更换后同步本机书架快照，并刷新书架/收藏/首页等缓存列表，避免各处继续显示旧封面
+      updateShelfCover(novel.id, asset.imageUrl)
+      queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
+      queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+      queryClient.invalidateQueries({ queryKey: ['home'] })
       await queryClient.invalidateQueries({ queryKey: ['novel-detail-cover-history', novelId] })
       await queryClient.invalidateQueries({ queryKey: ['novel-detail', novelId] })
     },
@@ -266,6 +274,13 @@ export function useNovelDetailState() {
       return updateNovelMeta(detail.novel.id, { coverAssetId: assetId })
     },
     onSuccess: async (novel) => {
+      // 封面更换后同步本机书架快照与各处缓存列表（同上传封面链路）
+      if (novel.coverUrl) {
+        updateShelfCover(novel.id, novel.coverUrl)
+      }
+      queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
+      queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+      queryClient.invalidateQueries({ queryKey: ['home'] })
       queryClient.setQueryData(['novel-detail', novelId], (current: typeof detailQuery.data) =>
         current
           ? {
