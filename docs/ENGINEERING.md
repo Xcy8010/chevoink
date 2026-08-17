@@ -377,3 +377,35 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | `prisma/migrations/2026xxxx_admin_console/` | `prisma/migrations/20260812190000_admin_console/`（占位时间戳已落地为实际值） |
 
 > 注：阅读区三端布局（`reader/layouts/ReaderMobile/Tablet/Desktop.tsx`）保留了三端拆分形态，与创作区的选择不同——阅读器交互差异大、创作区需要面板联动，属有意为之的架构差异。
+
+---
+
+## 10. 推荐系统落地记录（推荐算法优化方案）
+
+对应外部方案 `docs/RECOMMENDATION-ALGORITHM.md`。可行性评估结论：**Phase 0（评分统一与版本化）与 Phase 1（行为事件采集 + 画像 + for-you 个性化）当前栈可直接落地，已实现；Phase 2（LightGBM 精排/向量召回）与 Phase 3（双塔/数仓）依赖数据规模与离线基建，按方案自身节奏延后**。
+
+### 10.1 Phase 0：评分统一与版本化
+
+- 评分纯函数唯一来源 `shared/recommend/scoring.ts`（hotScore/totalScore/周榜/日榜/更新度/篇幅分等），双端（客户端 `src/features/discover/ranking.ts`、`weekly-picks.ts`、`daily-picks.ts` 与服务端 `api/lib/data/home.ts`、`api/lib/data/novel.ts`）统一引用，消除权重漂移；
+- 算法版本常量 `RECOMMEND_ALGORITHM_VERSIONS`（home `novel-home-v2` / related `related-v2` / forYou `for-you-v1` / weeklyPicks / dailyPicks），随响应下发（`HomePagePayload.algorithmVersion`、`NovelDetailPayload.relatedAlgorithmVersion`）供归因；
+- 首页候选池修正：`最近更新 200 ∪ 历史热门 200` 双通道取并集去重，替代单一排序截断。
+
+### 10.2 Phase 1：事件采集 → 画像 → for-you 个性化
+
+- **事件表**：`recommendation_events`（迁移 `20260817120000_recommendation_events`），`eventId` 唯一幂等、`userId` 可空、只存行为元数据（surface/eventType/dwellMs/progressPercent/sessionId/algorithmVersion），索引 `(userId, createdAt)` 与 `(novelId, eventType)`；
+- **事件上报**：`POST /api/recommendations/events` 批量 ≤50，`api/lib/recommendation/events.ts` 幂等入库；写入失败静默降级返回 `accepted: 0`，绝不阻塞阅读主流程；客户端 fire-and-forget（keepalive + catch 吞），dwellMs 上限 30 分钟；
+- **用户画像**：`api/lib/recommendation/profile.ts`，interest = Σ weight × exp(-ageDays/30)，信号权重——完读 +6 / 进度≥80% +4 / 收藏 +5 / 关注作者 +4 / 开始阅读 +1 / 点击 +0.3 / dismiss·abandon -5（抑制）；回看窗口 90 天；
+- **for-you 链路**：`api/lib/recommendation/for-you.ts` 召回 → 精排（0.45 interest + 0.15 author + 0.20 quality + 0.10 fresh + 0.10 explore，分量按候选集最大值归一）→ 重排（同作者 ≤2、同主标签连续 ≤2，不足时放宽补齐）→ 推荐理由（必须来自真实特征）；冷启动（无信号）降级为 0.8 quality + 0.2 fresh 且 `personalized: false`；
+- **归因**：每次 for-you 响应返回 `sessionId`（randomUUID）与 `algorithmVersion`，曝光/点击/负反馈事件携带同会话键；
+- **客户端接入**：`src/features/discover/useForYouRecommendations.ts`——服务端为唯一排序来源，失败回退本地 `buildRecommendedNovels` 保证可用；曝光按 `sessionId+作品集合` 去重批量上报；`DiscoverPage` 卡片展示推荐理由、「不感兴趣」本地立即移除并上报 dismiss。
+
+### 10.3 验收自检（对照方案 §13）
+
+| 验收项 | 状态 |
+| --- | --- |
+| 双端评分一致（单一来源 + 版本常量） | ✅ |
+| 事件幂等、失败不阻塞主流程 | ✅ |
+| 冷启动降级与 personalized 标识 | ✅ |
+| 推荐理由来自真实特征、无编造 | ✅ |
+| 曝光/点击/负反馈上报闭环 | ✅ |
+| 离线/线上评估指标（CTR/多样性等） | 待 Phase 2 数据积累后建立 |

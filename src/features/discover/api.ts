@@ -3,6 +3,7 @@ import type {
   Chapter,
   ChapterListItem,
   CommentTargetType,
+  GetForYouResponse,
   GetHomeResponse,
   GetNovelDetailResponse,
   GetReaderResponse,
@@ -11,6 +12,8 @@ import type {
   Novel,
   NovelCard,
   Post,
+  RecommendationEventInput,
+  ReportRecommendationEventsRequest,
   TopicSummary,
   Comment,
 } from '../../../shared/contracts/index.js'
@@ -93,6 +96,27 @@ async function requestData<T>(path: string, options?: RequestDataOptions): Promi
 
 export function getHomePayload(): Promise<GetHomeResponse['data']> {
   return requestData<GetHomeResponse['data']>('/api/home')
+}
+
+/** 服务端个性化「为你推荐」（推荐算法优化方案 Phase 1）：服务端为唯一排序来源 */
+export function getForYouRecommendations(): Promise<GetForYouResponse['data']> {
+  return requestData<GetForYouResponse['data']>('/api/recommendations/for-you')
+}
+
+/** 推荐行为事件上报：fire-and-forget，失败静默，绝不阻塞阅读主流程（方案 §6.2） */
+export function reportRecommendationEvents(events: RecommendationEventInput[]): void {
+  if (events.length === 0) return
+  const body: ReportRecommendationEventsRequest = { events }
+  void fetch(buildApiUrl('/api/recommendations/events'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...buildAuthHeader(),
+    },
+    body: JSON.stringify(body),
+    keepalive: true,
+  }).catch(() => {})
 }
 
 export function listNovels(options?: ListNovelOptions): Promise<ListNovelsResponse['data']> {

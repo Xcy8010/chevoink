@@ -17,7 +17,7 @@ import {
   listNovels,
 } from '@/features/discover/api'
 import { buildBoardNovels, hotScore } from '@/features/discover/ranking'
-import { buildRecommendedNovels } from '@/features/discover/recommend'
+import { useForYouRecommendations } from '@/features/discover/useForYouRecommendations'
 import { useStartReading } from '@/features/discover/useStartReading'
 import { formatWordCount } from '@/features/home/utils'
 import { cn } from '@/lib/utils'
@@ -98,16 +98,12 @@ export default function DiscoverPage() {
     [novelsQuery.data],
   )
 
-  // 推荐作品：基于最近阅读的标签口味挑 4 本，没有阅读记录时随机挑选；排除主推位已展示的书避免重复露出
-  const recommendation = useMemo(
-    () =>
-      buildRecommendedNovels(
-        novels,
-        4,
-        sortedNovels.slice(0, 2).map((novel) => novel.id),
-      ),
-    [novels, sortedNovels],
-  )
+  // 推荐作品：服务端 for-you 为唯一排序来源（推荐算法优化方案 Phase 1），
+  // 接口不可用时回退本地标签口味算法；排除主推位已展示的书避免重复露出
+  const forYou = useForYouRecommendations({
+    fallbackPool: novels,
+    excludeIds: sortedNovels.slice(0, 2).map((novel) => novel.id),
+  })
 
   if (novelsQuery.isLoading) {
     return <DiscoverSkeleton />
@@ -295,7 +291,7 @@ export default function DiscoverPage() {
                 推荐作品
               </div>
               <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-                {recommendation.personalized ? '根据你最近的阅读口味挑选' : '随机为你挑选，读几本后会更懂你'}
+                {forYou.personalized ? '根据你最近的阅读口味挑选' : '随机为你挑选，读几本后会更懂你'}
               </p>
             </div>
             <Link
@@ -308,11 +304,21 @@ export default function DiscoverPage() {
           </div>
 
           <div className="mt-5 grid gap-4 xl:grid-cols-2">
-            {recommendation.novels.map((novel) => (
+            {forYou.items.map((item) => {
+              const novel = item.novel
+              return (
               <article
                 key={novel.id}
-                className="grid gap-4 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4 sm:grid-cols-[88px_minmax(0,1fr)]"
+                className="relative grid gap-4 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4 sm:grid-cols-[88px_minmax(0,1fr)]"
               >
+                {/* 负反馈入口：本地立即移除 + 上报 dismiss（方案 Phase 1） */}
+                <button
+                  type="button"
+                  onClick={() => forYou.reportDismiss(novel.id)}
+                  className="press-feedback absolute right-2 top-2 rounded-[var(--radius-pill)] px-2 py-1 text-xs text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)]"
+                >
+                  不感兴趣
+                </button>
                 {getCoverUrl(novel.coverUrl) ? (
                   <AppImage
                     src={getCoverUrl(novel.coverUrl) ?? ''}
@@ -332,6 +338,10 @@ export default function DiscoverPage() {
                     <span>·</span>
                     <span>{formatUpdatedTime(novel.updatedAt)}</span>
                   </div>
+                  {/* 推荐理由：来自服务端真实特征（方案 §11.3），本地回退时不展示 */}
+                  {item.reason ? (
+                    <p className="mt-1.5 text-xs font-medium text-[var(--color-brand)]">{item.reason}</p>
+                  ) : null}
                   <h3 className="mt-2 text-lg font-semibold text-[var(--text-primary)]">{getDisplayTitle(novel)}</h3>
                   <p className="mt-2 line-clamp-2 text-sm leading-7 text-[var(--text-secondary)]">{getNovelSummary(novel.summary)}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -347,7 +357,10 @@ export default function DiscoverPage() {
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => startReading(novel.id)}
+                      onClick={() => {
+                        forYou.reportClick(novel.id)
+                        startReading(novel.id)
+                      }}
                       disabled={isStarting && pendingNovelId === novel.id}
                       className="press-feedback inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius-pill)] bg-[var(--color-brand)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:opacity-70"
                     >
@@ -356,6 +369,7 @@ export default function DiscoverPage() {
                     </button>
                     <Link
                       to={`/novel/${novel.id}`}
+                      onClick={() => forYou.reportClick(novel.id)}
                       className="inline-flex h-10 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--border-subtle)] px-4 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
                     >
                       查看详情
@@ -363,7 +377,8 @@ export default function DiscoverPage() {
                   </div>
                 </div>
               </article>
-            ))}
+              )
+            })}
           </div>
         </div>
 
