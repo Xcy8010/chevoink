@@ -6,6 +6,7 @@
 import type { Prisma, Visibility as PrismaVisibility } from '@prisma/client'
 import type { CreateNovelRequest, Novel, NovelCard, NovelDetailPayload, UpdateNovelRequest, Visibility } from '../../../shared/contracts/index.js'
 import { NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
+import { hotScore, RECOMMEND_ALGORITHM_VERSIONS } from '../../../shared/recommend/scoring.js'
 import { storeNovelCoverDataUrl, storeNovelCoverFromRemoteUrl } from '../novel-cover-storage.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { buildPagination, buildSlug, chapterListItemSelect, commentInclude, ensureNonEmptyText, ensureNovelOwner, ensureUserExists, novelInclude, recalculateNovelStats, toChapterListItem, toComment, toNovel, toNovelCard } from './internal.js'
@@ -273,14 +274,7 @@ type RelatedNovelSignals = {
 
 
 
-/** 与首页热度榜同口径的热度分：互动加权（阅读1/点赞3/评论4/收藏5）+ 内容规模，除以更新时间衰减 */
-function computeNovelHotScore(novel: RelatedNovelSignals, nowMs: number): number {
-  const engagement = novel.viewCount + novel.likeCount * 3 + novel.commentCount * 4 + novel.favoriteCount * 5
-  const substance = Math.min(novel.chapterCount, 50) * 2 + Math.min(novel.wordCount / 10000, 30)
-  const lastActive = (novel.lastPublishedAt ?? novel.updatedAt).getTime()
-  const ageDays = Math.max(0, (nowMs - lastActive) / 86_400_000)
-  return (engagement + substance) / Math.pow(ageDays + 2, 1.4)
-}
+/** 热度分统一使用 shared/recommend/scoring 纯函数（与首页榜单/客户端同源，方案 Phase 0） */
 
 
 
@@ -326,7 +320,7 @@ function rankRelatedNovels<T extends RelatedNovelSignals & { id: string }>(
   const scored = candidates.map((candidate) => {
     const affinity = computeTagAffinity(source, candidate)
     const tier = affinity > 0 ? 0 : candidate.authorId === source.authorId ? 1 : 2
-    return { candidate, affinity, tier, hot: computeNovelHotScore(candidate, nowMs) }
+    return { candidate, affinity, tier, hot: hotScore(candidate, nowMs) }
   })
 
   return scored
@@ -444,6 +438,8 @@ export async function getNovelDetailData(
     chapters: chapterRecords.map(toChapterListItem),
     topComments: commentRecords.map(toComment),
     relatedNovels: relatedRecords.map((record) => toNovelCard(record)),
+    /** 相关推荐算法版本（方案 Phase 0） */
+    relatedAlgorithmVersion: RECOMMEND_ALGORITHM_VERSIONS.related,
   }
 }
 

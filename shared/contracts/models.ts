@@ -620,6 +620,8 @@ export interface HomePagePayload {
   rankingNew?: NovelCard[]
   /** 服务端计算的完结榜（已完结作品按累计热度） */
   rankingFinished?: NovelCard[]
+  /** 推荐算法版本（推荐算法优化方案 Phase 0），曝光归因与结果解释用 */
+  algorithmVersion?: string
   hotTopics: TopicSummary[]
   hotPosts: Post[]
   [key: string]: unknown
@@ -630,6 +632,8 @@ export interface NovelDetailPayload {
   chapters: ChapterListItem[]
   topComments: Comment[]
   relatedNovels: NovelCard[]
+  /** 相关推荐算法版本（推荐算法优化方案 Phase 0） */
+  relatedAlgorithmVersion?: string
   [key: string]: unknown
 }
 

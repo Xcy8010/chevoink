@@ -4,6 +4,7 @@
  * 本文件为 api/lib/data-access.ts 桶文件的重导出源，禁止绕过桶文件新增消费者。
  */
 import type { NovelCard } from '../../../shared/contracts/index.js'
+import { hotScore, totalScore, RECOMMEND_ALGORITHM_VERSIONS } from '../../../shared/recommend/scoring.js'
 import { prisma } from '../prisma.js'
 import { novelInclude, postInclude, toNovelCard, toPost, toTopic } from './internal.js'
 import { attachPostViewerFlags, computePostRecommendScore, getViewerPostFlags } from './post.js'
@@ -12,13 +13,20 @@ import { searchableNovelWhere } from './search.js'
 
 
 async function buildHomePayload() {
-  const [novelPool, hotTopics, hotPostRecords] = await prisma.$transaction([
-    // 候选池：只取公开且已发布/已完结、且至少有一个公开章节的作品，榜单在内存中加权计算
+  const [recentPool, popularPool, hotTopics, hotPostRecords] = await prisma.$transaction([
+    // 候选池通道一：最近更新作品
     prisma.novel.findMany({
       include: novelInclude,
       where: searchableNovelWhere,
       orderBy: [{ lastPublishedAt: 'desc' }, { updatedAt: 'desc' }],
-      take: 120,
+      take: 200,
+    }),
+    // 候选池通道二：历史热门作品（修复旧版只按更新取 120 本时，热门但久未更新作品进不了首页推荐位）
+    prisma.novel.findMany({
+      include: novelInclude,
+      where: searchableNovelWhere,
+      orderBy: [{ viewCount: 'desc' }, { favoriteCount: 'desc' }],
+      take: 200,
     }),
     prisma.topic.findMany({
       orderBy: [{ postCount: 'desc' }, { name: 'asc' }],
@@ -31,24 +39,17 @@ async function buildHomePayload() {
     }),
   ])
 
-  const cards = novelPool.map((record) => toNovelCard(record))
+  // 双通道去重合并，候选池覆盖「近期更新 ∪ 历史热门」，逼近全量作品语义（推荐算法优化方案 Phase 0）
+  const poolById = new Map<string, (typeof recentPool)[number]>()
+  for (const record of [...recentPool, ...popularPool]) {
+    if (!poolById.has(record.id)) poolById.set(record.id, record)
+  }
+  const cards = [...poolById.values()].map((record) => toNovelCard(record))
   const now = Date.now()
 
-  // 热度分：互动加权（阅读1/点赞3/评论4/收藏5）+ 内容规模基础分，除以时间衰减（参考主流阅读平台的 gravity 榜单）
-  const hotScore = (novel: (typeof cards)[number]) => {
-    const engagement =
-      (novel.viewCount ?? 0) + (novel.likeCount ?? 0) * 3 + (novel.commentCount ?? 0) * 4 + (novel.favoriteCount ?? 0) * 5
-    const substance = Math.min(novel.chapterCount, 50) * 2 + Math.min(novel.wordCount / 10000, 30)
-    const lastActive = new Date(novel.lastPublishedAt ?? novel.updatedAt).getTime()
-    const ageDays = Math.max(0, (now - lastActive) / 86_400_000)
-    return (engagement + substance) / Math.pow(ageDays + 2, 1.4)
-  }
+  // 热度分/累计口碑分统一使用 shared/recommend/scoring 纯函数（客户端同源，消除权重漂移）
 
-  // 完结榜看累计口碑，不做时间衰减
-  const totalScore = (novel: (typeof cards)[number]) =>
-    (novel.viewCount ?? 0) + (novel.likeCount ?? 0) * 3 + (novel.commentCount ?? 0) * 4 + (novel.favoriteCount ?? 0) * 5 + novel.wordCount / 10000
-
-  const rankingHot = [...cards].sort((left, right) => hotScore(right) - hotScore(left)).slice(0, 10)
+  const rankingHot = [...cards].sort((left, right) => hotScore(right, now) - hotScore(left, now)).slice(0, 10)
   const rankingNew = [...cards]
     .sort(
       (left, right) =>
@@ -73,6 +74,8 @@ async function buildHomePayload() {
     .map((entry) => toPost(entry.record))
 
   return {
+    /** 推荐算法版本（方案 Phase 0）：曝光归因与结果解释用 */
+    algorithmVersion: RECOMMEND_ALGORITHM_VERSIONS.home,
     continueReading: latestUpdated.slice(0, 1),
     recommendedNovels: rankingHot.slice(0, 8),
     latestUpdatedNovels: latestUpdated,

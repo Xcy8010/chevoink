@@ -1,21 +1,12 @@
 import type { NovelCard } from '../../../shared/contracts/index.js'
+import { hotScore, totalScore } from '../../../shared/recommend/scoring.js'
 
 /**
- * 榜单算法（与服务端 getHomePayloadData 同源）：
- * - hotScore：互动加权（阅读1/点赞3/评论4/收藏5）+ 内容规模基础分，除以时间衰减
- * - totalScore：累计口碑，不做时间衰减（完结榜）
+ * 榜单算法：评分纯函数统一来自 shared/recommend/scoring（与服务端同源，方案 Phase 0），
+ * 本文件只保留榜单目录与板位排序等客户端展示层逻辑。
  */
 
-export const hotScore = (novel: NovelCard) => {
-  const engagement =
-    (novel.viewCount ?? 0) + (novel.likeCount ?? 0) * 3 + (novel.commentCount ?? 0) * 4 + (novel.favoriteCount ?? 0) * 5
-  const substance = Math.min(novel.chapterCount, 50) * 2 + Math.min(novel.wordCount / 10000, 30)
-  const ageDays = Math.max(0, (Date.now() - new Date(novel.lastPublishedAt ?? novel.updatedAt).getTime()) / 86_400_000)
-  return (engagement + substance) / Math.pow(ageDays + 2, 1.4)
-}
-
-export const totalScore = (novel: NovelCard) =>
-  (novel.viewCount ?? 0) + (novel.likeCount ?? 0) * 3 + (novel.commentCount ?? 0) * 4 + (novel.favoriteCount ?? 0) * 5 + novel.wordCount / 10000
+export { hotScore, totalScore }
 
 export type RankingBoardId = 'hot' | 'popular' | 'new' | 'update' | 'long' | 'finished'
 
