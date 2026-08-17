@@ -1,4 +1,5 @@
 export * from './models.js'
+export * from './recommendation.js'
 export * from './agent-attachments.js'
 export * from './api.js'
 export * from './schemas.js'

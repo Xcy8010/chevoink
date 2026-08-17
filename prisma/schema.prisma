@@ -263,6 +263,7 @@ model Novel {
   agentRuns       AgentRun[]
   projectMemoryEntries ProjectMemoryEntry[]
   readingProgress ReadingProgress[]
+  recommendationEvents RecommendationEvent[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -489,6 +490,30 @@ model ParagraphUnderline {
   @@unique([userId, chapterId, paragraphIndex])
   @@index([userId, chapterId])
   @@map("paragraph_underlines")
+}
+
+// 推荐行为事件（推荐算法优化方案 Phase 1）：
+// 统一记录曝光/点击/开始阅读/进度/收藏/完读/弃读/不感兴趣等事件；
+// 客户端生成 eventId 幂等去重，服务端入库唯一跳过；
+// 只保留作品/用户/行为元数据，不保留正文内容（隐私优先）。
+model RecommendationEvent {
+  id               String   @id @default(cuid()) @db.VarChar(64)
+  eventId          String   @unique @map("event_id") @db.VarChar(64)
+  userId           String?  @map("user_id") @db.VarChar(64)
+  novelId          String   @map("novel_id") @db.VarChar(64)
+  surface          String   @db.VarChar(32)
+  position         Int?
+  eventType        String   @map("event_type") @db.VarChar(32)
+  dwellMs          Int?     @map("dwell_ms")
+  progressPercent  Float?   @map("progress_percent")
+  sessionId        String?  @map("session_id") @db.VarChar(64)
+  algorithmVersion String?  @map("algorithm_version") @db.VarChar(32)
+  createdAt        DateTime @default(now()) @map("created_at")
+  novel            Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([novelId, eventType])
+  @@map("recommendation_events")
 }
 
 model CommentLike {
