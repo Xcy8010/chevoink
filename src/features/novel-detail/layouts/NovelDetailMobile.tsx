@@ -48,14 +48,15 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
 
   return (
     <div className="pb-40">
-      {/* 左上返回按钮：放在 hero 容器之外的页面左上角，仅图标；有站内历史则回退，深链直达兜底回首页 */}
+      {/* 左上返回：hero 容器之外，与帖子详情同款灰色箭头+文字（无圆形容器）；
+          不用负外边距，整体稍右移避免被左侧安全区裁切 */}
       <button
         type="button"
         onClick={handleBack}
-        aria-label="返回"
-        className="press-feedback -ml-1 mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+        className="press-feedback mb-2 inline-flex items-center gap-1 rounded-[var(--radius-pill)] px-1.5 py-1 text-sm text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
       >
-        <ChevronLeft className="h-5 w-5" />
+        <ChevronLeft className="h-4 w-4" />
+        返回
       </button>
 
       {/* hero：封面按 20:27 原比例完整展示，不再被横向 banner 裁切 */}
@@ -84,7 +85,8 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
           </button>
         ) : null}
 
-        <div className="relative flex gap-4 px-4 pb-5 pt-6">
+        {/* 左内边距比常规多 4px：封面稍右移，避免贴左侧安全区被裁切 */}
+        <div className="relative flex gap-4 pb-5 pl-5 pr-4 pt-6">
           {detailCoverUrl ? (
             <button
               type="button"
