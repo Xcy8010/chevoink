@@ -1,6 +1,6 @@
-import { ChevronRight, PenLine } from 'lucide-react'
+import { ChevronLeft, ChevronRight, PenLine } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import AppImage from '@/components/ui/AppImage'
 import Avatar from '@/features/community/components/Avatar'
@@ -17,6 +17,7 @@ type NovelDetailMobileProps = {
 /** 手机端详情页：竖版封面完整显示（模糊底图烘托），信息右排 + 底部固定操作栏 */
 export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
   const [coverPreviewOpen, setCoverPreviewOpen] = useState(false)
+  const navigate = useNavigate()
   const {
     detail,
     detailTitle,
@@ -33,6 +34,16 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
 
   if (!detail) {
     return null
+  }
+
+  // 左上返回：有站内历史则回退，否则兜底回首页（深链直接进入时 history 无站内记录）
+  const handleBack = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    if (idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/')
+    }
   }
 
   return (
@@ -52,6 +63,16 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
           <div aria-hidden className="absolute inset-0 bg-[linear-gradient(135deg,var(--color-brand)_0%,#16233a_100%)]" />
         )}
 
+        {/* 左上返回按钮：仅图标，与右上编辑按钮同款浮层样式；hero 内容行加高避让，不遮挡封面与书名 */}
+        <button
+          type="button"
+          onClick={handleBack}
+          aria-label="返回"
+          className="press-feedback absolute left-4 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-black/30 text-white backdrop-blur transition-colors hover:bg-black/45"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+
         {canEditNovelPage ? (
           <button
             type="button"
@@ -63,7 +84,7 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
           </button>
         ) : null}
 
-        <div className="relative flex gap-4 px-4 pb-5 pt-6">
+        <div className="relative flex gap-4 px-4 pb-5 pt-14">
           {detailCoverUrl ? (
             <button
               type="button"
@@ -151,7 +172,8 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
         </div>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[64px] z-40 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 py-2.5 backdrop-blur">
+      {/* 全局底栏在本路由隐藏：操作栏直接贴底（含安全区），不再为底栏让位 */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-subtle)] bg-[color:var(--surface-default)]/96 px-4 pb-[calc(10px+var(--safe-bottom))] pt-2.5 backdrop-blur">
         <DetailCtaRow state={state} compact />
       </div>
 

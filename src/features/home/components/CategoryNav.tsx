@@ -37,7 +37,9 @@ export default function CategoryNav({ activeCategory, onSelect }: CategoryNavPro
       <div
         className={cn(
           'flex min-w-0 flex-1 items-center gap-1',
-          expanded ? 'flex-wrap gap-y-1.5' : 'rail-scroll',
+          // 展开态用自然流式排布：标签按自身宽度依次填满每一行，行尾不留固定网格空位；
+          // 按钮不缩不换行，保证标签文字完整显示
+          expanded ? 'flex-wrap gap-x-2 gap-y-2' : 'rail-scroll',
         )}
       >
         {visibleCategories.map((category) => (
@@ -47,7 +49,7 @@ export default function CategoryNav({ activeCategory, onSelect }: CategoryNavPro
             aria-pressed={category === activeCategory}
             onClick={() => onSelect(category === activeCategory ? '' : category)}
             className={cn(
-              'press-feedback shrink-0 rounded-[var(--radius-pill)] px-3.5 py-1.5 text-sm transition-colors',
+              'press-feedback shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] px-3.5 py-1.5 text-sm transition-colors',
               category === activeCategory
                 ? 'bg-[var(--color-brand)] font-semibold text-white'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',

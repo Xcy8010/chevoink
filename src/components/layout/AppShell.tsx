@@ -786,6 +786,8 @@ export default function AppShell({ title, description, children }: AppShellProps
                 isMessagesRoute && 'app-messages-main flex h-full min-h-0 flex-col space-y-0 pb-[calc(76px+var(--safe-bottom))] md:pb-6',
                 // 聊天详情态：底栏已隐藏，手机端只留安全区，输入框贴底
                 isMessagesChatRoute && 'mobile:pb-[var(--safe-bottom)]',
+                // 作品详情页手机端底栏已隐藏，底部留白交给页面自己的贴底操作栏控制
+                isNovelDetailRoute && 'mobile:pb-4',
               )}
               style={{ '--app-header-height': `${headerHeight}px` } as CSSProperties}
             >
@@ -829,6 +831,8 @@ export default function AppShell({ title, description, children }: AppShellProps
           isStudioRoute && 'hidden',
           // 聊天详情态：隐藏底栏让输入框贴底，返回会话列表后恢复
           isMessagesChatRoute && 'hidden',
+          // 作品详情页手机端自带贴底操作栏 + 左上返回，隐藏全局底栏让阅读动线更沉浸
+          isNovelDetailRoute && 'hidden',
         )}
       >
         <div className="mx-auto grid max-w-lg grid-cols-[1fr_1fr_auto_1fr_1fr] items-center gap-2">
