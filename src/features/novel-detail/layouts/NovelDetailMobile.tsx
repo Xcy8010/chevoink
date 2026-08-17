@@ -48,6 +48,16 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
 
   return (
     <div className="pb-40">
+      {/* 左上返回按钮：放在 hero 容器之外的页面左上角，仅图标；有站内历史则回退，深链直达兜底回首页 */}
+      <button
+        type="button"
+        onClick={handleBack}
+        aria-label="返回"
+        className="press-feedback -ml-1 mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+      >
+        <ChevronLeft className="h-5 w-5" />
+      </button>
+
       {/* hero：封面按 20:27 原比例完整展示，不再被横向 banner 裁切 */}
       <section className="relative -mx-4 overflow-hidden">
         {detailCoverUrl ? (
@@ -63,16 +73,6 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
           <div aria-hidden className="absolute inset-0 bg-[linear-gradient(135deg,var(--color-brand)_0%,#16233a_100%)]" />
         )}
 
-        {/* 左上返回按钮：仅图标，与右上编辑按钮同款浮层样式；hero 内容行加高避让，不遮挡封面与书名 */}
-        <button
-          type="button"
-          onClick={handleBack}
-          aria-label="返回"
-          className="press-feedback absolute left-4 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-black/30 text-white backdrop-blur transition-colors hover:bg-black/45"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-
         {canEditNovelPage ? (
           <button
             type="button"
@@ -84,7 +84,7 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
           </button>
         ) : null}
 
-        <div className="relative flex gap-4 px-4 pb-5 pt-14">
+        <div className="relative flex gap-4 px-4 pb-5 pt-6">
           {detailCoverUrl ? (
             <button
               type="button"

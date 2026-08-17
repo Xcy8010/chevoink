@@ -37,9 +37,9 @@ export default function CategoryNav({ activeCategory, onSelect }: CategoryNavPro
       <div
         className={cn(
           'flex min-w-0 flex-1 items-center gap-1',
-          // 展开态用自然流式排布：标签按自身宽度依次填满每一行，行尾不留固定网格空位；
-          // 按钮不缩不换行，保证标签文字完整显示
-          expanded ? 'flex-wrap gap-x-2 gap-y-2' : 'rail-scroll',
+          // 展开态用流式排布 + 行内两端对齐：标签按自身宽度依次排满每一行，
+          // 行尾不留空位（水平方向撑满），按钮不缩不换行保证文字完整
+          expanded ? 'flex-wrap justify-between gap-x-2 gap-y-2' : 'rail-scroll',
         )}
       >
         {visibleCategories.map((category) => (
