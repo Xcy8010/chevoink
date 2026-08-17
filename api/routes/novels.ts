@@ -241,7 +241,7 @@ router.get('/:novelId/reader/:chapterId', async (req: Request, res: Response): P
   const requestId = createRequestId()
 
   try {
-    const payload = await getReaderPayloadData(req.params.novelId, req.params.chapterId)
+    const payload = await getReaderPayloadData(req.params.novelId, req.params.chapterId, getSessionUserId(req))
     if (!payload) {
       res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节内容。'))
       return

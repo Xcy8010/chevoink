@@ -277,6 +277,7 @@ export interface Novel {
   commentCount: number
   favoriteCount: number
   likeCount: number
+  /** 读者数（UV 口径：一人一作品仅计一次，匿名阅读不计；历史数据已由 reading_progress 回填校准） */
   viewCount: number
   /** 作品评分：平均星级（1-5，保留一位小数）；没有评分时为 null */
   ratingAverage?: number | null
@@ -306,6 +307,7 @@ export interface NovelCard {
   chapterCount: number
   lastPublishedAt: string | null
   publishedAt?: string | null
+  /** 读者数（UV 口径，同 Novel.viewCount） */
   viewCount?: number
   likeCount?: number
   favoriteCount?: number

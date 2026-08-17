@@ -19,7 +19,7 @@ export type RankingBoardDef = {
 /** 完整榜单页的榜单目录（顺序即导航顺序） */
 export const RANKING_BOARDS: RankingBoardDef[] = [
   { id: 'hot', label: '热读榜', description: '互动热度加时间衰减，最近读者最上头的作品。' },
-  { id: 'popular', label: '人气榜', description: '累计阅读与收藏最高的作品。' },
+  { id: 'popular', label: '人气榜', description: '累计读者与收藏最多的作品。' },
   { id: 'new', label: '新书榜', description: '最新发布上架的作品，先人一步开坑。' },
   { id: 'update', label: '更新榜', description: '最近仍在稳定推进的作品，追更不断粮。' },
   { id: 'long', label: '长篇榜', description: '篇幅规模领先，适合长线追读的内容。' },

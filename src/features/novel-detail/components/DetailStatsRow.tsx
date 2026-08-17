@@ -32,7 +32,7 @@ export default function DetailStatsRow({ state, inverted = false }: DetailStatsR
   const items = [
     { icon: FileText, label: '字数', value: formatWordCount(actualWordCount) },
     { icon: Layers, label: '章节', value: formatNumber(actualChapterCount) },
-    { icon: BookOpen, label: '阅读', value: formatNumber(detail.novel.viewCount) },
+    { icon: BookOpen, label: '读者', value: formatNumber(detail.novel.viewCount) },
     { icon: Heart, label: '收藏', value: formatNumber(detail.novel.favoriteCount) },
     { icon: MessageSquare, label: '评论', value: formatNumber(detail.novel.commentCount) },
   ]

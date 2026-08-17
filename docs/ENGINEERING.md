@@ -121,10 +121,11 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 1.6 数据模型概览（prisma/schema.prisma）
 
-27 张表，按域划分：
+29 张表，按域划分：
 
 - **账号**：User、SmsVerificationCode、AdminAuditLog
-- **创作与阅读**：Novel、Chapter、CoverAsset、ReadingProgress、ParagraphUnderline、NovelFavorite
+- **创作与阅读**：Novel、Chapter、CoverAsset、ReadingProgress、NovelRead、ParagraphUnderline、NovelFavorite
+- **推荐**：RecommendationEvent
 - **社区互动**：Post、Topic、PostTopic、PostLike、PostBookmark、Comment、CommentLike、UserFollow
 - **私信**：Conversation、ConversationMember、Message
 - **Agent**：AgentSession、AgentRun、AgentMessage、AgentRunEvent、AgentArtifact、ProjectMemoryEntry、AiUsageLog
@@ -343,7 +344,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | `plan/04` | 三端适配与分阶段上线方案 | 已落地 |
 | `plan/06` | 本地测试与并行协作规范 | 执行规范 |
 | `plan/07` · `plan/08` | AI 配置安全与长上下文方案 · env 变量设计与密钥托管规范 | 已落地（env 清单见 [4.3](#43-环境变量体系envexample)） |
-| `plan/09` | 数据模型与接口契约初稿 | 已落地（演进至 27 表，见 [1.6](#16-数据模型概览prismaschemaprisma)） |
+| `plan/09` | 数据模型与接口契约初稿 | 已落地（演进至 29 表，见 [1.6](#16-数据模型概览prismaschemaprisma)） |
 | `plan/10` · `plan/11` | 写作 Agent 设计方案 · opencode Agent 高保真复刻专项 | 已落地（实现有演进，见 9.2） |
 | `plan/12` · `plan/16` | 前端 UI/UX 产品级优化 · 手机端创作区深度优化 | 已落地（布局方案有演进，见 9.2） |
 | `plan/13` | 创作区 Agent 深度重构与前端产品级优化 | 已落地（含后续 P3/P4 模块级拆分） |
@@ -399,7 +400,16 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 - **归因**：每次 for-you 响应返回 `sessionId`（randomUUID）与 `algorithmVersion`，曝光/点击/负反馈事件携带同会话键；
 - **客户端接入**：`src/features/discover/useForYouRecommendations.ts`——服务端为唯一排序来源，失败回退本地 `buildRecommendedNovels` 保证可用；曝光按 `sessionId+作品集合` 去重批量上报；`DiscoverPage` 卡片展示推荐理由、「不感兴趣」本地立即移除并上报 dismiss。
 
-### 10.3 验收自检（对照方案 §13）
+### 10.3 阅读数读者数口径（viewCount UV 化）
+
+对外「读者」指标由原始 PV（每次打开章节 +1）切换为 UV（一人一作品仅计一次），对齐微信读书/Wattpad 主流口径：
+
+- 去重表 `novel_reads`（迁移 `20260817140000_novel_reads_uv`），`@@unique([userId, novelId])`；登录用户首次加载已发布章节时事务内 `createMany skipDuplicates`，仅首次 +1；
+- 匿名阅读不计入读者数（登录态口径，书架/进度天然驱动登录转化）；草稿章不计；
+- 历史数据回填：`reading_progress` 中 `chapter_id` 非空（实际打开过章节，排除仅加书架）按 用户×作品 去重回填，`view_count` 以 `novel_reads` 计数重新校准；
+- 热度/榜单信号继续复用 `viewCount`（UV 天然防刷，权重不变）。
+
+### 10.4 验收自检（对照方案 §13）
 
 | 验收项 | 状态 |
 | --- | --- |

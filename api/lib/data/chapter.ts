@@ -65,7 +65,11 @@ export async function getStudioPayloadData(userId: string, novelId: string): Pro
 
 
 
-export async function getReaderPayloadData(novelId: string, chapterId: string): Promise<ReaderPayload | null> {
+export async function getReaderPayloadData(
+  novelId: string,
+  chapterId: string,
+  userId: string | null,
+): Promise<ReaderPayload | null> {
   const [novel, currentChapter, chapterRecords] = await prisma.$transaction([
     prisma.novel.findUnique({
       where: { id: novelId },
@@ -85,11 +89,20 @@ export async function getReaderPayloadData(novelId: string, chapterId: string): 
     return null
   }
 
-  // 阅读正文计入作品阅读量，作为热度榜的核心互动信号
-  if (currentChapter.status !== 'draft') {
-    await prisma.novel.update({
-      where: { id: novelId },
-      data: { viewCount: { increment: 1 } },
+  // 阅读数 UV 口径：登录用户首次阅读该作品写入 novel_reads 去重表并 +1，重读不累加；
+  // 匿名阅读不计入读者数（与微信读书登录态口径一致），草稿章不计。
+  if (currentChapter.status !== 'draft' && userId) {
+    await prisma.$transaction(async (tx) => {
+      const created = await tx.novelRead.createMany({
+        data: [{ userId, novelId }],
+        skipDuplicates: true,
+      })
+      if (created.count > 0) {
+        await tx.novel.update({
+          where: { id: novelId },
+          data: { viewCount: { increment: 1 } },
+        })
+      }
     })
   }
 

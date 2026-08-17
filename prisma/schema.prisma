@@ -198,6 +198,7 @@ model User {
   commentLikes            CommentLike[]
   novelFavorites          NovelFavorite[]
   readingProgress         ReadingProgress[]
+  novelReads              NovelRead[]
   paragraphUnderlines     ParagraphUnderline[]
   following               UserFollow[]         @relation("UserFollowFollower")
   followers               UserFollow[]         @relation("UserFollowFollowing")
@@ -263,6 +264,7 @@ model Novel {
   agentRuns       AgentRun[]
   projectMemoryEntries ProjectMemoryEntry[]
   readingProgress ReadingProgress[]
+  novelReads      NovelRead[]
   recommendationEvents RecommendationEvent[]
 
   @@index([authorId])
@@ -474,6 +476,21 @@ model ReadingProgress {
   @@unique([userId, novelId])
   @@index([userId])
   @@map("reading_progress")
+}
+
+// 读者去重表（阅读数 UV 化）：一人一作品仅一条，首次阅读写入后重读不累加；
+// viewCount 对外语义为「读者数」，与微信读书/Wattpad 的 UV 口径一致。
+model NovelRead {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  novelId   String   @map("novel_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel     Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, novelId])
+  @@index([novelId])
+  @@map("novel_reads")
 }
 
 // 阅读器段落划线（方案 20 §2.7）：段级划线，userId+chapterId+paragraphIndex 幂等唯一
