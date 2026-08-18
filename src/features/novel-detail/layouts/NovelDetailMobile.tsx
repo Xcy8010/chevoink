@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, PenLine } from 'lucide-react'
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import AppImage from '@/components/ui/AppImage'
 import Avatar from '@/features/community/components/Avatar'
@@ -18,6 +18,22 @@ type NovelDetailMobileProps = {
 export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
   const [coverPreviewOpen, setCoverPreviewOpen] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
+  // 返回防跌回阅读器：旧版历史栈可能把阅读器条目留在作品页前一条，
+  // 回退落地后若仍是阅读器路由则继续回退，直到离开阅读器段
+  const skipReaderRef = useRef(false)
+  useEffect(() => {
+    if (!skipReaderRef.current) return
+    skipReaderRef.current = false
+    if (!/^\/novel\/[^/]+\/read\//.test(location.pathname)) return
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    if (idx > 0) {
+      skipReaderRef.current = true
+      navigate(-1)
+    } else {
+      navigate('/', { replace: true })
+    }
+  }, [location, navigate])
   const {
     detail,
     detailTitle,
@@ -40,6 +56,7 @@ export default function NovelDetailMobile({ state }: NovelDetailMobileProps) {
   const handleBack = () => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
     if (idx > 0) {
+      skipReaderRef.current = true
       navigate(-1)
     } else {
       navigate('/')

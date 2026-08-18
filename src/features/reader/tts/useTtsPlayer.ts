@@ -33,6 +33,48 @@ const SILENT_WAV =
 /** 手动滚动后暂停自动跟随的时长 */
 const USER_SCROLL_HOLD_MS = 5000
 
+/** 听书会话快照（按作品存本机）：退出时是听书模式则重进阅读器默认恢复听书并续到上次位置 */
+type TtsSessionSnapshot = {
+  chapterId: string
+  paragraphIndex: number
+  charOffset: number
+  savedAt: number
+}
+
+const ttsSessionKey = (novelId: string) => `chevoink:tts-session:${novelId}`
+
+function readTtsSession(novelId: string | undefined, chapterId: string | undefined): TtsSessionSnapshot | null {
+  if (!novelId || !chapterId) return null
+  try {
+    const raw = window.localStorage.getItem(ttsSessionKey(novelId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as TtsSessionSnapshot
+    if (parsed.chapterId !== chapterId) return null
+    if (typeof parsed.paragraphIndex !== 'number' || parsed.paragraphIndex < 0) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeTtsSession(novelId: string, chapterId: string, paragraphIndex: number, charOffset: number) {
+  try {
+    const snapshot: TtsSessionSnapshot = { chapterId, paragraphIndex, charOffset, savedAt: Date.now() }
+    window.localStorage.setItem(ttsSessionKey(novelId), JSON.stringify(snapshot))
+  } catch {
+    // 隐私模式等存储不可用：静默放弃会话持久化
+  }
+}
+
+function clearTtsSession(novelId: string | undefined) {
+  if (!novelId) return
+  try {
+    window.localStorage.removeItem(ttsSessionKey(novelId))
+  } catch {
+    // 同上
+  }
+}
+
 /** 等音频元信息就绪（拿到 duration 才能 seek），超时即放弃 seek 从批首播 */
 function waitForMetadata(audio: HTMLAudioElement): Promise<void> {
   if (audio.readyState >= 1) return Promise.resolve()
@@ -121,6 +163,13 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const pendingAutoNextTargetRef = useRef<string | null>(null)
   /** 当前朗读段落内的字符位置（近似，按批内字数占比折算） */
   const charOffsetRef = useRef(0)
+  /** 听书位置快照（段落+段内字符），会话持久化数据源 */
+  const ttsPosRef = useRef({ paragraphIndex: 0, charOffset: 0 })
+  const lastPersistAtRef = useRef(0)
+  /** 浏览器拦截自动播放（无用户手势）时的续播位置：点一次播放从原位继续 */
+  const autoplayBlockRef = useRef<{ batchIndex: number; paragraphIndex: number; charOffset: number } | null>(null)
+  /** 进入阅读器待自动恢复的听书会话（同作品同章节、上次以听书模式退出） */
+  const autoResumeRef = useRef<TtsSessionSnapshot | null>(null)
   const userScrollUntilRef = useRef(0)
   const programmaticScrollUntilRef = useRef(0)
   const stateRef = useRef({
@@ -151,6 +200,14 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     currentBatchIndex,
     status,
   }
+
+  /** 落听书会话（作品+章节+段落位置）：播放/暂停/卸载时调用，供重进阅读器恢复 */
+  const persistSession = useCallback(() => {
+    const { novelId: novel, chapterId: chapter, status: currentStatus } = stateRef.current
+    if (fromStudio || !novel || !chapter) return
+    if (currentStatus !== 'playing' && currentStatus !== 'paused' && currentStatus !== 'loading') return
+    writeTtsSession(novel, chapter, ttsPosRef.current.paragraphIndex, ttsPosRef.current.charOffset)
+  }, [fromStudio])
 
   const blobKey = (chapter: string, voice: string, batchIndex: number) =>
     `${chapter}:${voice}:${batchIndex}`
@@ -251,6 +308,11 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
           }
         }
 
+        ttsPosRef.current =
+          typeof seekParagraph === 'number'
+            ? { paragraphIndex: seekParagraph, charOffset: typeof seekChar === 'number' ? seekChar : 0 }
+            : { paragraphIndex: batch?.paragraphStart ?? 0, charOffset: 0 }
+
         await audio.play()
         if (sessionRef.current !== session) return
 
@@ -262,6 +324,17 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
         }
       } catch (error) {
         if (sessionRef.current !== session) return
+        // 自动恢复听书时 play 无用户手势会被浏览器拦截：落暂停态记住位置，点一次播放从原位续
+        if (error instanceof DOMException && error.name === 'NotAllowedError') {
+          autoplayBlockRef.current = {
+            batchIndex,
+            paragraphIndex: typeof seekParagraph === 'number' ? seekParagraph : -1,
+            charOffset: typeof seekChar === 'number' ? seekChar : 0,
+          }
+          if (typeof seekParagraph === 'number') setActiveParagraphIndex(seekParagraph)
+          setStatus('paused')
+          return
+        }
         setStatus('error')
         setErrorMessage(error instanceof Error ? error.message : '听书暂时不可用，请稍后重试。')
       }
@@ -292,6 +365,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       setTimerOptionState('off')
       setStatus('ended')
       setActiveParagraphIndex(null)
+      clearTtsSession(stateRef.current.novelId)
       return
     }
 
@@ -304,6 +378,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
 
     setStatus('ended')
     setActiveParagraphIndex(null)
+    clearTtsSession(stateRef.current.novelId)
   }, [navigate])
 
   /**
@@ -336,8 +411,15 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       cumulative += share
     }
 
+    ttsPosRef.current = { paragraphIndex: target, charOffset: charOffsetRef.current }
+    // 节流落听书会话：重进阅读器可恢复听书模式与上次位置
+    if (Date.now() - lastPersistAtRef.current > 2000) {
+      lastPersistAtRef.current = Date.now()
+      persistSession()
+    }
+
     setActiveParagraphIndex((previous) => (previous === target ? previous : target))
-  }, [])
+  }, [persistSession])
 
   // 音频元素事件绑定（一次）
   useEffect(() => {
@@ -423,9 +505,22 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
   const pause = useCallback(() => {
     audioRef.current?.pause()
     setStatus((previous) => (previous === 'playing' ? 'paused' : previous))
-  }, [])
+    persistSession()
+  }, [persistSession])
 
   const resume = useCallback(() => {
+    // 自动播放被拦截的续播：用户点播放即手势，从记住的位置起播
+    const blocked = autoplayBlockRef.current
+    if (blocked) {
+      autoplayBlockRef.current = null
+      sessionRef.current += 1
+      void playBatchRef.current(
+        blocked.batchIndex,
+        blocked.paragraphIndex >= 0 ? blocked.paragraphIndex : undefined,
+        blocked.charOffset > 0 ? blocked.charOffset : undefined,
+      )
+      return
+    }
     const { status: currentStatus, currentBatchIndex: index } = stateRef.current
     if (currentStatus === 'paused' && audioRef.current?.src) {
       void audioRef.current.play().then(() => setStatus('playing')).catch((): undefined => undefined)
@@ -449,6 +544,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     sessionRef.current += 1
     pendingResumeRef.current = false
     pendingAutoNextTargetRef.current = null
+    clearTtsSession(stateRef.current.novelId)
     const audio = audioRef.current
     if (audio) {
       audio.pause()
@@ -536,10 +632,13 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     revokeAllBlobs()
     setActiveParagraphIndex(null)
     setCurrentBatchIndex(0)
+    autoplayBlockRef.current = null
+    ttsPosRef.current = { paragraphIndex: 0, charOffset: 0 }
+    autoResumeRef.current = fromStudio ? null : readTtsSession(novelId, chapterId)
     if (!pendingResumeRef.current) {
       setStatus((previous) => (previous === 'idle' ? previous : 'idle'))
     }
-  }, [chapterId, revokeAllBlobs])
+  }, [chapterId, revokeAllBlobs, fromStudio, novelId])
 
   useEffect(() => {
     if (pendingResumeRef.current && batches.length > 0) {
@@ -548,6 +647,25 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       void playBatchRef.current(0)
     }
   }, [chapterId, batches])
+
+  // 听书会话自动恢复：上次以听书模式退出且重进同一章节，批次+音色就绪后从上次位置起播；
+  // 无手势被浏览器拦截时落暂停态（迷你栏可见），点一次播放从原位续
+  useEffect(() => {
+    const target = autoResumeRef.current
+    if (!target || fromStudio || batches.length === 0 || !voiceId) return
+    if (stateRef.current.status !== 'idle') return
+    autoResumeRef.current = null
+    sessionRef.current += 1
+    const paragraphIndex = Math.min(target.paragraphIndex, paragraphs.length - 1)
+    const matched = batches.find(
+      (batch) => paragraphIndex >= batch.paragraphStart && paragraphIndex <= batch.paragraphEnd,
+    )
+    void playBatchRef.current(
+      matched ? matched.index : 0,
+      matched ? paragraphIndex : 0,
+      target.charOffset > 0 ? target.charOffset : undefined,
+    )
+  }, [batches, voiceId, fromStudio, paragraphs])
 
   // 手动滚动 5s 内暂停自动跟随（程序化滚动通过时间窗标记区分）
   useEffect(() => {
@@ -618,9 +736,10 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
     }
   }, [status, chapterTitle, novelTitle, coverUrl, resume, pause, jumpBatch])
 
-  // 卸载清理：停止播放、释放 objectURL
+  // 卸载清理：停止播放、释放 objectURL；听书态退出先落会话供重进恢复
   useEffect(() => {
     return () => {
+      persistSession()
       sessionRef.current += 1
       const audio = audioRef.current
       if (audio) {
@@ -636,7 +755,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
         navigator.mediaSession.metadata = null
       }
     }
-  }, [])
+  }, [persistSession])
 
   const timerRemainingMinutes = timerDeadline
     ? Math.max(1, Math.ceil((timerDeadline - Date.now()) / 60_000))
