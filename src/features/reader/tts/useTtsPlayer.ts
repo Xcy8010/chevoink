@@ -259,7 +259,12 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
    * seekChar 进一步细化到段内字符位置（分页续块起播，避免回读上一页）。
    */
   const playBatch = useCallback(
-    async (batchIndex: number, seekParagraph?: number, seekChar?: number) => {
+    async (
+      batchIndex: number,
+      seekParagraph?: number,
+      seekChar?: number,
+      options?: { startPaused?: boolean },
+    ) => {
       const session = sessionRef.current
       const audio = getAudio()
 
@@ -312,6 +317,12 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
           typeof seekParagraph === 'number'
             ? { paragraphIndex: seekParagraph, charOffset: typeof seekChar === 'number' ? seekChar : 0 }
             : { paragraphIndex: batch?.paragraphStart ?? 0, charOffset: 0 }
+
+        // 听书会话自动恢复：只恢复位置落暂停态，不自动出声；用户点一次播放从原位续
+        if (options?.startPaused) {
+          setStatus('paused')
+          return
+        }
 
         await audio.play()
         if (sessionRef.current !== session) return
@@ -664,6 +675,7 @@ export function useTtsPlayer(args: UseTtsPlayerArgs) {
       matched ? matched.index : 0,
       matched ? paragraphIndex : 0,
       target.charOffset > 0 ? target.charOffset : undefined,
+      { startPaused: true },
     )
   }, [batches, voiceId, fromStudio, paragraphs])
 

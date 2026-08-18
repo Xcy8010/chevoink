@@ -403,7 +403,9 @@ export function useNovelDetailState() {
       return
     }
 
-    startReading(detail.novel.id)
+    // 带上作品页历史 idx 标记：阅读器左上角退出时精确回退到本作品页条目
+    const fromDetailIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    startReading(detail.novel.id, { fromDetailIdx })
   }
 
   /** 继续阅读：优先回到本地进度章节 */
@@ -413,7 +415,8 @@ export function useNovelDetailState() {
     }
 
     if (readingProgress && publishedChapters.some((chapter) => chapter.id === readingProgress.chapterId)) {
-      navigate(`/novel/${detail.novel.id}/read/${readingProgress.chapterId}`)
+      const fromDetailIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+      navigate(`/novel/${detail.novel.id}/read/${readingProgress.chapterId}`, { state: { fromDetailIdx } })
       return
     }
 

@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import {
   asArray,
@@ -247,17 +247,20 @@ export function useReaderState() {
   const backHref = reader ? (fromStudio && returnTo ? returnTo : `/novel/${reader.novel.id}`) : '/discover'
   const backLabel = fromStudio ? '返回创作区' : '返回详情'
 
-  // 退出阅读器：回退「阅读器自身 + 器内翻章」push 的全部历史步数，落回进入阅读器前的页面；
-  // 避免 push 作品页导致作品页「返回」又跌回阅读器。深链无站内历史时 replace 成作品页起点。
+  // 退出阅读器：
+  // - 从作品页进入（入口携带作品页历史 idx 标记）：回退「阅读器自身+器内翻章」步数，精确落回该作品页条目；
+  // - 直达入口（首页继续阅读/深链/创作区）：把阅读器条目 replace 成目标页，
+  //   作品页即当前页，其左上角返回回进入前页面，不会跌回阅读器。
   const navigate = useNavigate()
-  const readerMountIdxRef = useRef<number>(
-    (window.history.state as { idx?: number } | null)?.idx ?? 0,
+  const location = useLocation()
+  const entryDetailIdxRef = useRef<number | null>(
+    (location.state as { fromDetailIdx?: number } | null)?.fromDetailIdx ?? null,
   )
   const exitReader = () => {
-    const mountIdx = readerMountIdxRef.current
-    if (mountIdx > 0) {
-      const currentIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-      navigate(-(currentIdx - mountIdx + 1))
+    const currentIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    const detailIdx = entryDetailIdxRef.current
+    if (detailIdx !== null && currentIdx > detailIdx) {
+      navigate(-(currentIdx - detailIdx))
     } else {
       navigate(backHref, { replace: true })
     }

@@ -9,7 +9,8 @@ export function useStartReading() {
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
-    mutationFn: async (novelId: string) => {
+    mutationFn: async (vars: { novelId: string; navState?: { fromDetailIdx: number } }) => {
+      const { novelId } = vars
       const detail = await queryClient.ensureQueryData({
         queryKey: ['novel-detail', novelId],
         queryFn: () => getNovelDetailPayload(novelId),
@@ -25,11 +26,12 @@ export function useStartReading() {
       return {
         novelId,
         chapterId: progressChapter?.id ?? findFirstReadableChapterId(chapters),
+        navState: vars.navState,
       }
     },
-    onSuccess: ({ novelId, chapterId }) => {
+    onSuccess: ({ novelId, chapterId, navState }) => {
       if (chapterId) {
-        navigate(`/novel/${novelId}/read/${chapterId}`)
+        navigate(`/novel/${novelId}/read/${chapterId}`, navState ? { state: navState } : undefined)
         return
       }
 
@@ -38,8 +40,8 @@ export function useStartReading() {
   })
 
   return {
-    startReading: mutation.mutate,
+    startReading: (novelId: string, navState?: { fromDetailIdx: number }) => mutation.mutate({ novelId, navState }),
     isStarting: mutation.isPending,
-    pendingNovelId: mutation.variables ?? null,
+    pendingNovelId: mutation.variables?.novelId ?? null,
   }
 }
