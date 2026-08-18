@@ -10,7 +10,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import BottomSheet from '@/components/layout/BottomSheet'
 import { useDevice } from '@/components/layout/device-context'
@@ -176,13 +176,14 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
         <div className="flex min-w-0 flex-1 flex-col">
           <ReaderProgressBar percent={state.progressPercent} />
           <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
-            <Link
-              to={state.backHref}
+            <button
+              type="button"
+              onClick={state.exitReader}
               className="touch-target inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)] press-feedback"
               aria-label={state.backLabel}
             >
               <ChevronLeft className="h-5 w-5" />
-            </Link>
+            </button>
             <div className="min-w-0 flex-1 text-[var(--text-primary)]">
               <p className="truncate text-sm font-medium">{state.novelTitle}</p>
               <p className="truncate text-xs text-[var(--text-tertiary)]">{state.chapterTitle}</p>
@@ -254,13 +255,14 @@ export default function ReaderTablet({ state }: ReaderTabletProps) {
     >
       <ReaderProgressBar percent={state.progressPercent} />
       <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
-        <Link
-          to={state.backHref}
+        <button
+          type="button"
+          onClick={state.exitReader}
           className="touch-target inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)] press-feedback"
           aria-label={state.backLabel}
         >
           <ChevronLeft className="h-5 w-5" />
-        </Link>
+        </button>
         <div className="min-w-0 flex-1 text-[var(--text-primary)]">
           <p className="truncate text-sm font-medium">{state.novelTitle}</p>
           <p className="truncate text-xs text-[var(--text-tertiary)]">{state.chapterTitle}</p>

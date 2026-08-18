@@ -552,7 +552,7 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
       setShelfDialogOpen(true)
       return
     }
-    navigate(state.backHref)
+    state.exitReader()
   }
 
   const handleShelfConfirm = () => {
@@ -566,13 +566,13 @@ export default function ReaderMobile({ state }: ReaderMobileProps) {
     pushShelfAdd(state.novelId, state.novelTitle, state.reader?.novel.coverUrl ?? null)
     toast.success('已加入书架')
     setShelfDialogOpen(false)
-    window.setTimeout(() => navigate(state.backHref), 300)
+    window.setTimeout(() => state.exitReader(), 300)
   }
 
   const handleShelfDismiss = () => {
     if (state.novelId) markShelfPrompted(state.novelId)
     setShelfDialogOpen(false)
-    navigate(state.backHref)
+    state.exitReader()
   }
 
   const handleLongPressParagraph = useCallback((paragraphIndex: number, rect: DOMRect) => {

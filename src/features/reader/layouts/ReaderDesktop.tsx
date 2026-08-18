@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
 import ReaderArticle from '../components/ReaderArticle'
@@ -200,13 +200,14 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
 
       {/* 顶部工具栏 */}
       <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
-        <Link
-          to={state.backHref}
+        <button
+          type="button"
+          onClick={state.exitReader}
           className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[var(--radius-pill)] px-3 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] press-feedback"
         >
           <ChevronLeft className="h-4 w-4" />
           {state.backLabel}
-        </Link>
+        </button>
         <div className="min-w-0 flex-1 text-center text-[var(--text-primary)]">
           <p className="truncate text-sm font-medium">
             {state.novelTitle}

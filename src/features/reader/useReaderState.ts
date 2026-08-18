@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import {
   asArray,
@@ -246,6 +246,22 @@ export function useReaderState() {
 
   const backHref = reader ? (fromStudio && returnTo ? returnTo : `/novel/${reader.novel.id}`) : '/discover'
   const backLabel = fromStudio ? '返回创作区' : '返回详情'
+
+  // 退出阅读器：回退「阅读器自身 + 器内翻章」push 的全部历史步数，落回进入阅读器前的页面；
+  // 避免 push 作品页导致作品页「返回」又跌回阅读器。深链无站内历史时 replace 成作品页起点。
+  const navigate = useNavigate()
+  const readerMountIdxRef = useRef<number>(
+    (window.history.state as { idx?: number } | null)?.idx ?? 0,
+  )
+  const exitReader = () => {
+    const mountIdx = readerMountIdxRef.current
+    if (mountIdx > 0) {
+      const currentIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+      navigate(-(currentIdx - mountIdx + 1))
+    } else {
+      navigate(backHref, { replace: true })
+    }
+  }
 
   /** 打开/关闭面板；离开评论面板时重置段评筛选，下次从底栏进入默认看章评总合 */
   const setActivePanel = (panel: ReaderPanelId) => {
@@ -496,6 +512,7 @@ export function useReaderState() {
     },
     backHref,
     backLabel,
+    exitReader,
     buildReadHref,
     previousHref,
     nextHref,
