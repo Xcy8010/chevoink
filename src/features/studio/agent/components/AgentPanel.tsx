@@ -881,7 +881,9 @@ export function AgentPanel({
               const block = blockInfoById.get(message.id)
               const isBlockFirst = block?.firstId === message.id
               const blockExpanded = block ? !!expandedBlocks[block.firstId] : false
-              const blockCollapsed = !active && !blockExpanded
+              // 仅当前 run 的消息视为活跃：新任务开始时历史块保持折叠，不会被全局 active 连带展开
+              const messageRunActive = active && message.runId === runId
+              const blockCollapsed = !messageRunActive && !blockExpanded
               const hasTextPart = message.parts.some((part) => part.type === 'text')
               // 折叠态下块内非首条且无文本的消息不贡献任何内容，不渲染空壳（避免 flex gap 多出空隙）
               if (blockCollapsed && !isBlockFirst && !hasTextPart) {
@@ -896,8 +898,8 @@ export function AgentPanel({
                 >
                   <AgentMessageParts
                     parts={message.parts}
-                    streaming={active && message.id === lastAssistantId}
-                    runActive={active}
+                    streaming={messageRunActive && message.id === lastAssistantId}
+                    runActive={messageRunActive}
                     blockId={block?.firstId}
                     summaryCount={isBlockFirst ? block?.ops : undefined}
                     summaryExpanded={blockExpanded}
