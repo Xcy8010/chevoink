@@ -108,7 +108,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | --- | --- | --- |
 | 读（5） | novelGetContext · chapterRead · chapterListSummaries · memorySearch · planRead | 作品上下文、章节内容、跨会话记忆、计划工件 |
 | 调研（2） | webSearch · webRead | 博查为主的多级降级搜索；网页深读带 SSRF 防护 |
-| 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层 |
+| 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名/标签/题材关键词定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层；类似作品走特征词检索+简介对比，站内无果降级联网搜索 |
 | 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
 | 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | 冲突检测 + 409 语义 + 回滚快照 |
 | 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |

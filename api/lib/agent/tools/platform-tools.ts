@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 
-import { searchableNovelWhere } from '../../data/search.js'
+import { novelKeywordOr, searchableNovelWhere } from '../../data/search.js'
 import { prisma } from '../../prisma.js'
 import {
   consumePlatformReadBudget,
@@ -45,14 +45,14 @@ const platformNovelSearchParameters = z.object({
     .string()
     .min(1)
     .max(60)
-    .describe('书名关键词（作品标题中的词，不是题材/情节描述）'),
+    .describe('书名或标签/题材关键词（定位特定作品传书名中的词；找类似/同类作品传标签或题材特征词，如「仙侠」「悬疑」，禁止把书名逐字拆分穷举搜索）'),
 })
 
 export const platformNovelSearchTool = defineTool({
   name: 'platform_novel_search',
   title: '搜索站内作品',
   description:
-    '按书名在启创墨域站内定位作品：返回站内已上架作品（任何作者）与作者本人未公开的作品（含草稿），含 novelId/作者/状态/字数/标签。只知道书名想查看某作品时先用本工具定位，再用 platform_novel_read 传 novelId 深读。当前作品自身内容用 novel_get_context/chapter_read，不要用本工具。一次任务最多搜索 5 次。',
+    '按书名或标签/题材关键词在启创墨域站内定位作品：返回站内已上架作品（任何作者）与作者本人未公开的作品（含草稿），含 novelId/作者/状态/字数/标签。只知道书名想查看某作品时先用本工具定位，再用 platform_novel_read 传 novelId 深读；找类似/同类作品时先用 platform_novel_read 读参考作品的标签/分类/简介提炼特征词，再用特征词搜索并对比候选的标签与简介判断相似度，严禁把参考作品书名逐字拆分穷举搜索；站内没有合适候选时用 web_search 搜站外类似作品推荐。当前作品自身内容用 novel_get_context/chapter_read，不要用本工具。一次任务最多搜索 5 次。',
   parameters: platformNovelSearchParameters,
   permission: READ_PERMISSION,
   readOnly: true,
@@ -65,15 +65,13 @@ export const platformNovelSearchTool = defineTool({
       }
     }
 
-    const titleOr: Prisma.NovelWhereInput['OR'] = [
-      { title: { contains: args.query, mode: 'insensitive' } },
-      { displayTitle: { contains: args.query, mode: 'insensitive' } },
-    ]
+    // 关键词匹配 OR 组（书名模糊 + 标签精确/部分匹配扩展），与全站搜索共用口径
+    const keywordOr = novelKeywordOr(args.query)
 
     // 两路查询：① 本人作品任意状态；② 平台已上架池（与发现页口径一致）
     const [ownNovels, publicNovels] = await Promise.all([
       prisma.novel.findMany({
-        where: { authorId: ctx.userId, OR: titleOr },
+        where: { authorId: ctx.userId, OR: keywordOr },
         orderBy: { updatedAt: 'desc' },
         take: 5,
         select: {
@@ -88,7 +86,7 @@ export const platformNovelSearchTool = defineTool({
         },
       }),
       prisma.novel.findMany({
-        where: { ...searchableNovelWhere, OR: titleOr },
+        where: { ...searchableNovelWhere, OR: keywordOr },
         orderBy: [{ viewCount: 'desc' }, { favoriteCount: 'desc' }, { lastPublishedAt: 'desc' }],
         take: 8,
         select: {
@@ -116,7 +114,7 @@ export const platformNovelSearchTool = defineTool({
 
     if (results.length === 0) {
       return {
-        output: `站内搜索「${args.query}」没有找到匹配的作品。请核对书名关键词后重试，或基于既有知识继续。`,
+        output: `站内搜索「${args.query}」没有找到匹配的作品。可换标签/题材特征词重试，或用 web_search 搜站外类似作品。`,
         summary: `已搜索作品「${args.query}」· 0 个结果`,
         display: { kind: 'platformNovelSearch', query: args.query, results: [] },
       }

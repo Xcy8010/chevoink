@@ -22,17 +22,23 @@ export const searchableNovelWhere = {
 
 
 
-function buildNovelKeywordWhere(keyword: string): Prisma.NovelWhereInput {
-  // 标签支持部分匹配：搜“言情”也能命中打了“古代言情”“现代言情”标签的作品
+/** 关键词匹配 OR 组：书名模糊 + 标签精确/部分匹配扩展（全站搜索与 Agent 站内搜索共用口径） */
+export function novelKeywordOr(keyword: string): Prisma.NovelWhereInput[] {
   const matchedTags = ALL_NOVEL_TAGS.filter((tag) => tag.includes(keyword))
 
+  return [
+    { title: { contains: keyword, mode: 'insensitive' } },
+    { displayTitle: { contains: keyword, mode: 'insensitive' } },
+    { tagNames: { has: keyword } },
+    ...(matchedTags.length > 0 ? [{ tagNames: { hasSome: matchedTags } }] : []),
+  ]
+}
+
+function buildNovelKeywordWhere(keyword: string): Prisma.NovelWhereInput {
   return {
     ...searchableNovelWhere,
     OR: [
-      { title: { contains: keyword, mode: 'insensitive' } },
-      { displayTitle: { contains: keyword, mode: 'insensitive' } },
-      { tagNames: { has: keyword } },
-      ...(matchedTags.length > 0 ? [{ tagNames: { hasSome: matchedTags } }] : []),
+      ...novelKeywordOr(keyword),
       // 搜作者名也能带出他的作品
       { author: { nickname: { contains: keyword, mode: 'insensitive' } } },
     ],
