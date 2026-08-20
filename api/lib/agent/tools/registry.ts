@@ -20,6 +20,7 @@ import {
   novelRenameTool,
   novelUpdateMetaTool,
 } from './novel-tools.js'
+import { platformNovelReadTool, platformNovelSearchTool } from './platform-tools.js'
 import {
   chapterListSummariesTool,
   chapterReadTool,
@@ -42,6 +43,8 @@ export const allTools: AgentTool<any>[] = [
   planReadTool,
   webSearchTool,
   webReadTool,
+  platformNovelSearchTool,
+  platformNovelReadTool,
   viewImageTool,
   readFileTool,
   // 写

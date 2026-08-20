@@ -131,6 +131,22 @@ const openingPlanningSkill: AgentSkill = {
 }
 
 /** 优先级从高到低：意图越具体越靠前；去AI味先于修订润色（两者都可能含「润色/改写」） */
+const platformReferenceSkill: AgentSkill = {
+  name: '站内作品参考',
+  trigger: {
+    modes: ['plan', 'build'],
+    pattern: /(查看|参考|借鉴|学习|二创).{0,12}(作品|书|《)|(二创|同人).{0,8}(修改|写|序章)/,
+  },
+  prompt: `本次任务命中「站内作品参考」工作流，严格按以下步骤执行：
+1. 定位：platform_novel_search 按书名定位，确认 novelId（作者未指明具体作品时合并一次 ask_user 确认）。
+2. 读作品：platform_novel_read 读简介、标签与章节列表；再选首章或作者指定的章节读 1-2 个相关章节正文（超 6000 字用 offset 分段）。
+3. 参考执行：提炼风格、结构、开篇钩子等可参考要素，再用既有工具执行当前写作任务；二创/改写成果用 chapter 工具写入当前作品，正文禁止贴在回复里。
+4. 收尾：不超过 2 句话汇报参考了哪部作品与完成情况。
+铁律：参考他人作品仅限已上架内容；二创/写序章必须先读参考作品的简介与相关章节再动笔，禁止盲写。
+自查清单：是否真的读了参考作品的简介与相关章节？参考是否落在作者指定的点上（风格/结构/情节）？收尾是否注明参考作品？`,
+}
+
+/** Skill 优先级数组（matchSkill 按此顺序取首个命中） */
 const skills: AgentSkill[] = [
   chapterPlanningSkill,
   deAiFlavorSkill,
@@ -138,6 +154,7 @@ const skills: AgentSkill[] = [
   characterDesignSkill,
   worldbuildingSkill,
   openingPlanningSkill,
+  platformReferenceSkill,
   chapterWritingSkill,
   consistencyReviewSkill,
 ]

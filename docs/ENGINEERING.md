@@ -49,7 +49,7 @@
                            │  ├── data/      数据访问层           │
                            │  ├── agent/     写作 Agent 引擎      │
                            │  │   loop 调度内核 + run-service +   │
-                           │  │   29 个工具 + 权限守卫 + 知识集    │
+                           │  │   31 个工具 + 权限守卫 + 知识集    │
                            │  └── auth-session / 限流 / 审计      │
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
@@ -78,8 +78,8 @@
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
   - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
-  - `tools/`：29 个注册工具（清单见 [1.5](#15-agent-工具清单29-个)），按依赖拆分为 chapter/novel/write/read/cover/search/interact/todo/attachment 九组文件；
-  - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次每 run）；
+  - `tools/`：31 个注册工具（清单见 [1.5](#15-agent-工具清单31-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment 十组文件；
+  - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次 / 站内搜索 5 次 / 站内深读 8 次每 run）；
   - `knowledge/` + `skills/`：写作知识与操作知识集（对应 `plan/14` 幻觉治理方案）。
 
 ### 1.4 Agent SSE 事件协议（shared/contracts/agent-events.ts）
@@ -102,12 +102,13 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 前端消息分部模型 `AgentMessagePart`（text / reasoning / tool-call / attachment）由上述事件构建，写操作工具额外携带回滚快照（仅服务端持久化，消息列表接口返回前剥离），支撑「对话内一键回退」。
 
-### 1.5 Agent 工具清单（29 个）
+### 1.5 Agent 工具清单（31 个）
 
 | 分组 | 工具 | 说明 |
 | --- | --- | --- |
 | 读（5） | novelGetContext · chapterRead · chapterListSummaries · memorySearch · planRead | 作品上下文、章节内容、跨会话记忆、计划工件 |
 | 调研（2） | webSearch · webRead | 博查为主的多级降级搜索；网页深读带 SSRF 防护 |
+| 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层 |
 | 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
 | 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | 冲突检测 + 409 语义 + 回滚快照 |
 | 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |
@@ -276,7 +277,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 鉴权边界 | 所有写端点 401 优先于 400（未登录先拒，不泄露校验细节）；zod 校验统一文案 |
 | 限流 | 短信发码 IP 双窗口（小时/天）；admin 登录 IP+账号双键失败锁定；TTS 合成同 IP 每分钟 20 次；限流 Map 超上限清空防无界增长 |
 | 密钥 | 全部经 `.env` 注入（模板 `.env.example`）；`.env`、证书、密钥库均被 `.gitignore` 排除（`plan/08`） |
-| Agent | 工具权限分级（读/写/危险）；每 run 预算封顶（ask_user 3、联网搜索 5、网页深读 8）；AiUsageLog 全量记录 token 消耗；AdminAuditLog 记录后台高危操作 |
+| Agent | 工具权限分级（读/写/危险）；每 run 预算封顶（ask_user 3、联网搜索 5、网页深读 8、站内搜索 5、站内深读 8）；AiUsageLog 全量记录 token 消耗；AdminAuditLog 记录后台高危操作 |
 | 依赖 | CI 与部署双闸门 `npm audit --omit=dev --audit-level=high`；当前 **0 漏洞** |
 
 ### 6.2 明确的风险取舍（书面记录）

@@ -62,6 +62,32 @@ export type AgentToolDisplayPayload =
       provider: string
       results: Array<{ title: string; url: string; snippet: string; source: string }>
     }
+  | {
+      /** 站内作品搜索：已上架他作 + 本人未公开作品（isOwn 标记），供 platform_novel_read 深读定位 */
+      kind: 'platformNovelSearch'
+      query: string
+      results: Array<{
+        id: string
+        title: string
+        authorName: string
+        isOwn: boolean
+        published: boolean
+        wordCount: number
+      }>
+    }
+  | {
+      /** 站内作品查看：介绍/分类/标签/章节元信息（含本人未公开作品） */
+      kind: 'platformNovel'
+      title: string
+      authorName: string
+      isOwn: boolean
+      published: boolean
+      tags: string[]
+      summary: string
+      chapterCount: number
+      wordCount: number
+      chapterTitle?: string
+    }
 
 /** 工具调用的回滚快照（写操作自动记录） */
 export interface AgentRollbackSnapshot {

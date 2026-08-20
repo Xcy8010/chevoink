@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BookOpenText,
   Brain,
   Check,
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   CircleAlert,
   Eye,
   FileText,
+  Library,
   LoaderCircle,
   Search,
   ShieldX,
@@ -264,6 +266,103 @@ function WebSearchCard({
   )
 }
 
+/** 站内作品搜索结果卡片：折叠行 = 已搜索作品「query」· n 个结果，展开为书名+作者+状态徽标列表 */
+function PlatformNovelSearchCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'platformNovelSearch' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <Library className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+          已搜索作品 「{display.query}」
+          {display.results.length > 0 ? ` · ${display.results.length} 个结果` : ''}
+        </span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        )}
+      </button>
+      {expanded && display.results.length > 0 ? (
+        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] px-1 py-1">
+          {display.results.map((result, index) => (
+            <li
+              key={result.id || index}
+              className="flex items-center gap-2 rounded-[8px] px-2 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+                《{result.title}》 · {result.authorName}
+              </span>
+              <span className="shrink-0 text-[10px] text-[var(--text-secondary)]">
+                {result.published ? '已上架' : result.isOwn ? '我的·未公开' : '已下架'}
+              </span>
+              <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">
+                {result.wordCount} 字
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+/** 站内作品查看卡片：折叠行 = 已查看作品《title》· 作者 · n 章，展开为状态/标签/简介元信息 */
+function PlatformNovelCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'platformNovel' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <BookOpenText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+          已查看作品 《{display.title}》 · {display.authorName} · {display.chapterCount} 章
+        </span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+          <p className="text-[11px] text-[var(--text-secondary)]">
+            {display.published ? '已上架' : display.isOwn ? '我的·未公开' : '已下架'}
+            {display.chapterTitle ? ` · 本章：《${display.chapterTitle}》` : ''}
+          </p>
+          {display.tags.length > 0 ? (
+            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+              标签：{display.tags.join('、')}
+            </p>
+          ) : null}
+          {display.summary.trim() ? (
+            <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-6 text-[var(--text-primary)]">
+              {display.summary}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** 视觉旁路查看图片卡片：折叠行「已查看图片 · n 张」，展开为缩略图行（点击放大）+ 视觉模型描述 */
 function ViewedImageCard({
   display,
@@ -386,6 +485,10 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       return <CoverImagesCard display={display} />
     case 'webSearch':
       return <WebSearchCard display={display} />
+    case 'platformNovelSearch':
+      return <PlatformNovelSearchCard display={display} />
+    case 'platformNovel':
+      return <PlatformNovelCard display={display} />
     case 'viewedImage':
       return <ViewedImageCard display={display} />
     case 'markdown':
@@ -482,14 +585,22 @@ const ToolCallCard = memo(function ToolCallCard({
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   const webSearchQuery =
     part.toolName === 'web_search' && typeof argsRecord?.query === 'string' ? argsRecord.query : ''
+  const platformSearchQuery =
+    part.toolName === 'platform_novel_search' && typeof argsRecord?.query === 'string'
+      ? argsRecord.query
+      : ''
   const runningLabel =
     running && webSearchQuery
       ? `正在搜索「${webSearchQuery}」…`
-      : running
-        ? part.progressChars
-          ? `已生成 ${part.progressChars} 字 · 执行中…`
-          : '执行中…'
-        : ''
+      : running && platformSearchQuery
+        ? `正在搜索作品「${platformSearchQuery}」…`
+        : running && part.toolName === 'platform_novel_read'
+          ? '查看作品中…'
+          : running
+            ? part.progressChars
+              ? `已生成 ${part.progressChars} 字 · 执行中…`
+              : '执行中…'
+            : ''
 
   return (
     <div

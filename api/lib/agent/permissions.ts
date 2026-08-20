@@ -199,6 +199,9 @@ export function cancelAllQuestions(runId: string) {
   webSearchCountByRun.delete(runId)
   webReadCountByRun.delete(runId)
   webSearchCacheByRun.delete(runId)
+  platformSearchCountByRun.delete(runId)
+  platformReadCountByRun.delete(runId)
+  platformReadCacheByRun.delete(runId)
 
   if (!pending) {
     return
@@ -290,4 +293,66 @@ export function consumeWebReadBudget(runId: string): boolean {
 
   webReadCountByRun.set(runId, used + 1)
   return true
+}
+
+// ---------------------------------------------------------------------------
+// 站内作品搜索预算：每个 run 最多搜索 5 次，防止循环滥用拖慢任务
+// ---------------------------------------------------------------------------
+
+export const PLATFORM_SEARCH_BUDGET_PER_RUN = 5
+
+const platformSearchCountByRun = new Map<string, number>()
+
+/** 尝试消耗一次站内作品搜索额度：返回是否允许本次搜索 */
+export function consumePlatformSearchBudget(runId: string): boolean {
+  const used = platformSearchCountByRun.get(runId) ?? 0
+
+  if (used >= PLATFORM_SEARCH_BUDGET_PER_RUN) {
+    return false
+  }
+
+  platformSearchCountByRun.set(runId, used + 1)
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 站内作品深读预算：每个 run 最多读取 8 次，配合 platform_novel_search 使用
+// ---------------------------------------------------------------------------
+
+export const PLATFORM_READ_BUDGET_PER_RUN = 8
+
+const platformReadCountByRun = new Map<string, number>()
+
+/** 尝试消耗一次站内作品深读额度：返回是否允许本次读取 */
+export function consumePlatformReadBudget(runId: string): boolean {
+  const used = platformReadCountByRun.get(runId) ?? 0
+
+  if (used >= PLATFORM_READ_BUDGET_PER_RUN) {
+    return false
+  }
+
+  platformReadCountByRun.set(runId, used + 1)
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 站内作品深读去重缓存：同一 run 内相同 novelId/chapterId/offset/limit 命中
+// 缓存时直接返回，不扣深读预算
+// ---------------------------------------------------------------------------
+
+const platformReadCacheByRun = new Map<string, Map<string, unknown>>()
+
+export function getCachedPlatformRead(runId: string, cacheKey: string): unknown | undefined {
+  return platformReadCacheByRun.get(runId)?.get(cacheKey)
+}
+
+export function setCachedPlatformRead(runId: string, cacheKey: string, outcome: unknown): void {
+  let cache = platformReadCacheByRun.get(runId)
+
+  if (!cache) {
+    cache = new Map()
+    platformReadCacheByRun.set(runId, cache)
+  }
+
+  cache.set(cacheKey, outcome)
 }
