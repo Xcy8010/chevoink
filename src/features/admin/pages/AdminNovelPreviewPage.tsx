@@ -80,7 +80,9 @@ export default function AdminNovelPreviewPage() {
                     {takenDown ? (
                       <StatusPill tone="danger">已下架</StatusPill>
                     ) : (
-                      <StatusPill tone="success">{NOVEL_STATUS_LABELS[novel.status] ?? novel.status}</StatusPill>
+                      <StatusPill tone={novel.status === 'published' || novel.status === 'completed' ? 'success' : 'neutral'}>
+                        {NOVEL_STATUS_LABELS[novel.status] ?? novel.status}
+                      </StatusPill>
                     )}
                   </div>
                   <p className="mt-1 text-sm text-[var(--text-secondary)]">

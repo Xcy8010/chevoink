@@ -65,6 +65,8 @@ export const NOVEL_STATUS_LABELS: Record<string, string> = {
   archived: '已归档',
 }
 
+/** 下架唯一信号是 status==='archived'（管理端下架与作者归档共同写入）；
+ * visibility==='private' 仅代表仅自己可见，草稿默认即私有，不能判为已下架 */
 export function isNovelTakenDown(novel: AdminNovelRow): boolean {
-  return novel.visibility === 'private' || novel.status === 'archived'
+  return novel.status === 'archived'
 }

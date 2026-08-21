@@ -1,4 +1,4 @@
-# 启创墨域 Chevoink
+# <img src="public/favicon.png" alt="启创墨域" width="40" height="40"> 启创墨域 Chevoink
 
 这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台：读者可以在书城发现、追更、听书，作者可以在创作区与写作 Agent 协作产出章节（Agent 支持图片/文件附件、视觉看图、参考资料读取、联网搜索调研与站内作品参考），社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
 
