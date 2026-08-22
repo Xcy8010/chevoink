@@ -145,10 +145,10 @@ html.keyboard-open .app-messages-main {
   padding-bottom: 12px;
 }
 
-/* 帖子详情手机端评论栏：键盘收起时 sticky 悬浮在底部导航上方；
-   键盘打开时底栏隐藏，评论栏贴住滚动容器底，随容器收缩顶到键盘上方 */
+/* 帖子详情手机端评论栏：底部固定导航已隐藏，键盘收起时贴住屏幕底（占位即隐藏底栏的位置）；
+   键盘打开时底栏隐藏，评论栏随容器收缩顶到键盘上方 */
 .post-composer-bar {
-  bottom: calc(72px + var(--safe-bottom));
+  bottom: 0;
 }
 html.keyboard-open .post-composer-bar {
   bottom: 0;

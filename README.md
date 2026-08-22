@@ -1,25 +1,54 @@
 # <img src="public/favicon.png" alt="启创墨域" width="40" height="40"> 启创墨域 Chevoink
 
+**简体中文** | [English](./README.en.md)
+
 这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台：读者可以在书城发现、追更、听书，作者可以在创作区与写作 Agent 协作产出章节（Agent 支持图片/文件附件、视觉看图、参考资料读取、联网搜索调研与站内作品参考），社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
 
-线上地址：<https://chevoink.chevolink.com>
+🌐 线上地址：<https://chevoink.chevolink.com>
 
 [![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
+[![License](https://img.shields.io/badge/License-MIT-crimson)](#-license)
+[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#-技术栈)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#-技术栈)
+[![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
+[![QQ 交流群](https://img.shields.io/badge/QQ%E4%BA%A4%E6%B5%81%E7%BE%A4-158443235-blue?logo=tencentqq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
 
-## 快速导航
+## 🖥️ 产品预览
+
+**桌面端**
+
+<table>
+  <tr>
+    <td align="center"><img src="public/PCdemo1.png" alt="桌面端演示 1" width="420"><br>书城与阅读链路</td>
+    <td align="center"><img src="public/PCdemo2.png" alt="桌面端演示 2" width="420"><br>创作区与 AI 写作 Agent</td>
+  </tr>
+</table>
+
+**移动端**
+
+<table>
+  <tr>
+    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="移动端演示 1" width="220"><br>手机端首页与书城</td>
+    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="移动端演示 2" width="220"><br>手机端阅读与社区</td>
+  </tr>
+</table>
+
+## 🧭 快速导航
 
 | 想做什么 | 去哪里 |
 | --- | --- |
 | 直接体验产品 | [线上地址](https://chevoink.chevolink.com)（网页端，无需安装） |
-| 安装安卓 APP | [下载与安装教程](#下载与安装安卓-app) · [Releases 页面](https://github.com/Xcy8010/chevoink/releases) |
-| 了解怎么用 | [使用教程](#使用教程) |
-| 了解功能 | [功能一览](#功能一览) |
-| 本地跑起来 | [快速开始](#快速开始) |
-| 了解架构 | [技术栈](#技术栈) · [目录结构](#目录结构) |
-| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md) · 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md) |
-| 部署上线 | [部署与发布](#部署与发布) · [环境变量](#环境变量) |
+| 安装安卓 APP | [下载与安装教程](#-下载与安装安卓-app) · [Releases 页面](https://github.com/Xcy8010/chevoink/releases) |
+| 了解怎么用 | [使用教程](#-使用教程) |
+| 了解功能 | [功能一览](#-功能一览) |
+| 本地跑起来 | [快速开始](#-快速开始) |
+| 了解架构 | [技术栈](#-技术栈) · [目录结构](#-目录结构) |
+| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md) |
+| 部署上线 | [部署与发布](#-部署与发布) · [环境变量](#-环境变量) |
+| 交流讨论 | [QQ 交流群 158443235](#-交流群) |
 
-## 下载与安装（安卓 APP）
+## 📥 下载与安装（安卓 APP）
 
 两种方式任选其一：
 
@@ -32,7 +61,7 @@
 
 安装后无需手动升级：APP 启动时会自动检测新版本，站内条幅 / 设置页会提示更新并引导下载。网页端用户打开线上地址即是最新版。
 
-## 使用教程
+## 📖 使用教程
 
 ### 读者
 
@@ -50,7 +79,7 @@
 4. 用 **AI 封面生成**一键产出封面图（远程直链自动落盘本站）；也可以让 Agent 直接「查看当前封面」核对画面效果；
 5. 章节写完点击发布，读者端即刻可见；支持定时追更与章节管理。
 
-## 功能一览
+## ✨ 功能一览
 
 - **阅读区**：书城首页（轮播、榜单、分类推荐）、书架与阅读进度云同步、沉浸式阅读器、TTS 听书
 - **创作区**：小说/章节管理、AI 写作 Agent（流式事件、工具调用、知识集 Skill、默认最大权限、图片/文件附件、视觉看图、pdf/docx/txt/md 参考资料读取、联网搜索与网页阅读、站内作品参考（查看全站已上架作品与本人未公开作品、按标签/题材识别类似作品、站内无果联网补充，支持二创/写序章）、跨会话记忆）、AI 封面生成（远程直链自动落盘）
@@ -59,7 +88,7 @@
 - **管理后台**：数据看板、用户/作品/内容治理、移动端适配
 - **安卓客户端**：Capacitor 壳加载远程站点，应用内检测更新与 APK 分发
 
-## 技术栈
+## 🛠️ 技术栈
 
 | 层 | 技术 |
 | --- | --- |
@@ -70,7 +99,7 @@
 | 测试 | Vitest + Supertest（单元与集成冒烟；开箱即用——clone 后直接 `npm test`，无测试库时 DB 用例自动跳过） |
 | 部署 | PM2 + nginx（生产）· GitHub Actions CI（push 即跑类型检查/lint/单测/集成测试）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
-## 目录结构
+## 📁 目录结构
 
 ```
 ├── api/               # Express 后端（routes 路由、lib 业务模块、config 环境配置）
@@ -78,14 +107,14 @@
 ├── shared/contracts/  # 前后端共享的类型契约
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
 ├── tests/             # Vitest 测试（单元 + 集成冒烟，环境见 tests/.env.test.example）
-├── docs/              # 工程文档（工程现状 ENGINEERING + 开发规范 DEVELOPMENT-STANDARDS）
+├── docs/              # 工程文档（工程现状 ENGINEERING 中英文 + 开发规范 DEVELOPMENT-STANDARDS）
 ├── plan/              # 各阶段规划方案快照（24 篇 + 并行执行清单）
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
 └── public/            # 静态资源
 ```
 
-## 快速开始
+## 🚀 快速开始
 
 ```bash
 # 1. 安装依赖
@@ -114,16 +143,22 @@ npm run dev
 | `npm run build` | 生产构建 |
 | `npm run deploy:prod` | 一键部署到生产服务器 |
 
-## 部署与发布
+## 📦 部署与发布
 
 - **生产部署**：`npm run deploy:prod`（本地闸门：类型检查 → 测试 → 生产依赖安全审计 → 构建；然后打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
 - **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.07 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
-## 环境变量
+## 🔐 环境变量
 
 所有密钥通过 `.env` 注入（数据库、会话签名、腾讯云短信、AI 服务等），模板见 [.env.example](.env.example)。`.env`、证书、密钥库等敏感文件均已被 `.gitignore` 排除，不会进入仓库。
 
-## License
+## 💬 交流群
+
+欢迎加入 **启创墨域交流群**（QQ 群号：`158443235`），讨论使用体验、反馈问题或参与共建：
+
+👉 [点击加入 QQ 交流群](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
+
+## 📄 License
 
 本项目基于 [MIT License](LICENSE) 开源：可自由使用、修改与分发，需保留版权声明。
