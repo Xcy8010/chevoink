@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   Check,
+  ChevronLeft,
   Download,
   KeyRound,
   Lock,
@@ -457,6 +458,24 @@ export default function SettingsPage() {
     }
   }
 
+  // 页内返回按钮（与帖子详情同款样式）：壳层大标题已隐藏，优先回上一页，无历史则回个人中心
+  const backButton = (
+    <button
+      type="button"
+      onClick={() => {
+        if (window.history.length > 1) {
+          navigate(-1)
+        } else {
+          navigate('/me')
+        }
+      }}
+      className="press-feedback -ml-1 inline-flex items-center gap-1 rounded-[var(--radius-pill)] px-1.5 py-1 text-sm text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+    >
+      <ChevronLeft className="h-4 w-4" />
+      返回
+    </button>
+  )
+
   // 会话校验中：先给骨架，避免闪现登录引导
   if (authStatus === 'checking') {
     return <SettingsSkeleton />
@@ -674,6 +693,8 @@ export default function SettingsPage() {
   if (authStatus !== 'authenticated' || !sessionUser) {
     return (
       <div className="mx-auto max-w-[640px] space-y-8">
+        {backButton}
+
         <section>
           <SectionTitle>显示</SectionTitle>
           {appearanceRows}
@@ -697,6 +718,8 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-[640px] space-y-8 pb-8">
+      {backButton}
+
       <input
         ref={avatarInputRef}
         type="file"

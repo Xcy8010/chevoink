@@ -14,6 +14,7 @@ import { MAX_POST_IMAGE_COUNT, preparePostImage } from '@/features/community/pos
 import type { CommunityShareDraft } from '@/features/community/share'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
+import { splitContentByTopics } from '../../../../shared/contracts/index.js'
 
 type PostComposerProps = {
   onSubmit: (payload: {
@@ -47,6 +48,8 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
   const [share, setShare] = useState<CommunityShareDraft | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  // #话题 高亮镜像层：textarea 文字透明，同字体同内边距的镜像层负责渲染彩色正文
+  const highlightLayerRef = useRef<HTMLDivElement | null>(null)
 
   // 推荐话题：打开编辑器才拉，点击直接插入光标处
   const recommendedTopicsQuery = useQuery({
@@ -76,6 +79,15 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
   }
 
   const handleClose = () => setOpen(false)
+
+  /** textarea 滚动时镜像层同步位移，保证 #话题 高亮与正文逐字对齐 */
+  const handleEditorScroll = () => {
+    const textarea = textareaRef.current
+    const layer = highlightLayerRef.current
+    if (textarea && layer) {
+      layer.scrollTop = textarea.scrollTop
+    }
+  }
 
   /** 推荐话题点击：把 #话题 插入光标处，光标落在插入内容之后 */
   const handleInsertTopic = (name: string) => {
@@ -151,16 +163,38 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
 
   const editor = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <textarea
-        ref={textareaRef}
-        // 全屏编辑页打开即输入
-        autoFocus={isMobile}
-        value={content}
-        onChange={(event) => setContent(event.target.value)}
-        rows={isMobile ? undefined : 7}
-        placeholder={share ? '说说你的推荐理由，让更多人看到它。' : '把你的观察、追更感受或写作心得发出来。'}
-        className="min-h-0 flex-1 resize-none bg-transparent px-4 py-4 text-[15px] leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] md:px-5"
-      />
+      {/* 高亮镜像结构：镜像层垫底渲染彩色正文（#话题 品牌蓝），textarea 叠在上层、
+          文字透明只留光标，滚动时同步镜像层位移，两端指标一致保证逐行对齐 */}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={highlightLayerRef}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-4 text-[15px] leading-7 text-[var(--text-primary)] md:px-5"
+        >
+          {splitContentByTopics(content).map((segment, index) =>
+            segment.type === 'topic' ? (
+              <span key={index} className="text-[var(--color-brand)]">
+                {segment.text}
+              </span>
+            ) : (
+              <span key={index}>{segment.text}</span>
+            ),
+          )}
+          {/* 尾部补一个换行：正文以 \n 结尾时 textarea 仍占一行，镜像层保持同高 */}
+          {'\n'}
+        </div>
+        <textarea
+          ref={textareaRef}
+          // 全屏编辑页打开即输入
+          autoFocus={isMobile}
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          onScroll={handleEditorScroll}
+          placeholder={share ? '说说你的推荐理由，让更多人看到它。' : '把你的观察、追更感受或写作心得发出来。'}
+          // 绝对定位铺满容器，与镜像层同尺寸同内边距，逐行对齐
+          className="absolute inset-0 h-full w-full resize-none bg-transparent px-4 py-4 text-[15px] leading-7 text-transparent caret-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] md:px-5"
+        />
+      </div>
 
       {/* 分享卡片预览：不可点跳转，右上角可移除 */}
       {share ? (
@@ -240,9 +274,9 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
       ) : null}
 
       <div className="border-t border-[var(--border-subtle)] px-4 py-3 md:px-5">
-        {/* X 式话题引导：纯文本两行，无卡片无胶囊无边框（方案 18 §3.5） */}
+        {/* X 式话题引导：纯文本两行，无卡片无胶囊无边框（方案 18 §3.5）；话题名上限 9 字 */}
         <p className="text-xs leading-6 text-[var(--text-tertiary)]">
-          使用 <span className="font-medium text-[var(--color-brand)]">#</span> 可以引用或创建一个话题
+          使用 <span className="font-medium text-[var(--color-brand)]">#</span> 可以引用或创建一个话题（话题名最多 9 个字）
         </p>
         {recommendedTopics.length > 0 ? (
           <p className="mt-0.5 text-xs leading-6 text-[var(--text-tertiary)]">

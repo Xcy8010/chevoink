@@ -47,12 +47,19 @@ export default function CategoryNav({ activeCategory, onSelect }: CategoryNavPro
             key={category}
             type="button"
             aria-pressed={category === activeCategory}
-            onClick={() => onSelect(category === activeCategory ? '' : category)}
+            onClick={(event) => {
+              onSelect(category === activeCategory ? '' : category)
+              // 触屏（尤其 APP 壳 WebView）tap 后按钮会残留 focus/hover 淡色态：
+              // 再次点击取消选中后外面仍围着一圈淡色圈，点击后立即收回焦点
+              event.currentTarget.blur()
+            }}
             className={cn(
               'press-feedback shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] px-3.5 py-1.5 text-sm transition-colors',
               category === activeCategory
                 ? 'bg-[var(--color-brand)] font-semibold text-white'
-                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
+                // hover 背景仅在支持 hover 的设备（鼠标）生效：触屏 tap 会粘住 :hover，
+                // 取消选中后残留淡色背景圈，用 @media(hover:hover) 门控后与网页端一致
+                : 'text-[var(--text-secondary)] [@media(hover:hover)]:hover:bg-[var(--surface-muted)] [@media(hover:hover)]:hover:text-[var(--text-primary)]',
             )}
           >
             {category}

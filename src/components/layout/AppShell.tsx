@@ -73,6 +73,8 @@ export default function AppShell({ title, description, children }: AppShellProps
   const isMeListRoute = location.pathname === '/me/follows' || location.pathname === '/me/likes'
   // 个人中心页自带头部卡片，壳层大标题多余，隐藏
   const isProfileRoute = location.pathname === '/me'
+  // 设置页改用页面内返回按钮（与帖子详情同款），壳层大标题一并隐藏
+  const isSettingsRoute = location.pathname === '/settings'
   const isAuthRoute = location.pathname === '/login' || location.pathname === '/register'
   const isAuthenticated = authStatus === 'authenticated' && !!sessionUser
   const accountRoute = authStatus === 'guest' ? '/login?redirect=%2Fme' : '/me'
@@ -788,6 +790,8 @@ export default function AppShell({ title, description, children }: AppShellProps
                 isMessagesChatRoute && 'mobile:pb-[var(--safe-bottom)]',
                 // 作品详情页手机端底栏已隐藏，底部留白交给页面自己的贴底操作栏控制
                 isNovelDetailRoute && 'mobile:pb-4',
+                // 帖子详情/设置/关注粉丝/获赞明细：底栏隐藏后不再为它预留 88px 底部占位
+                (isPostDetailRoute || isSettingsRoute || isMeListRoute) && 'mobile:pb-6',
               )}
               style={{ '--app-header-height': `${headerHeight}px` } as CSSProperties}
             >
@@ -802,6 +806,7 @@ export default function AppShell({ title, description, children }: AppShellProps
                     isMessagesRoute && 'hidden',
                     isMeListRoute && 'hidden',
                     isProfileRoute && 'hidden',
+                    isSettingsRoute && 'hidden',
                     isCommunityRoute && 'hidden',
                     // 登录/注册页自带页面标题，壳层大标题隐藏
                     isAuthRoute && 'hidden',
@@ -833,6 +838,12 @@ export default function AppShell({ title, description, children }: AppShellProps
           isMessagesChatRoute && 'hidden',
           // 作品详情页手机端自带贴底操作栏 + 左上返回，隐藏全局底栏让阅读动线更沉浸
           isNovelDetailRoute && 'hidden',
+          // 帖子详情以正文为中心：底部评论栏自带贴底入口，隐藏全局底栏
+          isPostDetailRoute && 'hidden',
+          // 设置页为全屏表单动线，隐藏底栏
+          isSettingsRoute && 'hidden',
+          // 关注粉丝/获赞明细（互动消息）为紧凑列表页，隐藏底栏
+          isMeListRoute && 'hidden',
         )}
       >
         <div className="mx-auto grid max-w-lg grid-cols-[1fr_1fr_auto_1fr_1fr] items-center gap-2">

@@ -113,10 +113,21 @@ export default function StudioWorkspace() {
       snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
     return initialTask?.sessionId ?? null
   })
-  const [agentTaskWindows, setAgentTaskWindows] = useState<AgentTaskWindowState[]>([
-    createLocalAgentTaskWindow(),
-  ])
-  const [activeAgentTaskWindowId, setActiveAgentTaskWindowId] = useState<string | null>(null)
+  // 任务窗口同样从快照惰性恢复：挂载即落在该作品上次活跃的任务窗口，
+  // 避免初始空窗口先触发快照写入效应清掉存档、或界面闪现「新任务」
+  const [agentTaskWindows, setAgentTaskWindows] = useState<AgentTaskWindowState[]>(() => {
+    const snapshot = readStoredAgentWorkspace(activeNovelId)
+    return snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
+  })
+  const [activeAgentTaskWindowId, setActiveAgentTaskWindowId] = useState<string | null>(() => {
+    const snapshot = readStoredAgentWorkspace(activeNovelId)
+    const initialTask =
+      snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
+    return initialTask?.id ?? null
+  })
+  // 当前任务窗口状态归属的作品：切换作品后状态水合落地前，快照写入效应
+  // 不得用旧作品窗口写入/删除（会污染目标作品快照），仅状态归属当前作品时才允许写
+  const [agentStateNovelId, setAgentStateNovelId] = useState(activeNovelId)
   const [showAgentTaskList, setShowAgentTaskList] = useState(false)
   const [agentRunState, setAgentRunState] = useState<AgentRunState>(createIdleAgentRunState)
   const [agentArtifacts, setAgentArtifacts] = useState<AgentArtifact[]>([])
@@ -491,6 +502,7 @@ export default function StudioWorkspace() {
     agentRunAbortControllerRef.current?.abort()
     resetAgentWorkspace()
     setShowAgentTaskList(false)
+    setAgentStateNovelId(activeNovelId)
 
     const snapshot = readStoredAgentWorkspace(activeNovelId)
     const snapshotTasks = snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
@@ -651,6 +663,11 @@ export default function StudioWorkspace() {
       return
     }
 
+    // 任务窗口状态尚未水合到当前作品（切换后残留旧作品状态）：跳过写入，避免污染/误删当前作品快照
+    if (agentStateNovelId !== activeNovelId) {
+      return
+    }
+
     const storageKey = getAgentWorkspaceStorageKey(activeNovelId)
     const meaningfulTasks = agentTaskWindows.filter(
       (taskWindow) =>
@@ -686,7 +703,7 @@ export default function StudioWorkspace() {
       catalogDocument,
     }
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot))
-  }, [activeAgentTaskWindowId, activeNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId])
+  }, [activeAgentTaskWindowId, activeNovelId, agentStateNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId])
 
   async function handleWorkspaceDialogConfirm() {
     if (!workspaceDialog) {
