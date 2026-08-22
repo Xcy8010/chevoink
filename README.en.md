@@ -29,8 +29,8 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
 
 <table>
   <tr>
-    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="Mobile demo 1" width="220"><br>Home & bookstore</td>
-    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="Mobile demo 2" width="220"><br>Reading & community</td>
+    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="Mobile demo 1" width="420"><br>Home & community</td>
+    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="Mobile demo 2" width="420"><br>Studio & reading</td>
   </tr>
 </table>
 
@@ -44,7 +44,7 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
 | Explore features | [Feature overview](#-feature-overview) |
 | Run it locally | [Quick start](#-quick-start) |
 | Understand the architecture | [Tech stack](#%EF%B8%8F-tech-stack) · [Directory structure](#-directory-structure) |
-| Deep engineering details | [Engineering Documentation](./docs/ENGINEERING.en.md) ([中文](./docs/ENGINEERING.md)) · [Development Standards](./docs/DEVELOPMENT-STANDARDS.md) |
+| Deep engineering details | [Engineering Documentation](./docs/ENGINEERING.en.md) ([中文](./docs/ENGINEERING.md)) · [Development Standards](./docs/DEVELOPMENT-STANDARDS.en.md) ([中文](./docs/DEVELOPMENT-STANDARDS.md)) |
 | Deploy to production | [Deployment & releases](#-deployment--releases) · [Environment variables](#-environment-variables) |
 | Chat with us | [QQ group 158443235](#-community) |
 
@@ -107,7 +107,7 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ├── shared/contracts/  # Type contracts shared by frontend & backend
 ├── prisma/            # Data model schema, migrations, seed data
 ├── tests/             # Vitest tests (unit + integration smoke, see tests/.env.test.example)
-├── docs/              # Engineering docs (ENGINEERING in Chinese & English + DEVELOPMENT-STANDARDS)
+├── docs/              # Engineering docs (ENGINEERING & DEVELOPMENT-STANDARDS, both bilingual)
 ├── plan/              # Planning snapshots per phase (24 docs + parallel execution checklists)
 ├── deploy/            # nginx config & server deployment scripts
 ├── scripts/           # Deployment / push / data cleanup scripts

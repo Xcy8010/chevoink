@@ -29,8 +29,8 @@
 
 <table>
   <tr>
-    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="移动端演示 1" width="220"><br>手机端首页与书城</td>
-    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="移动端演示 2" width="220"><br>手机端阅读与社区</td>
+    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="移动端演示 1" width="420"><br>手机端首页与社区</td>
+    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="移动端演示 2" width="420"><br>手机端创作与阅读</td>
   </tr>
 </table>
 
@@ -44,7 +44,7 @@
 | 了解功能 | [功能一览](#-功能一览) |
 | 本地跑起来 | [快速开始](#-快速开始) |
 | 了解架构 | [技术栈](#-技术栈) · [目录结构](#-目录结构) |
-| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md) |
+| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md)（[English](./docs/DEVELOPMENT-STANDARDS.en.md)） |
 | 部署上线 | [部署与发布](#-部署与发布) · [环境变量](#-环境变量) |
 | 交流讨论 | [QQ 交流群 158443235](#-交流群) |
 
@@ -107,7 +107,7 @@
 ├── shared/contracts/  # 前后端共享的类型契约
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
 ├── tests/             # Vitest 测试（单元 + 集成冒烟，环境见 tests/.env.test.example）
-├── docs/              # 工程文档（工程现状 ENGINEERING 中英文 + 开发规范 DEVELOPMENT-STANDARDS）
+├── docs/              # 工程文档（ENGINEERING 与 DEVELOPMENT-STANDARDS，均中英文双语）
 ├── plan/              # 各阶段规划方案快照（24 篇 + 并行执行清单）
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
