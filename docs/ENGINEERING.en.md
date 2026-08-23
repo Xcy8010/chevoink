@@ -4,7 +4,7 @@
 > All content is grounded in the current repository code and the real planning documents under `plan/`, and is updated continuously as the project evolves.
 > The `plan/` directory is public in the repository: the 24 documents are the true planning snapshots of each phase; for the mapping between historical file paths referenced therein and the current implementation, see [Section 9](#9-plan-document-index).
 >
-> Last updated: 2026-08-16
+> Last updated: 2026-08-24
 >
 > Language: English | [简体中文](./ENGINEERING.md)
 
@@ -52,7 +52,7 @@
                            │  ├── data/      data access layer   │
                            │  ├── agent/     writing Agent engine│
                            │  │   loop kernel + run-service +    │
-                           │  │   31 tools + permission guards + │
+                           │  │   32 tools + permission guards + │
                            │  │   knowledge sets                 │
                            │  └── auth-session / rate-limit /    │
                            │      audit                          │
@@ -84,7 +84,7 @@ Frontend and backend share type contracts through `shared/contracts/` (including
 - **Agent engine** `api/lib/agent/` (corresponds to `plan/10`, `plan/13`):
   - `loop.ts` execution kernel (executeAgentRun) + `active-runs.ts` run registry;
   - `run-service.ts` run lifecycle & session CRUD, `session-messages.ts` messages/rollback, `plan-artifacts.ts` plan artifacts;
-  - `tools/`: 31 registered tools (list in [1.5](#15-agent-tool-inventory-31-tools)), split by dependency into ten files: chapter/novel/write/read/cover/search/platform/interact/todo/attachment;
+  - `tools/`: 32 registered tools (list in [1.5](#15-agent-tool-inventory-32-tools)), split by dependency into eleven files: chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export;
   - `permissions.ts` permission guards & budgets (per run: ask_user 3 / web search 5 / web deep-read 8 / platform search 5 / platform deep-read 8);
   - `knowledge/` + `skills/`: writing knowledge and operational knowledge sets (corresponds to the `plan/14` hallucination-governance plan).
 
@@ -108,7 +108,7 @@ During a run, frontend and backend communicate through a one-way SSE event strea
 
 The frontend message-part model `AgentMessagePart` (text / reasoning / tool-call / attachment) is built from the events above; write-operation tools additionally carry rollback snapshots (persisted server-side only, stripped before the message-list API returns), powering "one-click rollback inside the conversation".
 
-### 1.5 Agent Tool Inventory (31 tools)
+### 1.5 Agent Tool Inventory (32 tools)
 
 | Group | Tools | Notes |
 | --- | --- | --- |
@@ -116,6 +116,7 @@ The frontend message-part model `AgentMessagePart` (text / reasoning / tool-call
 | Research (2) | webSearch · webRead | Multi-tier fallback search with Bocha as the primary engine; web deep-read with SSRF protection |
 | Platform reference (2) | platformNovelSearch · platformNovelRead | Locates published platform works and the author's own unpublished works by title/tag/genre keywords; reads synopsis/categories/chapter text with a visibility hard gate at the DB where layer; similar-work detection via feature-term search + synopsis comparison, falling back to web search when the platform yields nothing |
 | Attachments (2) | viewImage · readFile | GLM-4.1V vision side-channel; pdf/docx/txt/md reading |
+| Export (1) | novelExport | One-click zip export of the novel (plans/catalog/chapters/work info & publishing advice); read-only, skips approval; supports chapter subsets and four-scope trimming; artifacts stored in an in-memory store (TTL 15 min) for the frontend download card |
 | Chapter write (5) | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | Conflict detection + 409 semantics + rollback snapshots |
 | Novel management (2) | novelRename · novelUpdateMeta | Title & metadata updates |
 | Plan artifacts (3) | planSave · planRename · planDelete | Save/rename/delete outline plans |
@@ -156,6 +157,7 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 | Image understanding | Zhipu GLM-4.1V vision side-channel + in-process concurrency semaphore (default 4) | Free tier allows 5 concurrent; keep 1 in reserve (`api/config/env.ts`) |
 | Large-file governance | Module-level splits move only stateless/pure logic; full tsc is the authoritative verification | Completed in this sprint: run-service 1447→1043 lines, write-tools 826→285, loop 903→837, AgentPanel 1096→1020 |
 | Frontend component split discipline | Never split untested component bodies; only extract module-level pure declarations | Any JSX slicing without coverage is a regression risk; extracted pure functions get guardrail unit tests |
+| One-click export | Server-side dependency-free ZIP writer (store, no compression) + shared Fanqie vocabulary contract | Avoids adding jszip (artifacts are mostly plain text; store mode suffices); the vocabulary lives in `shared/contracts/fanqie-tags.ts` shared by both sides; AI publishing-advice output is clamped to the official vocabulary (no invented tags); AI unavailability degrades to fallback copy without blocking the export |
 
 ---
 
@@ -309,7 +311,7 @@ The full set of 12 test files finishes in ~7 seconds (local forks pool); CI clos
 | Missing coverage gate | CI only produces coverage reports; repo-wide baseline is low (tests concentrated on api validation/session/Agent core and frontend pure functions) | Anchor core modules first (api/lib, shared/contracts) with per-module thresholds, then tighten gradually |
 | CSP not enforced | Running Report-Only | Switch to enforce after cleaning violation sources |
 | Pre-existing lint warning | 1 in StudioWorkspace.tsx react-hooks/exhaustive-deps | Involves component-body changes; handle after frontend test coverage is in place |
-| Frontend components without test coverage | Large components (StudioWorkspace 4167 lines, AgentPanel 1020 lines) not split | Keep the "module-level pure declarations only" discipline; add key interaction tests before discussing component splits |
+| Frontend components without test coverage | Large components (StudioWorkspace 4215 lines, AgentPanel 1020 lines) not split | Keep the "module-level pure declarations only" discipline; add key interaction tests before discussing component splits |
 | Prisma config migration | `package.json#prisma` deprecated (removed in Prisma 7) | Upgrade to `prisma.config.ts` |
 | Manual deploy-pack whitelist | tar whitelist once referenced a deleted file and broke packaging (historical incident) | When adding top-level directories, cross-check the `deploy-production.ps1` whitelist |
 
@@ -324,7 +326,8 @@ New accumulations from this engineering sprint (2026-08, 85→90 points):
 - zod validation canonicalized to cover all write endpoints (copy verbatim-anchored in `tests/integration/p2-validation.test.ts`);
 - Auth degradation hardening (stale fallback + cache capacity cap 5000);
 - Module-level splits of the three largest backend files (run-service / loop / write-tools) with guardrail unit tests;
-- Frontend AgentPanel module-level extraction (panel-helpers + ProcessingHint into separate files).
+- Frontend AgentPanel module-level extraction (panel-helpers + ProcessingHint into separate files);
+- Studio one-click zip export (four content scopes checkable, per-chapter selection, AI-generated publishing advice against the Fanqie Novel official vocabulary) and the Agent `novel_export` tool (chapter subsets & exclusion rules supported).
 
 Candidate directions going forward (ordered by payoff):
 

@@ -4,7 +4,7 @@
 > 全部内容基于当前仓库代码与 `plan/` 目录内的真实方案文档，随工程演进持续更新。
 > `plan/` 目录已入库公开：24 篇方案为各阶段的真实规划快照，其中引用的历史文件路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
 >
-> 最近更新：2026-08-16
+> 最近更新：2026-08-24
 
 ## 目录
 
@@ -49,7 +49,7 @@
                            │  ├── data/      数据访问层           │
                            │  ├── agent/     写作 Agent 引擎      │
                            │  │   loop 调度内核 + run-service +   │
-                           │  │   31 个工具 + 权限守卫 + 知识集    │
+                           │  │   32 个工具 + 权限守卫 + 知识集    │
                            │  └── auth-session / 限流 / 审计      │
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
@@ -78,7 +78,7 @@
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
   - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
-  - `tools/`：31 个注册工具（清单见 [1.5](#15-agent-工具清单31-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment 十组文件；
+  - `tools/`：32 个注册工具（清单见 [1.5](#15-agent-工具清单32-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export 十一组文件；
   - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次 / 站内搜索 5 次 / 站内深读 8 次每 run）；
   - `knowledge/` + `skills/`：写作知识与操作知识集（对应 `plan/14` 幻觉治理方案）。
 
@@ -102,7 +102,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 前端消息分部模型 `AgentMessagePart`（text / reasoning / tool-call / attachment）由上述事件构建，写操作工具额外携带回滚快照（仅服务端持久化，消息列表接口返回前剥离），支撑「对话内一键回退」。
 
-### 1.5 Agent 工具清单（31 个）
+### 1.5 Agent 工具清单（32 个）
 
 | 分组 | 工具 | 说明 |
 | --- | --- | --- |
@@ -110,6 +110,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 调研（2） | webSearch · webRead | 博查为主的多级降级搜索；网页深读带 SSRF 防护 |
 | 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名/标签/题材关键词定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层；类似作品走特征词检索+简介对比，站内无果降级联网搜索 |
 | 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
+| 导出（1） | novelExport | 一键导出作品 zip（规划/目录/章节/作品信息以及发布建议），只读免审批；支持章节子集与四类内容裁剪；产物存内存仓库（TTL 15 分钟）供前端下载卡片拉取 |
 | 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | 冲突检测 + 409 语义 + 回滚快照 |
 | 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |
 | 计划工件（3） | planSave · planRename · planDelete | 大纲计划的保存/重命名/删除 |
@@ -150,6 +151,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 图像理解 | 智谱 GLM-4.1V 视觉旁路 + 进程内并发信号量（默认 4） | 免费档并发 5，留 1 缓冲（`api/config/env.ts`） |
 | 大文件治理 | 模块级拆分只搬无状态/纯逻辑，tsc 全量为权威验证 | 本轮冲刺完成：run-service 1447→1043 行、write-tools 826→285 行、loop 903→837 行、AgentPanel 1096→1020 行 |
 | 前端组件拆分纪律 | 无测试覆盖的组件本体一律不拆，仅抽模块级纯声明 | 任何 JSX 切割在无覆盖下都是回归风险；拆出的纯函数补护栏单测 |
+| 一键导出 | 服务端零依赖 ZIP writer（store 不压缩）+ 番茄词表共享契约 | 不引入 jszip（产物纯文本为主，store 模式够用）；词表固化于 `shared/contracts/fanqie-tags.ts` 双端共用，AI 发布建议输出强制钳制到官方词表不自创标签；AI 不可用时降级文案不阻断导出 |
 
 ---
 
@@ -303,7 +305,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 覆盖率门禁缺失 | CI 只产出覆盖率报告；全仓口径基线偏低（测试集中于 api 校验/会话/Agent 核心与前端纯函数） | 先锚定核心模块（api/lib、shared/contracts）分模块阈值，再逐步收紧 |
 | CSP 未转正 | Report-Only 运行中 | 清理违规源后切 enforce |
 | 存量 lint warning | StudioWorkspace.tsx react-hooks/exhaustive-deps 1 条 | 涉及组件体改动，待前端测试覆盖补齐后处理 |
-| 前端组件无测试覆盖 | 大组件（StudioWorkspace 4167 行、AgentPanel 1020 行）本体未拆 | 维持「只抽模块级纯声明」纪律；先补关键交互测试再议组件拆分 |
+| 前端组件无测试覆盖 | 大组件（StudioWorkspace 4215 行、AgentPanel 1020 行）本体未拆 | 维持「只抽模块级纯声明」纪律；先补关键交互测试再议组件拆分 |
 | Prisma 配置迁移 | `package.json#prisma` 已废弃（Prisma 7 移除） | 升级到 `prisma.config.ts` |
 | 部署打包白名单手工维护 | tar 白名单引用已删除文件曾导致打包失败（历史事故） | 新增顶层目录时同步核对 `deploy-production.ps1` 白名单 |
 
@@ -318,7 +320,8 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 - zod 校验收编全量覆盖写端点（文案逐字锚定于 `tests/integration/p2-validation.test.ts`）；
 - 认证降级加固（stale fallback + 缓存容量上限 5000）；
 - 后端三大文件模块级拆分（run-service / loop / write-tools）并补护栏单测；
-- 前端 AgentPanel 模块级抽取（panel-helpers + ProcessingHint 独立成文件）。
+- 前端 AgentPanel 模块级抽取（panel-helpers + ProcessingHint 独立成文件）；
+- 创作区一键导出 zip（规划/目录/章节/作品信息以及发布建议四类内容可勾选、章节可逐章自选，发布建议由 AI 按番茄小说官方词表生成）与 Agent `novel_export` 工具（支持章节子集与排除规则）。
 
 后续候选方向（按收益排序）：
 
