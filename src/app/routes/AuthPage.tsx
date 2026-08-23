@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Lock, MessageSquareText, Smartphone, UserRound } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -11,6 +11,7 @@ import { hydrateReadingSync } from '@/features/home/reading-sync'
 import { brandMeta } from '@/lib/theme/tokens'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
+import { useToast } from '@/components/ui/toast-context'
 import type {
   AuthSessionPayload,
   LoginRequest,
@@ -94,6 +95,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const queryClient = useQueryClient()
   const setAuthenticated = useShellStore((state) => state.setAuthenticated)
   const isAuthenticated = useShellStore((state) => state.authStatus === 'authenticated' && !!state.sessionUser)
+  const toast = useToast()
 
   const redirectPath = useMemo(() => normalizeRedirectPath(searchParams.get('redirect')), [searchParams])
   const isRegisterPage = mode === 'register'
@@ -120,13 +122,30 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const isSmsFlow = isRegisterPage || loginMethod === 'sms'
   const shouldCollectProfile = isRegisterPage || smsAccountStatus === 'new'
 
+  const refreshCaptcha = useCallback(async () => {
+    setLoadingCaptcha(true)
+
+    try {
+      const payload = await requestJson<CaptchaPayload>('/api/auth/captcha')
+      setCaptchaId(payload.captchaId)
+      setCaptchaImageBase64(payload.imageBase64)
+      setCaptchaAnswer('')
+    } catch (error) {
+      const message = error instanceof ApiClientError ? error.message : '人机验证获取失败，请稍后重试。'
+      setErrorMessage(message)
+      toast.error(message)
+    } finally {
+      setLoadingCaptcha(false)
+    }
+  }, [toast])
+
   useEffect(() => {
     if (!isSmsFlow || !captchaDialogVisible) {
       return
     }
 
     void refreshCaptcha()
-  }, [isSmsFlow, captchaDialogVisible])
+  }, [isSmsFlow, captchaDialogVisible, refreshCaptcha])
 
   useEffect(() => {
     if (!cooldownUntil || cooldownUntil <= Date.now()) {
@@ -143,21 +162,6 @@ export default function AuthPage({ mode }: AuthPageProps) {
   }, [cooldownUntil])
 
   const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000))
-
-  async function refreshCaptcha() {
-    setLoadingCaptcha(true)
-
-    try {
-      const payload = await requestJson<CaptchaPayload>('/api/auth/captcha')
-      setCaptchaId(payload.captchaId)
-      setCaptchaImageBase64(payload.imageBase64)
-      setCaptchaAnswer('')
-    } catch (error) {
-      setErrorMessage(error instanceof ApiClientError ? error.message : '人机验证获取失败，请稍后重试。')
-    } finally {
-      setLoadingCaptcha(false)
-    }
-  }
 
   function openCaptchaDialog() {
     const trimmedPhone = phone.trim()
@@ -199,10 +203,20 @@ export default function AuthPage({ mode }: AuthPageProps) {
       )
       setCaptchaDialogVisible(false)
       setCaptchaAnswer('')
+      toast.success('验证码已发送，请注意查收短信。')
     } catch (error) {
+      const message = error instanceof ApiClientError ? error.message : '验证码发送失败，请稍后再试。'
       setSmsAccountStatus(isRegisterPage ? 'new' : null)
-      setErrorMessage(error instanceof ApiClientError ? error.message : '验证码发送失败，请稍后再试。')
-      await refreshCaptcha()
+      setErrorMessage(message)
+      toast.error(message)
+
+      // 仅人机验证答案错误保留弹窗换新图重试；其它失败（频控/日限/过期等）自动关弹窗，错误回落到页面主体展示
+      if (error instanceof ApiClientError && error.code === 'AUTH_CAPTCHA_INVALID') {
+        await refreshCaptcha()
+      } else {
+        setCaptchaDialogVisible(false)
+        setCaptchaAnswer('')
+      }
     } finally {
       setSendingCode(false)
     }
@@ -504,6 +518,12 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 maxLength={4}
                 required
               />
+
+              {errorMessage ? (
+                <p className="rounded-[var(--radius-md)] bg-[var(--surface-muted)] px-3 py-2 text-sm leading-6 text-[var(--color-danger,#dc2626)]">
+                  {errorMessage}
+                </p>
+              ) : null}
             </div>
 
             <div className="mt-5 flex gap-3">

@@ -48,15 +48,24 @@ function buildSmsClient() {
   })
 }
 
-function verificationSceneText(purpose: SmsAuthPurpose): string {
-  if (purpose === 'reset_password') {
-    return '重置密码'
+/** 腾讯云短信拒发时把平台状态码映射为友好中文文案，避免英文原文直出用户 */
+function tencentSendFailureMessage(code: string, message: string): string {
+  const haystack = `${code} ${message}`.toLowerCase()
+
+  if (haystack.includes('every day') || haystack.includes('daily')) {
+    return '该手机号今日验证码发送次数已达上限，请明天再试。'
   }
-  if (purpose === 'admin_bind') {
-    return '绑定手机号'
+  if (haystack.includes('hour')) {
+    return '该手机号获取验证码过于频繁，请稍后再试。'
+  }
+  if (haystack.includes('minute') || haystack.includes('frequency')) {
+    return '发送过于频繁，请稍后再试。'
+  }
+  if (haystack.includes('blacklist')) {
+    return '该手机号暂无法接收验证码，请稍后再试或使用密码登录。'
   }
 
-  return purpose === 'register' ? '注册' : '登录'
+  return '验证码发送失败，请稍后再试。'
 }
 
 async function ensureSmsSendAllowed(phone: string, purpose: SmsAuthPurpose) {
@@ -129,10 +138,11 @@ export async function sendAuthSmsCode(input: { phone: string; purpose: SmsAuthPu
 
   const status = response.SendStatusSet?.[0]
   if (!status || status.Code !== 'Ok') {
+    console.warn('[sms] tencent send rejected:', status?.Code ?? 'unknown', status?.Message ?? '')
     throw new DataAccessError(
       502,
       'SMS_SEND_FAILED',
-      status?.Message || `${verificationSceneText(purpose)}验证码发送失败，请稍后再试。`,
+      tencentSendFailureMessage(status?.Code ?? '', status?.Message ?? ''),
     )
   }
 
