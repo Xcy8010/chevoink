@@ -70,7 +70,7 @@ export default function CoverPanel({
         </Button>
       }
     >
-      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain pr-1">
+      <div className="flex h-full min-h-0 max-w-full flex-col gap-4 overflow-y-auto overflow-x-hidden overscroll-contain pr-1">
         <input
           ref={uploadInputRef}
           type="file"
@@ -85,7 +85,9 @@ export default function CoverPanel({
           }}
         />
 
-        <div className="grid gap-4">
+        {/* 用 flex 纵排而非 grid 隐式 auto 列：auto 轨道会按子项 max-content 取宽，
+            智能生成回填的长提示词会把 textarea 固有宽度撑大，进而横向撑开整个容器 */}
+        <div className="flex min-w-0 flex-col gap-4">
           {/* 提示词模式切换 */}
           <div className="grid grid-cols-2 gap-1 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-1">
             {([

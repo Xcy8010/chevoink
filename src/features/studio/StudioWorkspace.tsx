@@ -1934,11 +1934,13 @@ export default function StudioWorkspace() {
       )
       setCoverKeywords(result.visualKeywords)
       setCoverMessage('提示词已生成，可继续微调后再生成封面。')
+      toast.success('封面提示词已生成，可继续微调后直接生成封面。')
       setActiveToolPanel('cover')
       setMobileView('cover')
     },
     onError: (error: Error) => {
       setCoverMessage(error.message)
+      toast.error(error.message || '封面提示词生成失败，请稍后重试。')
     },
   })
 
