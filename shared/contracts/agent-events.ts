@@ -55,6 +55,13 @@ export type AgentToolDisplayPayload =
       unanswered?: boolean
     }
   | { kind: 'uiIntent'; intent: 'open_meta' | 'open_cover' }
+  | {
+      /** 一键导出完成：前端渲染下载卡片，downloadUrl 需带会话 cookie 拉取 zip */
+      kind: 'exportReady'
+      downloadUrl: string
+      fileName: string
+      detail: string
+    }
   | { kind: 'todoList'; items: AgentTodoItem[] }
   | {
       kind: 'webSearch'

@@ -9,6 +9,14 @@ import type {
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
 import { createCoverAssetsData } from './data-access.js'
+import {
+  FANQIE_ALL_CATEGORIES,
+  FANQIE_PLOT_TAGS,
+  FANQIE_ROLE_TAGS,
+  FANQIE_THEME_TAGS,
+  sanitizePublishAdvice,
+  type PublishAdvice,
+} from '../../shared/contracts/index.js'
 
 type TextCompletionOptions = {
   userId: string
@@ -613,4 +621,65 @@ export async function generateCoverImageData(
     images,
     providerMode: env.aiProviderMode,
   }
+}
+
+/** 从模型回复里抠出 JSON 对象（兼容 ```json 包裹与前后杂音） */
+function extractJsonObject(content: string): unknown {
+  const start = content.indexOf('{')
+  const end = content.lastIndexOf('}')
+
+  if (start === -1 || end <= start) {
+    throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型未返回可解析的 JSON。')
+  }
+
+  try {
+    return JSON.parse(content.slice(start, end + 1))
+  } catch {
+    throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型返回了无法解析的 JSON。')
+  }
+}
+
+/**
+ * 番茄小说发布建议：男频/女频、主分类（单选）、主题/角色/情节标签（各≤2）与主角名（≤2）。
+ * 模型输出经 sanitizePublishAdvice 钳制到番茄词表，非法标签一律丢弃。
+ */
+export async function generatePublishAdviceData(
+  userId: string,
+  input: {
+    novelId?: string | null
+    title: string
+    summary: string
+    genre: string
+    tags: string[]
+    sampleText: string
+  },
+): Promise<PublishAdvice> {
+  const systemPrompt = [
+    '你是番茄小说的资深责编，熟悉番茄作者端的作品标签体系。',
+    '请根据作品信息快速判断其在番茄发布的标签配置，只输出一个 JSON 对象，不要输出其它内容。',
+    'JSON 字段：channel（"男频"或"女频"）、mainCategory（主分类，只能从给定主分类清单选一个）、themeTags（主题，最多2个，只能从主题清单选）、roleTags（角色，最多2个，只能从角色清单选）、plotTags（情节，最多2个，只能从情节清单选）、protagonists（主角名字，最多2个）、advice（50-150字发布建议，含开篇节奏与卖点）。',
+    '严禁使用清单之外的标签。',
+  ].join('\n')
+
+  const userPrompt = [
+    `作品名：${input.title}`,
+    `简介：${input.summary}`,
+    `题材：${input.genre}`,
+    `已有标签：${input.tags.join('、') || '无'}`,
+    `正文样章：${input.sampleText.slice(0, 1500) || '无'}`,
+    `主分类清单：${FANQIE_ALL_CATEGORIES.join('、')}`,
+    `主题清单：${FANQIE_THEME_TAGS.join('、')}`,
+    `角色清单：${FANQIE_ROLE_TAGS.join('、')}`,
+    `情节清单：${FANQIE_PLOT_TAGS.join('、')}`,
+  ].join('\n')
+
+  const content = await generateTextCompletion(systemPrompt, userPrompt, {
+    userId,
+    action: 'generatePublishAdvice',
+    novelId: input.novelId ?? null,
+    targetType: 'publishAdvice',
+    temperature: 0.3,
+  })
+
+  return sanitizePublishAdvice(extractJsonObject(content))
 }

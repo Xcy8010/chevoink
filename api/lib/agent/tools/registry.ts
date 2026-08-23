@@ -11,6 +11,7 @@ import {
   chapterRenameTool,
   chapterWriteTool,
 } from './chapter-tools.js'
+import { novelExportTool } from './export-tools.js'
 import { askUserTool } from './interact-tools.js'
 import {
   coverPromptSetTool,
@@ -47,6 +48,7 @@ export const allTools: AgentTool<any>[] = [
   platformNovelReadTool,
   viewImageTool,
   readFileTool,
+  novelExportTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,

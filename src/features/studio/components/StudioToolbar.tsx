@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpenText, FileText, ImagePlus, MoreHorizontal, Save, Settings2, Sparkles, Trash2, Upload, WandSparkles } from 'lucide-react'
+import { BookOpenText, FileText, FolderDown, ImagePlus, MoreHorizontal, Save, Settings2, Sparkles, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import Button from '@/components/ui/Button'
@@ -27,6 +27,7 @@ type StudioToolbarProps = {
   onSaveNovel: () => void
   onPublishNovel: () => void
   onDeleteNovel: () => void
+  onExport: () => void
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
   onEditNovelTitle?: () => void
@@ -57,6 +58,7 @@ export default function StudioToolbar({
   onSaveNovel,
   onPublishNovel,
   onDeleteNovel,
+  onExport,
   onSelectNovel,
   onCreateNovel,
   onEditNovelTitle,
@@ -198,6 +200,17 @@ export default function StudioToolbar({
                       查看作品页
                     </Link>
                   ) : null}
+                  <button
+                    type="button"
+                    className={moreItemClass}
+                    onClick={() => {
+                      setMoreOpen(false)
+                      onExport()
+                    }}
+                  >
+                    <FolderDown className="h-4 w-4 text-[var(--text-secondary)]" />
+                    一键导出
+                  </button>
                   <div className="my-1 border-t border-[var(--border-subtle)]" />
                   <button
                     type="button"

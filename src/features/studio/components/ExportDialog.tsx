@@ -1,0 +1,237 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Check, FolderDown, LoaderCircle, X } from 'lucide-react'
+
+import { useToast } from '@/components/ui/toast-context'
+import { cn } from '@/lib/utils'
+import type { ChapterListItem } from '../../../../shared/contracts/index.js'
+
+import { downloadNovelExportZip } from '../lib/export-download'
+
+type ExportDialogProps = {
+  open: boolean
+  novelId: string
+  novelTitle: string
+  chapters: ChapterListItem[]
+  onClose: () => void
+}
+
+type SectionKey = 'plans' | 'catalog' | 'chapters' | 'info'
+
+const SECTION_OPTIONS: Array<{ key: SectionKey; label: string; hint: string }> = [
+  { key: 'plans', label: '规划', hint: '计划文件夹内的全部创作计划' },
+  { key: 'catalog', label: '目录', hint: '全部章节的目录清单' },
+  { key: 'chapters', label: '章节', hint: '各章正文，逐章存为 txt' },
+  { key: 'info', label: '作品信息以及发布建议', hint: '作品信息 + AI 生成的番茄小说发布建议与封面图片' },
+]
+
+function CheckboxRow({
+  checked,
+  label,
+  hint,
+  onToggle,
+}: {
+  checked: boolean
+  label: string
+  hint?: string
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      onClick={onToggle}
+      className="flex w-full items-start gap-3 rounded-[14px] px-3 py-2.5 text-left transition hover:bg-[var(--surface-muted)]"
+    >
+      <span
+        className={cn(
+          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition',
+          checked
+            ? 'border-[var(--surface-contrast)] bg-[var(--surface-contrast)] text-[var(--text-contrast)]'
+            : 'border-[var(--border-strong)] bg-transparent text-transparent',
+        )}
+      >
+        <Check className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>
+        {hint ? <span className="mt-0.5 block text-xs leading-5 text-[var(--text-tertiary)]">{hint}</span> : null}
+      </span>
+    </button>
+  )
+}
+
+/** 一键导出弹窗：勾选四类内容，章节支持全量或按章自选，确认后服务端打包 zip 直接下载 */
+export default function ExportDialog({ open, novelId, novelTitle, chapters, onClose }: ExportDialogProps) {
+  const toast = useToast()
+  const [sections, setSections] = useState<Record<SectionKey, boolean>>({
+    plans: true,
+    catalog: true,
+    chapters: true,
+    info: true,
+  })
+  const [chapterMode, setChapterMode] = useState<'all' | 'custom'>('all')
+  const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
+  const [exporting, setExporting] = useState(false)
+
+  // 每次打开重置为「全部导出」，避免沿用上次勾选造成意外裁剪
+  useEffect(() => {
+    if (open) {
+      setSections({ plans: true, catalog: true, chapters: true, info: true })
+      setChapterMode('all')
+      setSelectedChapterIds([])
+      setExporting(false)
+    }
+  }, [open])
+
+  const allChapterIds = useMemo(() => chapters.map((chapter) => chapter.id), [chapters])
+  const customValid = chapterMode === 'all' || selectedChapterIds.length > 0
+  const anySectionChecked = Object.values(sections).some(Boolean)
+  const canExport = anySectionChecked && (!sections.chapters || customValid) && !exporting
+
+  if (!open) return null
+
+  const toggleSection = (key: SectionKey) => {
+    setSections((current) => ({ ...current, [key]: !current[key] }))
+  }
+
+  const toggleChapter = (chapterId: string) => {
+    setSelectedChapterIds((current) =>
+      current.includes(chapterId) ? current.filter((id) => id !== chapterId) : [...current, chapterId],
+    )
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await downloadNovelExportZip(novelId, {
+        includePlans: sections.plans,
+        includeCatalog: sections.catalog,
+        includeInfo: sections.info,
+        includeChapters: sections.chapters,
+        chapterIds: sections.chapters && chapterMode === 'custom' ? selectedChapterIds : undefined,
+      })
+      toast.success('导出完成，文件已开始下载。')
+      onClose()
+    } catch (error) {
+      toast.error(error instanceof Error && error.message ? error.message : '导出失败，请稍后重试。')
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-end justify-center bg-[rgba(15,23,42,0.45)] p-0 sm:items-center sm:p-6" onClick={onClose}>
+      <div
+        className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-[24px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[var(--shadow-soft)] sm:rounded-[24px]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-5 py-4">
+          <FolderDown className="h-5 w-5 shrink-0 text-[var(--text-secondary)]" />
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-semibold text-[var(--text-primary)]">一键导出</h3>
+            <p className="truncate text-xs text-[var(--text-tertiary)]">《{novelTitle}》将以 zip 打包下载</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭导出弹窗"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-secondary)] transition hover:bg-[var(--surface-muted)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          <p className="px-3 pb-1 text-xs font-medium text-[var(--text-tertiary)]">导出内容</p>
+          <div className="space-y-0.5">
+            {SECTION_OPTIONS.map((option) => (
+              <CheckboxRow
+                key={option.key}
+                checked={sections[option.key]}
+                label={option.label}
+                hint={option.hint}
+                onToggle={() => toggleSection(option.key)}
+              />
+            ))}
+          </div>
+
+          {sections.chapters && chapters.length > 0 ? (
+            <div className="mt-3 rounded-[14px] border border-[var(--border-subtle)]">
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2.5">
+                <p className="text-xs font-medium text-[var(--text-tertiary)]">
+                  章节范围（共 {chapters.length} 章）
+                </p>
+                <div className="flex items-center gap-1.5">
+                  {(['all', 'custom'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        setChapterMode(mode)
+                        if (mode === 'custom' && selectedChapterIds.length === 0) {
+                          setSelectedChapterIds(allChapterIds)
+                        }
+                      }}
+                      className={cn(
+                        'rounded-full px-3 py-1 text-xs transition',
+                        chapterMode === mode
+                          ? 'bg-[var(--surface-contrast)] font-medium text-[var(--text-contrast)]'
+                          : 'bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]/70',
+                      )}
+                    >
+                      {mode === 'all' ? '全部章节' : '自选章节'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {chapterMode === 'custom' ? (
+                <div className="max-h-56 overflow-y-auto p-1.5">
+                  <div className="flex items-center justify-between px-2 pb-1">
+                    <p className="text-[11px] text-[var(--text-tertiary)]">已选 {selectedChapterIds.length} 章</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedChapterIds(selectedChapterIds.length === allChapterIds.length ? [] : allChapterIds)
+                      }
+                      className="text-[11px] text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                    >
+                      {selectedChapterIds.length === allChapterIds.length ? '全部取消' : '全部选中'}
+                    </button>
+                  </div>
+                  {chapters.map((chapter, index) => (
+                    <CheckboxRow
+                      key={chapter.id}
+                      checked={selectedChapterIds.includes(chapter.id)}
+                      label={`第${index + 1}章 ${chapter.title}`}
+                      hint={`${chapter.wordCount} 字 · ${chapter.status === 'published' ? '已发布' : '草稿'}`}
+                      onToggle={() => toggleChapter(chapter.id)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 items-center rounded-full px-4 text-sm text-[var(--text-secondary)] transition hover:bg-[var(--surface-muted)]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={!canExport}
+            onClick={() => void handleExport()}
+            className="inline-flex h-10 items-center gap-2 rounded-full bg-[var(--surface-contrast)] px-5 text-sm font-medium text-[var(--text-contrast)] transition hover:bg-[var(--surface-contrast-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {exporting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FolderDown className="h-4 w-4" />}
+            {exporting ? '正在打包导出' : '开始导出'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

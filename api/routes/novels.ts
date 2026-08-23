@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express'
+import { z } from 'zod'
 
 import {
   FIXED_NOVEL_COVER_HEIGHT,
@@ -29,11 +30,21 @@ import {
   updateNovelData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
+import { buildNovelExportZip } from '../lib/export-service.js'
 import { storeNovelCoverDataUrl } from '../lib/novel-cover-storage.js'
 import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
 
 const router = Router()
+
+/** 一键导出选项：四类内容可勾选，chapterIds 缺省导出全部章节 */
+const exportNovelSchema = z.object({
+  includePlans: z.boolean().optional(),
+  includeCatalog: z.boolean().optional(),
+  includeInfo: z.boolean().optional(),
+  includeChapters: z.boolean().optional(),
+  chapterIds: z.array(z.string().min(1)).optional(),
+})
 
 async function handleNovelDetailRequest(req: Request, res: Response, novelId: string): Promise<void> {
   const requestId = createRequestId()
@@ -197,6 +208,23 @@ router.post('/:novelId/publish', async (req: Request, res: Response): Promise<vo
     }
 
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 一键导出：服务端组装 zip（规划/目录/章节/作品信息以及发布建议），二进制流直接下发
+router.post('/:novelId/export', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const body = parseBody(exportNovelSchema, req.body, '导出选项格式不正确。')
+    const result = await buildNovelExportZip(userId, req.params.novelId, body)
+
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(result.fileName)}`)
+    res.status(200).send(result.buffer)
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

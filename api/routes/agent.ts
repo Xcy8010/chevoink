@@ -9,6 +9,7 @@ import {
 } from '../../shared/contracts/index.js'
 import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
+import { getStoredExport } from '../lib/export-store.js'
 import { stopActiveRunsInSession } from '../lib/agent/active-runs.js'
 import {
   createNovelPlanArtifact,
@@ -342,6 +343,27 @@ router.patch('/plans/:artifactId', async (req: Request, res: Response): Promise<
 
     const payload = await updateNovelPlanArtifact(userId, req.params.artifactId, patch)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 一键导出产物下载：内存仓库 TTL 15 分钟，校验会话归属
+router.get('/exports/:exportId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const stored = getStoredExport(req.params.exportId, userId)
+
+    if (!stored) {
+      res.status(404).json(buildError(requestId, 'EXPORT_NOT_FOUND', '导出文件不存在或已过期，请重新导出。'))
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(stored.fileName)}`)
+    res.status(200).send(stored.buffer)
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

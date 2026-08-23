@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FilePlus2,
   FileText as FileTextIcon,
+  FolderDown,
   ImagePlus,
   MoreHorizontal,
   NotebookPen,
@@ -111,6 +112,7 @@ type ImmersiveComposerProps = {
   onOpenMeta?: () => void
   onPublishNovel?: () => void
   onDeleteNovel?: () => void
+  onExport?: () => void
   novelPublished?: boolean
   novelSaving?: boolean
   agentPanel: ReactNode
@@ -179,6 +181,7 @@ export default function ImmersiveComposer({
   onOpenMeta,
   onPublishNovel,
   onDeleteNovel,
+  onExport,
   novelPublished = false,
   novelSaving = false,
   agentPanel,
@@ -466,6 +469,12 @@ export default function ImmersiveComposer({
               <Save className="h-4 w-4" />
               立即保存
             </Button>
+            {onExport ? (
+              <Button variant="secondary" onClick={onExport}>
+                <FolderDown className="h-4 w-4" />
+                一键导出
+              </Button>
+            ) : null}
             <Button variant="ghost" onClick={onClose}>
               <ArrowLeft className="h-4 w-4" />
               退出沉浸
@@ -995,6 +1004,19 @@ export default function ImmersiveComposer({
                       >
                         <Upload className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
                         {novelPublished ? '更新发布' : '发布作品'}
+                      </button>
+                    ) : null}
+                    {onExport ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false)
+                          onExport()
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
+                      >
+                        <FolderDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                        一键导出
                       </button>
                     ) : null}
                     {onDeleteNovel ? (

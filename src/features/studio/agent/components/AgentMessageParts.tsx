@@ -7,8 +7,10 @@ import {
   ChevronRight,
   ChevronUp,
   CircleAlert,
+  Download,
   Eye,
   FileText,
+  FolderDown,
   Library,
   LoaderCircle,
   Search,
@@ -16,6 +18,7 @@ import {
   Wrench,
 } from 'lucide-react'
 
+import { buildApiUrl } from '@/app/api-base'
 import { cn } from '@/lib/utils'
 import ImageLightbox from '../../components/ImageLightbox'
 import type {
@@ -522,6 +525,28 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
         <p className="text-[11px] text-[var(--text-secondary)]">
           {display.intent === 'open_meta' ? '已请求打开作品信息面板' : '已请求打开封面面板'}
         </p>
+      )
+    case 'exportReady':
+      return (
+        <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <FolderDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-[var(--text-primary)]">{display.fileName}</p>
+              <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-secondary)]">
+                含{display.detail} · 链接 15 分钟内有效
+              </p>
+            </div>
+          </div>
+          <a
+            href={buildApiUrl(display.downloadUrl)}
+            download={display.fileName}
+            className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface-contrast)] px-3 text-xs font-medium text-[var(--text-contrast)] transition hover:bg-[var(--surface-contrast-hover)]"
+          >
+            <Download className="h-3.5 w-3.5" />
+            下载导出包
+          </a>
+        </div>
       )
     case 'question':
       return (

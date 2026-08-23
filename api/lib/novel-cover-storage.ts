@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
@@ -123,4 +123,28 @@ async function writeCoverBuffer(
   await writeFile(path.join(coverDirectory, filename), buffer)
 
   return `${MANAGED_NOVEL_COVER_PREFIX}${filename}`
+}
+
+/** 一键导出用：托管封面 URL 读回原始字节；非托管地址或读盘失败返回 null 由调用方降级 */
+export async function readNovelCoverBuffer(
+  coverUrl: string | null,
+): Promise<{ buffer: Buffer; extension: string } | null> {
+  if (!coverUrl || !coverUrl.startsWith(MANAGED_NOVEL_COVER_PREFIX)) {
+    return null
+  }
+
+  const filename = path.basename(decodeURIComponent(coverUrl.slice(MANAGED_NOVEL_COVER_PREFIX.length)).split('?')[0])
+
+  // 防路径穿越：只允许 uuid 风格的单层文件名
+  if (!/^[a-f0-9-]+\.(png|jpg|webp)$/i.test(filename) || filename.includes('..')) {
+    return null
+  }
+
+  try {
+    const buffer = await readFile(path.join(getNovelCoverDirectory(), filename))
+    const extension = filename.split('.').pop()?.toLowerCase() ?? 'jpg'
+    return { buffer, extension }
+  } catch {
+    return null
+  }
 }

@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, ChevronLeft, FileText, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
+import { BookOpen, BookOpenText, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -23,6 +23,7 @@ import AgentTaskSidebar from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
 import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
+import ExportDialog from './components/ExportDialog'
 import { buildReviewDiff, resolveReviewHunk } from './components/diff'
 import ImmersiveComposer from './components/ImmersiveComposer'
 import MetaPanel from './components/MetaPanel'
@@ -81,6 +82,7 @@ export default function StudioWorkspace() {
   const [coverGenerationBusy, setCoverGenerationBusy] = useState(false)
   const [coverGenerationProgress, setCoverGenerationProgress] = useState(0)
   const [chapters, setChapters] = useState<StudioPayload['chapters']>([])
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null)
   const [selectedTreeItemId, setSelectedTreeItemId] = useState<string | null>(null)
   const [catalogDocument, setCatalogDocument] = useState<{
@@ -3819,6 +3821,7 @@ export default function StudioWorkspace() {
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'immersive', label: '沉浸创作', icon: WandSparkles, action: () => handleEnterImmersive() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
+                  { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },
                   ...(previewHref
                     ? [{ key: 'preview', label: '预览阅读', icon: BookOpen, action: () => navigate(previewHref) }]
                     : []),
@@ -3891,6 +3894,7 @@ export default function StudioWorkspace() {
             onSaveNovel={handleSaveNovel}
             onPublishNovel={handlePublishNovel}
             onDeleteNovel={handleRequestDeleteNovel}
+            onExport={() => setExportDialogOpen(true)}
             onSelectNovel={handleSelectWorkspaceNovel}
             onCreateNovel={handleCreateWorkspaceNovel}
             onEditNovelTitle={() => setActiveToolPanel('meta')}
@@ -4054,6 +4058,7 @@ export default function StudioWorkspace() {
           onEditNovelTitle={() => setActiveToolPanel('meta')}
           detailPreviewHref={detailPreviewHref}
           previewHref={previewHref}
+          onExport={() => setExportDialogOpen(true)}
           onSelectChapter={handleSelectChapter}
           onSelectPlan={handleSelectPlanFromTree}
           onDeletePlan={handleRequestDeletePlan}
@@ -4185,6 +4190,13 @@ export default function StudioWorkspace() {
           }
         }}
         onConfirm={(chapterIds, visibility) => publishNovelMutation.mutate({ chapterIds, visibility })}
+      />
+      <ExportDialog
+        open={exportDialogOpen}
+        novelId={currentNovel.id}
+        novelTitle={novelForm?.title ?? currentNovel?.title ?? ''}
+        chapters={chapters}
+        onClose={() => setExportDialogOpen(false)}
       />
       <NovelCoverCropDialog
         open={Boolean(pendingCoverUploadFile)}
