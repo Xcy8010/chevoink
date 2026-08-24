@@ -76,7 +76,9 @@ export async function startLoopRun(
       select: { id: true },
     })
     if (!chapter) {
-      throw new DataAccessError(404, 'NOT_FOUND', '章节不存在或不属于该作品。')
+      // 独立错误码：前端据此丢弃失效 chapterId 重试；严禁与会话 404 共用 NOT_FOUND，
+      // 否则前端会把「章节被回退删除」误判成「会话被删除」而清空整段对话
+      throw new DataAccessError(404, 'CHAPTER_NOT_FOUND', '章节不存在或不属于该作品。')
     }
   }
 

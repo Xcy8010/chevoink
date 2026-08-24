@@ -349,16 +349,35 @@ export function AgentPanel({
           ensuredSessionId = await ensureSession()
           lazySessionRef.current = ensuredSessionId
         }
-        const result = await startAgentLoopRun({
-          sessionId: ensuredSessionId,
-          novelId,
-          chapterId: chapterId ?? null,
-          // Agent 默认最大权限：恒以 build 模式运行（后端路由也有强制兜底）
-          mode: 'build',
-          prompt,
-          selection: selection ?? null,
-          attachments: attachments.length > 0 ? attachments : undefined,
-        })
+        const startRun = (targetChapterId: string | null) =>
+          startAgentLoopRun({
+            sessionId: ensuredSessionId,
+            novelId,
+            chapterId: targetChapterId,
+            // Agent 默认最大权限：恒以 build 模式运行（后端路由也有强制兜底）
+            mode: 'build',
+            prompt,
+            selection: selection ?? null,
+            attachments: attachments.length > 0 ? attachments : undefined,
+          })
+        let result: Awaited<ReturnType<typeof startAgentLoopRun>>
+        try {
+          result = await startRun(chapterId ?? null)
+        } catch (error) {
+          // 当前打开的章节被回退删除等导致 chapterId 失效：丢弃失效章节重试一次。
+          // 与会话删除严格区分（此前两者共用 404 NOT_FOUND，章节 404 会被误判成
+          // 「会话已被删除」而清空整段对话并新建会话——P0 数据丢失事故根因）
+          if (
+            chapterId &&
+            error instanceof AgentApiError &&
+            error.status === 404 &&
+            error.code === 'CHAPTER_NOT_FOUND'
+          ) {
+            result = await startRun(null)
+          } else {
+            throw error
+          }
+        }
         useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId, attachments)
         connect(result.runId)
       } catch (error) {

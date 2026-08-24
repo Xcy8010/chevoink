@@ -929,6 +929,18 @@ export default function StudioWorkspace() {
       const previousCoverAssetId = currentNovelStateRef.current?.coverAssetId ?? null
 
       setChapters(payload.chapters)
+      // 当前打开的章节被回退删除：回落到首章或目录。
+      // 失效的 selectedChapterId 会让后续发送在后端报章节 404，
+      // 此前前端把它误判成会话删除而清空整段对话（P0 数据丢失事故根因）
+      if (selectedChapterId && !payload.chapters.some((chapter) => chapter.id === selectedChapterId)) {
+        const fallbackChapter = payload.chapters[0] ?? null
+        setSelectedChapterId(fallbackChapter?.id ?? null)
+        setSelectedTreeItemId(fallbackChapter ? `chapter:${fallbackChapter.id}` : 'catalog')
+        setChapterDraft(null)
+        setChapterDirty(false)
+        setChapterSaveState('idle')
+        setChapterSaveMessage(fallbackChapter ? '正在打开章节...' : '当前章节已被回退删除。')
+      }
       setCurrentNovel(payload.novel)
       setCoverAssets(payload.coverAssets)
       // fresh payload 写回缓存，保持双源一致（避免丢章 bug）
