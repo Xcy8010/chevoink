@@ -187,13 +187,13 @@ AUTH_COOKIE_SECURE=false
 
 ## 5.6 AI 文本服务
 
-当前文本模型为 `deepseek-v4-pro`，建议：
+当前文本模型为 `deepseek-v4-flash`，建议：
 
 ```env
 AI_TEXT_PROVIDER=deepseek
 AI_TEXT_BASE_URL=https://api.deepseek.com
 AI_TEXT_API_KEY=replace_me
-AI_TEXT_MODEL=deepseek-v4-pro
+AI_TEXT_MODEL=deepseek-v4-flash
 AI_TEXT_CONTEXT_MAX_TOKENS=1000000
 AI_TEXT_CONTEXT_SOFT_LIMIT=700000
 AI_TEXT_CONTEXT_COMPRESS_LEVEL1=850000

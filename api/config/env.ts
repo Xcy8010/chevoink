@@ -58,7 +58,7 @@ export const env = {
   aiTextBaseUrl: process.env.AI_TEXT_BASE_URL ?? 'https://api.deepseek.com',
   aiTextApiKeyConfigured: isConfigured(process.env.AI_TEXT_API_KEY),
   aiTextApiKey: process.env.AI_TEXT_API_KEY ?? '',
-  aiTextModel: process.env.AI_TEXT_MODEL ?? 'deepseek-v4-pro',
+  aiTextModel: process.env.AI_TEXT_MODEL ?? 'deepseek-v4-flash',
   aiTextContextMaxTokens: parsePositiveNumber(process.env.AI_TEXT_CONTEXT_MAX_TOKENS, 1000000),
   aiTextContextSoftLimit: parsePositiveNumber(process.env.AI_TEXT_CONTEXT_SOFT_LIMIT, 700000),
   aiTextContextCompressLevel1: parsePositiveNumber(
