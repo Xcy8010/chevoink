@@ -11,6 +11,10 @@ import type {
 import { createCoverAssetsData } from './data-access.js'
 import {
   FANQIE_ALL_CATEGORIES,
+  FANQIE_CONTENT_EMOTION_TAGS,
+  FANQIE_CONTENT_PLOT_TAGS,
+  FANQIE_CONTENT_ROLE_TAGS,
+  FANQIE_CONTENT_WORLDVIEW_TAGS,
   FANQIE_PLOT_TAGS,
   FANQIE_ROLE_TAGS,
   FANQIE_THEME_TAGS,
@@ -26,6 +30,8 @@ type TextCompletionOptions = {
   targetType?: string
   targetId?: string | null
   temperature?: number
+  /** 思考强度按调用覆盖：简单分类/打标类任务用 low 提速，默认走 env 全局值 */
+  reasoningEffort?: 'low' | 'high' | 'max'
 }
 
 function ensureTextProviderConfigured() {
@@ -395,7 +401,7 @@ export async function generateTextCompletion(
     body: JSON.stringify({
       model: env.aiTextModel,
       temperature: options.temperature ?? 0.7,
-      reasoning_effort: env.aiReasoningEffort,
+      reasoning_effort: options.reasoningEffort ?? env.aiReasoningEffort,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -643,8 +649,10 @@ function extractJsonObject(content: string): unknown {
 }
 
 /**
- * 番茄小说发布建议：男频/女频、主分类（单选）、主题/角色/情节标签（各≤2）与主角名（≤2）。
+ * 番茄小说发布建议：男频/女频、主分类（单选）、阅读标签（作品/角色/情节各≤2）、
+ * 内容标签（情节≤4/人设≤4/情感≤2/世界观≤1）、主角名（≤2）与作品简介。
  * 模型输出经 sanitizePublishAdvice 钳制到番茄词表，非法标签一律丢弃。
+ * 简单打标任务思考强度用 low：显著缩短首字延迟，质量足够。
  */
 export async function generatePublishAdviceData(
   userId: string,
@@ -658,9 +666,9 @@ export async function generatePublishAdviceData(
   },
 ): Promise<PublishAdvice> {
   const systemPrompt = [
-    '你是番茄小说的资深责编，熟悉番茄作者端的作品标签体系。',
-    '请根据作品信息快速判断其在番茄发布的标签配置，只输出一个 JSON 对象，不要输出其它内容。',
-    'JSON 字段：channel（"男频"或"女频"）、mainCategory（主分类，只能从给定主分类清单选一个）、themeTags（主题，最多2个，只能从主题清单选）、roleTags（角色，最多2个，只能从角色清单选）、plotTags（情节，最多2个，只能从情节清单选）、protagonists（主角名字，最多2个）、advice（50-150字发布建议，含开篇节奏与卖点）。',
+    '你是番茄小说的资深责编，熟悉番茄作者端的标签体系。',
+    '请根据作品信息快速判断其在番茄发布的标签配置并写一份作品简介，只输出一个 JSON 对象，不要输出其它内容。',
+    'JSON 字段：channel（"男频"或"女频"）、mainCategory（主分类，只能从给定主分类清单选一个）、themeTags（阅读标签·作品，最多2个，只能从主题清单选）、roleTags（阅读标签·角色，最多2个，只能从角色清单选）、plotTags（阅读标签·情节，最多2个，只能从情节清单选）、contentPlotTags（内容标签·情节，最多4个，只能从内容情节清单选）、contentRoleTags（内容标签·人设，最多4个，只能从内容人设清单选）、contentEmotionTags（内容标签·情感，最多2个，只能从内容情感清单选）、contentWorldviewTags（内容标签·世界观，最多1个，只能从内容世界观清单选）、protagonists（主角名字，最多2个）、summary（100-200字作品简介，突出卖点与悬念，可直接用于发布）。',
     '严禁使用清单之外的标签。',
   ].join('\n')
 
@@ -674,6 +682,10 @@ export async function generatePublishAdviceData(
     `主题清单：${FANQIE_THEME_TAGS.join('、')}`,
     `角色清单：${FANQIE_ROLE_TAGS.join('、')}`,
     `情节清单：${FANQIE_PLOT_TAGS.join('、')}`,
+    `内容情节清单：${FANQIE_CONTENT_PLOT_TAGS.join('、')}`,
+    `内容人设清单：${FANQIE_CONTENT_ROLE_TAGS.join('、')}`,
+    `内容情感清单：${FANQIE_CONTENT_EMOTION_TAGS.join('、')}`,
+    `内容世界观清单：${FANQIE_CONTENT_WORLDVIEW_TAGS.join('、')}`,
   ].join('\n')
 
   const content = await generateTextCompletion(systemPrompt, userPrompt, {
@@ -682,6 +694,7 @@ export async function generatePublishAdviceData(
     novelId: input.novelId ?? null,
     targetType: 'publishAdvice',
     temperature: 0.3,
+    reasoningEffort: 'low',
   })
 
   return sanitizePublishAdvice(extractJsonObject(content))

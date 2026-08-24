@@ -1,5 +1,6 @@
 import { DataAccessError, prisma } from './prisma.js'
 import { generatePublishAdviceData } from './ai-service.js'
+import type { PublishAdvice } from '../../shared/contracts/index.js'
 import { listNovelPlanArtifacts } from './agent/plan-artifacts.js'
 import { readNovelCoverBuffer } from './novel-cover-storage.js'
 import { buildZipBuffer, type ZipEntry } from './zip-writer.js'
@@ -35,6 +36,64 @@ function formatDateTime(value: Date): string {
   const pad = (num: number) => String(num).padStart(2, '0')
 
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}`
+}
+
+/** 发布建议缓存：作品未变化（书名/简介/标签/首章）时直接复用上次 AI 结果，重复导出零等待 */
+const publishAdviceCache = new Map<string, { fingerprint: string; advice: PublishAdvice }>()
+
+type AdviceNovelInput = {
+  id: string
+  title: string
+  displayTitle: string | null
+  summary: string
+  categoryName: string | null
+  tagNames: string[]
+  updatedAt: Date
+}
+
+type AdviceChapterInput = { id: string; content: string; wordCount: number; updatedAt: Date }
+
+function buildAdviceFingerprint(
+  novel: AdviceNovelInput,
+  firstChapter: AdviceChapterInput | undefined,
+): string {
+  return [
+    novel.updatedAt.getTime(),
+    novel.title,
+    novel.displayTitle ?? '',
+    novel.summary,
+    novel.categoryName ?? '',
+    novel.tagNames.join('、'),
+    firstChapter ? `${firstChapter.id}:${firstChapter.updatedAt.getTime()}:${firstChapter.wordCount}` : 'no-chapter',
+  ].join('|')
+}
+
+async function resolvePublishAdvice(
+  userId: string,
+  novel: AdviceNovelInput,
+  firstChapter: AdviceChapterInput | undefined,
+): Promise<PublishAdvice> {
+  const fingerprint = buildAdviceFingerprint(novel, firstChapter)
+  const cached = publishAdviceCache.get(novel.id)
+  if (cached && cached.fingerprint === fingerprint) {
+    return cached.advice
+  }
+
+  const advice = await generatePublishAdviceData(userId, {
+    novelId: novel.id,
+    title: novel.displayTitle?.trim() || novel.title,
+    summary: novel.summary,
+    genre: novel.categoryName ?? '未分类',
+    tags: novel.tagNames,
+    sampleText: firstChapter?.content ?? '',
+  })
+
+  if (publishAdviceCache.size > 200) {
+    publishAdviceCache.clear()
+  }
+  publishAdviceCache.set(novel.id, { fingerprint, advice })
+
+  return advice
 }
 
 /**
@@ -78,7 +137,7 @@ export async function buildNovelExportZip(
   const allChapters = await prisma.chapter.findMany({
     where: { novelId },
     orderBy: { orderIndex: 'asc' },
-    select: { id: true, title: true, content: true, wordCount: true, status: true },
+    select: { id: true, title: true, content: true, wordCount: true, status: true, updatedAt: true },
   })
 
   const wantedIds = options.chapterIds?.length ? new Set(options.chapterIds) : null
@@ -87,6 +146,9 @@ export async function buildNovelExportZip(
   if (includeChapters && wantedIds && chapters.length === 0) {
     throw new DataAccessError(400, 'VALIDATION_ERROR', '勾选的章节不存在，请重新选择。')
   }
+
+  // 发布建议是导出唯一慢步骤（AI 调用）：缓存未命中时尽早发请求，与后续装配并行隐藏延迟
+  const advicePromise = includeInfo ? resolvePublishAdvice(userId, novel, allChapters[0]) : null
 
   const root = sanitizePathComponent(novel.displayTitle?.trim() || novel.title, '未命名作品')
   const entries: ZipEntry[] = []
@@ -152,27 +214,27 @@ export async function buildNovelExportZip(
     let adviceText = '发布建议本次未生成（AI 服务暂不可用），可稍后重新导出。'
 
     try {
-      const advice = await generatePublishAdviceData(userId, {
-        novelId: novel.id,
-        title: novel.displayTitle?.trim() || novel.title,
-        summary: novel.summary,
-        genre: novel.categoryName ?? '未分类',
-        tags: novel.tagNames,
-        sampleText: allChapters[0]?.content ?? '',
-      })
+      const advice = advicePromise ? await advicePromise : null
 
-      adviceText = [
-        `《${novel.displayTitle?.trim() || novel.title}》番茄小说发布建议`,
-        '',
-        `频道：${advice.channel}`,
-        `主分类：${advice.mainCategory || '（建议在番茄作者端结合主分类清单人工确认）'}`,
-        `作品标签：${advice.themeTags.join('、') || '（无）'}`,
-        `角色标签：${advice.roleTags.join('、') || '（无）'}`,
-        `情节：${advice.plotTags.join('、') || '（无）'}`,
-        `主角名字：${advice.protagonists.join('、') || '（无）'}`,
-        '',
-        `综合建议：${advice.advice || '（无）'}`,
-      ].join('\n')
+      if (advice) {
+        adviceText = [
+          `《${novel.displayTitle?.trim() || novel.title}》番茄小说发布建议`,
+          '',
+          `频道：${advice.channel}`,
+          `主分类：${advice.mainCategory || '（建议在番茄作者端结合主分类清单人工确认）'}`,
+          `阅读标签·作品：${advice.themeTags.join('、') || '（无）'}`,
+          `阅读标签·角色：${advice.roleTags.join('、') || '（无）'}`,
+          `阅读标签·情节：${advice.plotTags.join('、') || '（无）'}`,
+          `内容标签·情节：${advice.contentPlotTags.join('、') || '（无）'}`,
+          `内容标签·人设：${advice.contentRoleTags.join('、') || '（无）'}`,
+          `内容标签·情感：${advice.contentEmotionTags.join('、') || '（无）'}`,
+          `内容标签·世界观：${advice.contentWorldviewTags.join('、') || '（无）'}`,
+          `主角名字：${advice.protagonists.join('、') || '（无）'}`,
+          '',
+          '作品简介：',
+          advice.summary || '（无）',
+        ].join('\n')
+      }
     } catch {
       // AI 不可用不阻断导出，降级文案已就位
     }
