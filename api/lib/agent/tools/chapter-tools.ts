@@ -216,11 +216,15 @@ export const chapterEditRangeTool = defineTool({
   name: 'chapter_edit_range',
   title: '改写章节片段',
   description:
-    '按字符区间替换章节正文的一个片段（选区级改写/润色），避免整章覆盖。start/end 为字符下标（含头不含尾），与用户选中文本或 chapter_read 返回的定位一致。',
+    '按原文锚点或字符区间替换章节正文的一个片段（选区级改写/润色），避免整章覆盖。推荐传 oldText（逐字拷贝要替换的原文片段，系统自动定位并计算下标，严禁自己数字数算下标）；start/end 字符下标（含头不含尾）仅在作者选区提供精确坐标时使用。',
   parameters: z.object({
     chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
-    start: z.number().int().min(0).describe('片段起始字符位置'),
-    end: z.number().int().min(0).describe('片段结束字符位置（不含）'),
+    oldText: z
+      .string()
+      .optional()
+      .describe('要替换的原文片段（从 chapter_read 返回的正文逐字拷贝，含标点换行）；系统自动定位，须在正文中唯一，不唯一就向两侧多拷几句'),
+    start: z.number().int().min(0).optional().describe('片段起始字符位置（仅作者选区给出精确坐标时传；常规改写用 oldText 定位）'),
+    end: z.number().int().min(0).optional().describe('片段结束字符位置（不含）'),
     newText: z.string().describe('替换后的新文本'),
   }),
   permission: WRITE_PERMISSION,
@@ -236,8 +240,30 @@ export const chapterEditRangeTool = defineTool({
       return buildChapterNotFound(ctx, chapterId)
     }
 
-    if (args.end < args.start || args.start > chapter.content.length) {
-      return { output: `区间 [${args.start}, ${args.end}) 无效：章节正文总长 ${chapter.content.length} 字。请先 chapter_read 确认定位。` }
+    const before = chapter.content
+
+    // 定位优先级：oldText 锚点（系统算下标，模型免数数）> 选区精确坐标 start/end
+    let start: number
+    let end: number
+    if (args.oldText) {
+      const first = before.indexOf(args.oldText)
+      if (first === -1) {
+        return { output: `oldText 未在正文中逐字匹配到（标点、换行须完全一致）。请先 chapter_read 逐字拷贝要替换的原文再传 oldText。` }
+      }
+      if (before.indexOf(args.oldText, first + args.oldText.length) !== -1) {
+        return { output: `oldText 在正文中出现多次，无法唯一定位。请向两侧多拷几句上下文使其在正文中唯一。` }
+      }
+      start = first
+      end = first + args.oldText.length
+    } else if (args.start !== undefined && args.end !== undefined) {
+      start = args.start
+      end = args.end
+    } else {
+      return { output: `请提供 oldText（逐字拷贝原文片段定位，推荐）或 start/end 字符下标。` }
+    }
+
+    if (end < start || start > before.length) {
+      return { output: `区间 [${start}, ${end}) 无效：章节正文总长 ${before.length} 字。请先 chapter_read 确认定位。` }
     }
 
     const baseline = getChapterBaseline(ctx.runId, chapter.id)
@@ -245,9 +271,7 @@ export const chapterEditRangeTool = defineTool({
       return buildConflictResult(chapter.title)
     }
 
-    const before = chapter.content
-    const end = Math.min(args.end, before.length)
-    const after = before.slice(0, args.start) + args.newText + before.slice(end)
+    const after = before.slice(0, start) + args.newText + before.slice(end)
 
     const updated = await prisma.chapter.update({
       where: { id: chapter.id },
@@ -257,7 +281,7 @@ export const chapterEditRangeTool = defineTool({
     recordChapterBaseline(ctx.runId, chapter.id, updated.updatedAt)
 
     return {
-      output: `已改写《${chapter.title}》第 ${args.start}-${end} 字的片段（原 ${end - args.start} 字 → 新 ${args.newText.length} 字）。`,
+      output: `已改写《${chapter.title}》第 ${start}-${end} 字的片段（原 ${end - start} 字 → 新 ${args.newText.length} 字）。`,
       summary: `改写《${chapter.title}》片段 · ${args.newText.length} 字`,
       display: {
         kind: 'chapterDiff',
