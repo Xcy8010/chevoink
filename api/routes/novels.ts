@@ -31,6 +31,7 @@ import {
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { buildNovelExportZip } from '../lib/export-service.js'
+import { createStoredExport, getStoredExportByToken } from '../lib/export-store.js'
 import { storeNovelCoverDataUrl } from '../lib/novel-cover-storage.js'
 import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
@@ -114,6 +115,27 @@ router.get('/cards', async (req: Request, res: Response): Promise<void> => {
   try {
     const items = await listNovelCardsByIdsData(ids, getSessionUserId(req))
     res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 一键导出产物匿名下载：APP 壳外跳系统浏览器后无会话 Cookie，只验 token（randomUUID + TTL 15 分钟）；
+// 必须先于 /:novelId 注册，避免被动态段吞掉
+router.get('/exports/:exportId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const stored = getStoredExportByToken(req.params.exportId)
+
+    if (!stored) {
+      res.status(404).json(buildError(requestId, 'EXPORT_NOT_FOUND', '导出文件不存在或已过期，请重新导出。'))
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(stored.fileName)}`)
+    res.status(200).send(stored.buffer)
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
@@ -225,6 +247,29 @@ router.post('/:novelId/export', async (req: Request, res: Response): Promise<voi
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(result.fileName)}`)
     res.status(200).send(result.buffer)
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 一键导出（APP 壳专用）：服务端打包并暂存，返回一次性下载链接；
+// 壳内 WebView 会吞掉 blob/同源下载，前端拿链接外跳系统浏览器完成保存
+router.post('/:novelId/export-link', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const body = parseBody(exportNovelSchema, req.body, '导出选项格式不正确。')
+    const result = await buildNovelExportZip(userId, req.params.novelId, body)
+    const exportId = createStoredExport(userId, result.buffer, result.fileName)
+
+    res.status(200).json(
+      buildSuccess(requestId, {
+        exportId,
+        downloadUrl: `/api/novels/exports/${exportId}`,
+        fileName: result.fileName,
+      }),
+    )
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

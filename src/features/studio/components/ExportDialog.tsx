@@ -2,10 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, FolderDown, LoaderCircle, X } from 'lucide-react'
 
 import { useToast } from '@/components/ui/toast-context'
+import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import type { ChapterListItem } from '../../../../shared/contracts/index.js'
 
-import { downloadNovelExportZip } from '../lib/export-download'
+import {
+  downloadNovelExportZip,
+  openExportDownloadInBrowser,
+  requestNovelExportLink,
+  type NovelExportRequest,
+} from '../lib/export-download'
 
 type ExportDialogProps = {
   open: boolean
@@ -104,14 +110,25 @@ export default function ExportDialog({ open, novelId, novelTitle, chapters, onCl
   const handleExport = async () => {
     setExporting(true)
     try {
-      await downloadNovelExportZip(novelId, {
+      const options: NovelExportRequest = {
         includePlans: sections.plans,
         includeCatalog: sections.catalog,
         includeInfo: sections.info,
         includeChapters: sections.chapters,
         chapterIds: sections.chapters && chapterMode === 'custom' ? selectedChapterIds : undefined,
-      })
-      toast.success('导出完成，文件已开始下载。')
+      }
+
+      if (isNativeApp()) {
+        // APP 壳内 WebView 会吞掉 blob 下载（下载了也找不到文件）：
+        // 服务端打包暂存后拿一次性链接，外跳系统浏览器完成保存
+        const link = await requestNovelExportLink(novelId, options)
+        openExportDownloadInBrowser(link.downloadUrl)
+        toast.success('导出打包完成，已跳转系统浏览器下载，完成后请查看手机「下载」文件夹。')
+      } else {
+        await downloadNovelExportZip(novelId, options)
+        toast.success('导出完成，文件已开始下载。')
+      }
+
       onClose()
     } catch (error) {
       toast.error(error instanceof Error && error.message ? error.message : '导出失败，请稍后重试。')

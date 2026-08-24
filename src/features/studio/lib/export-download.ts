@@ -1,5 +1,6 @@
 import { buildApiUrl } from '@/app/api-base'
 import { buildAuthHeader } from '@/lib/auth-token'
+import { openExternalUrl } from '@/lib/native-app'
 
 /** 一键导出选项：与后端 exportNovelSchema 对齐 */
 export type NovelExportRequest = {
@@ -8,6 +9,13 @@ export type NovelExportRequest = {
   includeInfo: boolean
   includeChapters: boolean
   chapterIds?: string[]
+}
+
+/** 一次性下载链接（APP 壳外跳系统浏览器专用） */
+export type NovelExportLink = {
+  exportId: string
+  downloadUrl: string
+  fileName: string
 }
 
 /** 从 Content-Disposition 解析下载文件名（优先 RFC5987 UTF-8 编码） */
@@ -72,4 +80,48 @@ export async function downloadNovelExportZip(novelId: string, options: NovelExpo
   const fileName = parseDownloadFileName(response.headers.get('Content-Disposition')) ?? '作品一键导出.zip'
 
   triggerBlobDownload(blob, fileName)
+}
+
+/** APP 壳专用：服务端打包并暂存后返回一次性下载链接（链接 15 分钟内有效） */
+export async function requestNovelExportLink(novelId: string, options: NovelExportRequest): Promise<NovelExportLink> {
+  const response = await fetch(buildApiUrl(`/api/novels/${novelId}/export-link`), {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...buildAuthHeader(),
+    },
+    body: JSON.stringify(options),
+  })
+
+  if (!response.ok) {
+    let message = '导出失败，请稍后重试。'
+
+    try {
+      const payload = (await response.json()) as { error?: { message?: string } }
+      if (payload?.error?.message) {
+        message = payload.error.message
+      }
+    } catch {
+      // 非 JSON 错误体保持兜底文案
+    }
+
+    throw new Error(message)
+  }
+
+  const payload = (await response.json()) as { data?: NovelExportLink }
+  if (!payload?.data?.downloadUrl) {
+    throw new Error('导出失败，请稍后重试。')
+  }
+
+  return payload.data
+}
+
+/**
+ * APP 壳内触发导出下载：壳内 WebView 会吞掉 blob/同源下载（下载了也找不到文件），
+ * 统一外跳系统浏览器完成保存；普通浏览器直接新开标签页。
+ */
+export function openExportDownloadInBrowser(downloadUrl: string): void {
+  const absoluteUrl = new URL(downloadUrl, window.location.href).toString()
+  openExternalUrl(absoluteUrl)
 }

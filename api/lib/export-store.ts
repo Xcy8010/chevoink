@@ -51,3 +51,18 @@ export function getStoredExport(id: string, userId: string): { buffer: Buffer; f
 
   return { buffer: item.buffer, fileName: item.fileName }
 }
+
+/**
+ * 取导出产物（匿名）：仅校验有效期，不校验归属。
+ * 用于 APP 壳外跳系统浏览器下载的场景——系统浏览器没有壳内会话 Cookie，
+ * token 本身为 randomUUID + 15 分钟 TTL，作为短期访问凭证已足够。
+ */
+export function getStoredExportByToken(id: string): { buffer: Buffer; fileName: string } | null {
+  const item = storedExports.get(id)
+
+  if (!item || item.expiresAt <= Date.now()) {
+    return null
+  }
+
+  return { buffer: item.buffer, fileName: item.fileName }
+}
