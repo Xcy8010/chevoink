@@ -311,6 +311,22 @@ async function handleToolCall(
     return { observation, part: { ...basePart, args: null, status: 'failed', summary: '参数解析失败' } }
   }
 
+  // 校验前兜底修复：模型偶发用 null 表示「未传」（zod optional 不收 null），顶层统一剔除；
+  // 工具自有 coerceArgs 再修嵌套/别名/超长等毛病，修复结果同步进事件流与校验，
+  // 避免小概率参数毛病把整次写入打成「参数校验失败」
+  if (parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)) {
+    const cleaned: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(parsedArgs as Record<string, unknown>)) {
+      if (value !== null) {
+        cleaned[key] = value
+      }
+    }
+    parsedArgs = cleaned
+  }
+  if (tool?.coerceArgs) {
+    parsedArgs = tool.coerceArgs(parsedArgs)
+  }
+
   // 审批预判（与下方执行前判定同一公式）：提前给事件流打标，供前端与审计识别自动批准的工具调用
   const autoApproved =
     env.agentAutoApprove ||

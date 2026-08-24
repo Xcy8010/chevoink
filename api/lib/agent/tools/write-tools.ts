@@ -85,6 +85,66 @@ export const planSaveTool = defineTool({
       .optional()
       .describe('要修订的既有计划 id（工具返回或上下文提供）。修订已有计划时必传；新建计划时不传'),
   }),
+  // 校验前兜底修复：plan_save 是「参数校验失败」小概率事故的高发工具（长上下文下模型偶发
+  // planId:null、标题超长/非字符串、参数嵌套一层、别名键），修好再进 zod，避免整次写入作废
+  coerceArgs(raw: unknown): unknown {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return raw
+    }
+
+    let obj = raw as Record<string, unknown>
+
+    // 模型偶发把参数嵌套一层（如 {"plan": {...}}）：根层缺 title/content 时展平
+    if (obj.title === undefined && obj.content === undefined) {
+      const nested = Object.values(obj).find(
+        (value) => value !== null && typeof value === 'object' && !Array.isArray(value),
+      ) as Record<string, unknown> | undefined
+      if (nested && (nested.title !== undefined || nested.content !== undefined)) {
+        obj = { ...nested, planId: obj.planId ?? nested.planId }
+      }
+    }
+
+    const result: Record<string, unknown> = { ...obj }
+
+    // 别名键兜底
+    if (result.title === undefined) {
+      result.title = result.name ?? result.planTitle
+    }
+    if (result.content === undefined) {
+      result.content = result.text ?? result.markdown ?? result.body
+    }
+
+    // planId 空值（null 已在 loop 层剔除，这里再防空串）一律视为新建
+    if (typeof result.planId !== 'string' || result.planId.trim().length === 0) {
+      delete result.planId
+    } else {
+      result.planId = result.planId.trim()
+    }
+
+    // content 段落数组拼成全文
+    if (Array.isArray(result.content)) {
+      result.content = result.content
+        .map((item) => (typeof item === 'string' ? item : JSON.stringify(item)))
+        .join('\n')
+    } else if (typeof result.content === 'number') {
+      result.content = String(result.content)
+    }
+
+    // title 非字符串/超长/过短兜底：数字转串、超长截断、缺失或过短从正文首个标题行派生
+    if (typeof result.title === 'number') {
+      result.title = String(result.title)
+    }
+    if (typeof result.title === 'string') {
+      result.title = result.title.trim().slice(0, 60)
+    }
+    if (typeof result.title !== 'string' || result.title.length < 2) {
+      const heading =
+        typeof result.content === 'string' ? /^#{1,6}\s*(.+)$/m.exec(result.content)?.[1]?.trim() : undefined
+      result.title = (heading && heading.length >= 2 ? heading : '创作计划').slice(0, 60)
+    }
+
+    return result
+  },
   permission: { plan: 'allow', build: 'allow', review: 'deny' },
   readOnly: false,
   async execute(ctx, args) {
