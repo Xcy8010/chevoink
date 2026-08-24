@@ -201,7 +201,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   const body: Record<string, unknown> = {
     model,
     temperature: params.temperature ?? 0.6,
-    // 思考强度：默认 low 抑制冗长犹豫的思维链，省 token 且更果断（env 可上调 high/max）
+    // 思考强度：默认 high 兼顾周到与成本（low 考虑不周、max 过度思考），env 可调整
     reasoning_effort: env.aiReasoningEffort,
     // 显式拉满单轮输出上限：不传时 DeepSeek 默认仅 4096，
     // Agent 写 3000+ 字长章时工具参数 JSON 会被 length 截断导致写入失败
