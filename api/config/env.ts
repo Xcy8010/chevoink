@@ -26,6 +26,10 @@ function isConfigured(value: string | undefined): boolean {
   return Boolean(value && value !== 'replace_me')
 }
 
+function parseReasoningEffort(value: string | undefined): 'low' | 'high' | 'max' {
+  return value === 'high' || value === 'max' ? value : 'low'
+}
+
 export const env = {
   appName: process.env.APP_NAME ?? '启创墨域',
   appEnv: process.env.APP_ENV ?? 'development',
@@ -59,6 +63,9 @@ export const env = {
   aiTextApiKeyConfigured: isConfigured(process.env.AI_TEXT_API_KEY),
   aiTextApiKey: process.env.AI_TEXT_API_KEY ?? '',
   aiTextModel: process.env.AI_TEXT_MODEL ?? 'deepseek-v4-flash',
+  // 思考强度（DeepSeek 思考模式 reasoning_effort：low/high/max）：默认 high 思考冗长犹豫、浪费 token，
+  // 默认 low 让思考简短果断；需要更深规划时经环境变量上调
+  aiReasoningEffort: parseReasoningEffort(process.env.AI_REASONING_EFFORT),
   aiTextContextMaxTokens: parsePositiveNumber(process.env.AI_TEXT_CONTEXT_MAX_TOKENS, 1000000),
   aiTextContextSoftLimit: parsePositiveNumber(process.env.AI_TEXT_CONTEXT_SOFT_LIMIT, 700000),
   aiTextContextCompressLevel1: parsePositiveNumber(
