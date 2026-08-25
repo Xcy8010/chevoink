@@ -16,6 +16,18 @@ import { prisma } from '../../api/lib/prisma.js'
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
 
+async function waitForMemoryExtractionJob(jobId: string, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const job = await prisma.memoryExtractionJob.findUniqueOrThrow({ where: { id: jobId } })
+    if (job.status === 'completed' || job.status === 'failed') {
+      return job
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return prisma.memoryExtractionJob.findUniqueOrThrow({ where: { id: jobId } })
+}
+
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
 })
@@ -107,8 +119,7 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
     const jobId = await enqueueChapterMemoryExtraction({
       novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '旧内容', after: chapter.content,
     })
-    await new Promise((resolve) => setTimeout(resolve, 250))
-    const job = await prisma.memoryExtractionJob.findUniqueOrThrow({ where: { id: jobId } })
+    const job = await waitForMemoryExtractionJob(jobId)
     expect(job.status).toBe('completed')
     expect(await prisma.projectMemoryEntry.findFirst({ where: { novelId, memoryType: 'volumeSummary', title: `卷:${volumeId}` } })).not.toBeNull()
   })
