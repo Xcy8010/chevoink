@@ -230,6 +230,13 @@ export async function getNovelMemoryGraph(novelId: string): Promise<MemoryGraph>
   return data.graph
 }
 
+export async function syncNovelMemoryGraph(novelId: string): Promise<MemoryGraph> {
+  const data = await requestData<{ graph: MemoryGraph }>(`/api/agent/novels/${novelId}/memory-graph/sync`, {
+    method: 'POST',
+  })
+  return data.graph
+}
+
 /** 发布作品：同时批量发布选中章节并设置可见范围 */
 export async function publishNovelWorkspace(
   novelId: string,

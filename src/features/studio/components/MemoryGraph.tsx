@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BrainCircuit, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { MemoryGraphNode } from '../../../../shared/contracts/index.js'
-import { getNovelMemoryGraph } from '../api'
+import { getNovelMemoryGraph, syncNovelMemoryGraph } from '../api'
 
 const NODE_COLORS: Record<string, string> = {
   character: '#60a5fa',
@@ -33,6 +33,8 @@ function graphPositions(nodes: MemoryGraphNode[]) {
 }
 
 export default function MemoryGraph({ novelId, active = false, className }: { novelId: string; active?: boolean; className?: string }) {
+  const queryClient = useQueryClient()
+  const syncAttemptedRef = useRef(new Set<string>())
   const [scale, setScale] = useState(1)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const graphQuery = useQuery({
@@ -42,6 +44,15 @@ export default function MemoryGraph({ novelId, active = false, className }: { no
     staleTime: 10_000,
   })
   const graph = graphQuery.data
+  const syncMutation = useMutation({
+    mutationFn: () => syncNovelMemoryGraph(novelId),
+    onSuccess: (nextGraph) => queryClient.setQueryData(['studio', novelId, 'memory-graph'], nextGraph),
+  })
+  useEffect(() => {
+    if (!graph || graph.nodes.length > 0 || syncMutation.isPending || syncAttemptedRef.current.has(novelId)) return
+    syncAttemptedRef.current.add(novelId)
+    syncMutation.mutate()
+  }, [graph, novelId, syncMutation])
   const visibleNodes = useMemo(() => (graph?.nodes ?? []).slice(0, 30), [graph?.nodes])
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes])
   const positions = useMemo(() => graphPositions(visibleNodes), [visibleNodes])
@@ -53,6 +64,10 @@ export default function MemoryGraph({ novelId, active = false, className }: { no
 
   if (graphQuery.isError) {
     return <div className={cn('flex h-full flex-col items-center justify-center gap-3 px-6 text-center', className)}><BrainCircuit className="h-8 w-8 text-[var(--text-tertiary)]" /><p className="text-sm text-[var(--text-secondary)]">记忆图谱暂时无法载入。</p><button type="button" onClick={() => void graphQuery.refetch()} className="text-xs text-[var(--text-primary)] underline underline-offset-4">重新加载</button></div>
+  }
+
+  if ((!graph || graph.nodes.length === 0) && syncMutation.isPending) {
+    return <div className={cn('flex h-full items-center justify-center gap-2 text-sm text-[var(--text-secondary)]', className)}><LoaderCircle className="h-4 w-4 animate-spin" />正在从已有正文生成作品记忆…</div>
   }
 
   if (!graph || graph.nodes.length === 0) {

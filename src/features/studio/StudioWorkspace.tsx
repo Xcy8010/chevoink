@@ -117,7 +117,7 @@ export default function StudioWorkspace() {
   const [workLeftOpen, setWorkLeftOpen] = useState(false)
   const [workRightOpen, setWorkRightOpen] = useState(false)
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
-  const [workViewer, setWorkViewer] = useState<'chapter' | 'memory' | null>(null)
+  const [workViewer, setWorkViewer] = useState<'chapter' | null>(null)
   const [ideTreeOpen, setIdeTreeOpen] = useState(true)
   const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
@@ -125,7 +125,15 @@ export default function StudioWorkspace() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
-  const { panelWidths, beginPanelResize } = useStudioPanelWidths()
+  const { panelWidths, beginPanelResize } = useStudioPanelWidths({
+    onCollapse: (panel) => {
+      if (panel === 'tree') setIdeTreeOpen(false)
+      if (panel === 'agent') setIdeAgentOpen(false)
+      if (panel === 'workTask') setWorkLeftOpen(false)
+      if (panel === 'workInspector') setWorkRightOpen(false)
+      if (panel === 'workViewer') setWorkViewer(null)
+    },
+  })
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
   const platformCapabilities = useMemo(() => getPlatformCapabilities(), [])
   const [agentPrompt, setAgentPrompt] = useState('')
@@ -3720,13 +3728,13 @@ export default function StudioWorkspace() {
   return (
     <>
       <div
-        className="flex h-full min-h-0 flex-col overflow-hidden"
+        className="studio-workspace flex h-full min-h-0 flex-col overflow-hidden bg-[var(--app-bg)]"
         data-platform={platformCapabilities.native ? 'app' : 'web'}
         data-visual-viewport={platformCapabilities.visualViewport ? 'supported' : 'fallback'}
       >
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
           <div className="flex shrink-0 items-center gap-2 px-0.5 pb-2 pt-1">
-            {mobileView === 'cover' || mobileView === 'meta' ? (
+            {mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' ? (
               <>
                 <button
                   type="button"
@@ -3737,7 +3745,7 @@ export default function StudioWorkspace() {
                   返回
                 </button>
                 <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-                  {mobileView === 'cover' ? '封面工坊' : '作品设置'}
+                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : '作品设置'}
                 </p>
               </>
             ) : (
@@ -3858,6 +3866,12 @@ export default function StudioWorkspace() {
               </div>
             ) : null}
 
+            {mobileView === 'memory' && featureFlags.memory2 ? (
+              <div className="min-h-0 flex-1 overflow-hidden border-t border-[var(--border-subtle)]">
+                <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} />
+              </div>
+            ) : null}
+
             {mobileView === 'cover' ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {renderCoverToolPanel(() => setMobileView('assistant'))}
@@ -3928,7 +3942,7 @@ export default function StudioWorkspace() {
                 onClick={() => setMobileMoreOpen(true)}
                 className={cn(
                   'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
-                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta'
+                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory'
                     ? 'font-medium text-[var(--text-primary)]'
                     : 'text-[var(--text-tertiary)] active:text-[var(--text-primary)]',
                 )}
@@ -3949,7 +3963,10 @@ export default function StudioWorkspace() {
                   { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
                   { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
                   ...(featureFlags.memory2
-                    ? [{ key: 'memory', label: '记忆审核', icon: BrainCircuit, action: () => setMemoryReviewOpen(true) }]
+                    ? [
+                        { key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') },
+                        { key: 'memory-review', label: '记忆审核', icon: BrainCircuit, action: () => setMemoryReviewOpen(true) },
+                      ]
                     : []),
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
@@ -4016,7 +4033,6 @@ export default function StudioWorkspace() {
             novelOptions={novelOptions}
             novelsLoading={myNovelsQuery.isLoading}
             switchingNovel={createNovelMutation.isPending}
-            chapterTitle={chapterTitle}
             onSelectNovel={handleSelectWorkspaceNovel}
             onCreateNovel={handleCreateWorkspaceNovel}
             onPublish={handlePublishNovel}
@@ -4051,8 +4067,7 @@ export default function StudioWorkspace() {
                   wordCount={latestWordCountLabel}
                   pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
                   activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
-                  onOpenMemory={() => setWorkViewer('memory')}
-                  onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+                  memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
                 viewer={workViewer === 'chapter' ? <StudioChapterViewer
@@ -4060,7 +4075,7 @@ export default function StudioWorkspace() {
                   onChange={handleChapterDraftChange} onSelectionChange={setEditorSelection}
                   onAddSelection={handleAddViewerSelectionToAgent} onClose={() => setWorkViewer(null)}
                   onBlur={handleEditorBlurFlush}
-                /> : workViewer === 'memory' && featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : undefined}
+                /> : undefined}
                 leftOpen={workLeftOpen}
                 rightOpen={workRightOpen}
                 taskWidth={panelWidths.workTask}
@@ -4071,7 +4086,6 @@ export default function StudioWorkspace() {
                 inspectorTab={workInspectorTab}
                 onSelectInspectorTab={(tab) => {
                   setWorkInspectorTab(tab)
-                  if (tab === 'memory') setWorkViewer('memory')
                 }}
                 onBeginResize={beginPanelResize}
               />
@@ -4119,8 +4133,6 @@ export default function StudioWorkspace() {
                     wordCount={latestWordCountLabel}
                     pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
                     activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
-                    onOpenMemory={() => setIdeSidebarTab('memory')}
-                    onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
                   />}
                 />
                 {ideTreeOpen ? <PanelResizeHandle

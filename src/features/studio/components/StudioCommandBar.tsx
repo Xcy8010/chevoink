@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpenText, ChevronDown, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PenLine, Settings2, Upload } from 'lucide-react'
+import { BookOpenText, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PenLine, Settings2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -15,7 +15,6 @@ type Props = {
   novelOptions: Novel[]
   novelsLoading?: boolean
   switchingNovel?: boolean
-  chapterTitle: string
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
   onPublish: () => void
@@ -48,8 +47,6 @@ export default function StudioCommandBar(props: Props) {
       <div className="max-w-[260px] min-w-[170px] [&_button]:h-8 [&_button]:rounded-none">
         <WorkspaceNovelSwitcher currentNovelId={props.currentNovelId} currentNovelTitle={props.novelTitle} novels={props.novelOptions} busy={props.switchingNovel} loading={props.novelsLoading} onSelectNovel={props.onSelectNovel} onCreateNovel={props.onCreateNovel} />
       </div>
-      <ChevronDown className="hidden h-3.5 w-3.5 text-[var(--text-tertiary)] xl:block" />
-      <span className="hidden min-w-0 truncate text-xs text-[var(--text-tertiary)] xl:block">{props.chapterTitle}</span>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <button type="button" onClick={props.onPublish} className="inline-flex h-8 items-center gap-1.5 bg-[var(--surface-contrast)] px-3 text-xs font-medium text-[var(--text-contrast)] hover:opacity-90"><Upload className="h-3.5 w-3.5" />{props.published ? '更新发布' : '发布'}</button>
         {props.previewHref ? <Link to={props.previewHref} className="hidden h-8 items-center gap-1.5 border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)] xl:inline-flex"><BookOpenText className="h-3.5 w-3.5" />预览</Link> : null}

@@ -7,17 +7,21 @@ import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent }
 
 const STUDIO_PANEL_WIDTHS_STORAGE_KEY = 'studio-panel-widths'
 
-export const TREE_PANEL_WIDTH_LIMITS = { min: 200, max: 420, fallback: 264 }
-export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, max: 640, fallback: 424 }
-export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, max: 280, fallback: 232 }
-export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 220, max: 320, fallback: 264 }
-export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, max: 620, fallback: 420 }
+export const TREE_PANEL_WIDTH_LIMITS = { min: 200, fallback: 264 }
+export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, fallback: 424 }
+export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
+export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 220, fallback: 264 }
+export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 420 }
 
 export type StudioPanelWidths = { tree: number; agent: number; workTask: number; workInspector: number; workViewer: number }
 export type ResizablePanel = keyof StudioPanelWidths
 
-function clampPanelWidth(value: number, limits: { min: number; max: number }): number {
-  return Math.min(limits.max, Math.max(limits.min, Math.round(value)))
+function viewportMaximum(): number {
+  return typeof window === 'undefined' ? 1920 : Math.max(420, window.innerWidth - 320)
+}
+
+function clampPanelWidth(value: number, limits: { min: number }): number {
+  return Math.min(viewportMaximum(), Math.max(limits.min, Math.round(value)))
 }
 
 function readStoredPanelWidths(): StudioPanelWidths {
@@ -59,7 +63,7 @@ function storePanelWidths(widths: StudioPanelWidths) {
   }
 }
 
-export function useStudioPanelWidths() {
+export function useStudioPanelWidths(options: { onCollapse?: (panel: ResizablePanel) => void } = {}) {
   const [panelWidths, setPanelWidths] = useState<StudioPanelWidths>(readStoredPanelWidths)
   const panelWidthsRef = useRef(panelWidths)
   panelWidthsRef.current = panelWidths
@@ -81,11 +85,13 @@ export function useStudioPanelWidths() {
               ? WORK_INSPECTOR_PANEL_WIDTH_LIMITS
               : WORK_VIEWER_PANEL_WIDTH_LIMITS
       handle.setPointerCapture(event.pointerId)
+      let rawWidth = startWidth
 
       const handleMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
         const growsRight = panel === 'tree' || panel === 'workTask'
-        const nextWidth = clampPanelWidth(growsRight ? startWidth + delta : startWidth - delta, limits)
+        rawWidth = growsRight ? startWidth + delta : startWidth - delta
+        const nextWidth = clampPanelWidth(rawWidth, limits)
         setPanelWidths((current) =>
           current[panel] === nextWidth
             ? current
@@ -96,14 +102,18 @@ export function useStudioPanelWidths() {
         handle.removeEventListener('pointermove', handleMove)
         handle.removeEventListener('pointerup', handleUp)
         handle.removeEventListener('pointercancel', handleUp)
-        storePanelWidths(panelWidthsRef.current)
+        if (rawWidth <= Math.round(limits.min * 0.62)) {
+          options.onCollapse?.(panel)
+        } else {
+          storePanelWidths(panelWidthsRef.current)
+        }
       }
 
       handle.addEventListener('pointermove', handleMove)
       handle.addEventListener('pointerup', handleUp)
       handle.addEventListener('pointercancel', handleUp)
     },
-    [],
+    [options],
   )
 
   return { panelWidths, beginPanelResize }

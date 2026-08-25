@@ -303,6 +303,172 @@ export async function processMemoryExtractionJob(jobId: string): Promise<void> {
   }
 }
 
+const CHARACTER_NAME_BOUNDARY = String.raw`(?:^|[\s，。！？；：、“”‘’（）—])`
+const CHARACTER_ACTION = String.raw`(?:说|问|答|道|看|望|笑|哭|走|跑|站|坐|来|回|发现|觉得|知道|点头|摇头|皱眉|抬头|转身|开口|沉默|握住|拿起)`
+const COMMON_SURNAMES = new Set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵季贾路娄江童颜郭梅盛林钟徐邱骆高夏蔡田樊胡凌霍虞万柯管卢莫房裘缪解应宗丁宣邓郁单杭洪包诸左石崔吉龚程邢裴陆荣翁荀羊甄曲封芮储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白蒲台鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双闻莘党翟谭贡劳姬申扶堵冉宰郦雍郤璩桑桂濮牛寿通边扈燕冀浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东欧沃利蔚越隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公'.split(''))
+const CHARACTER_NAME_STOPWORDS = new Set([
+  '他们', '她们', '我们', '你们', '自己', '有人', '没人', '众人', '所有人', '年轻人', '老人', '男人', '女人',
+  '今天', '昨天', '明天', '此刻', '这时', '那时', '这里', '那里', '外面', '里面', '随后', '忽然', '终于',
+])
+const memoryProjectionVersionCache = new Map<string, string>()
+const MEMORY_PROJECTION_CACHE_LIMIT = 500
+
+function rememberMemoryProjectionVersion(novelId: string, version: string) {
+  memoryProjectionVersionCache.delete(novelId)
+  memoryProjectionVersionCache.set(novelId, version)
+  while (memoryProjectionVersionCache.size > MEMORY_PROJECTION_CACHE_LIMIT) {
+    const oldest = memoryProjectionVersionCache.keys().next().value
+    if (!oldest) break
+    memoryProjectionVersionCache.delete(oldest)
+  }
+}
+
+function extractCharacterNames(content: string): string[] {
+  const candidates = new Set<string>()
+  const patterns = [
+    new RegExp(`${CHARACTER_NAME_BOUNDARY}([\\u3400-\\u9fff]{2,4})(?=${CHARACTER_ACTION})`, 'gmu'),
+    new RegExp(`${CHARACTER_NAME_BOUNDARY}([\\u3400-\\u9fff]{2,4})(?=[：:]?[“\u201c])`, 'gmu'),
+  ]
+  for (const pattern of patterns) {
+    for (const match of content.matchAll(pattern)) {
+      const name = match[1]?.trim()
+      if (!name || CHARACTER_NAME_STOPWORDS.has(name) || !COMMON_SURNAMES.has(name[0])) continue
+      candidates.add(name)
+    }
+  }
+  return [...candidates]
+}
+
+/**
+ * 将已有正文投影为可视化记忆图谱，并为尚未抽取的章节补建幂等任务。
+ * 全程只做本地规则抽取与数据库 upsert，不调用模型、不额外消耗 token。
+ */
+export async function syncNovelMemoryProjection(userId: string, novelId: string) {
+  const novel = await prisma.novel.findFirst({
+    where: { id: novelId, authorId: userId },
+    select: { id: true },
+  })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新记忆。')
+
+  const [chapters, characterCards] = await Promise.all([
+    prisma.chapter.findMany({
+      where: { novelId, content: { not: '' } },
+      orderBy: { orderIndex: 'asc' },
+      select: { id: true, content: true, revision: true, orderIndex: true },
+      take: 500,
+    }),
+    prisma.projectMemoryEntry.findMany({
+      where: { novelId, memoryType: 'characterCard', status: { in: ['confirmed', 'inferred'] } },
+      orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
+      select: { title: true, content: true, status: true, updatedAt: true },
+      take: 80,
+    }),
+  ])
+
+  const idempotencyKeys = chapters.map((chapter) => `${chapter.id}:${chapter.revision}`)
+  const existingJobs = await prisma.memoryExtractionJob.findMany({
+    where: { novelId, idempotencyKey: { in: idempotencyKeys } },
+    select: { id: true, idempotencyKey: true, status: true, leaseUntil: true },
+  })
+  const jobsByKey = new Map(existingJobs.map((job) => [job.idempotencyKey, job]))
+  const queuedJobIds: string[] = []
+  for (const chapter of chapters) {
+    const key = `${chapter.id}:${chapter.revision}`
+    const existing = jobsByKey.get(key)
+    if (!existing) {
+      queuedJobIds.push(await enqueueChapterMemoryExtraction({
+        novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: chapter.content,
+      }))
+    } else if (existing.status === 'pending' || existing.status === 'failed' && (!existing.leaseUntil || existing.leaseUntil < new Date())) {
+      queuedJobIds.push(existing.id)
+      queueMicrotask(() => void processMemoryExtractionJob(existing.id).catch(() => {}))
+    }
+  }
+
+  const projectionVersion = createHash('sha256').update([
+    ...chapters.map((chapter) => `${chapter.id}:${chapter.revision}`),
+    ...characterCards.map((card) => `${card.title}:${card.status}:${card.updatedAt.toISOString()}`),
+  ].join('|')).digest('hex').slice(0, 20)
+  const currentEntityCount = await prisma.storyEntity.count({ where: { novelId } })
+  if (currentEntityCount > 0 && memoryProjectionVersionCache.get(novelId) === projectionVersion) {
+    return { chapterCount: chapters.length, jobCount: queuedJobIds.length, entityCount: currentEntityCount, relationCount: 0 }
+  }
+
+  const mentions = new Map<string, { count: number; chapterIds: Set<string>; description?: string; status: StoryMemoryStatus }>()
+  for (const card of characterCards) {
+    const name = card.title.trim()
+    if (!name || name.length > 32) continue
+    mentions.set(name, { count: 10, chapterIds: new Set(), description: card.content, status: card.status })
+  }
+  const chapterNames = new Map<string, string[]>()
+  for (const chapter of chapters) {
+    const names = extractCharacterNames(chapter.content)
+    chapterNames.set(chapter.id, names)
+    for (const name of names) {
+      const current = mentions.get(name) ?? { count: 0, chapterIds: new Set<string>(), status: 'inferred' as StoryMemoryStatus }
+      current.count += 1
+      current.chapterIds.add(chapter.id)
+      mentions.set(name, current)
+    }
+  }
+
+  const selectedNames = [...mentions.entries()]
+    .filter(([, item]) => item.description || item.count >= 2 || item.chapterIds.size >= 2)
+    .sort((left, right) => right[1].count - left[1].count || right[1].chapterIds.size - left[1].chapterIds.size)
+    .slice(0, 36)
+  const entities = new Map<string, { id: string }>()
+  for (const [name, item] of selectedNames) {
+    const entity = await prisma.storyEntity.upsert({
+      where: { novelId_entityType_canonicalName: { novelId, entityType: 'character', canonicalName: name } },
+      create: {
+        novelId, entityType: 'character', canonicalName: name,
+        description: item.description ?? `从正文中自动识别，出现于 ${item.chapterIds.size} 个章节。`,
+        status: item.status,
+      },
+      update: item.description ? { description: item.description, status: item.status } : {},
+      select: { id: true },
+    })
+    entities.set(name, entity)
+  }
+
+  await prisma.entityRelation.deleteMany({
+    where: {
+      relationType: '同章出现',
+      state: '正文共现（待 Agent 进一步确认关系）',
+      fromEntity: { novelId },
+    },
+  })
+
+  let relationCount = 0
+  for (const chapter of chapters) {
+    const names = (chapterNames.get(chapter.id) ?? []).filter((name) => entities.has(name)).slice(0, 8)
+    for (let left = 0; left < names.length && relationCount < 160; left += 1) {
+      for (let right = left + 1; right < names.length && relationCount < 160; right += 1) {
+        const from = entities.get(names[left])!
+        const to = entities.get(names[right])!
+        const existing = await prisma.entityRelation.findFirst({
+          where: { fromEntityId: from.id, toEntityId: to.id, relationType: '同章出现', validFrom: chapter.orderIndex },
+          select: { id: true },
+        })
+        const data = {
+          state: '正文共现（待 Agent 进一步确认关系）', validTo: chapter.orderIndex,
+          confidence: 0.55, sourceId: chapter.id, revision: chapter.revision,
+        }
+        if (existing) await prisma.entityRelation.update({ where: { id: existing.id }, data })
+        else await prisma.entityRelation.create({
+          data: {
+            fromEntityId: from.id, toEntityId: to.id, relationType: '同章出现', validFrom: chapter.orderIndex, ...data,
+          },
+        })
+        relationCount += 1
+      }
+    }
+  }
+
+  rememberMemoryProjectionVersion(novelId, projectionVersion)
+  return { chapterCount: chapters.length, jobCount: queuedJobIds.length, entityCount: entities.size, relationCount }
+}
+
 export async function listMemoryReviewInbox(userId: string, novelId: string) {
   const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
   if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权查看记忆。')

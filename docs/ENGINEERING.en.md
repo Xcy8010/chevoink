@@ -4,7 +4,7 @@
 > All content is grounded in the current repository code and the real planning documents under `plan/`, and is updated continuously as the project evolves.
 > `plan/00`–`plan/20` are true planning snapshots of landed phases; `plan/21` is the active 2.0 implementation plan. For the mapping between historical file paths and the current implementation, see [Section 9](#9-plan-document-index).
 >
-> Last updated: 2026-08-25
+> Last updated: 2026-08-26
 >
 > Language: English | [简体中文](./ENGINEERING.md)
 
@@ -326,6 +326,8 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 Completed 1.0 plans: three-device adaptation & phased launch (04), writing Agent & high-fidelity opencode replication (10/11), studio deep refactor (13), hallucination governance & knowledge-set Skills (14), release pipeline & site-wide loading optimization (15), mobile studio (16), TTS narration (17), admin console & community recommendation algorithm upgrade (18), Android APK packaging (19), immersive reader & safe-area refactor (20). `plan/21` is the active Agent/Studio 2.0 plan.
 
 Agent 2.0 P0 engineering foundations landed on 2026-08-25: frozen runtime contracts; chapter revision migration and optimistic locking; version-guarded Agent chapter writes; revision propagation across publishing, insertion, deletion compaction, and rollback; test-enforced governance for 32 tools; and seven core eval scenarios with stable success/token/P95-latency/rollback aggregation. The formal P0 gate still requires at least five real-model runs per scenario against an available test database; P1 must not start before those measurements exist.
+
+Studio / Agent 2.0 desktop and memory UX landed on 2026-08-26: the Work/IDE command bar now keeps only novel selection while chapter hierarchy lives in the editor header; the editor uses a flat edge-to-edge surface; Studio has a scoped neutral light/dark palette; side panels have no fixed maximum width and snap closed below their collapse thresholds; Work renders the memory graph directly in the inspector and mobile includes a dedicated memory view. Existing prose is projected into the graph through idempotent local rules, while every completed Agent turn performs threshold-based context compaction and revision-aware memory refresh without an additional model call. The in-process projection-version cache is capped at 500 novels.
 
 New accumulations from this engineering sprint (2026-08, 85→90 points):
 

@@ -11,6 +11,7 @@ import {
   saveEntityRelation,
   saveStoryMemory,
   searchStoryMemory,
+  syncNovelMemoryProjection,
 } from '../../api/lib/agent/story-memory.js'
 import { prisma } from '../../api/lib/prisma.js'
 
@@ -122,5 +123,19 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
     const job = await waitForMemoryExtractionJob(jobId)
     expect(job.status).toBe('completed')
     expect(await prisma.projectMemoryEntry.findFirst({ where: { novelId, memoryType: 'volumeSummary', title: `卷:${volumeId}` } })).not.toBeNull()
+  })
+
+  it('已有正文可无模型调用地初始化关系图，重复同步保持幂等', async () => {
+    await prisma.chapter.update({ where: { id: chapterIds[1] }, data: { content: '林舟说：“去钟楼。” 顾棠问：“现在吗？”', revision: { increment: 1 } } })
+    await prisma.chapter.update({ where: { id: chapterIds[2] }, data: { content: '顾棠点头，林舟转身走进雨里。', revision: { increment: 1 } } })
+    const first = await syncNovelMemoryProjection(userId, novelId)
+    const relationCount = await prisma.entityRelation.count({ where: { fromEntity: { novelId }, relationType: '同章出现' } })
+    const second = await syncNovelMemoryProjection(userId, novelId)
+    const repeatedRelationCount = await prisma.entityRelation.count({ where: { fromEntity: { novelId }, relationType: '同章出现' } })
+    const graph = await getMemoryGraph(userId, novelId)
+    expect(first.entityCount).toBeGreaterThan(0)
+    expect(second.jobCount).toBe(0)
+    expect(graph.nodes.map((node) => node.label)).toEqual(expect.arrayContaining(['林舟', '顾棠']))
+    expect(repeatedRelationCount).toBe(relationCount)
   })
 })

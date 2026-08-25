@@ -218,7 +218,7 @@ export default function EditorCanvas({
               className="min-h-0 flex-1"
             />
           ) : (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1 py-1">
             {workspaceDocument.editableContent ? (
               <textarea
                 value={workspaceDocument.content}
@@ -396,7 +396,13 @@ export default function EditorCanvas({
 
   return (
     <Surface as="section" padding="md" className={embedded ? `${sectionClassName} border-0 px-5 py-5 shadow-none xl:px-6` : sectionClassName}>
-      <div className="flex flex-wrap items-center justify-end gap-2 border-b border-[var(--border-subtle)] pb-4">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">第 {chapterDraft.orderIndex} 章</p>
+          <h1 className="mt-1 truncate text-base font-semibold tracking-[0.01em] text-[var(--text-primary)]">
+            {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
+          </h1>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {onPublishNovel ? (
             <Button
@@ -421,7 +427,7 @@ export default function EditorCanvas({
         </div>
       </div>
 
-      <div className="relative mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-2 pt-4">
         {pendingChapterReview ? (
           <ChapterChangeReview
             review={pendingChapterReview}
@@ -437,12 +443,7 @@ export default function EditorCanvas({
           />
         ) : (
           <>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border-strong)] bg-[var(--surface-default)] px-5 py-5">
-            <div className="border-b border-[var(--border-subtle)] pb-4">
-              <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
-                {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
-              </p>
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1">
             <textarea
               value={chapterDraft.content}
               onChange={(event) => {
@@ -457,7 +458,7 @@ export default function EditorCanvas({
                 onEditorBlur?.()
               }}
               rows={20}
-              className="mt-4 min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
+              className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent px-1 text-[15px] leading-8 text-[var(--text-primary)] outline-none"
               placeholder="继续写这一章的正文。"
             />
           </div>

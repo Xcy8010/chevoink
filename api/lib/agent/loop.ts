@@ -16,6 +16,7 @@ import { deregisterActiveRun, registerActiveRun } from './active-runs.js'
 import { clearRunBaselines } from './baseline.js'
 import { assembleContext } from './context.js'
 import { captureUserDirectives, compactSessionContext } from './context-engine.js'
+import { syncNovelMemoryProjection } from './story-memory.js'
 import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
 import { createRunEventBus, disposeRunEventBus, type RunEventBus } from './events.js'
 import {
@@ -464,16 +465,10 @@ async function finalizeRun(
   outputSummary: string,
   errorMessage?: string,
 ) {
-  if (status === 'paused') {
-    bus.emit({ type: 'run.paused', reason: 'user_stop' })
-  } else {
-    bus.emit({ type: 'run.finished', status, usage, artifacts: [], outputSummary })
-  }
-
   // 事件协议用 succeeded，DB 枚举用 completed
   const dbStatus = status === 'succeeded' ? 'completed' : status
 
-  await prisma.agentRun
+  const finalizedRun = await prisma.agentRun
     .update({
       where: { id: runId },
       data: {
@@ -484,8 +479,29 @@ async function finalizeRun(
         currentTurn,
         finishedAt: status === 'paused' ? null : new Date(),
       },
+      select: { userId: true, sessionId: true, novelId: true },
     })
-    .catch((error) => console.error('[agent-loop] run 状态落库失败', runId, error))
+    .catch((error) => {
+      console.error('[agent-loop] run 状态落库失败', runId, error)
+      return null
+    })
+
+  if (status !== 'paused' && finalizedRun) {
+    await Promise.all([
+      compactSessionContext(finalizedRun.userId, finalizedRun.sessionId, false).catch((error) => {
+        console.error('[agent-loop] 对话结束后自动整理上下文失败', runId, error)
+      }),
+      syncNovelMemoryProjection(finalizedRun.userId, finalizedRun.novelId).catch((error) => {
+        console.error('[agent-loop] 对话结束后自动更新作品记忆失败', runId, error)
+      }),
+    ])
+  }
+
+  if (status === 'paused') {
+    bus.emit({ type: 'run.paused', reason: 'user_stop' })
+  } else {
+    bus.emit({ type: 'run.finished', status, usage, artifacts: [], outputSummary })
+  }
 
   rejectAllApprovals(runId)
   cancelAllQuestions(runId)

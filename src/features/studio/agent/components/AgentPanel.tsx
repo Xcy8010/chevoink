@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   CircleAlert,
-  BrainCircuit,
   Copy,
   FileText,
   History,
@@ -24,7 +23,6 @@ import type {
   AgentAttachmentMeta,
   AgentSession,
   AgentStreamEvent,
-  ContextState,
   CreativeFreedom,
   EntityId,
 } from '../../../../../shared/contracts/index.js'
@@ -34,11 +32,9 @@ import ImageLightbox from '../../components/ImageLightbox'
 import {
   AgentApiError,
   continueAgentLoopRun,
-  compactAgentContext,
   deleteAgentSession,
   deleteAgentSessionMessage,
   fetchAgentSessionMessages,
-  fetchAgentContextState,
   fetchAgentSessions,
   renameAgentSession,
   resolveAgentApproval,
@@ -126,8 +122,6 @@ export function AgentPanel({
 
   const [historyLoading, setHistoryLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [contextState, setContextState] = useState<ContextState | null>(null)
-  const [contextCompacting, setContextCompacting] = useState(false)
   const [creativeFreedom, setCreativeFreedom] = useState<CreativeFreedom>(() => {
     if (typeof window === 'undefined') return 'balanced'
     const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
@@ -169,30 +163,8 @@ export function AgentPanel({
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
 
   useEffect(() => {
-    if (!sessionId) {
-      setContextState(null)
-      return
-    }
-    void fetchAgentContextState(sessionId).then(setContextState).catch(() => setContextState(null))
-  }, [sessionId, phase])
-
-  useEffect(() => {
     window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
   }, [creativeFreedom, novelId])
-
-  const handleCompactContext = useCallback(async () => {
-    if (!sessionId || active || contextCompacting) return
-    setContextCompacting(true)
-    setActionError(null)
-    try {
-      const result = await compactAgentContext(sessionId)
-      setContextState(result.state)
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '上下文整理失败，请稍后再试。')
-    } finally {
-      setContextCompacting(false)
-    }
-  }, [active, contextCompacting, sessionId])
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
   const blockInfoById = useMemo(() => {
@@ -683,24 +655,6 @@ export function AgentPanel({
           {currentTurn > 0 ? `第 ${currentTurn} 轮 · ` : ''}
           {usage.totalTokens > 0 ? `${usage.totalTokens.toLocaleString()} tokens` : ''}
         </span>
-        {sessionId ? (
-          <button
-            type="button"
-            onClick={() => void handleCompactContext()}
-            disabled={active || contextCompacting}
-            className={cn(
-              'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-45',
-              contextState && contextState.usageRatio >= contextState.warningThreshold
-                ? 'bg-amber-50 text-amber-700'
-                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
-            )}
-            aria-label="整理长期对话上下文"
-            title={contextState ? `上下文约 ${Math.round(contextState.usageRatio * 100)}%，${contextState.activeDirectiveCount} 条有效指令` : '整理长期对话上下文'}
-          >
-            {contextCompacting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <BrainCircuit className="h-3.5 w-3.5" />}
-            {contextState?.checkpoint ? <span className="hidden sm:inline">已整理</span> : null}
-          </button>
-        ) : null}
         <button
           type="button"
           onClick={toggleHistory}
