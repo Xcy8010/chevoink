@@ -2,9 +2,12 @@ import { buildApiUrl } from '@/app/api-base'
 import { buildAuthHeader } from '@/lib/auth-token'
 import type {
   AgentActionResultPayload,
+  ApplyChangeSetRequest,
   ApiResponse,
   Chapter,
+  ChangeSet,
   CreateChapterRequest,
+  CreateVolumeRequest,
   CreateNovelRequest,
   CreateNovelResponse,
   CreateAgentSessionResponse,
@@ -22,9 +25,19 @@ import type {
   PublishNovelRequest,
   PublishNovelResponse,
   StudioPayload,
+  Volume,
   UploadNovelCoverRequest,
   UploadNovelCoverResponse,
   UpdateChapterRequest,
+  UpdateVolumeRequest,
+  MoveChapterRequest,
+  MoveVolumeRequest,
+  SplitChapterRequest,
+  MergeChaptersRequest,
+  StructureReport,
+  BulkReplacePreviewRequest,
+  ProjectSearchRequest,
+  ProjectSearchResult,
   UpdateAgentSessionRequest,
   UpdateAgentSessionResponse,
   UpdateNovelRequest,
@@ -279,6 +292,129 @@ export async function createChapterDraft(
   return data.chapter
 }
 
+export async function createVolume(
+  novelId: string,
+  payload: CreateVolumeRequest,
+): Promise<Volume> {
+  const data = await requestData<{ volume: Volume }>(`/api/novels/${novelId}/volumes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.volume
+}
+
+export async function updateVolume(
+  novelId: string,
+  volumeId: string,
+  payload: UpdateVolumeRequest,
+): Promise<Volume> {
+  const data = await requestData<{ volume: Volume }>(`/api/novels/${novelId}/volumes/${volumeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+  return data.volume
+}
+
+export async function moveVolume(
+  novelId: string,
+  volumeId: string,
+  payload: MoveVolumeRequest,
+): Promise<Volume> {
+  const data = await requestData<{ volume: Volume }>(`/api/novels/${novelId}/volumes/${volumeId}/move`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.volume
+}
+
+export async function deleteVolume(novelId: string, volumeId: string): Promise<void> {
+  await requestData<{ deleted: true }>(`/api/novels/${novelId}/volumes/${volumeId}`, { method: 'DELETE' })
+}
+
+export async function moveChapter(
+  novelId: string,
+  chapterId: string,
+  payload: MoveChapterRequest,
+): Promise<Chapter> {
+  const data = await requestData<{ chapter: Chapter }>(`/api/novels/${novelId}/chapters/${chapterId}/move`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.chapter
+}
+
+export async function splitChapter(
+  novelId: string,
+  chapterId: string,
+  payload: SplitChapterRequest,
+): Promise<{ first: Chapter; second: Chapter }> {
+  return requestData(`/api/novels/${novelId}/chapters/${chapterId}/split`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function mergeChapters(
+  novelId: string,
+  targetChapterId: string,
+  payload: MergeChaptersRequest,
+): Promise<Chapter> {
+  const data = await requestData<{ chapter: Chapter }>(`/api/novels/${novelId}/chapters/${targetChapterId}/merge`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.chapter
+}
+
+export async function getStructureReport(novelId: string): Promise<StructureReport> {
+  const data = await requestData<{ report: StructureReport }>(`/api/novels/${novelId}/structure`)
+  return data.report
+}
+
+export function searchProject(novelId: string, payload: ProjectSearchRequest): Promise<ProjectSearchResult> {
+  return requestData<ProjectSearchResult>(`/api/novels/${novelId}/search`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function previewBulkReplace(
+  novelId: string,
+  payload: BulkReplacePreviewRequest,
+): Promise<ChangeSet> {
+  const data = await requestData<{ changeSet: ChangeSet }>(`/api/novels/${novelId}/changesets/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.changeSet
+}
+
+export async function listChangeSets(novelId: string): Promise<ChangeSet[]> {
+  const data = await requestData<{ items: ChangeSet[] }>(`/api/novels/${novelId}/changesets`)
+  return data.items
+}
+
+export async function getChangeSet(changeSetId: string): Promise<ChangeSet> {
+  const data = await requestData<{ changeSet: ChangeSet }>(`/api/changesets/${changeSetId}`)
+  return data.changeSet
+}
+
+export async function applyChangeSet(changeSetId: string, payload: ApplyChangeSetRequest): Promise<ChangeSet> {
+  const data = await requestData<{ changeSet: ChangeSet }>(`/api/changesets/${changeSetId}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data.changeSet
+}
+
+export async function rollbackChangeSet(changeSetId: string, reason?: string): Promise<ChangeSet> {
+  const data = await requestData<{ changeSet: ChangeSet }>(`/api/changesets/${changeSetId}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify(reason ? { reason } : {}),
+  })
+  return data.changeSet
+}
+
 export async function updateChapterDraft(
   novelId: string,
   chapterId: string,
@@ -295,8 +431,13 @@ export async function updateChapterDraft(
   return data.chapter
 }
 
-export async function deleteChapterDraft(novelId: string, chapterId: string): Promise<void> {
-  await requestData<DeleteChapterResponse['data']>(`/api/novels/${novelId}/chapters/${chapterId}`, {
+export async function deleteChapterDraft(
+  novelId: string,
+  chapterId: string,
+  expectedRevision?: number,
+): Promise<void> {
+  const revisionQuery = expectedRevision === undefined ? '' : `?expectedRevision=${expectedRevision}`
+  await requestData<DeleteChapterResponse['data']>(`/api/novels/${novelId}/chapters/${chapterId}${revisionQuery}`, {
     method: 'DELETE',
   })
 }

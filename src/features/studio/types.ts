@@ -59,6 +59,7 @@ export type ChapterDraftState = {
   status: ChapterStatus
   visibility: Visibility
   orderIndex: number
+  revision: number
   localOnly: boolean
 }
 

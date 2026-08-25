@@ -36,7 +36,11 @@ import {
 } from '../lib/agent/session-messages.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
+import { prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
+import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
+import { listMemoryReviewInbox, resolveMemoryReview } from '../lib/agent/story-memory.js'
+import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 
 const router = Router()
 
@@ -64,6 +68,8 @@ const updateAgentPlanSchema = z
     saved: z.boolean().optional(),
   })
   .refine((patch) => patch.title !== undefined || patch.content !== undefined || patch.saved !== undefined)
+
+const resolveMemoryReviewSchema = z.object({ accepted: z.boolean() })
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -132,6 +138,67 @@ router.get('/sessions/:sessionId/history', async (req: Request, res: Response): 
     const userId = requireSessionUserId(req)
     const payload = await listAgentSessionHistoryData(userId, req.params.sessionId)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/sessions/:sessionId/context-state', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await getContextState(userId, req.params.sessionId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/sessions/:sessionId/compact', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const checkpoint = await compactSessionContext(userId, req.params.sessionId, true)
+    const state = await getContextState(userId, req.params.sessionId)
+    res.status(200).json(buildSuccess(requestId, { checkpoint, state }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/sessions/:sessionId/directives', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const session = await prisma.agentSession.findFirst({ where: { id: req.params.sessionId, userId }, select: { novelId: true } })
+    if (!session) throw new Error('Agent 会话不存在。')
+    const items = await listActiveDirectives(userId, session.novelId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/memory-review', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('memory2', userId)
+    const items = await listMemoryReviewInbox(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/memory/:memoryId/review', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('memory2', userId)
+    const body = parseBody(resolveMemoryReviewSchema, req.body, '请明确接受或拒绝该记忆候选。')
+    const memory = await resolveMemoryReview(userId, req.params.memoryId, body.accepted)
+    res.status(200).json(buildSuccess(requestId, { memory }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
@@ -211,6 +278,7 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       prompt: body.prompt.trim(),
       selection: body.selection ?? null,
       attachments: body.attachments ?? [],
+      creativeFreedom: body.creativeFreedom ?? 'balanced',
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {

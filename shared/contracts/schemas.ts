@@ -61,6 +61,8 @@ export const createChapterSchema = z.object({
   content: z.string(),
   status: chapterStatusSchema,
   visibility: visibilitySchema.optional(),
+  volumeId: z.string().min(1).optional(),
+  orderInVolume: z.number().int().positive().optional(),
 })
 
 /** PATCH /api/novels/:novelId/chapters/:chapterId（原路由零校验透传：同 updateNovelSchema 策略） */
@@ -70,6 +72,7 @@ export const updateChapterSchema = z.object({
   content: z.string().optional(),
   status: chapterStatusSchema.optional(),
   visibility: visibilitySchema.optional(),
+  expectedRevision: z.number().int().positive().optional(),
 })
 
 /* ---------------- posts / comments ---------------- */
@@ -120,6 +123,7 @@ export const startAgentLoopRunSchema = z.object({
     .nullable()
     .optional(),
   attachments: z.array(agentAttachmentMetaSchema).optional(),
+  creativeFreedom: z.enum(['stable', 'balanced', 'bold']).optional(),
 })
 
 /** POST /api/agent/runs/:runId/approvals（原校验：callId 真值 + approved 为布尔） */

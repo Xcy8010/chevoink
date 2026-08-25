@@ -565,6 +565,15 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
         </p>
       )
     }
+    case 'changeSet':
+      return (
+        <div className="border-l-2 border-[var(--border-strong)] pl-3 text-[11px] leading-5 text-[var(--text-secondary)]">
+          <p className="font-medium text-[var(--text-primary)]">
+            全书变更 · {display.selectedCount}/{display.patchCount} 项 · {display.status}
+          </p>
+          <p>变更集 {display.changeSetId} 已同步到审查抽屉。</p>
+        </div>
+      )
     default:
       return null
   }

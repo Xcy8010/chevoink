@@ -32,7 +32,32 @@ import {
 import { webReadTool, webSearchTool } from './search-tools.js'
 import type { AgentTool } from './types.js'
 import { todoWriteTool } from './todo-tools.js'
+import {
+  chapterMergeTool,
+  chapterMoveTool,
+  chapterMoveToVolumeTool,
+  chapterSplitTool,
+  structureOutlineTool,
+  volumeCreateTool,
+  volumeDeleteTool,
+  volumeListTool,
+  volumeMoveTool,
+  volumeUpdateTool,
+} from './structure-tools.js'
 import { memorySaveTool, planDeleteTool, planExitTool, planRenameTool, planSaveTool } from './write-tools.js'
+import {
+  bulkReplacePreviewTool,
+  changeSetApplyTool,
+  changeSetRollbackTool,
+  entityRenamePreviewTool,
+  entityResolveTool,
+  impactAnalyzeTool,
+  projectSearchTool,
+  structureValidateTool,
+} from './changeset-tools.js'
+import { directiveListTool, directiveSaveTool, directiveSupersedeTool } from './directive-tools.js'
+import { memoryEventSaveTool, memoryRelationSaveTool, memoryReviewListTool } from './memory-tools.js'
+import { creativeCritiqueTool, creativeRevisionDraftTool, skillCatalogTool, skillLoadTool } from './skill-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
@@ -49,12 +74,34 @@ export const allTools: AgentTool<any>[] = [
   viewImageTool,
   readFileTool,
   novelExportTool,
+  volumeListTool,
+  structureOutlineTool,
+  projectSearchTool,
+  entityResolveTool,
+  impactAnalyzeTool,
+  structureValidateTool,
+  directiveListTool,
+  memoryReviewListTool,
+  skillCatalogTool,
+  skillLoadTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
   chapterAppendTool,
   chapterEditRangeTool,
   chapterRenameTool,
+  volumeCreateTool,
+  volumeUpdateTool,
+  volumeMoveTool,
+  volumeDeleteTool,
+  chapterMoveTool,
+  chapterMoveToVolumeTool,
+  chapterSplitTool,
+  chapterMergeTool,
+  bulkReplacePreviewTool,
+  entityRenamePreviewTool,
+  changeSetApplyTool,
+  changeSetRollbackTool,
   novelRenameTool,
   novelUpdateMetaTool,
   planSaveTool,
@@ -72,6 +119,12 @@ export const allTools: AgentTool<any>[] = [
   memorySaveTool,
   planExitTool,
   todoWriteTool,
+  directiveSaveTool,
+  directiveSupersedeTool,
+  memoryRelationSaveTool,
+  memoryEventSaveTool,
+  creativeCritiqueTool,
+  creativeRevisionDraftTool,
   // 交互
   askUserTool,
 ]

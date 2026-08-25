@@ -2,9 +2,9 @@
 
 > This document consolidates the system architecture, key technical decisions, testing & CI, deployment strategy, performance data, security posture & risk trade-offs, technical debt and evolution plans.
 > All content is grounded in the current repository code and the real planning documents under `plan/`, and is updated continuously as the project evolves.
-> The `plan/` directory is public in the repository: the 24 documents are the true planning snapshots of each phase; for the mapping between historical file paths referenced therein and the current implementation, see [Section 9](#9-plan-document-index).
+> `plan/00`–`plan/20` are true planning snapshots of landed phases; `plan/21` is the active 2.0 implementation plan. For the mapping between historical file paths and the current implementation, see [Section 9](#9-plan-document-index).
 >
-> Last updated: 2026-08-24
+> Last updated: 2026-08-25
 >
 > Language: English | [简体中文](./ENGINEERING.md)
 
@@ -60,7 +60,7 @@
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
                            │ PostgreSQL 16 (29 tables ·          │
-                           │ 23 migrations)                      │
+                           │ 26 migrations)                      │
                            └─────────────────────────────────────┘
 ```
 
@@ -75,7 +75,7 @@
 | `src/features/discover` / `home` / `search` / `novel-detail` / `profile` | Discovery feed, detail pages, personal center |
 | `src/features/admin` | Admin console (data dashboard, user/novel/content governance) |
 
-Frontend and backend share type contracts through `shared/contracts/` (including the Agent SSE event structures `AgentStreamEvent` / `AgentUIMessage`), so interface mismatches are caught at compile time.
+Frontend and backend share type contracts through `shared/contracts/`, including the Agent SSE protocol and the frozen Agent 2.0 `TaskSpec`, `ChangeSet`, `Volume`, and `MemoryEvidence` contracts, so interface mismatches are caught at compile time.
 
 ### 1.3 Backend Structure (api/)
 
@@ -84,7 +84,7 @@ Frontend and backend share type contracts through `shared/contracts/` (including
 - **Agent engine** `api/lib/agent/` (corresponds to `plan/10`, `plan/13`):
   - `loop.ts` execution kernel (executeAgentRun) + `active-runs.ts` run registry;
   - `run-service.ts` run lifecycle & session CRUD, `session-messages.ts` messages/rollback, `plan-artifacts.ts` plan artifacts;
-  - `tools/`: 32 registered tools (list in [1.5](#15-agent-tool-inventory-32-tools)), split by dependency into eleven files: chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export;
+  - `tools/`: 32 registered tools (list in [1.5](#15-agent-tool-inventory-32-tools)), split by dependency into eleven files: chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export; `governance.ts` freezes risk classifications and postconditions for every tool;
   - `permissions.ts` permission guards & budgets (per run: ask_user 3 / web search 5 / web deep-read 8 / platform search 5 / platform deep-read 8);
   - `knowledge/` + `skills/`: writing knowledge and operational knowledge sets (corresponds to the `plan/14` hallucination-governance plan).
 
@@ -117,7 +117,7 @@ The frontend message-part model `AgentMessagePart` (text / reasoning / tool-call
 | Platform reference (2) | platformNovelSearch · platformNovelRead | Locates published platform works and the author's own unpublished works by title/tag/genre keywords; reads synopsis/categories/chapter text with a visibility hard gate at the DB where layer; similar-work detection via feature-term search + synopsis comparison, falling back to web search when the platform yields nothing |
 | Attachments (2) | viewImage · readFile | GLM-4.1V vision side-channel; pdf/docx/txt/md reading |
 | Export (1) | novelExport | One-click zip export of the novel (plans/catalog/chapters/work info & publishing advice); read-only, skips approval; supports chapter subsets and four-scope trimming; artifacts stored in an in-memory store (TTL 15 min) for the frontend download card |
-| Chapter write (5) | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | Conflict detection + 409 semantics + rollback snapshots |
+| Chapter write (5) | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | Atomic revision conflict detection + 409 semantics + rollback snapshots |
 | Novel management (2) | novelRename · novelUpdateMeta | Title & metadata updates |
 | Plan artifacts (3) | planSave · planRename · planDelete | Save/rename/delete outline plans |
 | Cover (3) | coverPromptSet · coverGenerate · coverApply | Prompt, generation, apply & persist |
@@ -150,6 +150,7 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 | Auth degradation | On DB failure, prefer reusing historical session state ≤10 minutes old (stale fallback); only degrade-open beyond the window | Availability-first is the established design baseline; full fail-closed would take down site-wide login state on DB jitter |
 | Agent execution mode | Autonomous execution with maximum permissions by default (`AGENT_AUTO_APPROVE=true`) | Product decision: zero-interruption writing flow (README selling point); `false` switches back to the approval flow in one flip, see [Section 6](#6-security-posture--risk-trade-offs) |
 | Agent engine | Unified loop scheduling kernel + tool registry + event stream | High-fidelity replication of opencode (`plan/11`); the frontend only consumes the standard event stream |
+| Chapter concurrency | `Chapter.revision` + `expectedRevision` optimistic locking; Agent writes use atomic version-guarded updateMany | Prevents silent overwrites across Web, legacy APP, and Agent writes; the legacy no-field path remains compatible but still advances the version |
 | Event stream architecture | All SSE events persisted with seq; live and replay share one source; Last-Event-ID resume | No message loss on disconnect/refresh; history replay and live share one code path, eliminating dual-implementation drift |
 | API response shape | `{ success, data }` on success, `{ code, message }` on failure, always JSON | Single error-handling path on the frontend; validation copy is verbatim-anchored in integration tests (p0/p1/p2-validation) |
 | Hallucination governance | Knowledge sets (worldbuilding/character cards) + Skill injection + web-research budgets | `plan/14`: read the facts before writing; budgets prevent runaway |
@@ -174,10 +175,13 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 | Unit | phone / password | 6 / 6 | Phone number & password rules |
 | Unit | active-runs | 5 | Agent run registry (register/count/stop) |
 | Unit | parse-body | 5 | Request body parsing & 400/401 boundaries |
+| Unit | agent2-contracts / agent-baseline | 5 / 2 | TaskSpec/ChangeSet/Volume/MemoryEvidence contracts and revision baseline isolation |
+| Unit | agent-tool-governance / agent-eval-metrics | 3 / 2 | Governance coverage for all 32 tools and stable eval aggregation |
 | Integration | p0/p1/p2-validation | 27 / 21 / 15 | Three generations of validation copy verbatim comparison (DB group) + 401 precedence (no-DB group) |
 | Integration | app-smoke | 5 | Health check & basic route smoke |
+| Integration | agent2-revision | 3 | Concurrent update conflict, stale delete blocking, and legacy-client compatibility (DB required) |
 
-- Latest full run: **all 12 test files passed, 92 passed / 52 skipped** (skipped = the DB group auto-skips via `describe.skipIf(!dbAvailable)` when PostgreSQL is absent locally — `npm test` works out of the box after clone; CI with a postgres:16 service container runs the full set).
+- Latest full run: **17 test files: 16 passed / 1 skipped; 105 tests passed / 55 skipped** (DB groups auto-skip via `describe.skipIf(!dbAvailable)` when PostgreSQL is absent locally; CI with a postgres:16 service container runs them all).
 - vitest uses the forks pool: in-process caches (ban/token-version/rate-limit Maps) do not cross-contaminate, and the global PrismaClient singleton does not reuse connections across files.
 
 ### 3.2 CI Pipeline (.github/workflows/ci.yml)
@@ -214,7 +218,7 @@ scp upload (fallback to sftp on failure, 3 retries each) → remote extract to /
 ```
 
 - PM2 config: `ecosystem.config.cjs`; remote script: `deploy/deploy-production.sh`.
-- Database migrations go through `prisma migrate deploy` (all 23 migrations applied idempotently; none pending after this sprint).
+- Database migrations go through `prisma migrate deploy` (26 migrations currently; the new local migration will be applied by the deployment script at release time).
 - Release tags & APK: `scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk path>`.
 
 ### 4.2 Production Topology
@@ -270,7 +274,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 
 ### 5.3 Test Execution Performance
 
-The full set of 12 test files finishes in ~7 seconds (local forks pool); CI closes the loop within ~20 minutes including dependency installation and build.
+The full set of 17 test files finishes in roughly 6–9 seconds (local forks pool); CI closes the loop within ~20 minutes including dependency installation and build.
 
 ---
 
@@ -319,7 +323,9 @@ The full set of 12 test files finishes in ~7 seconds (local forks pool); CI clos
 
 ## 8. Evolution Plan
 
-Completed (all `plan/` proposals landed): three-device adaptation & phased launch (04), writing Agent & high-fidelity opencode replication (10/11), studio deep refactor (13), hallucination governance & knowledge-set Skills (14), release pipeline & site-wide loading optimization (15), mobile studio (16), TTS narration (17), admin console & community recommendation algorithm upgrade (18), Android APK packaging (19), immersive reader & safe-area refactor (20).
+Completed 1.0 plans: three-device adaptation & phased launch (04), writing Agent & high-fidelity opencode replication (10/11), studio deep refactor (13), hallucination governance & knowledge-set Skills (14), release pipeline & site-wide loading optimization (15), mobile studio (16), TTS narration (17), admin console & community recommendation algorithm upgrade (18), Android APK packaging (19), immersive reader & safe-area refactor (20). `plan/21` is the active Agent/Studio 2.0 plan.
+
+Agent 2.0 P0 engineering foundations landed on 2026-08-25: frozen runtime contracts; chapter revision migration and optimistic locking; version-guarded Agent chapter writes; revision propagation across publishing, insertion, deletion compaction, and rollback; test-enforced governance for 32 tools; and seven core eval scenarios with stable success/token/P95-latency/rollback aggregation. The formal P0 gate still requires at least five real-model runs per scenario against an available test database; P1 must not start before those measurements exist.
 
 New accumulations from this engineering sprint (2026-08, 85→90 points):
 
@@ -341,7 +347,7 @@ Candidate directions going forward (ordered by payoff):
 
 ## 9. plan/ Document Index
 
-The `plan/` directory holds the **true planning snapshots** of each phase (24 documents + parallel execution checklists); numbering equals project initiation order; **multiple documents under the same number = independent workstreams advanced in parallel within the same phase** (e.g. #18 admin console and community upgrade in parallel, #20 three documents on performance/reader in parallel), not version overrides. All proposals have landed; the implementation evolved normally; path correspondences with the current code are in [9.2](#92-historical-path-mapping-proposal-reference--current-implementation).
+The `plan/` directory holds true landed-phase snapshots and active implementation plans; numbering equals project initiation order. **Multiple documents under the same number = independent workstreams advanced in parallel within one phase**, not version overrides. `plan/00`–`plan/20` have landed; `plan/21` is progressing through P0–P7 gates.
 
 ### 9.1 Document List
 
@@ -364,6 +370,7 @@ The `plan/` directory holds the **true planning snapshots** of each phase (24 do
 | `plan/18` (two docs) | Admin console · community recommendation algorithm & topic system upgrade | Landed |
 | `plan/19` | Android APK client packaging (Capacitor shell project) | Landed |
 | `plan/20` (three docs) | Site-wide loading performance & Agent-runtime jank fixes · mobile immersive reader refactor · reader fullscreen immersion (Android shell safe-area system refactor) | Landed |
+| `plan/21` | Studio and Agent 2.0 enterprise iteration plan | In progress (P0 engineering foundation complete; live baseline pending) |
 | `plan/list/` | Multi-window parallel execution norms & master review checklist | Execution norm |
 
 ### 9.2 Historical Path Mapping (proposal reference → current implementation)

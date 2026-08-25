@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpenText, FileText, FolderDown, ImagePlus, MoreHorizontal, Save, Settings2, Sparkles, Trash2, Upload, WandSparkles } from 'lucide-react'
+import { BookOpenText, FileText, FolderDown, ImagePlus, MessageSquareText, MoreHorizontal, PenLine, Save, Settings2, Sparkles, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import Button from '@/components/ui/Button'
@@ -39,6 +39,9 @@ type StudioToolbarProps = {
   novelSaving?: boolean
   novelDirty?: boolean
   novelPublished?: boolean
+  perspective: 'work' | 'ide'
+  onPerspectiveChange: (perspective: 'work' | 'ide') => void
+  perspectiveSwitchEnabled?: boolean
 }
 
 export default function StudioToolbar({
@@ -70,6 +73,9 @@ export default function StudioToolbar({
   novelSaving = false,
   novelDirty = false,
   novelPublished = false,
+  perspective,
+  onPerspectiveChange,
+  perspectiveSwitchEnabled = true,
 }: StudioToolbarProps) {
   // 低频操作（封面/设置/作品页/删除）收进“更多”菜单，保持工具栏精简
   const [moreOpen, setMoreOpen] = useState(false)
@@ -90,7 +96,7 @@ export default function StudioToolbar({
     'flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-sm text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-45'
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-soft)] md:p-5">
+    <div className="border-b border-[var(--border-subtle)] bg-[var(--surface-default)] px-4 py-3 md:px-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -103,7 +109,7 @@ export default function StudioToolbar({
               onSelectNovel={onSelectNovel}
               onCreateNovel={onCreateNovel}
             />
-            <Tag tone="accent">编辑器</Tag>
+            <Tag tone="accent">{perspective === 'work' ? '工作台' : 'IDE'}</Tag>
             <Tag>{wordCountLabel}</Tag>
           </div>
           <div className="min-w-0">
@@ -127,6 +133,23 @@ export default function StudioToolbar({
 
         <div className="flex w-full flex-col gap-3 lg:w-auto lg:min-w-[28rem] lg:items-end">
           <div className="flex flex-wrap items-center gap-2">
+            {perspectiveSwitchEnabled ? <div className="inline-flex h-9 items-center rounded-full bg-[var(--surface-muted)] p-0.5" aria-label="切换创作视图">
+              {([
+                { key: 'work' as const, label: '工作台', icon: MessageSquareText },
+                { key: 'ide' as const, label: 'IDE', icon: PenLine },
+              ]).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onPerspectiveChange(key)}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors ${perspective === key ? 'bg-[var(--surface-default)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+                  aria-pressed={perspective === key}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div> : null}
             {novelSaving || novelDirty ? (
               <Button variant="secondary" size="sm" onClick={onSaveNovel} disabled={novelSaving}>
                 <Save className="h-4 w-4" />

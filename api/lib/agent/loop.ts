@@ -6,6 +6,7 @@ import type {
   AgentAttachmentMeta,
   AgentTodoItem,
   AgentTokenUsage,
+  CreativeFreedom,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import { chatWithTools, type ChatMessage, type ToolCallRequest } from '../ai-service.js'
@@ -14,6 +15,8 @@ import { getAgentDefinition, getToolsForAgent, type AgentDefinition } from './ag
 import { deregisterActiveRun, registerActiveRun } from './active-runs.js'
 import { clearRunBaselines } from './baseline.js'
 import { assembleContext } from './context.js'
+import { captureUserDirectives, compactSessionContext } from './context-engine.js'
+import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
 import { createRunEventBus, disposeRunEventBus, type RunEventBus } from './events.js'
 import {
   cancelAllQuestions,
@@ -26,6 +29,8 @@ import { getToolByName, toOpenAITools } from './tools/registry.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { autoNameSession } from './session-title.js'
+import { buildTaskSpec } from './task-spec.js'
+import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
 
 /**
  * Agent Loop 执行内核（plan/13 §4.3）。
@@ -48,6 +53,7 @@ export type ExecuteAgentRunParams = {
   /** 本轮附带附件元数据：持久化为用户消息 attachment parts 并注入上下文 */
   attachments?: AgentAttachmentMeta[]
   agentType?: string
+  creativeFreedom?: CreativeFreedom
   /** 从 paused 恢复：历史含本 run 已持久化的消息，prompt 换成续跑指令 */
   resume?: boolean
 }
@@ -329,7 +335,7 @@ async function handleToolCall(
 
   // 审批预判（与下方执行前判定同一公式）：提前给事件流打标，供前端与审计识别自动批准的工具调用
   const autoApproved =
-    env.agentAutoApprove ||
+    (env.agentAutoApprove && !tool?.alwaysConfirm) ||
     tool === undefined ||
     tool.permission[ctx.mode] !== 'ask' ||
     (hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
@@ -377,8 +383,9 @@ async function handleToolCall(
   // 审批：'ask' 且未被会话级“总是允许”覆盖时，挂起等待前端批复；
   // 全权限开关（默认开）短路审批：产品决策为 agent 自主判断所有动作，翻 env 可回退
   const needAsk =
-    !env.agentAutoApprove &&
-    permission === 'ask' && !(hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
+    permission === 'ask' &&
+    (tool.alwaysConfirm || !env.agentAutoApprove) &&
+    !(hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous && !tool.alwaysConfirm)
 
   if (needAsk) {
     const expiresAt = new Date(Date.now() + env.agentApprovalTimeoutMs).toISOString()
@@ -389,7 +396,7 @@ async function handleToolCall(
       toolName: tool.name,
       title: tool.title,
       args: validated.data,
-      allowAlways: !tool.dangerous,
+      allowAlways: !tool.dangerous && !tool.alwaysConfirm,
       expiresAt,
     })
 
@@ -402,7 +409,7 @@ async function handleToolCall(
       return fail(reason, `${reason}：工具 ${call.name} 未执行。请尊重用户决定，换一种方式完成任务或直接说明情况。`, 'denied')
     }
 
-    if (decision.alwaysAllow && !tool.dangerous) {
+    if (decision.alwaysAllow && !tool.dangerous && !tool.alwaysConfirm) {
       grantAlwaysAllow(ctx.sessionId, tool.name)
     }
   }
@@ -502,9 +509,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   let turn = 0
 
   try {
-    await prisma.agentRun.update({
+    const storedRun = await prisma.agentRun.update({
       where: { id: runId },
       data: { status: 'running', startedAt: new Date(), errorMessage: null },
+      select: { taskSpec: true },
     })
     await prisma.agentSession.update({
       where: { id: params.sessionId },
@@ -527,10 +535,41 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       url: attachment.url,
       size: attachment.size,
     }))
-    await persistMessage(randomUUID(), runId, params.sessionId, 'user', [
+    const userMessageId = randomUUID()
+    await persistMessage(userMessageId, runId, params.sessionId, 'user', [
       { type: 'text', text: prompt },
       ...attachmentParts,
     ])
+
+    const parsedTaskSpec = taskSpecSchema.safeParse(storedRun.taskSpec)
+    const taskSpec: TaskSpec = parsedTaskSpec.success
+      ? parsedTaskSpec.data
+      : buildTaskSpec({
+          runId,
+          novelId: params.novelId,
+          chapterId: params.chapterId,
+          prompt: params.prompt,
+          selection: params.selection,
+          creativeFreedom: params.creativeFreedom,
+        })
+    if (!parsedTaskSpec.success) {
+      await prisma.agentRun.update({ where: { id: runId }, data: { taskSpec: taskSpec as unknown as object } })
+    }
+    if (!params.resume) {
+      await captureUserDirectives({
+        userId: params.userId,
+        novelId: params.novelId,
+        sessionId: params.sessionId,
+        chapterId: params.chapterId,
+        sourceMessageId: userMessageId,
+        taskSpec,
+        prompt: params.prompt,
+      })
+    }
+    // 仅压缩已终态的旧 run；当前正在执行的消息永不进入检查点。
+    await compactSessionContext(params.userId, params.sessionId, false).catch((error) => {
+      console.error('[agent-loop] 自动上下文压缩失败，继续使用无损近期历史', runId, error)
+    })
 
     // 首次对话且仍是默认标题时异步自动命名（仅一次，不阻塞循环）
     if (!params.resume) {
@@ -554,9 +593,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       prompt,
       selection: params.selection,
       attachments: params.attachments ?? [],
+      taskSpec,
     })
 
-    const tools = getToolsForAgent(agent, params.mode)
+    const featureFlags = resolveAgent2FeatureFlags(params.userId)
+    const tools = getToolsForAgent(agent, params.mode, featureFlags)
     const openAITools = toOpenAITools(tools)
     const maxTurns = env.agentMaxTurns
 
@@ -626,6 +667,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         messages,
         tools: openAITools,
         model: agent.model,
+        temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
             if (textStreamed) {
@@ -790,6 +832,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           messages,
           tools: [],
           model: agent.model,
+          temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
           onChunk: (chunk) => {
             if (chunk.type === 'text-delta') {
               bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })

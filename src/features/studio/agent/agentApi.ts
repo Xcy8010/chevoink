@@ -4,6 +4,7 @@ import type {
   AgentSession,
   AgentUIMessage,
   ApiResponse,
+  ContextState,
   ResolveAgentApprovalRequest,
   ResolveAgentQuestionRequest,
   StartAgentLoopRunRequest,
@@ -122,6 +123,37 @@ export function fetchAgentSessions(novelId: string): Promise<{ items: AgentSessi
   return requestData<{ items: AgentSession[] }>(
     `/api/agent/sessions?novelId=${encodeURIComponent(novelId)}`,
   )
+}
+
+export function fetchAgentContextState(sessionId: string): Promise<ContextState> {
+  return requestData<ContextState>(`/api/agent/sessions/${sessionId}/context-state`)
+}
+
+export function compactAgentContext(sessionId: string): Promise<{ checkpoint: ContextState['checkpoint']; state: ContextState }> {
+  return requestData<{ checkpoint: ContextState['checkpoint']; state: ContextState }>(
+    `/api/agent/sessions/${sessionId}/compact`,
+    { method: 'POST' },
+  )
+}
+
+export type MemoryReviewItem = {
+  id: string
+  title: string
+  content: string
+  status: string
+  reviewStatus: string
+  confidence: number
+  evidence: Array<{ id: string; sourceType: string; sourceId: string; revision: number | null }>
+}
+
+export function fetchMemoryReviewInbox(novelId: string): Promise<{ items: MemoryReviewItem[] }> {
+  return requestData<{ items: MemoryReviewItem[] }>(`/api/agent/novels/${novelId}/memory-review`)
+}
+
+export function resolveMemoryReviewItem(memoryId: string, accepted: boolean): Promise<{ memory: MemoryReviewItem }> {
+  return requestData<{ memory: MemoryReviewItem }>(`/api/agent/memory/${memoryId}/review`, {
+    method: 'POST', body: JSON.stringify({ accepted }),
+  })
 }
 
 export function renameAgentSession(sessionId: string, title: string): Promise<{ session: AgentSession }> {

@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
+import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -10,13 +10,15 @@ import { useToast } from '@/components/ui/toast-context'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { updateShelfCover } from '@/features/home/local-shelf'
 import { cn } from '@/lib/utils'
-import { FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
+import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type { AgentStreamEvent, Chapter, CoverAsset, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
 import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, deleteWritingAgentSession, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
 import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
 import ChapterSidebar from './components/ChapterSidebar'
+import ChangeSetDrawer from './components/ChangeSetDrawer'
+import MemoryReviewDrawer from './components/MemoryReviewDrawer'
 import PlanSettingsPanel from './components/PlanSettingsPanel'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
 import AgentTaskSidebar from './components/AgentTaskSidebar'
@@ -31,6 +33,8 @@ import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioToolbar from './components/StudioToolbar'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
+import WorkPerspective from './components/WorkPerspective'
+import IdePerspective from './components/IdePerspective'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
@@ -44,8 +48,9 @@ import { chapterStatusLabelMap } from './types'
 import { buildArtifactsFromHistory, mergeRestoredArtifactsWithSnapshot, readStoredAgentWorkspace } from './lib/agent-persistence.js'
 import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_AGENT_TASK_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession } from './lib/agent-session.js'
 import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdatePayload, buildProjectNotes, createIdleAgentRunState, isNovelFormDirty } from './lib/form-state.js'
-import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterItem, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
+import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
+import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 export default function StudioWorkspace() {
   const { novelId } = useParams()
   const navigate = useNavigate()
@@ -82,7 +87,10 @@ export default function StudioWorkspace() {
   const [coverGenerationBusy, setCoverGenerationBusy] = useState(false)
   const [coverGenerationProgress, setCoverGenerationProgress] = useState(0)
   const [chapters, setChapters] = useState<StudioPayload['chapters']>([])
+  const [volumes, setVolumes] = useState<StudioPayload['volumes']>([])
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [activeChangeSetId, setActiveChangeSetId] = useState<string | null>(null)
+  const [memoryReviewOpen, setMemoryReviewOpen] = useState(false)
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null)
   const [selectedTreeItemId, setSelectedTreeItemId] = useState<string | null>(null)
   const [catalogDocument, setCatalogDocument] = useState<{
@@ -101,12 +109,18 @@ export default function StudioWorkspace() {
   const [novelLastSavedAt, setNovelLastSavedAt] = useState<string | null>(null)
   const [novelMessage, setNovelMessage] = useState('作品设置支持自动保存，也可以手动点击保存。')
   const [mobileView, setMobileView] = useState<MobileView>('assistant')
+  const [workspacePerspective, setWorkspacePerspective] = useState<'work' | 'ide'>(() => {
+    if (typeof window === 'undefined') return 'work'
+    return window.localStorage.getItem(`chevoink:perspective:${activeNovelId}`) === 'ide' ? 'ide' : 'work'
+  })
+  const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区（含沉浸创作/弹层 portal）内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
   const { panelWidths, beginPanelResize } = useStudioPanelWidths()
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
   const [isImmersive, setIsImmersive] = useState(false)
+  const platformCapabilities = useMemo(() => getPlatformCapabilities(), [])
   const [agentPrompt, setAgentPrompt] = useState('')
   // 惰性初始化：从快照同步恢复当前会话 id，避免跨路由返回时 AgentPanel 先以 null 挂载冲掉进行中的任务直播
   const [agentSessionId, setAgentSessionId] = useState<string | null>(() => {
@@ -202,6 +216,33 @@ export default function StudioWorkspace() {
   const [publishDialogOpen, setPublishDialogOpen] = useState(false)
   const createChapterLockRef = useRef(false)
   const agentExecutionChapterTargetRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    window.localStorage.setItem(`chevoink:perspective:${activeNovelId}`, workspacePerspective)
+  }, [activeNovelId, workspacePerspective])
+
+  useEffect(() => {
+    if (!featureFlags.dualWorkspace && workspacePerspective !== 'ide') {
+      setWorkspacePerspective('ide')
+    }
+  }, [featureFlags.dualWorkspace, workspacePerspective])
+
+  useEffect(() => subscribePlatformLifecycle({
+    onBack: () => {
+      if (workspaceDialog) setWorkspaceDialog(null)
+      else if (activeChangeSetId) setActiveChangeSetId(null)
+      else if (memoryReviewOpen) setMemoryReviewOpen(false)
+      else if (mobileMoreOpen) setMobileMoreOpen(false)
+      else if (isImmersive) setIsImmersive(false)
+      else if (activeToolPanel) setActiveToolPanel(null)
+      else if (mobileView !== 'assistant') setMobileView('assistant')
+      else navigate('/')
+    },
+    onResume: () => {
+      // SSE 以 seq 去重续传；这里只失效查询缓存，不重新启动 run，避免 APP 切后台造成重复写入。
+      void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId] })
+    },
+  }), [activeChangeSetId, activeNovelId, activeToolPanel, isImmersive, memoryReviewOpen, mobileMoreOpen, mobileView, navigate, queryClient, workspaceDialog])
 
   useEffect(() => {
     if (!coverGenerationBusy) {
@@ -460,6 +501,7 @@ export default function StudioWorkspace() {
     setCoverAssets([])
     setSelectedCoverId(null)
     setChapters([])
+    setVolumes([])
     setSelectedChapterId(null)
     setSelectedTreeItemId(null)
     setCatalogDocument(null)
@@ -497,6 +539,7 @@ export default function StudioWorkspace() {
     setCoverAssets(payload.coverAssets)
     setSelectedCoverId(payload.novel.coverAssetId ?? payload.coverAssets[0]?.id ?? null)
     setChapters(payload.chapters)
+    setVolumes(payload.volumes)
     setSelectedChapterId(payload.draftChapter?.id ?? payload.chapters[0]?.id ?? null)
   }, [studioQuery.data])
 
@@ -620,10 +663,11 @@ export default function StudioWorkspace() {
 
   useEffect(() => {
     return () => {
+      // 卸载时必须中止“当时最新”的请求，而不是 effect 建立时的旧 controller。
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       agentRunAbortControllerRef.current?.abort()
       flushPlanServerSync()
     }
-     
   }, [])
 
   // 计划文件夹云端持久化：作品切换时拉取全量计划（plan_save 已落库，这里跨会话聚合）
@@ -828,6 +872,9 @@ export default function StudioWorkspace() {
       const visibility = draftMatches?.visibility ?? chapterListItem?.visibility ?? 'private'
       const orderIndex =
         draftMatches?.orderIndex ?? chapterListItem?.orderIndex ?? chaptersStateRef.current.length + 1
+      const currentReview = pendingChapterReviewsRef.current.find(
+        (item) => item.chapterId === display.chapterId,
+      )
 
       const afterState: ChapterDraftState = {
         id: display.chapterId,
@@ -837,14 +884,17 @@ export default function StudioWorkspace() {
         status,
         visibility,
         orderIndex,
+        revision:
+          display.revision ??
+          currentReview?.after.revision ??
+          draftMatches?.revision ??
+          chapterListItem?.revision ??
+          1,
         localOnly: false,
       }
 
       // 同一章节连续写入（如 chapter_write 后再 append）：保留最早的 before/回滚快照，仅推进 after；
       // 其他章节的审查态不受影响（fix：新章写入不再覆盖旧章未定夺的审查）
-      const currentReview = pendingChapterReviewsRef.current.find(
-        (item) => item.chapterId === display.chapterId,
-      )
       if (currentReview) {
         setPendingChapterReviews((current) =>
           current.map((item) =>
@@ -929,6 +979,7 @@ export default function StudioWorkspace() {
       const previousCoverAssetId = currentNovelStateRef.current?.coverAssetId ?? null
 
       setChapters(payload.chapters)
+      setVolumes(payload.volumes)
       // 当前打开的章节被回退删除：回落到首章或目录。
       // 失效的 selectedChapterId 会让后续发送在后端报章节 404，
       // 此前前端把它误判成会话删除而清空整段对话（P0 数据丢失事故根因）
@@ -1122,6 +1173,10 @@ export default function StudioWorkspace() {
           current && current.startsWith('plan:') ? null : current,
         )
         return
+      }
+
+      if (event.type === 'tool.result' && event.ok && event.display?.kind === 'changeSet') {
+        setActiveChangeSetId(event.display.changeSetId)
       }
 
       if (event.type === 'tool.result' && event.ok && WORKSPACE_WRITE_TOOLS.has(event.toolName)) {
@@ -1530,13 +1585,19 @@ export default function StudioWorkspace() {
                 status: 'published' as const,
                 visibility: variables.visibility,
                 publishedAt: item.publishedAt ?? publishedAtFallback,
+                revision: item.revision + 1,
               }
             : item,
         ),
       )
       setChapterDraft((current) =>
         current && publishedSet.has(current.id)
-          ? { ...current, status: 'published', visibility: variables.visibility }
+          ? {
+              ...current,
+              status: 'published',
+              visibility: variables.visibility,
+              revision: current.revision + 1,
+            }
           : current,
       )
       syncStudioPayload((current) =>
@@ -1550,12 +1611,31 @@ export default function StudioWorkspace() {
                       status: 'published' as const,
                       visibility: variables.visibility,
                       publishedAt: item.publishedAt ?? publishedAtFallback,
+                      revision: item.revision + 1,
                     }
                   : item,
               ),
+              draftChapter:
+                current.draftChapter && publishedSet.has(current.draftChapter.id)
+                  ? null
+                  : current.draftChapter,
             }
           : current,
       )
+      for (const chapterId of publishedChapterIds) {
+        queryClient.setQueryData<Chapter>(['studio-chapter', activeNovelId, chapterId], (current) =>
+          current
+            ? {
+                ...current,
+                status: 'published',
+                visibility: variables.visibility,
+                publishedAt: current.publishedAt ?? publishedAtFallback,
+                revision: current.revision + 1,
+              }
+            : current,
+        )
+      }
+
       syncUpdatedNovelState(
         novel,
         publishedChapterIds.length > 0
@@ -1844,6 +1924,7 @@ export default function StudioWorkspace() {
           content: chapterDraft.content,
           status: chapterDraft.status,
           visibility: chapterDraft.visibility,
+          ...(chapterDraft.localOnly ? {} : { expectedRevision: chapterDraft.revision }),
         }
 
         const savedChapter = chapterDraft.localOnly
@@ -2353,17 +2434,17 @@ export default function StudioWorkspace() {
 
     const deletingChapter = chapterDraft
     const currentIndex = chapters.findIndex((chapter) => chapter.id === deletingChapter.id)
-    const remainingChapters = chapters.filter((chapter) => chapter.id !== deletingChapter.id)
+    const remainingChapters = removeChapterAndCompact(chapters, deletingChapter.id)
     const fallbackChapter =
       remainingChapters[Math.min(currentIndex, remainingChapters.length - 1)] ??
       remainingChapters[remainingChapters.length - 1] ??
       null
 
     if (!deletingChapter.localOnly) {
-      await deleteChapterDraft(activeNovelId, deletingChapter.id)
+      await deleteChapterDraft(activeNovelId, deletingChapter.id, deletingChapter.revision)
     }
 
-    setChapters((current) => removeChapterItem(current, deletingChapter.id))
+    setChapters((current) => removeChapterAndCompact(current, deletingChapter.id))
     setSelectedChapterId(fallbackChapter?.id ?? null)
     setEditorChapterSettingsOpen(false)
     setChapterDraft(null)
@@ -2376,6 +2457,7 @@ export default function StudioWorkspace() {
       queryClient.removeQueries({
         queryKey: ['studio-chapter', activeNovelId, deletingChapter.id],
       })
+      void queryClient.invalidateQueries({ queryKey: ['studio-chapter', activeNovelId] })
       setCurrentNovel((current) =>
         current
           ? {
@@ -2396,7 +2478,7 @@ export default function StudioWorkspace() {
               },
               draftChapter:
                 current.draftChapter?.id === deletingChapter.id ? null : current.draftChapter,
-              chapters: removeChapterItem(current.chapters, deletingChapter.id),
+              chapters: removeChapterAndCompact(current.chapters, deletingChapter.id),
             }
           : current,
       )
@@ -2419,6 +2501,10 @@ export default function StudioWorkspace() {
         orderIndex:
           chapters.find((chapter) => chapter.id === snapshot.chapter.id)?.orderIndex ??
           chapterDraft?.orderIndex ??
+          1,
+        revision:
+          chapters.find((chapter) => chapter.id === snapshot.chapter.id)?.revision ??
+          chapterDraft?.revision ??
           1,
         localOnly: false,
       }
@@ -2473,15 +2559,20 @@ export default function StudioWorkspace() {
             chapters.find((chapter) => chapter.id === previousChapter.id)?.orderIndex ??
             chapterDraft?.orderIndex ??
             1,
+          revision:
+            chapters.find((chapter) => chapter.id === previousChapter.id)?.revision ??
+            chapterDraft?.revision ??
+            1,
           localOnly: false,
         }
       : null
 
-    setChapters((current) => removeChapterItem(current, snapshot.chapter.id))
+    setChapters((current) => removeChapterAndCompact(current, snapshot.chapter.id))
     queryClient.removeQueries({
       queryKey: ['studio-chapter', activeNovelId, snapshot.chapter.id],
       exact: true,
     })
+    void queryClient.invalidateQueries({ queryKey: ['studio-chapter', activeNovelId] })
     setCurrentNovel((current) =>
       current
         ? {
@@ -2515,7 +2606,7 @@ export default function StudioWorkspace() {
                     }
                   : null
                 : current.draftChapter,
-            chapters: current.chapters.filter((chapter) => chapter.id !== snapshot.chapter.id),
+            chapters: removeChapterAndCompact(current.chapters, snapshot.chapter.id),
           }
         : current,
     )
@@ -2568,6 +2659,7 @@ export default function StudioWorkspace() {
           content: review.rollbackSnapshot.chapter.content,
           status: review.rollbackSnapshot.chapter.status,
           visibility: review.rollbackSnapshot.chapter.visibility,
+          expectedRevision: review.after.revision,
         })
 
         syncSavedChapterState(restoredChapter, {
@@ -2575,7 +2667,7 @@ export default function StudioWorkspace() {
           wordCountDelta: restoredChapter.wordCount - review.after.content.length,
         })
       } else {
-        await deleteChapterDraft(activeNovelId, review.after.id)
+        await deleteChapterDraft(activeNovelId, review.after.id, review.after.revision)
         syncLocalRollbackSnapshot(review.rollbackSnapshot)
       }
 
@@ -2665,6 +2757,7 @@ export default function StudioWorkspace() {
         content: resolved.after,
         status: review.after.status,
         visibility: review.after.visibility,
+        expectedRevision: review.after.revision,
       })
 
       syncSavedChapterState(savedChapter, {
@@ -2685,7 +2778,16 @@ export default function StudioWorkspace() {
       } else {
         setPendingChapterReviews((current) =>
           current.map((item) =>
-            item.id === review.id ? { ...item, after: { ...item.after, content: resolved.after } } : item,
+            item.id === review.id
+              ? {
+                  ...item,
+                  after: {
+                    ...item.after,
+                    content: resolved.after,
+                    revision: savedChapter.revision,
+                  },
+                }
+              : item,
           ),
         )
       }
@@ -3504,8 +3606,8 @@ export default function StudioWorkspace() {
       )
   }
 
-  function renderAgentTaskSidebar() {
-    if (!showAgentTaskList) {
+  function renderAgentTaskSidebar(force = false) {
+    if (!force && !showAgentTaskList) {
       return null
     }
 
@@ -3598,7 +3700,11 @@ export default function StudioWorkspace() {
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div
+        className="flex h-full min-h-0 flex-col overflow-hidden"
+        data-platform={platformCapabilities.native ? 'app' : 'web'}
+        data-visual-viewport={platformCapabilities.visualViewport ? 'supported' : 'fallback'}
+      >
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
           <div className="flex shrink-0 items-center gap-2 px-0.5 pb-2 pt-1">
             {mobileView === 'cover' || mobileView === 'meta' ? (
@@ -3719,6 +3825,7 @@ export default function StudioWorkspace() {
                 <ChapterSidebar
                   embedded
                   chapters={chapters}
+                  volumes={volumes}
                   savedPlans={savedPlanFiles}
                   selectedChapterId={selectedChapterId}
                   selectedTreeItemId={selectedTreeItemId}
@@ -3785,15 +3892,19 @@ export default function StudioWorkspace() {
               </button>
               {(
                 [
-                  { key: 'assistant', label: '对话', icon: MessageSquareText },
+                  { key: 'assistant', label: '工作台', icon: MessageSquareText },
                   { key: 'editor', label: '写作', icon: PenLine },
-                  { key: 'chapters', label: '章节', icon: BookOpenText },
+                  { key: 'chapters', label: '卷章', icon: BookOpenText },
                 ] as Array<{ key: MobileView; label: string; icon: typeof PenLine }>
               ).map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setMobileView(key)}
+                  onClick={() => {
+                    setMobileView(key)
+                    if (key === 'assistant') setWorkspacePerspective('work')
+                    if (key === 'editor' || key === 'chapters') setWorkspacePerspective('ide')
+                  }}
                   className={cn(
                     'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
                     mobileView === key
@@ -3830,6 +3941,9 @@ export default function StudioWorkspace() {
                 [
                   { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
                   { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
+                  ...(featureFlags.memory2
+                    ? [{ key: 'memory', label: '记忆审核', icon: BrainCircuit, action: () => setMemoryReviewOpen(true) }]
+                    : []),
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'immersive', label: '沉浸创作', icon: WandSparkles, action: () => handleEnterImmersive() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
@@ -3917,17 +4031,32 @@ export default function StudioWorkspace() {
             novelSaving={saveNovelMutation.isPending || deleteNovelMutation.isPending}
             novelDirty={novelDirty}
             novelPublished={novelForm?.status === 'published'}
+            perspective={workspacePerspective}
+            onPerspectiveChange={setWorkspacePerspective}
+            perspectiveSwitchEnabled={featureFlags.dualWorkspace}
           />
 
           <div className="mt-4 min-h-0 flex-1 overflow-hidden pb-2">
-            <div
-              className="hidden h-full min-h-0 overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] lg:grid"
-              style={{ gridTemplateColumns: `${panelWidths.tree}px minmax(0,1fr) auto` }}
-            >
+            {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
+              <WorkPerspective
+                taskRail={<div className="h-full [&>aside]:w-full [&>aside]:border-l-0">{renderAgentTaskSidebar(true)}</div>}
+                conversation={<div className="h-full min-h-0 px-5 py-4">{renderWritingAgent(undefined, false)}</div>}
+                novelTitle={novelTitle}
+                chapterTitle={chapterTitle}
+                chapterCount={chapters.length}
+                wordCount={latestWordCountLabel}
+                pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
+                activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
+                onOpenIde={() => setWorkspacePerspective('ide')}
+                onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+              />
+            ) : (
+            <IdePerspective treeWidth={panelWidths.tree}>
               <div className="relative min-h-0 border-r border-[var(--border-subtle)]">
                 <ChapterSidebar
                   embedded
                   chapters={chapters}
+                  volumes={volumes}
                   savedPlans={savedPlanFiles}
                   selectedChapterId={selectedChapterId}
                   selectedTreeItemId={selectedTreeItemId}
@@ -4032,7 +4161,8 @@ export default function StudioWorkspace() {
                 </div>
                 {renderAgentTaskSidebar()}
               </div>
-            </div>
+            </IdePerspective>
+            )}
           </div>
 
           {activeToolPanel && activeToolPanel !== 'assistant' ? (
@@ -4054,6 +4184,7 @@ export default function StudioWorkspace() {
           novelsLoading={myNovelsQuery.isLoading}
           chapterDraft={chapterDraft}
           chapters={chapters}
+          volumes={volumes}
           savedPlans={savedPlanFiles}
           selectedChapterId={selectedChapterId}
           selectedTreeItemId={selectedTreeItemId}
@@ -4221,6 +4352,14 @@ export default function StudioWorkspace() {
         }}
         onConfirm={(crop) => coverUploadMutation.mutate(crop)}
       />
+      {featureFlags.changeSet ? <ChangeSetDrawer
+        changeSetId={activeChangeSetId}
+        novelId={currentNovel.id}
+        chapters={chapters}
+        onClose={() => setActiveChangeSetId(null)}
+        onChanged={refreshWorkspaceAfterAgentWrite}
+      /> : null}
+      {featureFlags.memory2 ? <MemoryReviewDrawer open={memoryReviewOpen} novelId={currentNovel.id} onClose={() => setMemoryReviewOpen(false)} /> : null}
     </>
   )
 }

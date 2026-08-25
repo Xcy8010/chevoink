@@ -1,0 +1,16 @@
+DROP INDEX IF EXISTS "project_memory_entries_novel_status_idx";
+DROP INDEX IF EXISTS "project_memory_entries_search_trgm_idx";
+DROP TABLE IF EXISTS "memory_extraction_jobs";
+DROP TABLE IF EXISTS "story_events";
+DROP TABLE IF EXISTS "foreshadow_threads";
+DROP TABLE IF EXISTS "entity_relations";
+DROP TABLE IF EXISTS "entity_aliases";
+DROP TABLE IF EXISTS "story_entities";
+DROP TABLE IF EXISTS "memory_revisions";
+DROP TABLE IF EXISTS "memory_evidence";
+ALTER TABLE "project_memory_entries" DROP COLUMN IF EXISTS "embedding", DROP COLUMN IF EXISTS "version", DROP COLUMN IF EXISTS "confidence", DROP COLUMN IF EXISTS "review_status", DROP COLUMN IF EXISTS "status", DROP COLUMN IF EXISTS "layer";
+DROP TYPE IF EXISTS "MemoryJobStatus";
+DROP TYPE IF EXISTS "MemorySourceType";
+DROP TYPE IF EXISTS "MemoryReviewStatus";
+DROP TYPE IF EXISTS "StoryMemoryStatus";
+DROP TYPE IF EXISTS "StoryMemoryLayer";

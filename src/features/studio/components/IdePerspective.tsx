@@ -1,0 +1,18 @@
+import type { ReactNode } from 'react'
+
+type IdePerspectiveProps = {
+  children: ReactNode
+  treeWidth: number
+}
+
+/** 写作优先 IDE：边到边三栏，容器只表达真实分区，避免多层圆角卡片。 */
+export default function IdePerspective({ children, treeWidth }: IdePerspectiveProps) {
+  return (
+    <div
+      className="grid h-full min-h-0 overflow-hidden border-y border-[var(--border-subtle)] bg-[var(--surface-default)]"
+      style={{ gridTemplateColumns: `${treeWidth}px minmax(0,1fr) auto` }}
+    >
+      {children}
+    </div>
+  )
+}

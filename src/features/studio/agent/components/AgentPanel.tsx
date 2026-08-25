@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   CircleAlert,
+  BrainCircuit,
   Copy,
   FileText,
   History,
@@ -23,6 +24,8 @@ import type {
   AgentAttachmentMeta,
   AgentSession,
   AgentStreamEvent,
+  ContextState,
+  CreativeFreedom,
   EntityId,
 } from '../../../../../shared/contracts/index.js'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -31,9 +34,11 @@ import ImageLightbox from '../../components/ImageLightbox'
 import {
   AgentApiError,
   continueAgentLoopRun,
+  compactAgentContext,
   deleteAgentSession,
   deleteAgentSessionMessage,
   fetchAgentSessionMessages,
+  fetchAgentContextState,
   fetchAgentSessions,
   renameAgentSession,
   resolveAgentApproval,
@@ -120,6 +125,13 @@ export function AgentPanel({
 
   const [historyLoading, setHistoryLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [contextState, setContextState] = useState<ContextState | null>(null)
+  const [contextCompacting, setContextCompacting] = useState(false)
+  const [creativeFreedom, setCreativeFreedom] = useState<CreativeFreedom>(() => {
+    if (typeof window === 'undefined') return 'balanced'
+    const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
+    return saved === 'stable' || saved === 'bold' ? saved : 'balanced'
+  })
   /** 用户气泡附件图片的大图预览 */
   const [attachmentPreview, setAttachmentPreview] = useState<{ url: string; name: string } | null>(null)
 
@@ -154,6 +166,32 @@ export function AgentPanel({
   // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
   const awaiting =
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
+
+  useEffect(() => {
+    if (!sessionId) {
+      setContextState(null)
+      return
+    }
+    void fetchAgentContextState(sessionId).then(setContextState).catch(() => setContextState(null))
+  }, [sessionId, phase])
+
+  useEffect(() => {
+    window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
+  }, [creativeFreedom, novelId])
+
+  const handleCompactContext = useCallback(async () => {
+    if (!sessionId || active || contextCompacting) return
+    setContextCompacting(true)
+    setActionError(null)
+    try {
+      const result = await compactAgentContext(sessionId)
+      setContextState(result.state)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '上下文整理失败，请稍后再试。')
+    } finally {
+      setContextCompacting(false)
+    }
+  }, [active, contextCompacting, sessionId])
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
   const blockInfoById = useMemo(() => {
@@ -339,7 +377,7 @@ export function AgentPanel({
   useKeyboardPushScroll(scrollRef)
 
   const handleSend = useCallback(
-    async (prompt: string, attachments: AgentAttachmentMeta[]) => {
+    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom) => {
       setActionError(null)
       // 用户主动发言视为回到对话最新处，重新开启自动跟随
       pinnedToBottomRef.current = true
@@ -359,6 +397,7 @@ export function AgentPanel({
             prompt,
             selection: selection ?? null,
             attachments: attachments.length > 0 ? attachments : undefined,
+            creativeFreedom: freedom,
           })
         let result: Awaited<ReturnType<typeof startAgentLoopRun>>
         try {
@@ -642,6 +681,24 @@ export function AgentPanel({
           {currentTurn > 0 ? `第 ${currentTurn} 轮 · ` : ''}
           {usage.totalTokens > 0 ? `${usage.totalTokens.toLocaleString()} tokens` : ''}
         </span>
+        {sessionId ? (
+          <button
+            type="button"
+            onClick={() => void handleCompactContext()}
+            disabled={active || contextCompacting}
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+              contextState && contextState.usageRatio >= contextState.warningThreshold
+                ? 'bg-amber-50 text-amber-700'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
+            )}
+            aria-label="整理长期对话上下文"
+            title={contextState ? `上下文约 ${Math.round(contextState.usageRatio * 100)}%，${contextState.activeDirectiveCount} 条有效指令` : '整理长期对话上下文'}
+          >
+            {contextCompacting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <BrainCircuit className="h-3.5 w-3.5" />}
+            {contextState?.checkpoint ? <span className="hidden sm:inline">已整理</span> : null}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={toggleHistory}
@@ -1012,7 +1069,9 @@ export function AgentPanel({
         <AgentComposer
           running={active}
           disabled={historyLoading}
-          onSend={(prompt, attachments) => void handleSend(prompt, attachments)}
+          onSend={(prompt, attachments, freedom) => void handleSend(prompt, attachments, freedom)}
+          creativeFreedom={creativeFreedom}
+          onCreativeFreedomChange={setCreativeFreedom}
           onStop={() => void handleStop()}
         />
       </div>

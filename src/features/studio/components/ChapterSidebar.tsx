@@ -10,19 +10,20 @@ function formatChapterTreeLabel(chapter: StudioPayload['chapters'][number]) {
   const normalizedTitle = chapter.title.trim()
 
   if (!normalizedTitle) {
-    return `第 ${chapter.orderIndex} 章`
+    return `第 ${chapter.orderInVolume} 章`
   }
 
-  const prefixedPattern = new RegExp(`^第\\s*${chapter.orderIndex}\\s*章(?:\\s*[：:.·\\-]\\s*.*)?$`)
+  const prefixedPattern = new RegExp(`^第\\s*${chapter.orderInVolume}\\s*章(?:\\s*[：:.·\\-]\\s*.*)?$`)
   if (prefixedPattern.test(normalizedTitle)) {
     return normalizedTitle
   }
 
-  return `第 ${chapter.orderIndex} 章 · ${normalizedTitle}`
+  return `第 ${chapter.orderInVolume} 章 · ${normalizedTitle}`
 }
 
 type ChapterSidebarProps = {
   chapters: StudioPayload['chapters']
+  volumes: StudioPayload['volumes']
   savedPlans: WorkspacePlanFile[]
   selectedChapterId: string | null
   selectedTreeItemId: string | null
@@ -49,6 +50,7 @@ type ChapterSidebarProps = {
 
 export default function ChapterSidebar({
   chapters,
+  volumes,
   savedPlans,
   selectedChapterId,
   selectedTreeItemId,
@@ -66,6 +68,10 @@ export default function ChapterSidebar({
   const [novelExpanded, setNovelExpanded] = useState(true)
   const [planFolderExpanded, setPlanFolderExpanded] = useState(true)
   const [chapterFolderExpanded, setChapterFolderExpanded] = useState(true)
+  const volumeGroups = volumes.map((volume) => ({
+    volume,
+    chapters: chapters.filter((chapter) => chapter.volumeId === volume.id),
+  }))
   return (
     <div
       className={cn(
@@ -205,7 +211,15 @@ export default function ChapterSidebar({
 
               {chapterFolderExpanded ? (
                 <div className="ml-4 border-l border-[var(--border-subtle)] pl-2">
-                  {chapters.map((chapter) => {
+                  {volumeGroups.map(({ volume, chapters: volumeChapters }) => (
+                    <div key={volume.id} className="py-0.5">
+                      <div className="flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                        <NotebookText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                        <span className="truncate">第 {volume.orderIndex} 卷 · {volume.title}</span>
+                        <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">{volumeChapters.length} 章</span>
+                      </div>
+                      <div className="ml-3 border-l border-[var(--border-subtle)] pl-1.5">
+                  {volumeChapters.map((chapter) => {
                     const chapterActive =
                       selectedTreeItemId === `chapter:${chapter.id}` ||
                       (!selectedTreeItemId && selectedChapterId === chapter.id)
@@ -250,6 +264,15 @@ export default function ChapterSidebar({
                       </div>
                     )
                   })}
+                        {volumeChapters.length === 0 ? (
+                          <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">空卷</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                  {volumeGroups.length === 0 ? (
+                    <p className="px-2 py-2 text-xs text-[var(--text-tertiary)]">暂未建立卷结构</p>
+                  ) : null}
                 </div>
               ) : null}
             </div>

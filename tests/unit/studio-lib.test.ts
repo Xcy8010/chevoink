@@ -32,6 +32,7 @@ import {
   mergeCatalogContentWithChapters,
   readStoredPendingReviewList,
   removeChapterItem,
+  removeChapterAndCompact,
   replaceChapterItem,
   toChapterListItem,
   upsertChapterItem,
@@ -69,6 +70,7 @@ function fakeChapter(overrides: Partial<Chapter> = {}): Chapter {
     orderIndex: 1,
     wordCount: 2,
     commentCount: 0,
+    revision: 1,
     publishedAt: null,
     ...overrides,
   } as unknown as Chapter
@@ -255,10 +257,18 @@ describe('plan-review：章节列表操作', () => {
     expect(removeChapterItem(list as never, 'c1').map((c) => c.id)).toEqual(['c2'])
   })
 
+  it('removeChapterAndCompact：删除后连续编号并递增受影响章节 revision', () => {
+    const items = [fakeChapter({ id: 'c1', orderIndex: 1, revision: 2 }), fakeChapter({ id: 'c2', orderIndex: 2, revision: 4 }), fakeChapter({ id: 'c3', orderIndex: 3, revision: 7 })].map(toChapterListItem)
+    expect(removeChapterAndCompact(items, 'c2').map((item) => [item.id, item.orderIndex, item.revision])).toEqual([
+      ['c1', 1, 2],
+      ['c3', 2, 8],
+    ])
+  })
+
   it('toChapterListItem：字段白名单映射', () => {
     const item = toChapterListItem(fakeChapter())
     expect(Object.keys(item).sort()).toEqual(
-      ['commentCount', 'id', 'novelId', 'orderIndex', 'publishedAt', 'status', 'summary', 'title', 'visibility', 'wordCount'].sort(),
+      ['commentCount', 'id', 'novelId', 'volumeId', 'orderInVolume', 'orderIndex', 'publishedAt', 'revision', 'status', 'summary', 'title', 'visibility', 'wordCount'].sort(),
     )
   })
 })

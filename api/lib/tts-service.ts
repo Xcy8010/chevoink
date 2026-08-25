@@ -93,7 +93,7 @@ export async function synthesizeTtsBatchData(input: SynthesizeTtsInput): Promise
   }
 
   const cacheKey = createHash('sha1')
-    .update(`${chapter.id}:${chapter.updatedAt.toISOString()}:${input.voiceId}:${batch.index}`)
+    .update(`${chapter.id}:${chapter.revision}:${input.voiceId}:${batch.index}`)
     .digest('hex')
   const cacheDirectory = getTtsCacheDirectory()
   const filePath = path.join(cacheDirectory, `${cacheKey}.mp3`)

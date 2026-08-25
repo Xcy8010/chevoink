@@ -82,6 +82,8 @@ describe('P0 schema 行为对齐原路由断言', () => {
   it('createChapter：content 空串通过（原仅拒缺省）、status 非法枚举拒绝', () => {
     expect(createChapterSchema.safeParse({ title: 't', content: '', status: 'draft' }).success).toBe(true)
     expect(createChapterSchema.safeParse({ title: 't', content: 'c', status: 'bogus' }).success).toBe(false)
+    expect(updateChapterSchema.safeParse({ content: '新版', expectedRevision: 3 }).success).toBe(true)
+    expect(updateChapterSchema.safeParse({ expectedRevision: 0 }).success).toBe(false)
   })
 
   it('createPost / createComment：核心字段空白拒绝，paragraphIndex 允许 null', () => {

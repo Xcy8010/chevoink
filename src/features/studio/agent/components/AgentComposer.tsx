@@ -7,6 +7,7 @@ import {
   MAX_AGENT_IMAGE_COUNT,
   type AgentAttachmentMeta,
 } from '../../../../../shared/contracts/agent-attachments.js'
+import type { CreativeFreedom } from '../../../../../shared/contracts/index.js'
 import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agent-attachments'
 import { uploadAgentAttachment } from '../agentApi'
 import { useAgentStore } from '../agentStore'
@@ -31,11 +32,13 @@ type AgentComposerProps = {
   running: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
-  onSend: (prompt: string, attachments: AgentAttachmentMeta[]) => Promise<void> | void
+  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom) => Promise<void> | void
   onStop: () => void
+  creativeFreedom: CreativeFreedom
+  onCreativeFreedomChange: (value: CreativeFreedom) => void
 }
 
-export function AgentComposer({ running, disabled = false, onSend, onStop }: AgentComposerProps) {
+export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange }: AgentComposerProps) {
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
   const setPrompt = useAgentStore((state) => state.setComposerDraft)
@@ -137,7 +140,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop }: Age
     const pending = attachments
     setSending(true)
     try {
-      await onSend(trimmed, pending)
+      await onSend(trimmed, pending, creativeFreedom)
       setPrompt('')
       setAttachments([])
       setAttachError(null)
@@ -248,6 +251,18 @@ export function AgentComposer({ running, disabled = false, onSend, onStop }: Age
           >
             <ImagePlus className="h-4 w-4" />
           </button>
+          <select
+            value={creativeFreedom}
+            onChange={(event) => onCreativeFreedomChange(event.target.value as CreativeFreedom)}
+            disabled={running || disabled}
+            aria-label="创作自由度"
+            title="创作自由度只影响软技巧与表达探索，不降低事实一致性"
+            className="h-7 rounded-full border-0 bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] disabled:opacity-45"
+          >
+            <option value="stable">稳定延续</option>
+            <option value="balanced">平衡创作</option>
+            <option value="bold">大胆探索</option>
+          </select>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

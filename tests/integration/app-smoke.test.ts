@@ -1,4 +1,5 @@
 import request from 'supertest'
+import { randomInt } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import app from '../../api/app.js'
@@ -47,12 +48,13 @@ describe('应用冒烟（无 DB 依赖）', () => {
 
 describe.skipIf(!dbAvailable)('应用冒烟（需 DB）', () => {
   it('注册→登录→登出全链路', async () => {
-    const phone = `+861398${Date.now().toString().slice(-7)}`
+    const unique = randomInt(0, 10_000_000).toString().padStart(7, '0')
+    const phone = `+861398${unique}`
     const password = 'Smoke-Test-123!'
 
     const registerRes = await request(app)
       .post('/api/auth/register')
-      .send({ phone, nickname: '冒烟测试用户', password })
+      .send({ phone, nickname: `冒烟测试用户${unique}`, password })
     expect(registerRes.status).toBe(201)
     expect(registerRes.body.data.tokens.accessToken).toContain('v2.')
     // v2 双 cookie：access + refresh 同时下发

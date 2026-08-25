@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { prisma } from '../../prisma.js'
+import { searchStoryMemory } from '../story-memory.js'
 import { recordChapterBaseline } from '../baseline.js'
 import { defineTool } from './types.js'
 
@@ -77,20 +78,29 @@ export const novelGetContextTool = defineTool({
       return { output: '未找到当前作品，可能已被删除。' }
     }
 
-    const chapters = await prisma.chapter.findMany({
+    const volumes = await prisma.volume.findMany({
       where: { novelId: ctx.novelId },
       orderBy: { orderIndex: 'asc' },
-      select: { id: true, title: true, orderIndex: true, wordCount: true, status: true, summary: true },
+      include: {
+        chapters: {
+          orderBy: { orderInVolume: 'asc' },
+          select: { id: true, title: true, orderIndex: true, orderInVolume: true, wordCount: true, status: true, summary: true },
+        },
+      },
     })
+    const chapters = volumes.flatMap((volume) => volume.chapters)
 
-    const chapterLines = chapters.map((chapter) => {
-      const titleNumber = extractTitleChapterNumber(chapter.title)
-      const mismatched = titleNumber !== null && titleNumber !== chapter.orderIndex
-      return `- [${chapter.id}] 第${chapter.orderIndex}章《${chapter.title}》 ${chapter.wordCount}字 ${chapter.status === 'published' ? '已发布' : '草稿'}${chapter.summary ? ' 有摘要' : ''}${chapter.id === ctx.chapterId ? '（当前章节）' : ''}${mismatched ? ` 【注意：标题自称第${titleNumber}章，但实际排在第${chapter.orderIndex}位】` : ''}`
+    const volumeLines = volumes.map((volume) => {
+      const chapterLines = volume.chapters.map((chapter) => {
+        const titleNumber = extractTitleChapterNumber(chapter.title)
+        const mismatched = titleNumber !== null && titleNumber !== chapter.orderInVolume
+        return `  - [${chapter.id}] 卷内第${chapter.orderInVolume}章（全书第${chapter.orderIndex}章）《${chapter.title}》 ${chapter.wordCount}字 ${chapter.status === 'published' ? '已发布' : '草稿'}${chapter.summary ? ' 有摘要' : ''}${chapter.id === ctx.chapterId ? '（当前章节）' : ''}${mismatched ? ` 【注意：标题自称第${titleNumber}章，但卷内实际排在第${chapter.orderInVolume}位】` : ''}`
+      })
+      return `- 第${volume.orderIndex}卷《${volume.title}》 volumeId=${volume.id}${volume.summary ? ` 摘要：${clip(volume.summary, 120)}` : ''}\n${chapterLines.length ? chapterLines.join('\n') : '  （空卷）'}`
     })
     const hasMismatch = chapters.some((chapter) => {
       const titleNumber = extractTitleChapterNumber(chapter.title)
-      return titleNumber !== null && titleNumber !== chapter.orderIndex
+      return titleNumber !== null && titleNumber !== chapter.orderInVolume
     })
 
     const output = [
@@ -101,9 +111,9 @@ export const novelGetContextTool = defineTool({
       novel.coverAsset?.imageUrl
         ? `正式封面地址：${novel.coverAsset.imageUrl}（调用 view_image 即可查看当前封面画面效果）`
         : '正式封面：暂无',
-      chapters.length ? `章节列表：\n${chapterLines.join('\n')}` : '章节列表：暂无章节。',
+      volumes.length ? `卷章结构：\n${volumeLines.join('\n')}` : '卷章结构：暂无。',
       hasMismatch
-        ? '提醒：存在标题序号与实际排位不一致的章节（通常是作者删过中间章节导致错位）。作者要求写「第N章」时，先确认目标到底是哪一章：要补写被删掉的章节时用 chapter_create 传 position 在正确位置插入（后续章节编号会自动后移），不要直接覆盖错位的其他章节；处理完后用 chapter_rename 把序号对不上的标题一并修正。'
+        ? '提醒：存在标题序号与卷内排位不一致的章节。作者要求写「第N章」时，先确认所属卷和目标章节；结构调整应使用 chapter_move / chapter_move_to_volume，完成后调用 structure_outline 校验。'
         : '',
     ]
       .filter(Boolean)
@@ -134,15 +144,15 @@ export const chapterReadTool = defineTool({
     }
     const chapter = await prisma.chapter.findFirst({
       where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
-      select: { id: true, title: true, content: true, wordCount: true, summary: true, updatedAt: true },
+      select: { id: true, title: true, content: true, wordCount: true, summary: true, revision: true },
     })
 
     if (!chapter) {
       return { output: `章节 ${chapterId} 不存在或不属于当前作品。` }
     }
 
-    // 读取即记录写入基线：后续写入前校验 updatedAt，防止覆盖用户手动修改
-    recordChapterBaseline(ctx.runId, chapter.id, chapter.updatedAt)
+    // 读取即记录写入基线：后续写入前校验 revision，防止同毫秒写入或时钟精度导致漏判冲突
+    recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
 
     const offset = args.offset ?? 0
     const limit = args.limit ?? 6000
@@ -224,6 +234,12 @@ export const memorySearchTool = defineTool({
         'foreshadowing',
         'stylePreference',
         'continuityRule',
+        'volumeSummary',
+        'storyArc',
+        'sceneState',
+        'relationshipState',
+        'storyBible',
+        'authorProfile',
       ])
       .optional()
       .describe('限定记忆类型，缺省为全部'),
@@ -232,18 +248,9 @@ export const memorySearchTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
-    const entries = await prisma.projectMemoryEntry.findMany({
-      where: {
-        novelId: ctx.novelId,
-        ...(args.memoryType ? { memoryType: args.memoryType } : {}),
-        OR: [
-          { title: { contains: args.query, mode: 'insensitive' } },
-          { content: { contains: args.query, mode: 'insensitive' } },
-        ],
-      },
-      orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
-      take: args.limit ?? 8,
-      select: { memoryType: true, title: true, content: true, importance: true },
+    const entries = await searchStoryMemory({
+      userId: ctx.userId, novelId: ctx.novelId, query: args.query,
+      memoryType: args.memoryType, limit: args.limit ?? 8,
     })
 
     if (entries.length === 0) {
@@ -251,7 +258,7 @@ export const memorySearchTool = defineTool({
     }
 
     const lines = entries.map(
-      (entry) => `[${entry.memoryType}] ${entry.title}（重要性 ${entry.importance}）：${clip(entry.content, 400)}`,
+      (entry) => `[${entry.memoryType}/${entry.layer}/${entry.status}] ${entry.title}（融合分 ${entry.score.toFixed(4)}）：${clip(entry.content, 400)}\n  依据：${entry.evidence.map((item) => `${item.sourceType}:${item.sourceId}${item.revision ? `@r${item.revision}` : ''}`).join('、') || '无来源（仅作低可信参考）'}`,
     )
 
     return {

@@ -1,13 +1,22 @@
 import type { AgentExecutionMode } from '../../../shared/contracts/index.js'
-import type { AgentAttachmentMeta, AgentMessagePart } from '../../../shared/contracts/index.js'
+import type { AgentAttachmentMeta, AgentMessagePart, TaskSpec } from '../../../shared/contracts/index.js'
 import { MAX_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
 import type { ChatMessage } from '../ai-service.js'
 import { prisma } from '../prisma.js'
 import type { AgentDefinition } from './agents.js'
 import { OPERATION_KNOWLEDGE } from './knowledge/operation.js'
 import { buildGeneralWritingDigest, buildGenreWritingDigest } from './knowledge/writing.js'
-import { matchSkill } from './skills/index.js'
+import { buildSkillManifestDigest, routeSkills } from './skills/index.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
+import {
+  listActiveDirectives,
+  loadContextCheckpoint,
+  renderCheckpointDigest,
+  renderDirectiveDigest,
+} from './context-engine.js'
+import { renderTaskSpec } from './task-spec.js'
+import { searchStoryMemory } from './story-memory.js'
+import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
 
 /**
  * Context Manager（plan/13 §4.4 / §4.5）。
@@ -45,13 +54,14 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 4. 长任务先建待办再执行：作者要求连续完成多个单元（如「连写六章不要停」「把这几章都改完」）时，先用 todo_write 把任务拆成待办清单（一个单元一条），然后逐条执行，每完成一条立即用 todo_write 把该条标记为 completed。只要清单里还有未完成项，就必须继续执行下一条，严禁中途停下来问作者「要不要继续」。
 5. 记忆沉淀有时机：新设定、新角色、关键转折确立后及时用 memory_save 沉淀，试写内容不沉淀。
 6. 一致性防线前移：写作前先用 memory_search 校对人名、设定与时间线，而不是写完再检查。
-7. 章节序号先核对再动笔：作者用「第N章」指称章节时，先用 novel_get_context 核对该排位章节的标题与内容是否就是作者所指；若发现该排位的章节标题序号对不上或目标章节缺失（作者删过章导致错位），绝不直接覆盖现有章节，而是用 chapter_create 传 position 在正确位置插入新章（后续章节编号自动后移），必要时再用 chapter_rename 修正错位的标题序号；拿不准作者意图时用 ask_user 确认。
+7. 卷章结构先核对再动笔：作者用「第N卷/第N章」指称章节时，先用 novel_get_context 核对卷内排位、标题与正文；插章、跨卷移动、拆分、合并必须使用结构工具，完成后调用 structure_validate，禁止靠逐章改数字维持顺序。
 8. 短答复先对齐上一轮：作者发「好的」「可以」「继续」「嗯」这类短消息时，它大概率是在答复你上一条回复结尾的提问或建议（如「是否需要我继续？」等对用户的提问或者建议）。先回看历史里自己最后一条回复提了什么，把短答复对应到那个提问上直接执行；只有上一条回复没有待答事项时，才把「继续」理解为推进待办清单；两者都对不上时用 ask_user 确认，不要当作无效消息忽略。
 9. 外部事实走搜索：作者要求联网搜索，或 memory_search 检索不到的真实世界事实（人物事件、术语、行情、时事），用 web_search 获取并在引用时注明来源；搜索摘要不足以回答问题时，用 web_read 深读最相关的结果原文后再作答；搜不到时如实说明，不编造外部事实。
 10. 附件先理解再行动：你是纯文本模型，看不到图片像素也读不到文件二进制；作者附带图片时必须先逐张调用 view_image（视觉推理旁路）查看、附带文件时必须先调用 read_file 读取内容，然后再开始任务，禁止凭文件名或猜测理解附件。
 11. 站内作品参考走平台工具：作者要求查看/参考站内作品（含自己未公开的作品）时，用 platform_novel_search 按书名定位、platform_novel_read 读介绍/分类/标签/章节正文；二创、借鉴、写序章类任务必须先读参考作品的简介与相关章节再动笔，禁止盲写，引用他人作品仅限已上架内容；当前作品自身内容仍用 novel_get_context/chapter_read，不要用平台工具读当前作品。
 12. 找类似作品走特征词而非拆书名：作者要找类似/同类/同风格作品时，先用 platform_novel_read 读参考作品的标签、分类与简介，提炼题材特征词（标签/分类/核心题材），用特征词调 platform_novel_search 搜同类候选并对比标签与简介判断相似度，严禁把参考作品书名逐字拆分穷举搜索；站内没有合适候选时用 web_search 搜站外类似作品推荐（如「《x》 类似作品 推荐」或题材词+小说推荐），摘要不足用 web_read 深读，推荐时注明来源。
-13. 字数用工具数据不手数：任何字数核对（是否达到作者要求、改动前后篇幅）一律引用工具返回的字数；改写片段用 chapter_edit_range 传 oldText 锚点定位，严禁在思考信道逐字计数算下标。`
+13. 字数用工具数据不手数：任何字数核对（是否达到作者要求、改动前后篇幅）一律引用工具返回的字数；改写片段用 chapter_edit_range 传 oldText 锚点定位，严禁在思考信道逐字计数算下标。
+14. 全书改动必须走变更集：改名、术语替换、跨章批量修改先 project_search / impact_analyze，再 bulk_replace_preview 或 entity_rename_preview；向作者展示 ChangeSet 后才 changeset_apply。禁止逐章读取、逐章整段覆盖，应用后用 project_search 和 structure_validate 验证。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。
@@ -101,9 +111,15 @@ async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
 }
 
 /** L2/L3：角色卡 + 时间线 + 伏笔摘要（≤1200 字） */
-async function buildStoryMemoryDigest(novelId: string): Promise<string | null> {
+async function buildStoryMemoryDigest(userId: string, novelId: string, query: string): Promise<string | null> {
+  const retrieved = await searchStoryMemory({ userId, novelId, query, limit: 12 })
+  if (retrieved.length > 0) {
+    return `与本轮任务相关的故事记忆（RRF 混合召回；confirmed 可作事实，inferred 需按证据核实）：\n${retrieved
+      .map((entry) => `[${entry.memoryType}/${entry.status}] ${entry.title}：${clip(entry.content, 180)}（依据：${entry.evidence.map((item) => `${item.sourceType}:${item.sourceId}${item.revision ? `@r${item.revision}` : ''}`).join('、') || '无'}）`)
+      .join('\n')}`
+  }
   const entries = await prisma.projectMemoryEntry.findMany({
-    where: { novelId, memoryType: { in: ['characterCard', 'timelineEvent', 'foreshadowing', 'worldbuilding'] } },
+    where: { novelId, status: { in: ['confirmed', 'inferred'] }, memoryType: { in: ['characterCard', 'timelineEvent', 'foreshadowing', 'worldbuilding', 'storyBible', 'volumeSummary', 'sceneState', 'relationshipState'] } },
     orderBy: { importance: 'desc' },
     take: 12,
     select: { memoryType: true, title: true, content: true },
@@ -211,12 +227,22 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
 }
 
 /** 历史消息按字符预算裁剪：从最新往回收，超预算的旧消息折叠成一条占位 */
-async function loadSessionHistory(sessionId: string, excludeRunId: string, budgetChars: number): Promise<ChatMessage[]> {
+async function loadSessionHistory(
+  sessionId: string,
+  excludeRunId: string,
+  budgetChars: number,
+  after: Date | null,
+): Promise<ChatMessage[]> {
   // 必须取「最近」的 60 条（desc + reverse）：之前用 asc 取到的是最早 60 条，
   // 长会话里最新几轮（含助手上一轮结尾的提问）被整体截掉，
   // 作者回「好的/继续」时模型根本看不到自己刚问过什么
   const records = await prisma.agentMessage.findMany({
-    where: { sessionId, runId: { not: excludeRunId }, role: { in: ['user', 'assistant'] } },
+    where: {
+      sessionId,
+      runId: { not: excludeRunId },
+      role: { in: ['user', 'assistant'] },
+      ...(after ? { createdAt: { gt: after } } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: 60,
   })
@@ -266,16 +292,19 @@ export type AssembleContextInput = {
   selection?: { text: string; start?: number; end?: number } | null
   /** 本轮附件元数据：注入用户意图段，驱动 view_image/read_file 主动调用 */
   attachments?: AgentAttachmentMeta[]
+  taskSpec: TaskSpec
 }
 
 export async function assembleContext(input: AssembleContextInput): Promise<ChatMessage[]> {
-  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, history, chapter, novelTags] = await Promise.all([
+  const checkpointState = await loadContextCheckpoint(input.sessionId)
+  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
-    buildStoryMemoryDigest(input.novelId),
+    buildStoryMemoryDigest(input.userId, input.novelId, input.prompt),
     buildPlanFolderDigest(input.userId, input.novelId),
     buildCoverCandidateDigest(input.userId, input.novelId),
     buildTodoDigest(input.sessionId),
-    loadSessionHistory(input.sessionId, input.runId, 40000),
+    listActiveDirectives(input.userId, input.novelId),
+    loadSessionHistory(input.sessionId, input.runId, 40000, checkpointState.sourceEndedAt),
     input.chapterId
       ? prisma.chapter.findFirst({
           where: { id: input.chapterId, novelId: input.novelId },
@@ -286,7 +315,14 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
   ])
 
   // Skill 命中：按模式+意图匹配流程模板（每次最多 1 个）；题材文风卡只在 build 模式（写作类任务）注入
-  const skill = matchSkill(input.mode, input.prompt)
+  const skills = isAgent2FeatureEnabled('skill2', input.userId)
+    ? routeSkills({
+        mode: input.mode,
+        prompt: input.prompt,
+        intent: input.taskSpec.intent,
+        freedom: input.taskSpec.creativeFreedom,
+      })
+    : []
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null
 
   const systemPrompt = [
@@ -296,13 +332,15 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     OPERATION_KNOWLEDGE,
     buildGeneralWritingDigest(),
     genreDigest,
-    skill?.prompt ?? null,
+    buildSkillManifestDigest(skills, input.taskSpec.creativeFreedom),
     '历史对话中形如「[调用工具 xxx：yyy]」的行是系统对已发生工具调用的压缩标记，仅供你了解之前做过什么，不是回复文本的一部分。你自己的回复中严禁出现「[调用工具 …]」「[调用 tool]」这类文字：需要执行操作时直接发起真正的工具调用，需要向作者汇报进展时用自然语言描述。',
     ruleBundle,
     TAG_LIBRARY_DIGEST,
     memoryDigest,
     planDigest,
     coverDigest,
+    checkpointState.checkpoint ? renderCheckpointDigest(checkpointState.checkpoint) : null,
+    renderDirectiveDigest(directives),
     chapter
       ? `作者当前正在编辑：第${chapter.orderIndex}章《${chapter.title}》（chapterId=${chapter.id}，${chapter.wordCount} 字）。未指明章节时优先针对该章节操作。`
       : '作者当前未打开具体章节。',
@@ -346,6 +384,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     // 待办快照紧跟在历史之后、用户指令之前：位置越靠近当前轮次权重越高，
     // 避免被历史里旧任务的待办痕迹带偏（尤其是“继续”这类短指令）
     ...(todoDigest ? [{ role: 'user' as const, content: todoDigest }] : []),
+    { role: 'user', content: renderTaskSpec(input.taskSpec) },
     { role: 'user', content: intentSections.join('\n\n') },
   ]
 }

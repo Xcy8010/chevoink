@@ -4,10 +4,18 @@ import { z } from 'zod'
 import {
   FIXED_NOVEL_COVER_HEIGHT,
   FIXED_NOVEL_COVER_WIDTH,
+  bulkReplacePreviewRequestSchema,
   createChapterSchema,
+  createVolumeSchema,
+  mergeChaptersSchema,
+  moveChapterSchema,
+  moveVolumeSchema,
   createNovelSchema,
   publishNovelSchema,
+  projectSearchRequestSchema,
+  splitChapterSchema,
   updateChapterSchema,
+  updateVolumeSchema,
   updateNovelSchema,
   uploadNovelCoverSchema,
 } from '../../shared/contracts/index.js'
@@ -16,18 +24,30 @@ import {
   createChapterData,
   createUploadedCoverAssetData,
   createNovelData,
+  createVolumeData,
+  previewBulkReplaceData,
   deleteNovelData,
   deleteChapterData,
+  deleteVolumeData,
   getChapterData,
   getNovelDetailData,
   getReaderPayloadData,
   getStudioPayloadData,
+  getStructureReportData,
+  listVolumesData,
   listNovelCardsByIdsData,
+  listChangeSetsData,
   listNovelsData,
   publishNovelData,
+  mergeChaptersData,
+  moveChapterData,
+  moveVolumeData,
+  splitChapterData,
   setNovelFavoriteData,
+  searchProjectData,
   updateChapterData,
   updateNovelData,
+  updateVolumeData,
 } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { buildNovelExportZip } from '../lib/export-service.js'
@@ -35,6 +55,7 @@ import { createStoredExport, getStoredExportByToken } from '../lib/export-store.
 import { storeNovelCoverDataUrl } from '../lib/novel-cover-storage.js'
 import { parseBody } from '../lib/parse-body.js'
 import { sendRouteError } from '../lib/route-error.js'
+import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 
 const router = Router()
 
@@ -326,6 +347,178 @@ router.get('/:novelId/reader/:chapterId', async (req: Request, res: Response): P
   }
 })
 
+router.get('/:novelId/volumes', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const items = await listVolumesData(requireSessionUserId(req), req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/search', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('changeSet', userId)
+    const body = parseBody(projectSearchRequestSchema, req.body, '检索参数不正确。')
+    const result = await searchProjectData(userId, req.params.novelId, body)
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:novelId/changesets', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('changeSet', userId)
+    const items = await listChangeSetsData(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/changesets/preview', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('changeSet', userId)
+    const body = parseBody(bulkReplacePreviewRequestSchema, req.body, '变更预览参数不正确。')
+    const changeSet = await previewBulkReplaceData(userId, req.params.novelId, body)
+    res.status(201).json(buildSuccess(requestId, { changeSet }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/volumes', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(createVolumeSchema, req.body, '请填写卷标题。')
+    const volume = await createVolumeData(userId, req.params.novelId, body)
+    res.status(201).json(buildSuccess(requestId, { volume }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/:novelId/volumes/:volumeId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(updateVolumeSchema, req.body, '卷信息格式不正确。')
+    const volume = await updateVolumeData(userId, req.params.novelId, req.params.volumeId, body)
+    if (!volume) {
+      res.status(404).json(buildError(requestId, 'VOLUME_NOT_FOUND', '未找到卷。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { volume }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/volumes/:volumeId/move', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(moveVolumeSchema, req.body, '卷移动参数不正确。')
+    const volume = await moveVolumeData(userId, req.params.novelId, req.params.volumeId, body)
+    if (!volume) {
+      res.status(404).json(buildError(requestId, 'VOLUME_NOT_FOUND', '未找到卷。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { volume }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/:novelId/volumes/:volumeId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const deleted = await deleteVolumeData(userId, req.params.novelId, req.params.volumeId)
+    if (!deleted) {
+      res.status(404).json(buildError(requestId, 'VOLUME_NOT_FOUND', '未找到卷。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { deleted: true as const }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/:novelId/structure', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const report = await getStructureReportData(requireSessionUserId(req), req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { report }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/chapters/:chapterId/move', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(moveChapterSchema, req.body, '章节移动参数不正确。')
+    const chapter = await moveChapterData(userId, req.params.novelId, req.params.chapterId, body)
+    if (!chapter) {
+      res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { chapter }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/chapters/:chapterId/split', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(splitChapterSchema, req.body, '章节拆分参数不正确。')
+    const result = await splitChapterData(userId, req.params.novelId, req.params.chapterId, body)
+    if (!result) {
+      res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节。'))
+      return
+    }
+    res.status(201).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/:novelId/chapters/:chapterId/merge', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('volume', userId)
+    const body = parseBody(mergeChaptersSchema, req.body, '章节合并参数不正确。')
+    const chapter = await mergeChaptersData(userId, req.params.novelId, req.params.chapterId, body)
+    if (!chapter) {
+      res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到待合并章节。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { chapter }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.post('/:novelId/chapters', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
@@ -342,6 +535,8 @@ router.post('/:novelId/chapters', async (req: Request, res: Response): Promise<v
         content: body.content,
         status: body.status,
         visibility: body.visibility,
+        volumeId: body.volumeId,
+        orderInVolume: body.orderInVolume,
       },
       body.visibility ?? 'public',
     )
@@ -400,7 +595,27 @@ router.delete('/:novelId/chapters/:chapterId', async (req: Request, res: Respons
 
   try {
     const userId = requireSessionUserId(req)
-    const deleted = await deleteChapterData(userId, req.params.novelId, req.params.chapterId)
+    const rawExpectedRevision = req.query.expectedRevision
+    let expectedRevision: number | undefined
+    if (rawExpectedRevision !== undefined) {
+      const normalized = Array.isArray(rawExpectedRevision) ? rawExpectedRevision[0] : rawExpectedRevision
+      const parsedRevision = typeof normalized === 'string' ? Number(normalized) : Number.NaN
+      if (
+        typeof normalized !== 'string' ||
+        !/^[1-9]\d*$/.test(normalized) ||
+        !Number.isSafeInteger(parsedRevision)
+      ) {
+        res.status(400).json(buildError(requestId, 'VALIDATION_ERROR', '章节版本格式不正确。'))
+        return
+      }
+      expectedRevision = parsedRevision
+    }
+    const deleted = await deleteChapterData(
+      userId,
+      req.params.novelId,
+      req.params.chapterId,
+      expectedRevision,
+    )
 
     if (!deleted) {
       res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节。'))

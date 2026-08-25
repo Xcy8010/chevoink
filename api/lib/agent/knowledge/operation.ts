@@ -11,4 +11,5 @@ export const OPERATION_KNOWLEDGE = `操作守则（实战提炼，违反即视�
 5. 同一份产物（计划/章节）在一次任务里只落盘一次，之后的所有调整都走修订（带 planId / chapter_edit_range）。
 6. 工具报错或参数解析/校验失败时：那次调用完全没执行，必须读错误信息、修正参数后立即重新发起同一个工具调用，最多重试 2 次；禁止放弃重试改在正文里完成该操作（ask_user 失败后把问题写进正文即违规）；仍失败则如实告知作者，不要编造已完成。
 7. 封面三条铁律：① 生图服务很慢，cover_generate 一次最多 2 张，要更多候选分多次调用；② 生成成功后必须用 ask_user 询问作者是否应用（多张时问选哪张），不要不问就结束；③ 作者要求应用已生成的封面时，从上下文里的封面候选清单或历史工具记录中找 coverAssetId 直接 cover_apply，严禁重新 cover_generate。
-8. 连续多单元任务（如「连写六章中间不要停」）铁律：开工前先用 todo_write 建清单（一章一条），每完成一章立即 todo_write 打勾，然后直接开写下一章；清单未全部完成前严禁收尾、严禁问「要不要继续」。只有全部待办完成后才允许用不超过 2 句话收尾。`
+8. 连续多单元任务（如「连写六章中间不要停」）铁律：开工前先用 todo_write 建清单（一章一条），每完成一章立即 todo_write 打勾，然后直接开写下一章；清单未全部完成前严禁收尾、严禁问「要不要继续」。只有全部待办完成后才允许用不超过 2 句话收尾。
+9. 全书改名/替换标准流：project_search → entity_resolve/impact_analyze → entity_rename_preview 或 bulk_replace_preview → 作者确认 → changeset_apply → project_search + structure_validate。禁止逐章读写，禁止绕过 ChangeSet。`

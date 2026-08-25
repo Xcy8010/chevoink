@@ -1,9 +1,13 @@
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../../prisma.js'
 import { getChapterBaseline, getLastTouchedChapter, recordChapterBaseline } from '../baseline.js'
 import { recalcNovelStats } from './novel-tools.js'
 import { defineTool, type ToolContext, type ToolResult } from './types.js'
+import { placeCreatedChapter, resolveChapterPlacement } from '../../data/volume.js'
+import { enqueueChapterMemoryExtraction } from '../story-memory.js'
+import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 
 /**
  * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
@@ -39,12 +43,35 @@ function buildChapterNotFound(ctx: ToolContext, chapterId: string): ToolResult {
   }
 }
 
-/** 基线冲突检测：用户在 Agent 运行期间手动改过正文时不盲写 */
+/** 基线冲突检测：用户在 Agent 运行期间改过章节时不盲写 */
 function buildConflictResult(chapterTitle: string): ToolResult {
   return {
-    output: `冲突：章节《${chapterTitle}》的正文在你上次读取后已被用户手动修改。请先用 chapter_read 重新读取最新内容，再决定如何写入，避免覆盖用户的修改。`,
+    output: `冲突：章节《${chapterTitle}》在你上次读取后已被用户修改。请先用 chapter_read 重新读取最新内容，再决定如何写入，避免覆盖用户的修改。`,
     summary: `《${chapterTitle}》存在编辑冲突，已阻止写入`,
   }
+}
+
+/** 把“读当前版本 → 写入”收敛为单条带 revision 条件的原子更新。 */
+async function updateOwnedChapterAtRevision(
+  ctx: ToolContext,
+  chapter: { id: string; revision: number },
+  data: Prisma.ChapterUpdateManyMutationInput,
+) {
+  const result = await prisma.chapter.updateMany({
+    where: {
+      id: chapter.id,
+      novelId: ctx.novelId,
+      authorId: ctx.userId,
+      revision: chapter.revision,
+    },
+    data: { ...data, revision: { increment: 1 } },
+  })
+
+  if (result.count === 0) {
+    return null
+  }
+
+  return findOwnedChapter(ctx, chapter.id)
 }
 
 async function writeChapterContent(
@@ -60,19 +87,27 @@ async function writeChapterContent(
   }
 
   const baseline = getChapterBaseline(ctx.runId, chapter.id)
-  if (baseline && baseline !== chapter.updatedAt.toISOString()) {
+  if (baseline !== null && baseline !== chapter.revision) {
     return buildConflictResult(chapter.title)
   }
 
   const before = chapter.content
   const after = buildNextContent(before)
 
-  const updated = await prisma.chapter.update({
-    where: { id: chapter.id },
-    data: { content: after, wordCount: after.length },
+  const updated = await updateOwnedChapterAtRevision(ctx, chapter, {
+    content: after,
+    wordCount: after.length,
   })
+  if (!updated) {
+    return buildConflictResult(chapter.title)
+  }
   await recalcNovelStats(ctx.novelId)
-  recordChapterBaseline(ctx.runId, chapter.id, updated.updatedAt)
+  recordChapterBaseline(ctx.runId, chapter.id, updated.revision)
+  if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
+    await enqueueChapterMemoryExtraction({
+      novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: updated.revision, before, after,
+    })
+  }
 
   return {
     output: `已${actionLabel}章节《${chapter.title}》，当前正文 ${after.length} 字。`,
@@ -84,6 +119,7 @@ async function writeChapterContent(
       before,
       after,
       appliedDirectly: true,
+      revision: updated.revision,
     },
     snapshot: { target: 'chapter', targetId: chapter.id, field: 'content', previousValue: before },
   }
@@ -103,52 +139,52 @@ export const chapterCreateTool = defineTool({
       .min(1)
       .optional()
       .describe('插入位置（第 N 章）。缺省或超过现有章节数时追加到末尾；否则插入该位置，原第 N 章及之后的章节整体后移一位'),
+    volumeId: z.string().min(1).optional().describe('目标卷 ID；缺省时使用最后一卷'),
+    positionInVolume: z.number().int().min(1).optional().describe('目标卷内位置（第 N 章）；缺省时追加'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    // 用「最大编号+1」而不是「总数+1」：删过中间章节后总数+1 会撞 novelId+orderIndex 唯一约束
-    const lastChapter = await prisma.chapter.findFirst({
-      where: { novelId: ctx.novelId },
-      orderBy: { orderIndex: 'desc' },
-      select: { orderIndex: true },
-    })
-    const maxOrder = lastChapter?.orderIndex ?? 0
     const content = args.content ?? ''
-    // position 超界或缺省都退化为末尾追加
-    const inserting = args.position !== undefined && args.position <= maxOrder
-    const targetOrder = inserting ? (args.position as number) : maxOrder + 1
 
     const chapter = await prisma.$transaction(async (tx) => {
-      if (inserting) {
-        // 中间插入：把排位 ≥ position 的章节按编号降序逐个 +1，先挪最大号避免撞 novelId+orderIndex 唯一约束
-        const shifting = await tx.chapter.findMany({
-          where: { novelId: ctx.novelId, orderIndex: { gte: targetOrder } },
-          orderBy: { orderIndex: 'desc' },
-          select: { id: true, orderIndex: true },
-        })
-        for (const item of shifting) {
-          await tx.chapter.update({ where: { id: item.id }, data: { orderIndex: item.orderIndex + 1 } })
-        }
-      }
-      return tx.chapter.create({
+      const globalTarget = args.position
+        ? await tx.chapter.findFirst({ where: { novelId: ctx.novelId, orderIndex: args.position } })
+        : null
+      const placement = await resolveChapterPlacement(
+        tx,
+        ctx.novelId,
+        args.volumeId ?? globalTarget?.volumeId,
+        args.positionInVolume ?? globalTarget?.orderInVolume,
+      )
+      const chapterCount = await tx.chapter.count({ where: { novelId: ctx.novelId } })
+      const created = await tx.chapter.create({
         data: {
           novelId: ctx.novelId,
           authorId: ctx.userId,
           title: args.title.trim(),
           content,
-          orderIndex: targetOrder,
+          volumeId: placement.volume.id,
+          orderInVolume: -(placement.count + 1),
+          orderIndex: -(chapterCount + 1),
           wordCount: content.length,
           status: 'draft',
           visibility: 'public',
         },
       })
+      await placeCreatedChapter(tx, ctx.novelId, created, placement.volume.id, placement.position)
+      return tx.chapter.findUniqueOrThrow({ where: { id: created.id } })
     })
     await recalcNovelStats(ctx.novelId)
-    recordChapterBaseline(ctx.runId, chapter.id, chapter.updatedAt)
+    recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
+    if (content && isAgent2FeatureEnabled('memory2', ctx.userId)) {
+      await enqueueChapterMemoryExtraction({
+        novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: content,
+      })
+    }
 
     return {
-      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}${inserting ? '，原该位置及之后的章节已自动后移一位' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
+      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}，卷内序=${chapter.orderInVolume}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
       summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》`,
       // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
       display: content
@@ -159,6 +195,7 @@ export const chapterCreateTool = defineTool({
             before: '',
             after: content,
             appliedDirectly: true,
+            revision: chapter.revision,
           }
         : { kind: 'chapterRef', chapterId: chapter.id, title: chapter.title, wordCount: 0 },
       ...(content
@@ -267,18 +304,26 @@ export const chapterEditRangeTool = defineTool({
     }
 
     const baseline = getChapterBaseline(ctx.runId, chapter.id)
-    if (baseline && baseline !== chapter.updatedAt.toISOString()) {
+    if (baseline !== null && baseline !== chapter.revision) {
       return buildConflictResult(chapter.title)
     }
 
     const after = before.slice(0, start) + args.newText + before.slice(end)
 
-    const updated = await prisma.chapter.update({
-      where: { id: chapter.id },
-      data: { content: after, wordCount: after.length },
+    const updated = await updateOwnedChapterAtRevision(ctx, chapter, {
+      content: after,
+      wordCount: after.length,
     })
+    if (!updated) {
+      return buildConflictResult(chapter.title)
+    }
     await recalcNovelStats(ctx.novelId)
-    recordChapterBaseline(ctx.runId, chapter.id, updated.updatedAt)
+    recordChapterBaseline(ctx.runId, chapter.id, updated.revision)
+    if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
+      await enqueueChapterMemoryExtraction({
+        novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: updated.revision, before, after,
+      })
+    }
 
     return {
       output: `已改写《${chapter.title}》第 ${start}-${end} 字的片段（原 ${end - start} 字 → 新 ${args.newText.length} 字）。`,
@@ -292,6 +337,7 @@ export const chapterEditRangeTool = defineTool({
         before,
         after,
         appliedDirectly: true,
+        revision: updated.revision,
       },
       snapshot: { target: 'chapter', targetId: chapter.id, field: 'content', previousValue: before },
     }
@@ -320,8 +366,17 @@ export const chapterRenameTool = defineTool({
     }
 
     const previousTitle = chapter.title
-    await prisma.chapter.update({ where: { id: chapter.id }, data: { title: args.title.trim() } })
+    const baseline = getChapterBaseline(ctx.runId, chapter.id)
+    if (baseline !== null && baseline !== chapter.revision) {
+      return buildConflictResult(chapter.title)
+    }
+
+    const updated = await updateOwnedChapterAtRevision(ctx, chapter, { title: args.title.trim() })
+    if (!updated) {
+      return buildConflictResult(chapter.title)
+    }
     await recalcNovelStats(ctx.novelId)
+    recordChapterBaseline(ctx.runId, chapter.id, updated.revision)
 
     return {
       output: `已把章节《${previousTitle}》重命名为《${args.title.trim()}》。`,

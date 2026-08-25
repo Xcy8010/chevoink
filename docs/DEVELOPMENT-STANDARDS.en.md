@@ -230,6 +230,14 @@ A tool's `name` / `description` / parameter schema is a **model-visible contract
 | DB failure | stale fallback: reuse historical success state ≤10 minutes old (ban and tokenVersion comparisons as usual); degrade-open only beyond the window; fail-closed is forbidden | `api/lib/auth-session.ts` |
 | Gate's own anomaly | Fail-open + downstream falls back to local signature verification; admin-function failures must not take down the whole site | `api/app.ts` session gate |
 
+### 6.5 Agent 2.0 Tool Governance and Chapter Concurrency
+
+- Every new tool must be registered in both `tools/registry.ts` and `tools/governance.ts`, with a category, risk level, and at least one deterministic postcondition; governance tests must pass.
+- Any change to chapter prose, title, status, visibility, or structural order must increment `Chapter.revision`; non-authorial counters such as comment counts do not.
+- Agent chapter writes must atomically match `id + novelId + authorId + revision`; chapter reads record the revision baseline, and conflicts stop the write and require a reread.
+- Frontend chapter saves and deletes must send `expectedRevision`. A missing field is accepted only for legacy APP compatibility, and compatible writes still advance the server revision.
+- Until P2 ChangeSet support lands, cross-chapter operations must not claim atomic bulk guarantees.
+
 ---
 
 ## 7. Database Standards
@@ -243,6 +251,7 @@ Scope: `prisma/schema.prisma`, migrations, and data-access code.
 | Index awareness | Build composite indexes on where + orderBy fields of list/sort queries; large tables first | `20260815120000_add_list_indexes` |
 | Double-insurance validation | Enum-like fields: route zod validation + data-layer fallback (prevents bypassing routes via direct calls) | privacy fallback in `api/lib/data/user.ts` |
 | Revocation mechanism | Session-like data requiring immediate invalidation uses a version field (`tokenVersion`); caches compare version numbers | `20260815130000_add_user_token_version` |
+| Writing concurrency | Chapter content/structure writes advance `revision`; new clients use `expectedRevision` optimistic locking | `20260825190000_add_chapter_revision` |
 | Test database | Database name contains `test` (Iron Rule 7); migrations and integration tests share the same test database | `tests/setup.ts` |
 
 ---
@@ -255,8 +264,8 @@ Scope: `tests/**`; the verification obligation for all new logic.
 
 | Directory | Responsibility | Current Baseline |
 | --- | --- | --- |
-| `tests/unit/*.test.ts` | Pure-logic unit tests (prisma mockable) | 8 files, 76 cases (studio-lib 24 / auth-session 14 / schemas 9 / panel-helpers 7 / phone 6 / password 6 / active-runs 5 / parse-body 5) |
-| `tests/integration/*.test.ts` | supertest against the real Express app; DB group runs on the test database | 4 files, 68 cases (p0 27 / p1 21 / p2 15 / app-smoke 5) |
+| `tests/unit/*.test.ts` | Pure-logic unit tests (prisma mockable) | 12 files, 89 cases, including Agent 2.0 contracts, revision baselines, tool governance, and eval metrics |
+| `tests/integration/*.test.ts` | supertest against the real Express app; DB group runs on the test database | 5 files, 71 cases, including chapter revision conflicts, stale-delete blocking, and legacy compatibility |
 
 ### 8.2 Mandatory Patterns
 

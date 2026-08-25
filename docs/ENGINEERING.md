@@ -2,9 +2,9 @@
 
 > 本文档统一汇总系统架构、关键技术决策、测试与 CI、部署方案、性能数据、安全策略与风险取舍、技术债务及演进计划。
 > 全部内容基于当前仓库代码与 `plan/` 目录内的真实方案文档，随工程演进持续更新。
-> `plan/` 目录已入库公开：24 篇方案为各阶段的真实规划快照，其中引用的历史文件路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
+> `plan/00`–`plan/20` 为已落地阶段的真实规划快照，`plan/21` 为当前 2.0 实施方案；历史路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
 >
-> 最近更新：2026-08-24
+> 最近更新：2026-08-25
 
 ## 目录
 
@@ -54,7 +54,7 @@
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
-                           │ PostgreSQL 16（27 张表 · 23 次迁移） │
+                           │ PostgreSQL 16（29 张表 · 26 次迁移） │
                            └─────────────────────────────────────┘
 ```
 
@@ -69,7 +69,7 @@
 | `src/features/discover` / `home` / `search` / `novel-detail` / `profile` | 发现流、详情页、个人中心 |
 | `src/features/admin` | 管理后台（数据看板、用户/作品/内容治理） |
 
-前后端通过 `shared/contracts/` 共享类型契约（含 Agent SSE 事件结构 `AgentStreamEvent` / `AgentUIMessage`），编译期即可发现接口失配。
+前后端通过 `shared/contracts/` 共享类型契约（含 Agent SSE 事件结构以及 Agent 2.0 的 `TaskSpec`、`ChangeSet`、`Volume`、`MemoryEvidence` 冻结契约），编译期即可发现接口失配。
 
 ### 1.3 后端结构（api/）
 
@@ -78,7 +78,7 @@
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
   - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
-  - `tools/`：32 个注册工具（清单见 [1.5](#15-agent-工具清单32-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export 十一组文件；
+  - `tools/`：32 个注册工具（清单见 [1.5](#15-agent-工具清单32-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export 十一组文件；`governance.ts` 冻结每个工具的风险分类与后置条件；
   - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次 / 站内搜索 5 次 / 站内深读 8 次每 run）；
   - `knowledge/` + `skills/`：写作知识与操作知识集（对应 `plan/14` 幻觉治理方案）。
 
@@ -111,7 +111,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名/标签/题材关键词定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层；类似作品走特征词检索+简介对比，站内无果降级联网搜索 |
 | 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
 | 导出（1） | novelExport | 一键导出作品 zip（规划/目录/章节/作品信息以及发布建议），只读免审批；支持章节子集与四类内容裁剪；产物存内存仓库（TTL 15 分钟）供前端下载卡片拉取 |
-| 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | 冲突检测 + 409 语义 + 回滚快照 |
+| 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | revision 原子冲突检测 + 409 语义 + 回滚快照 |
 | 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |
 | 计划工件（3） | planSave · planRename · planDelete | 大纲计划的保存/重命名/删除 |
 | 封面（3） | coverPromptSet · coverGenerate · coverApply | 提示词、生成、应用落盘 |
@@ -144,6 +144,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 认证降级 | DB 故障时优先复用 ≤10 分钟历史会话状态（stale fallback），超窗才降级放行 | 可用性优先是既有设计基线；完全 fail-closed 会因 DB 抖动打挂全站登录态 |
 | Agent 执行模式 | 默认最大权限自主执行（`AGENT_AUTO_APPROVE=true`） | 产品决策：零打扰创作流（README 卖点）；`false` 一键回退审批流，见 [第 6 节](#6-安全策略与风险取舍) |
 | Agent 引擎 | 统一 loop 调度内核 + 工具注册表 + 事件流 | 对标 opencode 高保真复刻（`plan/11`），前端只消费标准事件流 |
+| 章节并发控制 | `Chapter.revision` + `expectedRevision` 乐观锁；Agent 使用带版本条件的原子 updateMany | 防止网页、旧 APP、Agent 并发写入时静默覆盖；旧客户端缺省字段保持兼容但仍推进版本 |
 | 事件流架构 | SSE 事件全量按 seq 持久化，live 与 replay 同源，Last-Event-ID 续传 | 断线/刷新不丢消息；历史回放与直播共用一条代码路径，消除双实现漂移 |
 | API 响应结构 | 成功统一 `{ success, data }`，失败统一 `{ code, message }` 且必返 JSON | 前端错误处理单路径；校验文案逐字锚定于集成测试（p0/p1/p2-validation） |
 | 幻觉治理 | 知识集（世界观/人物卡）+ Skill 注入 + 联网调研预算 | `plan/14`：先读事实再动笔，预算防跑飞 |
@@ -168,10 +169,13 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 单元 | phone / password | 6 / 6 | 手机号与密码规则 |
 | 单元 | active-runs | 5 | Agent 运行登记表（注册/计数/停止） |
 | 单元 | parse-body | 5 | 请求体解析与 400/401 边界 |
+| 单元 | agent2-contracts / agent-baseline | 5 / 2 | TaskSpec/ChangeSet/Volume/MemoryEvidence 契约与 revision 基线隔离 |
+| 单元 | agent-tool-governance / agent-eval-metrics | 3 / 2 | 32 工具治理完整性与统一评测汇总口径 |
 | 集成 | p0/p1/p2-validation | 27 / 21 / 15 | 三代校验文案逐字对照（DB 组）+ 401 优先顺序（无 DB 组） |
 | 集成 | app-smoke | 5 | 健康检查与基础路由冒烟 |
+| 集成 | agent2-revision | 3 | 同版本并发仅一次成功、旧客户端兼容写入、过期删除阻断（需 DB） |
 
-- 最近一次全量结果：**12 个测试文件全部通过，92 passed / 52 skipped**（skipped 为本地无 PostgreSQL 时 DB 组按 `describe.skipIf(!dbAvailable)` 自动跳过——clone 后 `npm test` 开箱即用；CI 带 postgres:16 服务容器则全量执行）。
+- 最近一次全量结果：**17 个测试文件，16 passed / 1 skipped；105 tests passed / 55 skipped**（skipped 为本地无 PostgreSQL 时 DB 组按 `describe.skipIf(!dbAvailable)` 自动跳过——clone 后 `npm test` 开箱即用；CI 带 postgres:16 服务容器则执行全部 DB 用例）。
 - vitest 采用 forks 池：进程内缓存（封禁/令牌版本/限流 Map）互不串扰，也避免全局 PrismaClient 单例跨文件复用连接。
 
 ### 3.2 CI 流水线（.github/workflows/ci.yml）
@@ -208,7 +212,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 ```
 
 - PM2 配置：`ecosystem.config.cjs`；远端脚本：`deploy/deploy-production.sh`。
-- 数据库迁移走 `prisma migrate deploy`（23 次迁移全部幂等应用，本轮冲刺后无 pending）。
+- 数据库迁移走 `prisma migrate deploy`（当前 26 次迁移；本地新增迁移将在正式发布时随部署脚本应用）。
 - 发布 Tag 与 APK：`scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk路径>`。
 
 ### 4.2 生产环境形态
@@ -264,7 +268,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ### 5.3 测试执行性能
 
-全量 12 个测试文件约 7 秒完成（本地 forks 池）；CI 含依赖安装与构建约 20 分钟内闭环。
+全量 17 个测试文件约 6–9 秒完成（本地 forks 池）；CI 含依赖安装与构建约 20 分钟内闭环。
 
 ---
 
@@ -313,7 +317,17 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ## 8. 演进计划
 
-已完成（`plan/` 方案均已落地）：三端适配与分阶段上线（04）、写作 Agent 与 opencode 高保真复刻（10/11）、创作区深度重构（13）、幻觉治理与知识集 Skill（14）、发布链路与全站加载优化（15）、手机端创作区（16）、TTS 听书（17）、后台管理系统与社区推荐算法升级（18）、安卓 APK 打包（19）、沉浸式阅读区与安全区重构（20）。
+已完成的 1.0 方案：三端适配与分阶段上线（04）、写作 Agent 与 opencode 高保真复刻（10/11）、创作区深度重构（13）、幻觉治理与知识集 Skill（14）、发布链路与全站加载优化（15）、手机端创作区（16）、TTS 听书（17）、后台管理系统与社区推荐算法升级（18）、安卓 APK 打包（19）、沉浸式阅读区与安全区重构（20）。`plan/21` 为当前 Agent/创作区 2.0 实施方案，不属于已落地历史方案。
+
+Agent 2.0 P0 工程基础（2026-08-25）已落地：
+
+- 冻结 `TaskSpec`、`ChangeSet`、`Volume`、`MemoryEvidence` 的 zod 运行时契约与 TypeScript 类型；
+- 新增章节 `revision` 迁移，Web 编辑器回传 `expectedRevision`，过期写入返回 409 且不覆盖新版本；旧 APP 保留兼容保存路径；
+- Agent 章节读取基线由时间戳改为 revision，正文覆盖/追加/区间改写/重命名统一使用带版本条件的原子写入；
+- 章节发布、插入移位、删除压缩与对话回滚同步推进 revision，并修复回滚中间插入章后的顺序空洞；
+- 32 个 Agent 工具建立可测试的风险分类与后置条件清单；建立七类核心 eval 与成功率、token、P95 延迟、回滚率统一汇总口径。
+
+P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场景至少 5 次的 1.0 基准；结果缺失前不进入 P1，也不在文档中填入推测数据。
 
 本轮工程冲刺（2026-08，85→90 分）新增沉淀：
 
@@ -335,7 +349,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ## 9. plan/ 方案文档索引
 
-`plan/` 目录为各阶段的**真实规划快照**（24 篇 + 并行执行清单），编号即立项顺序；**同编号多篇 = 同一阶段并行推进的独立工作流**（如 18 号后台管理与社区升级并行、20 号三篇性能/阅读区并行），非版本覆盖关系。所有方案均已落地，实现过程有正常演进，与当前代码的路径对应见 [9.2](#92-历史路径对照方案引用--当前实现)。
+`plan/` 目录为各阶段的**真实规划快照与当前实施方案**，编号即立项顺序；**同编号多篇 = 同一阶段并行推进的独立工作流**（如 18 号后台管理与社区升级并行、20 号三篇性能/阅读区并行），非版本覆盖关系。`plan/00`–`plan/20` 已落地，`plan/21` 正在按 P0→P7 门禁实施。
 
 ### 9.1 方案清单
 
@@ -358,6 +372,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | `plan/18`（两篇） | 后台管理系统 · 社区推荐算法与话题系统升级 | 已落地 |
 | `plan/19` | 安卓 APK 客户端打包（Capacitor 壳工程） | 已落地 |
 | `plan/20`（三篇） | 全站加载性能与 Agent 执行期卡顿修复 · 手机端沉浸式阅读区重构 · 阅读区全屏沉浸（安卓壳安全区体系重构） | 已落地 |
+| `plan/21` | 创作区与 Agent 2.0 企业级迭代方案 | 实施中（P0 工程基础完成，实测基线待跑） |
 | `plan/list/` | 多窗口并行执行规范与总控审查清单 | 执行规范 |
 
 ### 9.2 历史路径对照（方案引用 → 当前实现）

@@ -120,6 +120,8 @@ enum AgentArtifactType {
   polishSelection
   continuityReview
   coverPrompt
+  searchResult
+  contextCheckpoint
 }
 
 enum ProjectMemoryType {
@@ -131,6 +133,81 @@ enum ProjectMemoryType {
   foreshadowing
   stylePreference
   continuityRule
+  volumeSummary
+  storyArc
+  sceneState
+  relationshipState
+  storyBible
+  authorProfile
+}
+
+enum StoryMemoryLayer {
+  L0
+  L1
+  L2
+  L3
+}
+
+enum StoryMemoryStatus {
+  confirmed
+  inferred
+  conflicted
+  superseded
+  invalid
+}
+
+enum MemoryReviewStatus {
+  none
+  pending
+  accepted
+  rejected
+}
+
+enum MemorySourceType {
+  chapter
+  volume
+  message
+  author_input
+  artifact
+}
+
+enum MemoryJobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+enum ChangeSetStatus {
+  draft
+  approved
+  applying
+  applied
+  conflicted
+  failed
+  rolled_back
+}
+
+enum UserDirectiveScope {
+  global
+  volume
+  chapter
+  task
+}
+
+enum UserDirectiveKind {
+  goal
+  must
+  must_not
+  preference
+  decision
+}
+
+enum UserDirectiveStatus {
+  active
+  fulfilled
+  superseded
+  cancelled
 }
 
 enum SmsVerificationPurpose {
@@ -200,6 +277,8 @@ model User {
   readingProgress         ReadingProgress[]
   novelReads              NovelRead[]
   paragraphUnderlines     ParagraphUnderline[]
+  changeSets              ChangeSet[]
+  userDirectives          UserDirective[]
   following               UserFollow[]         @relation("UserFollowFollower")
   followers               UserFollow[]         @relation("UserFollowFollowing")
 
@@ -256,6 +335,7 @@ model Novel {
   coverAsset      CoverAsset?  @relation("NovelCover", fields: [coverAssetId], references: [id])
   coverAssets     CoverAsset[] @relation("CoverAssetCandidates")
   chapters        Chapter[]
+  volumes         Volume[]
   comments        Comment[]
   favorites       NovelFavorite[]
   posts           Post[]
@@ -266,6 +346,12 @@ model Novel {
   readingProgress ReadingProgress[]
   novelReads      NovelRead[]
   recommendationEvents RecommendationEvent[]
+  changeSets       ChangeSet[]
+  userDirectives   UserDirective[]
+  storyEntities     StoryEntity[]
+  storyEvents       StoryEvent[]
+  memoryExtractionJobs MemoryExtractionJob[]
+  foreshadowThreads ForeshadowThread[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -283,14 +369,18 @@ model Chapter {
   summary      String?
   content      String
   orderIndex   Int           @map("order_index")
+  volumeId     String        @map("volume_id") @db.VarChar(64)
+  orderInVolume Int          @map("order_in_volume")
   wordCount    Int           @default(0) @map("word_count")
   status       ChapterStatus @default(draft)
   visibility   Visibility    @default(public)
   commentCount Int           @default(0) @map("comment_count")
+  revision     Int           @default(1)
   publishedAt  DateTime?     @map("published_at")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
   novel        Novel         @relation(fields: [novelId], references: [id])
+  volume       Volume        @relation(fields: [volumeId], references: [id], onDelete: Restrict)
   author       User          @relation(fields: [authorId], references: [id])
   comments     Comment[]
   aiUsageLogs  AiUsageLog[]
@@ -299,8 +389,69 @@ model Chapter {
   paragraphUnderlines ParagraphUnderline[]
 
   @@unique([novelId, orderIndex])
+  @@unique([volumeId, orderInVolume])
   @@index([novelId, status])
+  @@index([volumeId, orderInVolume])
   @@map("chapters")
+}
+
+model Volume {
+  id         String    @id @default(cuid()) @db.VarChar(64)
+  novelId    String    @map("novel_id") @db.VarChar(64)
+  title      String    @db.VarChar(128)
+  summary    String?
+  orderIndex Int       @map("order_index")
+  revision   Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  novel      Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapters   Chapter[]
+
+  @@unique([novelId, orderIndex])
+  @@index([novelId])
+  @@map("volumes")
+}
+
+model ChangeSet {
+  id            String          @id @default(cuid()) @db.VarChar(64)
+  novelId       String          @map("novel_id") @db.VarChar(64)
+  userId        String          @map("user_id") @db.VarChar(64)
+  taskSpecId    String          @map("task_spec_id") @db.VarChar(64)
+  status        ChangeSetStatus @default(draft)
+  baseRevision  Int             @default(0) @map("base_revision")
+  validations   Json
+  snapshotId    String?         @map("snapshot_id") @db.VarChar(64)
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  novel         Novel           @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patches       ChangeSetPatch[]
+
+  @@index([novelId, createdAt])
+  @@index([userId, status])
+  @@map("change_sets")
+}
+
+model ChangeSetPatch {
+  id               String    @id @default(cuid()) @db.VarChar(64)
+  changeSetId      String    @map("change_set_id") @db.VarChar(64)
+  targetType       String    @map("target_type") @db.VarChar(24)
+  targetId         String    @map("target_id") @db.VarChar(64)
+  field            String    @db.VarChar(32)
+  beforeHash       String    @map("before_hash") @db.VarChar(64)
+  expectedRevision Int       @map("expected_revision")
+  appliedRevision  Int?      @map("applied_revision")
+  anchor           String?
+  before           String?
+  after            String?
+  reason           String
+  selected         Boolean   @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  changeSet        ChangeSet @relation(fields: [changeSetId], references: [id], onDelete: Cascade)
+
+  @@index([changeSetId, selected])
+  @@index([targetType, targetId])
+  @@map("change_set_patches")
 }
 
 model Comment {
@@ -649,6 +800,8 @@ model AgentSession {
   user      User               @relation(fields: [userId], references: [id])
   novel     Novel              @relation(fields: [novelId], references: [id])
   runs      AgentRun[]
+  directives UserDirective[]
+  contextCheckpoints ContextCheckpoint[]
 
   @@index([userId, novelId])
   @@index([novelId, updatedAt])
@@ -671,6 +824,7 @@ model AgentRun {
   engine        String         @default("legacy") @db.VarChar(16)
   currentTurn   Int            @default(0) @map("current_turn")
   usage         Json?
+  taskSpec      Json?          @map("task_spec")
   startedAt     DateTime?      @map("started_at")
   finishedAt    DateTime?      @map("finished_at")
   createdAt     DateTime       @default(now()) @map("created_at")
@@ -683,6 +837,7 @@ model AgentRun {
   memoryEntries ProjectMemoryEntry[]
   messages      AgentMessage[]
   events        AgentRunEvent[]
+  contextCheckpoints ContextCheckpoint[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
@@ -720,6 +875,55 @@ model AgentMessage {
   @@map("agent_messages")
 }
 
+model UserDirective {
+  id              String              @id @default(cuid()) @db.VarChar(64)
+  userId          String              @map("user_id") @db.VarChar(64)
+  novelId         String              @map("novel_id") @db.VarChar(64)
+  sessionId       String?             @map("session_id") @db.VarChar(64)
+  volumeId        String?             @map("volume_id") @db.VarChar(64)
+  chapterId       String?             @map("chapter_id") @db.VarChar(64)
+  taskSpecId      String?             @map("task_spec_id") @db.VarChar(64)
+  scope           UserDirectiveScope
+  kind            UserDirectiveKind
+  text            String
+  status          UserDirectiveStatus @default(active)
+  sourceMessageId String              @map("source_message_id") @db.VarChar(64)
+  supersededBy    String?             @map("superseded_by") @db.VarChar(64)
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel           Novel               @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  session         AgentSession?       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status, createdAt])
+  @@index([sessionId, status])
+  @@index([sourceMessageId])
+  @@map("user_directives")
+}
+
+model ContextCheckpoint {
+  id                 String       @id @default(cuid()) @db.VarChar(64)
+  sessionId          String       @map("session_id") @db.VarChar(64)
+  runId              String?      @map("run_id") @db.VarChar(64)
+  sourceMessageCount Int          @map("source_message_count")
+  sourceMessageIds   Json         @map("source_message_ids")
+  sourceStartedAt    DateTime     @map("source_started_at")
+  sourceEndedAt      DateTime     @map("source_ended_at")
+  sourceTokens       Int          @map("source_tokens")
+  summaryTokens      Int          @map("summary_tokens")
+  model              String       @db.VarChar(128)
+  version            Int          @default(1)
+  sourceHash         String       @map("source_hash") @db.VarChar(64)
+  summary            Json
+  validation         Json
+  createdAt          DateTime     @default(now()) @map("created_at")
+  session            AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run                AgentRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@map("context_checkpoints")
+}
+
 model AgentRunEvent {
   id        String   @id @default(cuid()) @db.VarChar(64)
   runId     String   @map("run_id") @db.VarChar(64)
@@ -743,16 +947,167 @@ model ProjectMemoryEntry {
   content         String
   importance      Int               @default(50)
   embeddingRef    String?           @map("embedding_ref") @db.VarChar(255)
+  layer           StoryMemoryLayer  @default(L1)
+  status          StoryMemoryStatus @default(confirmed)
+  reviewStatus    MemoryReviewStatus @default(none) @map("review_status")
+  confidence      Float             @default(1)
+  version         Int               @default(1)
+  embedding       Json?
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
   run             AgentRun?         @relation(fields: [runId], references: [id])
   novel           Novel             @relation(fields: [novelId], references: [id])
   sourceChapter   Chapter?          @relation(fields: [sourceChapterId], references: [id])
+  evidence        MemoryEvidence[]
+  revisions       MemoryRevision[]
 
   @@index([runId])
   @@index([novelId, memoryType])
   @@index([sourceChapterId])
   @@map("project_memory_entries")
+}
+
+model MemoryEvidence {
+  id         String           @id @default(cuid()) @db.VarChar(64)
+  memoryId   String           @map("memory_id") @db.VarChar(64)
+  sourceType MemorySourceType @map("source_type")
+  sourceId   String           @map("source_id") @db.VarChar(64)
+  revision   Int?
+  spanStart  Int?             @map("span_start")
+  spanEnd    Int?             @map("span_end")
+  quoteHash  String?          @map("quote_hash") @db.VarChar(64)
+  confidence Float            @default(1)
+  createdAt  DateTime         @default(now()) @map("created_at")
+  memory     ProjectMemoryEntry @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
+  @@index([sourceType, sourceId])
+  @@map("memory_evidence")
+}
+
+model MemoryRevision {
+  id           String   @id @default(cuid()) @db.VarChar(64)
+  memoryId     String   @map("memory_id") @db.VarChar(64)
+  before       String
+  after        String
+  reason       String   @db.VarChar(255)
+  supersededBy String?  @map("superseded_by") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at")
+  memory       ProjectMemoryEntry @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId, createdAt])
+  @@map("memory_revisions")
+}
+
+model StoryEntity {
+  id            String   @id @default(cuid()) @db.VarChar(64)
+  novelId       String   @map("novel_id") @db.VarChar(64)
+  entityType    String   @map("entity_type") @db.VarChar(32)
+  canonicalName String   @map("canonical_name") @db.VarChar(128)
+  description   String?
+  status        StoryMemoryStatus @default(confirmed)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  novel         Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  aliases       EntityAlias[]
+  relationsFrom EntityRelation[] @relation("RelationFrom")
+  relationsTo   EntityRelation[] @relation("RelationTo")
+
+  @@unique([novelId, entityType, canonicalName])
+  @@index([novelId, canonicalName])
+  @@map("story_entities")
+}
+
+model EntityAlias {
+  id        String   @id @default(cuid()) @db.VarChar(64)
+  entityId  String   @map("entity_id") @db.VarChar(64)
+  alias     String   @db.VarChar(128)
+  validFrom Int?     @map("valid_from")
+  validTo   Int?     @map("valid_to")
+  sourceId  String?  @map("source_id") @db.VarChar(64)
+  entity    StoryEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([entityId, alias])
+  @@index([alias])
+  @@map("entity_aliases")
+}
+
+model EntityRelation {
+  id           String   @id @default(cuid()) @db.VarChar(64)
+  fromEntityId String   @map("from_entity_id") @db.VarChar(64)
+  toEntityId   String   @map("to_entity_id") @db.VarChar(64)
+  relationType String   @map("relation_type") @db.VarChar(64)
+  state        String?
+  validFrom    Int?     @map("valid_from")
+  validTo      Int?     @map("valid_to")
+  confidence   Float    @default(1)
+  sourceId     String   @map("source_id") @db.VarChar(64)
+  revision     Int?
+  fromEntity   StoryEntity @relation("RelationFrom", fields: [fromEntityId], references: [id], onDelete: Cascade)
+  toEntity     StoryEntity @relation("RelationTo", fields: [toEntityId], references: [id], onDelete: Cascade)
+
+  @@unique([fromEntityId, toEntityId, relationType, validFrom])
+  @@index([fromEntityId])
+  @@index([toEntityId])
+  @@map("entity_relations")
+}
+
+model ForeshadowThread {
+  id          String   @id @default(cuid()) @db.VarChar(64)
+  novelId     String   @map("novel_id") @db.VarChar(64)
+  title       String   @db.VarChar(160)
+  content     String
+  plantedAt   String   @map("planted_at") @db.VarChar(64)
+  status      String   @default("open") @db.VarChar(24)
+  resolvedAt  String?  @map("resolved_at") @db.VarChar(64)
+  sourceId    String   @map("source_id") @db.VarChar(64)
+  revision    Int?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  novel       Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+  @@map("foreshadow_threads")
+}
+
+model StoryEvent {
+  id           String   @id @default(cuid()) @db.VarChar(64)
+  novelId      String   @map("novel_id") @db.VarChar(64)
+  title        String   @db.VarChar(160)
+  description  String
+  storyTime    String?  @map("story_time") @db.VarChar(160)
+  location     String?  @db.VarChar(160)
+  participants Json
+  causes       Json
+  effects      Json
+  sourceId     String   @map("source_id") @db.VarChar(64)
+  revision     Int?
+  status       StoryMemoryStatus @default(inferred)
+  createdAt    DateTime @default(now()) @map("created_at")
+  novel        Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, createdAt])
+  @@map("story_events")
+}
+
+model MemoryExtractionJob {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  chapterId      String   @map("chapter_id") @db.VarChar(64)
+  chapterRevision Int     @map("chapter_revision")
+  idempotencyKey String   @unique @map("idempotency_key") @db.VarChar(160)
+  diff           Json
+  status         MemoryJobStatus @default(pending)
+  attempts       Int      @default(0)
+  leaseUntil     DateTime? @map("lease_until")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  novel          Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([chapterId, chapterRevision])
+  @@map("memory_extraction_jobs")
 }
 
 /** 后台管理操作审计日志：只增不删，admin_id 不做外键（避免用户删除产生悬挂） */

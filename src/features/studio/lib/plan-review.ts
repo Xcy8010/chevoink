@@ -204,10 +204,13 @@ export function toChapterListItem(chapter: Chapter): StudioPayload['chapters'][n
     title: chapter.title,
     summary: chapter.summary,
     orderIndex: chapter.orderIndex,
+    volumeId: chapter.volumeId,
+    orderInVolume: chapter.orderInVolume,
     wordCount: chapter.wordCount,
     status: chapter.status,
     visibility: chapter.visibility,
     commentCount: chapter.commentCount,
+    revision: chapter.revision,
     publishedAt: chapter.publishedAt,
   }
 }
@@ -242,4 +245,23 @@ export function removeChapterItem(
   chapterId: string,
 ): StudioPayload['chapters'] {
   return current.filter((chapter) => chapter.id !== chapterId)
+}
+
+/** 与服务端删除后的 compactChapterOrder 保持一致；仅被前移的章节递增 revision。 */
+export function removeChapterAndCompact(
+  current: StudioPayload['chapters'],
+  chapterId: string,
+): StudioPayload['chapters'] {
+  const removed = current.find((chapter) => chapter.id === chapterId)
+  if (!removed) {
+    return current
+  }
+
+  return current
+    .filter((chapter) => chapter.id !== chapterId)
+    .map((chapter) =>
+      chapter.orderIndex > removed.orderIndex
+        ? { ...chapter, orderIndex: chapter.orderIndex - 1, revision: chapter.revision + 1 }
+        : chapter,
+    )
 }

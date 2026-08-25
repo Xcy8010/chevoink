@@ -9,9 +9,10 @@ import { NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
 import { hotScore, RECOMMEND_ALGORITHM_VERSIONS } from '../../../shared/recommend/scoring.js'
 import { storeNovelCoverDataUrl, storeNovelCoverFromRemoteUrl } from '../novel-cover-storage.js'
 import { DataAccessError, prisma } from '../prisma.js'
-import { buildPagination, buildSlug, chapterListItemSelect, commentInclude, ensureNonEmptyText, ensureNovelOwner, ensureUserExists, novelInclude, recalculateNovelStats, toChapterListItem, toComment, toNovel, toNovelCard } from './internal.js'
+import { buildPagination, buildSlug, chapterListItemSelect, commentInclude, ensureNonEmptyText, ensureNovelOwner, ensureUserExists, novelInclude, recalculateNovelStats, toChapterListItem, toComment, toNovel, toNovelCard, toVolumeListItem } from './internal.js'
 import { publicChapterWhere } from './chapter.js'
 import { searchableNovelWhere } from './search.js'
+import { DEFAULT_VOLUME_TITLE } from './volume.js'
 
 
 
@@ -109,6 +110,10 @@ export async function createNovelData(userId: string, input: CreateNovelRequest)
       },
     })
 
+    await tx.volume.create({
+      data: { novelId: created.id, title: DEFAULT_VOLUME_TITLE, orderIndex: 1 },
+    })
+
     return created
   })
 
@@ -203,6 +208,7 @@ export async function publishNovelData(
         data: {
           status: 'published',
           visibility,
+          revision: { increment: 1 },
         },
       })
       // updateMany 无法按行做 publishedAt ?? now 兜底，单独补一次空值填充
@@ -364,10 +370,15 @@ export async function getNovelDetailData(
         OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }],
       }
 
-  const [chapterRecords, commentRecords, relatedPoolRecords, authorNovelRecords, authorPublicNovelCount, ratingAggregate] = await prisma.$transaction([
+  const [chapterRecords, volumeRecords, commentRecords, relatedPoolRecords, authorNovelRecords, authorPublicNovelCount, ratingAggregate] = await prisma.$transaction([
     prisma.chapter.findMany({
       where: chapterWhere,
       select: chapterListItemSelect,
+      orderBy: { orderIndex: 'asc' },
+    }),
+    prisma.volume.findMany({
+      where: { novelId },
+      include: { chapters: { where: chapterWhere, select: { wordCount: true } } },
       orderBy: { orderIndex: 'asc' },
     }),
     prisma.comment.findMany({
@@ -435,6 +446,7 @@ export async function getNovelDetailData(
 
   return {
     novel: novelPayload,
+    volumes: volumeRecords.map(toVolumeListItem),
     chapters: chapterRecords.map(toChapterListItem),
     topComments: commentRecords.map(toComment),
     relatedNovels: relatedRecords.map((record) => toNovelCard(record)),

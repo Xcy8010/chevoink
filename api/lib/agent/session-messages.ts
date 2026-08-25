@@ -207,12 +207,12 @@ export async function rollbackLoopSessionFromMessage(
           const content = snapshot.previousValue ?? ''
           await tx.chapter.update({
             where: { id: snapshot.targetId },
-            data: { content, wordCount: content.length },
+            data: { content, wordCount: content.length, revision: { increment: 1 } },
           })
         } else if (snapshot.field === 'title') {
           await tx.chapter.update({
             where: { id: snapshot.targetId },
-            data: { title: snapshot.previousValue ?? '' },
+            data: { title: snapshot.previousValue ?? '', revision: { increment: 1 } },
           })
         }
         continue
@@ -237,6 +237,22 @@ export async function rollbackLoopSessionFromMessage(
         await tx.novel.update({
           where: { id: session.novelId },
           data: { status: snapshot.previousValue },
+        })
+      }
+    }
+
+    // 回滚可能删除中间插入章：提交前恢复连续顺序，并让被前移章节的 revision 失效旧编辑基线
+    const orderedChapters = await tx.chapter.findMany({
+      where: { novelId: session.novelId },
+      orderBy: { orderIndex: 'asc' },
+      select: { id: true, orderIndex: true },
+    })
+    for (let index = 0; index < orderedChapters.length; index += 1) {
+      const expectedOrder = index + 1
+      if (orderedChapters[index].orderIndex !== expectedOrder) {
+        await tx.chapter.update({
+          where: { id: orderedChapters[index].id },
+          data: { orderIndex: expectedOrder, revision: { increment: 1 } },
         })
       }
     }

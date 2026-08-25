@@ -98,6 +98,7 @@ export function buildChapterDraft(chapter: Chapter): ChapterDraftState {
     status: chapter.status,
     visibility: chapter.visibility,
     orderIndex: chapter.orderIndex,
+    revision: chapter.revision,
     localOnly: false,
   }
 }

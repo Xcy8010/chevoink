@@ -70,6 +70,8 @@ export type AgentArtifactType =
   | 'polishSelection'
   | 'continuityReview'
   | 'coverPrompt'
+  | 'searchResult'
+  | 'contextCheckpoint'
 export type ProjectMemoryType =
   | 'novelSummary'
   | 'worldbuilding'
@@ -79,6 +81,12 @@ export type ProjectMemoryType =
   | 'foreshadowing'
   | 'stylePreference'
   | 'continuityRule'
+  | 'volumeSummary'
+  | 'storyArc'
+  | 'sceneState'
+  | 'relationshipState'
+  | 'storyBible'
+  | 'authorProfile'
 export type AgentArtifactApplyStrategy = string
 export type ConversationPresence = 'online' | 'offline' | 'typing' | string
 
@@ -330,10 +338,14 @@ export interface Chapter {
   summary: string | null
   content: string
   orderIndex: number
+  volumeId: EntityId
+  orderInVolume: number
   wordCount: number
   status: ChapterStatus
   visibility: Visibility
   commentCount: number
+  /** 内容与结构写入版本；客户端保存与 Agent 工具写入必须据此做乐观并发校验。 */
+  revision: number
   publishedAt: string | null
   createdAt: string
   updatedAt: string
@@ -346,10 +358,13 @@ export interface ChapterListItem {
   title: string
   summary: string | null
   orderIndex: number
+  volumeId: EntityId
+  orderInVolume: number
   wordCount: number
   status: ChapterStatus
   visibility: Visibility
   commentCount: number
+  revision: number
   publishedAt: string | null
   [key: string]: unknown
 }
@@ -631,6 +646,7 @@ export interface HomePagePayload {
 
 export interface NovelDetailPayload {
   novel: Novel
+  volumes: import('./volume-contracts.js').VolumeListItem[]
   chapters: ChapterListItem[]
   topComments: Comment[]
   relatedNovels: NovelCard[]
@@ -677,6 +693,7 @@ export interface ReaderPayload {
   }
   currentChapter: Chapter
   chapterList: ChapterListItem[]
+  volumes: import('./volume-contracts.js').VolumeListItem[]
   previousChapterId: EntityId | null
   nextChapterId: EntityId | null
   [key: string]: unknown
@@ -684,9 +701,11 @@ export interface ReaderPayload {
 
 export interface StudioPayload {
   novel: Novel
+  volumes: import('./volume-contracts.js').VolumeListItem[]
   chapters: ChapterListItem[]
   draftChapter: Chapter | null
   coverAssets: CoverAsset[]
+  featureFlags?: import('./feature-flags.js').Agent2FeatureFlags
   [key: string]: unknown
 }
 

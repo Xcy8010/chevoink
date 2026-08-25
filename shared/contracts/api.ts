@@ -228,9 +228,16 @@ export type CreateChapterRequest = {
   content: string
   status: ChapterStatus
   visibility?: Visibility
+  /** 缺省时追加到最后一卷；保留缺省以兼容 Agent 1.0 与旧 APP。 */
+  volumeId?: string
+  /** 卷内插入位置；缺省时追加。 */
+  orderInVolume?: number
 }
 
-export type UpdateChapterRequest = Partial<CreateChapterRequest>
+export type UpdateChapterRequest = Partial<CreateChapterRequest> & {
+  /** 新客户端必须回传；旧 APP 缺省时服务端走兼容写入，但仍递增 revision。 */
+  expectedRevision?: number
+}
 
 export type GetChapterResponse = ApiSuccess<{ chapter: Chapter }>
 export type CreateChapterResponse = ApiSuccess<{ chapter: Chapter }>

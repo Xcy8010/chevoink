@@ -1,0 +1,94 @@
+export type AgentToolGovernance = {
+  category: 'read' | 'write' | 'structure' | 'high_risk' | 'workflow'
+  risk: 'low' | 'medium' | 'high'
+  postconditions: string[]
+}
+
+/**
+ * Agent 2.0 P0 工具治理清单。
+ * 新工具只有登记分类、风险和确定性后置条件后，才允许进入 allTools 注册表。
+ */
+export const AGENT_TOOL_GOVERNANCE = {
+  novel_get_context: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
+  chapter_read: { category: 'read', risk: 'low', postconditions: ['chapter_scope_verified', 'revision_baseline_recorded'] },
+  chapter_list_summaries: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
+  memory_search: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
+  plan_read: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
+  web_search: { category: 'read', risk: 'medium', postconditions: ['external_content_marked_untrusted'] },
+  web_read: { category: 'read', risk: 'medium', postconditions: ['external_content_marked_untrusted'] },
+  platform_novel_search: { category: 'read', risk: 'low', postconditions: ['visibility_scope_verified'] },
+  platform_novel_read: { category: 'read', risk: 'low', postconditions: ['visibility_scope_verified'] },
+  view_image: { category: 'read', risk: 'low', postconditions: ['attachment_scope_verified'] },
+  read_file: { category: 'read', risk: 'medium', postconditions: ['attachment_scope_verified', 'content_marked_untrusted'] },
+  novel_export: { category: 'read', risk: 'medium', postconditions: ['novel_scope_verified', 'export_artifact_created'] },
+  volume_list: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
+  structure_outline: { category: 'read', risk: 'low', postconditions: ['structure_invariants_reported'] },
+  project_search: { category: 'read', risk: 'low', postconditions: ['source_revisions_returned', 'index_freshness_reported'] },
+  entity_resolve: { category: 'read', risk: 'low', postconditions: ['ambiguity_reported'] },
+  impact_analyze: { category: 'read', risk: 'low', postconditions: ['affected_scope_reported'] },
+  structure_validate: { category: 'read', risk: 'low', postconditions: ['structure_invariants_reported'] },
+  directive_list: { category: 'read', risk: 'low', postconditions: ['active_directives_only'] },
+  memory_review_list: { category: 'read', risk: 'low', postconditions: ['conflicts_not_silently_resolved'] },
+  skill_catalog: { category: 'read', risk: 'low', postconditions: ['metadata_only'] },
+  skill_load: { category: 'read', risk: 'low', postconditions: ['phase_resource_only', 'soft_guidance_only'] },
+  chapter_create: {
+    category: 'structure',
+    risk: 'medium',
+    postconditions: ['chapter_order_unique', 'shifted_revisions_advanced', 'novel_stats_recalculated'],
+  },
+  chapter_write: {
+    category: 'write',
+    risk: 'medium',
+    postconditions: ['chapter_revision_advanced', 'novel_stats_recalculated', 'chapter_diff_emitted'],
+  },
+  chapter_append: {
+    category: 'write',
+    risk: 'medium',
+    postconditions: ['chapter_revision_advanced', 'novel_stats_recalculated', 'chapter_diff_emitted'],
+  },
+  chapter_edit_range: {
+    category: 'write',
+    risk: 'medium',
+    postconditions: ['anchor_or_range_verified', 'chapter_revision_advanced', 'chapter_diff_emitted'],
+  },
+  chapter_rename: {
+    category: 'structure',
+    risk: 'medium',
+    postconditions: ['chapter_revision_advanced', 'novel_stats_recalculated'],
+  },
+  volume_create: { category: 'structure', risk: 'medium', postconditions: ['volume_order_unique'] },
+  volume_update: { category: 'structure', risk: 'medium', postconditions: ['volume_revision_advanced'] },
+  volume_move: { category: 'structure', risk: 'medium', postconditions: ['volume_order_unique', 'chapter_order_unique'] },
+  volume_delete: { category: 'structure', risk: 'medium', postconditions: ['volume_empty_verified', 'volume_order_unique'] },
+  chapter_move: { category: 'structure', risk: 'medium', postconditions: ['chapter_order_unique', 'chapter_revision_advanced'] },
+  chapter_move_to_volume: { category: 'structure', risk: 'medium', postconditions: ['chapter_order_unique', 'chapter_revision_advanced'] },
+  chapter_split: { category: 'structure', risk: 'high', postconditions: ['chapter_order_unique', 'novel_stats_recalculated'] },
+  chapter_merge: { category: 'high_risk', risk: 'high', postconditions: ['source_chapter_deleted', 'chapter_order_unique', 'novel_stats_recalculated'] },
+  bulk_replace_preview: { category: 'read', risk: 'low', postconditions: ['changeset_preview_created', 'no_content_written'] },
+  entity_rename_preview: { category: 'read', risk: 'low', postconditions: ['changeset_preview_created', 'ambiguity_policy_recorded', 'no_content_written'] },
+  changeset_apply: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'all_revisions_verified', 'atomic_commit', 'rollback_point_created'] },
+  changeset_rollback: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'post_apply_revisions_verified', 'atomic_rollback'] },
+  novel_rename: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'rollback_snapshot_created'] },
+  novel_update_meta: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'rollback_snapshot_created'] },
+  plan_save: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'plan_artifact_persisted'] },
+  plan_rename: { category: 'write', risk: 'medium', postconditions: ['artifact_scope_verified'] },
+  plan_delete: { category: 'write', risk: 'high', postconditions: ['artifact_scope_verified', 'plan_removed'] },
+  cover_prompt_set: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'rollback_snapshot_created'] },
+  cover_generate: { category: 'write', risk: 'medium', postconditions: ['asset_owner_verified', 'cover_asset_created'] },
+  cover_apply: { category: 'write', risk: 'medium', postconditions: ['asset_owner_verified', 'rollback_snapshot_created'] },
+  novel_publish: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'public_chapter_exists'] },
+  novel_archive: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'rollback_snapshot_created'] },
+  novel_delete: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'novel_deleted'] },
+  memory_save: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'memory_source_recorded'] },
+  plan_exit: { category: 'workflow', risk: 'low', postconditions: ['execution_mode_updated'] },
+  todo_write: { category: 'workflow', risk: 'low', postconditions: ['todo_state_replaced'] },
+  directive_save: { category: 'workflow', risk: 'medium', postconditions: ['directive_source_recorded'] },
+  directive_supersede: { category: 'workflow', risk: 'medium', postconditions: ['old_directive_deactivated'] },
+  memory_relation_save: { category: 'write', risk: 'medium', postconditions: ['memory_source_recorded', 'entity_graph_updated'] },
+  memory_event_save: { category: 'write', risk: 'medium', postconditions: ['memory_source_recorded', 'timeline_updated'] },
+  creative_critique: { category: 'workflow', risk: 'medium', postconditions: ['isolated_critique_context', 'artifact_persisted', 'chapter_unchanged'] },
+  creative_revision_draft: { category: 'workflow', risk: 'medium', postconditions: ['selected_findings_only', 'artifact_persisted', 'chapter_unchanged'] },
+  ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
+} as const satisfies Record<string, AgentToolGovernance>
+
+export type GovernedAgentToolName = keyof typeof AGENT_TOOL_GOVERNANCE

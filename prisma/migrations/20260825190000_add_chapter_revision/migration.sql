@@ -1,0 +1,2 @@
+ALTER TABLE "chapters"
+ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 1;

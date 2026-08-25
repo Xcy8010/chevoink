@@ -109,6 +109,7 @@ export async function startLoopRun(
     prompt: input.prompt,
     selection: input.selection ?? null,
     attachments: input.attachments ?? [],
+    creativeFreedom: input.creativeFreedom ?? 'balanced',
   })
 
   return {

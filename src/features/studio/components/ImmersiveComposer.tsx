@@ -55,6 +55,7 @@ type ImmersiveComposerProps = {
   novelOptions: Novel[]
   chapterDraft: ChapterDraftState | null
   chapters: StudioPayload['chapters']
+  volumes: StudioPayload['volumes']
   savedPlans: WorkspacePlanFile[]
   selectedChapterId: string | null
   selectedTreeItemId: string | null
@@ -132,6 +133,7 @@ export default function ImmersiveComposer({
   novelOptions,
   chapterDraft,
   chapters,
+  volumes,
   savedPlans,
   selectedChapterId,
   selectedTreeItemId,
@@ -523,6 +525,7 @@ export default function ImmersiveComposer({
               <ChapterSidebar
                 embedded
                 chapters={chapters}
+                volumes={volumes}
                 savedPlans={savedPlans}
                 selectedChapterId={selectedChapterId}
                 selectedTreeItemId={selectedTreeItemId}
@@ -1113,6 +1116,7 @@ export default function ImmersiveComposer({
                   <ChapterSidebar
                     embedded
                     chapters={chapters}
+                    volumes={volumes}
                     savedPlans={savedPlans}
                     selectedChapterId={selectedChapterId}
                     selectedTreeItemId={selectedTreeItemId}

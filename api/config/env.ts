@@ -22,6 +22,13 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return value === 'true'
 }
 
+function parseCsv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function isConfigured(value: string | undefined): boolean {
   return Boolean(value && value !== 'replace_me')
 }
@@ -95,6 +102,15 @@ export const env = {
   // 对齐主流 Agent 单任务消耗量级（百轮/百万 token），配合循环内的上下文瘦身机制防爆窗
   agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 100),
   agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 2000000),
+  // Agent 2.0 上下文检查点：65% 提醒、78% 自动压缩；按实际模型窗口可覆盖。
+  agentContextWindowTokens: parsePositiveNumber(process.env.AGENT_CONTEXT_WINDOW_TOKENS, 128000),
+  // Agent 2.0 五项能力可独立回退；灰度名单非空时，仅名单用户启用这些能力。
+  featureVolumeEnabled: parseBoolean(process.env.FEATURE_VOLUME_ENABLED, true),
+  featureChangeSetEnabled: parseBoolean(process.env.FEATURE_CHANGESET_ENABLED, true),
+  featureMemory2Enabled: parseBoolean(process.env.FEATURE_MEMORY2_ENABLED, true),
+  featureSkill2Enabled: parseBoolean(process.env.FEATURE_SKILL2_ENABLED, true),
+  featureDualWorkspaceEnabled: parseBoolean(process.env.FEATURE_DUAL_WORKSPACE_ENABLED, true),
+  agent2RolloutUserIds: parseCsv(process.env.AGENT2_ROLLOUT_USER_IDS),
   agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),
   agentUserMaxConcurrent: parsePositiveNumber(process.env.AGENT_USER_MAX_CONCURRENT, 2),
   aiImageProvider: process.env.AI_IMAGE_PROVIDER ?? 'openai-compatible',

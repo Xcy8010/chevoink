@@ -47,6 +47,8 @@ export type AgentTool<Args = unknown> = {
   readOnly: boolean
   /** 高危操作不提供"总是允许"（发布/删除/下架） */
   dangerous?: boolean
+  /** 即使 AGENT_AUTO_APPROVE=true 也必须逐次确认；仅用于新增的跨文档事务等不可静默执行动作。 */
+  alwaysConfirm?: boolean
   /** 校验前参数兜底修复：把模型小概率毛病（null 当未传、参数嵌套、别名键、超长标题等）
    * 修成 schema 可接受形态，返回修复后的参数对象；不改变合法参数的语义 */
   coerceArgs?: (raw: unknown) => unknown

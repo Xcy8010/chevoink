@@ -75,6 +75,7 @@ async function fetchReaderPayload(
       coverUrl: studio.novel.coverUrl,
     },
     currentChapter: chapter,
+    volumes: studio.volumes,
     chapterList,
     previousChapterId: currentIndex > 0 ? chapterList[currentIndex - 1].id : null,
     nextChapterId:

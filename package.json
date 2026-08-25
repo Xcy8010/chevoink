@@ -19,6 +19,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "cleanup:demo-data": "node scripts/cleanup-demo-data.mjs",
+    "agent2:ops": "tsx scripts/agent2-ops.ts",
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\""
   },
   "dependencies": {

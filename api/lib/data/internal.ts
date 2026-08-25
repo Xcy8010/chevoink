@@ -4,7 +4,7 @@
  * 本文件为 api/lib/data-access.ts 桶文件的重导出源，禁止绕过桶文件新增消费者。
  */
 import type { Prisma } from '@prisma/client'
-import type { Chapter, ChapterListItem, Comment, CommentTargetType, Conversation, CoverAsset, Message, MessageCard, Novel, NovelCard, Pagination, Post, TopicSummary, User, UserSummary } from '../../../shared/contracts/index.js'
+import type { Chapter, ChapterListItem, Comment, CommentTargetType, Conversation, CoverAsset, Message, MessageCard, Novel, NovelCard, Pagination, Post, TopicSummary, User, UserSummary, Volume, VolumeListItem } from '../../../shared/contracts/index.js'
 import { hasConfiguredPassword } from '../password.js'
 import { DataAccessError, prisma } from '../prisma.js'
 
@@ -68,13 +68,29 @@ type ChapterRecord = {
   // 列表查询（chapterListItemSelect）不含 content，仅章节数据携带
   content?: string
   orderIndex: number
+  volumeId: string
+  orderInVolume: number
   wordCount?: number | null
   status: Chapter['status']
   visibility: Chapter['visibility']
   commentCount?: number | null
+  revision?: number | null
   publishedAt?: Date | string | null
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
+}
+
+type VolumeRecord = {
+  id: string
+  novelId: string
+  title: string
+  summary?: string | null
+  orderIndex: number
+  revision?: number | null
+  createdAt?: Date | string | null
+  updatedAt?: Date | string | null
+  _count?: { chapters?: number | null } | null
+  chapters?: Array<{ wordCount?: number | null }> | null
 }
 
 type CommentRecord = {
@@ -396,10 +412,13 @@ export function toChapter(record: ChapterRecord): Chapter {
     summary: record.summary ?? null,
     content: record.content ?? '',
     orderIndex: record.orderIndex,
+    volumeId: record.volumeId,
+    orderInVolume: record.orderInVolume,
     wordCount: record.wordCount ?? 0,
     status: record.status,
     visibility: record.visibility,
     commentCount: record.commentCount ?? 0,
+    revision: record.revision ?? 1,
     publishedAt: toIso(record.publishedAt),
     createdAt: toIso(record.createdAt) ?? nowIso(),
     updatedAt: toIso(record.updatedAt) ?? nowIso(),
@@ -417,10 +436,13 @@ export function toChapterListItem(record: ChapterRecord): ChapterListItem {
     title: chapter.title,
     summary: chapter.summary,
     orderIndex: chapter.orderIndex,
+    volumeId: chapter.volumeId,
+    orderInVolume: chapter.orderInVolume,
     wordCount: chapter.wordCount,
     status: chapter.status,
     visibility: chapter.visibility,
     commentCount: chapter.commentCount,
+    revision: chapter.revision,
     publishedAt: chapter.publishedAt,
   }
 }
@@ -435,14 +457,49 @@ export const chapterListItemSelect = {
   title: true,
   summary: true,
   orderIndex: true,
+  volumeId: true,
+  orderInVolume: true,
   wordCount: true,
   status: true,
   visibility: true,
   commentCount: true,
+  revision: true,
   publishedAt: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.ChapterSelect
+
+export function toVolume(record: VolumeRecord): Volume {
+  return {
+    id: record.id,
+    novelId: record.novelId,
+    title: record.title,
+    summary: record.summary ?? null,
+    orderIndex: record.orderIndex,
+    revision: record.revision ?? 1,
+    createdAt: toIso(record.createdAt) ?? nowIso(),
+    updatedAt: toIso(record.updatedAt) ?? nowIso(),
+  }
+}
+
+export function toVolumeListItem(record: VolumeRecord): VolumeListItem {
+  const volume = toVolume(record)
+  return {
+    id: volume.id,
+    novelId: volume.novelId,
+    title: volume.title,
+    summary: volume.summary,
+    orderIndex: volume.orderIndex,
+    revision: volume.revision,
+    chapterCount: record._count?.chapters ?? record.chapters?.length ?? 0,
+    wordCount: record.chapters?.reduce((total, chapter) => total + (chapter.wordCount ?? 0), 0) ?? 0,
+  }
+}
+
+export const volumeListItemInclude = {
+  _count: { select: { chapters: true } },
+  chapters: { select: { wordCount: true } },
+} satisfies Prisma.VolumeInclude
 
 
 

@@ -44,7 +44,7 @@
 | 了解功能 | [功能一览](#-功能一览) |
 | 本地跑起来 | [快速开始](#-快速开始) |
 | 了解架构 | [技术栈](#-技术栈) · [目录结构](#-目录结构) |
-| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md)（[English](./docs/DEVELOPMENT-STANDARDS.en.md)） |
+| 深入工程细节 | 详细工程说明请参阅 [Engineering Documentation](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· 开发规范请参阅 [Development Standards](./docs/DEVELOPMENT-STANDARDS.md)（[English](./docs/DEVELOPMENT-STANDARDS.en.md)）· Agent 2.0 发布见 [运维手册](./docs/AGENT-2.0-OPERATIONS.md) |
 | 部署上线 | [部署与发布](#-部署与发布) · [环境变量](#-环境变量) |
 | 交流讨论 | [QQ 交流群 158443235](#-交流群) |
 

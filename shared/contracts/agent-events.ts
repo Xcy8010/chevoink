@@ -23,6 +23,8 @@ export type AgentToolDisplayPayload =
       before: string
       after: string
       appliedDirectly: boolean
+      /** 工具写入成功后的章节版本；旧持久化事件可能缺省。 */
+      revision?: number
     }
   | { kind: 'coverImages'; images: Array<{ id: EntityId; url: string }> }
   | {
@@ -63,6 +65,21 @@ export type AgentToolDisplayPayload =
       detail: string
     }
   | { kind: 'todoList'; items: AgentTodoItem[] }
+  | {
+      kind: 'changeSet'
+      changeSetId: EntityId
+      status: 'draft' | 'approved' | 'applying' | 'applied' | 'conflicted' | 'failed' | 'rolled_back'
+      patchCount: number
+      selectedCount: number
+      patches: Array<{
+        id: EntityId
+        chapterId: EntityId
+        field: string
+        beforePreview: string
+        afterPreview: string
+        selected: boolean
+      }>
+    }
   | {
       kind: 'webSearch'
       query: string
@@ -230,7 +247,10 @@ export interface StartAgentLoopRunRequest {
   } | null
   /** 本轮附带附件元数据（先经 POST /api/agent/attachments 落盘，run 只带元数据） */
   attachments?: AgentAttachmentMeta[]
+  creativeFreedom?: CreativeFreedom
 }
+
+export type CreativeFreedom = 'stable' | 'balanced' | 'bold'
 
 export interface StartAgentLoopRunResponse {
   runId: EntityId

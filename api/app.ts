@@ -9,6 +9,7 @@ import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
 import authRoutes from './routes/auth.js'
 import commentsRoutes from './routes/comments.js'
+import changeSetRoutes from './routes/changesets.js'
 import conversationsRoutes from './routes/conversations.js'
 import homeRoutes from './routes/home.js'
 import metaRoutes from './routes/meta.js'
@@ -81,6 +82,7 @@ app.use('/api/admin', adminRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/comments', commentsRoutes)
+app.use('/api/changesets', changeSetRoutes)
 app.use('/api/conversations', conversationsRoutes)
 app.use('/api/home', homeRoutes)
 app.use('/api/meta', metaRoutes)

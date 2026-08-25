@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../../prisma.js'
+import { saveStoryMemory } from '../story-memory.js'
 import { defineTool } from './types.js'
 
 /**
@@ -27,6 +28,12 @@ export const memorySaveTool = defineTool({
         'foreshadowing',
         'stylePreference',
         'continuityRule',
+        'volumeSummary',
+        'storyArc',
+        'sceneState',
+        'relationshipState',
+        'storyBible',
+        'authorProfile',
       ])
       .describe('记忆类型'),
     title: z.string().min(1).max(120).describe('记忆标题（如角色名、章节名、设定名）'),
@@ -37,37 +44,23 @@ export const memorySaveTool = defineTool({
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: false,
   async execute(ctx, args) {
-    // 同名同类型记忆直接更新，避免重复沉淀
-    const existing = await prisma.projectMemoryEntry.findFirst({
-      where: { novelId: ctx.novelId, memoryType: args.memoryType, title: args.title.trim() },
-    })
-
-    if (existing) {
-      await prisma.projectMemoryEntry.update({
-        where: { id: existing.id },
-        data: { content: args.content.trim(), importance: args.importance, runId: ctx.runId },
-      })
-      return {
-        output: `已更新记忆 [${args.memoryType}] ${args.title}。`,
-        summary: `更新记忆「${args.title}」`,
-      }
-    }
-
-    await prisma.projectMemoryEntry.create({
-      data: {
-        novelId: ctx.novelId,
-        runId: ctx.runId,
-        sourceChapterId: args.sourceChapterId ?? null,
-        memoryType: args.memoryType,
-        title: args.title.trim(),
-        content: args.content.trim(),
-        importance: args.importance,
+    const result = await saveStoryMemory({
+      userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
+      sourceChapterId: args.sourceChapterId ?? null, memoryType: args.memoryType,
+      layer: ['novelSummary', 'storyBible', 'authorProfile', 'continuityRule'].includes(args.memoryType) ? 'L3' : ['chapterSummary', 'volumeSummary', 'storyArc', 'sceneState', 'relationshipState'].includes(args.memoryType) ? 'L2' : 'L1',
+      title: args.title, content: args.content, importance: args.importance,
+      confidence: 1, status: 'confirmed',
+      evidence: {
+        sourceType: args.sourceChapterId ? 'chapter' : 'author_input',
+        sourceId: args.sourceChapterId ?? ctx.runId,
+        confidence: 1,
       },
     })
-
     return {
-      output: `已保存记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}）。`,
-      summary: `沉淀记忆「${args.title}」`,
+      output: result.action === 'conflict'
+        ? `检测到记忆冲突：[${args.memoryType}] ${args.title} 未覆盖旧事实，候选 ${result.id} 已进入作者审核箱。`
+        : `已${result.action === 'created' ? '保存' : '更新'}记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}，含来源证据）。`,
+      summary: result.action === 'conflict' ? `记忆冲突「${args.title}」` : `沉淀记忆「${args.title}」`,
     }
   },
 })

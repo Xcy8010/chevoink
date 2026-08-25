@@ -230,6 +230,14 @@ cors（origin 白名单 + credentials）→ trust proxy → body 解析（limit 
 | DB 故障 | stale fallback：复用 ≤10 分钟历史成功状态（封禁/tokenVersion 照常比对），超窗才降级放行；禁止 fail-closed | `api/lib/auth-session.ts` |
 | 闸口自身异常 | 放行 + 下游退回本地验签，管理功能故障不打挂全站 | `api/app.ts` 会话闸口 |
 
+### 6.5 Agent 2.0 工具治理与章节并发
+
+- 新工具除注册到 `tools/registry.ts` 外，必须同步登记到 `tools/governance.ts`，声明读/写/结构/高风险/流程分类、风险等级和至少一个确定性后置条件；治理测试必须全绿。
+- 章节正文、标题、状态、可见性或结构顺序发生变化时必须递增 `Chapter.revision`；评论计数等非创作内容统计不递增。
+- Agent 章节写工具统一使用 `id + novelId + authorId + revision` 原子条件更新；读取章节时记录 revision 基线，冲突时停止写入并要求重新读取。
+- 前端章节保存与删除必须回传 `expectedRevision`。仅为旧 APP 保留缺省兼容路径；兼容写入仍必须递增服务端 revision。
+- 跨章写入在 ChangeSet 上线前不得伪装成已具备原子批量能力；P2 后统一走预览、版本校验、事务提交、后置校验和整体回滚。
+
 ---
 
 ## 7. 数据库规范
@@ -243,6 +251,7 @@ cors（origin 白名单 + credentials）→ trust proxy → body 解析（limit 
 | 索引意识 | 列表/排序查询的 where + orderBy 字段建复合索引；大表先行 | `20260815120000_add_list_indexes` |
 | 双保险校验 | 枚举类字段：路由 zod 校验 + 数据层兜底（防绕过路由直调） | `api/lib/data/user.ts` privacy 兜底 |
 | 吊销机制 | 需要即时失效的会话类数据用版本号字段（`tokenVersion`），缓存比对版本号 | `20260815130000_add_user_token_version` |
+| 创作并发 | 章节创作/结构写入递增 `revision`；新客户端以 `expectedRevision` 乐观锁防止覆盖 | `20260825190000_add_chapter_revision` |
 | 测试库 | 库名含 `test`（铁律 7）；迁移与集成测试共用同一测试库 | `tests/setup.ts` |
 
 ---
@@ -255,8 +264,8 @@ cors（origin 白名单 + credentials）→ trust proxy → body 解析（limit 
 
 | 目录 | 职责 | 现状基线 |
 | --- | --- | --- |
-| `tests/unit/*.test.ts` | 纯逻辑单测（可 mock prisma） | 8 文件 76 例（studio-lib 24 / auth-session 14 / schemas 9 / panel-helpers 7 / phone 6 / password 6 / active-runs 5 / parse-body 5） |
-| `tests/integration/*.test.ts` | supertest 打真实 Express app；DB 组走测试库 | 4 文件 68 例（p0 27 / p1 21 / p2 15 / app-smoke 5） |
+| `tests/unit/*.test.ts` | 纯逻辑单测（可 mock prisma） | 12 文件 89 例（含 Agent 2.0 契约、revision 基线、工具治理与 eval 指标） |
+| `tests/integration/*.test.ts` | supertest 打真实 Express app；DB 组走测试库 | 5 文件 71 例（含章节 revision 并发冲突、过期删除阻断与旧客户端兼容） |
 
 ### 8.2 强制模式
 

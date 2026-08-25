@@ -1,4 +1,5 @@
 import request from 'supertest'
+import { randomInt } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import app from '../../api/app.js'
@@ -44,10 +45,11 @@ describe.skipIf(!dbAvailable)('P1 收尾 400 文案对照（需 DB）', () => {
   let cookie = ''
 
   beforeAll(async () => {
-    const phone = `+861398${Date.now().toString().slice(-7)}`
+    const unique = randomInt(0, 10_000_000).toString().padStart(7, '0')
+    const phone = `+861398${unique}`
     const res = await request(app)
       .post('/api/auth/register')
-      .send({ phone, nickname: 'p1收尾对照', password: 'Zod-Test-123!' })
+      .send({ phone, nickname: `p1收尾对照${unique}`, password: 'Zod-Test-123!' })
     expect(res.status).toBe(201)
     const setCookies = res.headers['set-cookie']
     const list = Array.isArray(setCookies) ? setCookies : setCookies ? [setCookies] : []
