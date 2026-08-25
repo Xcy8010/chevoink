@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 /**
  * 三区布局（章节树 / 内容区 / Agent 对话区）拖拽调宽的共享实现：
@@ -16,12 +16,26 @@ export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 420 }
 export type StudioPanelWidths = { tree: number; agent: number; workTask: number; workInspector: number; workViewer: number }
 export type ResizablePanel = keyof StudioPanelWidths
 
+type PanelResizeOptions = {
+  onCollapse?: (panel: ResizablePanel) => void
+  /** 按当前布局实时计算该面板最多能占多少宽度，必须为中间工作区保留可用空间。 */
+  getMaximum?: (panel: ResizablePanel, widths: StudioPanelWidths) => number
+}
+
+const PANEL_LIMITS = {
+  tree: TREE_PANEL_WIDTH_LIMITS,
+  agent: AGENT_PANEL_WIDTH_LIMITS,
+  workTask: WORK_TASK_PANEL_WIDTH_LIMITS,
+  workInspector: WORK_INSPECTOR_PANEL_WIDTH_LIMITS,
+  workViewer: WORK_VIEWER_PANEL_WIDTH_LIMITS,
+} satisfies Record<ResizablePanel, { min: number; fallback: number }>
+
 function viewportMaximum(): number {
   return typeof window === 'undefined' ? 1920 : Math.max(420, window.innerWidth - 320)
 }
 
-function clampPanelWidth(value: number, limits: { min: number }): number {
-  return Math.min(viewportMaximum(), Math.max(limits.min, Math.round(value)))
+function clampPanelWidth(value: number, limits: { min: number }, maximum = viewportMaximum()): number {
+  return Math.min(Math.max(limits.min, maximum), Math.max(limits.min, Math.round(value)))
 }
 
 function readStoredPanelWidths(): StudioPanelWidths {
@@ -63,10 +77,38 @@ function storePanelWidths(widths: StudioPanelWidths) {
   }
 }
 
-export function useStudioPanelWidths(options: { onCollapse?: (panel: ResizablePanel) => void } = {}) {
+export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
   const [panelWidths, setPanelWidths] = useState<StudioPanelWidths>(readStoredPanelWidths)
   const panelWidthsRef = useRef(panelWidths)
+  const optionsRef = useRef(options)
   panelWidthsRef.current = panelWidths
+  optionsRef.current = options
+
+  const normalizeForViewport = useCallback(() => {
+    setPanelWidths((current) => {
+      let next = current
+      // 多跑两轮，让彼此依赖的面板上限稳定收敛，旧版存下的超宽值也不会挤出屏幕。
+      for (let pass = 0; pass < 2; pass += 1) {
+        for (const panel of Object.keys(PANEL_LIMITS) as ResizablePanel[]) {
+          const limits = PANEL_LIMITS[panel]
+          const maximum = optionsRef.current.getMaximum?.(panel, next) ?? viewportMaximum()
+          const width = clampPanelWidth(next[panel], limits, maximum)
+          if (width !== next[panel]) next = { ...next, [panel]: width }
+        }
+      }
+      if (next !== current) {
+        panelWidthsRef.current = next
+        storePanelWidths(next)
+      }
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    normalizeForViewport()
+    window.addEventListener('resize', normalizeForViewport)
+    return () => window.removeEventListener('resize', normalizeForViewport)
+  }, [normalizeForViewport, options.getMaximum])
 
   // 拖拽调宽：指针按下后追踪位移，松手时持久化到 localStorage
   const beginPanelResize = useCallback(
@@ -75,15 +117,7 @@ export function useStudioPanelWidths(options: { onCollapse?: (panel: ResizablePa
       const handle = event.currentTarget
       const startX = event.clientX
       const startWidth = panelWidthsRef.current[panel]
-      const limits = panel === 'tree'
-        ? TREE_PANEL_WIDTH_LIMITS
-        : panel === 'agent'
-          ? AGENT_PANEL_WIDTH_LIMITS
-          : panel === 'workTask'
-            ? WORK_TASK_PANEL_WIDTH_LIMITS
-            : panel === 'workInspector'
-              ? WORK_INSPECTOR_PANEL_WIDTH_LIMITS
-              : WORK_VIEWER_PANEL_WIDTH_LIMITS
+      const limits = PANEL_LIMITS[panel]
       handle.setPointerCapture(event.pointerId)
       let rawWidth = startWidth
 
@@ -91,19 +125,21 @@ export function useStudioPanelWidths(options: { onCollapse?: (panel: ResizablePa
         const delta = moveEvent.clientX - startX
         const growsRight = panel === 'tree' || panel === 'workTask'
         rawWidth = growsRight ? startWidth + delta : startWidth - delta
-        const nextWidth = clampPanelWidth(rawWidth, limits)
-        setPanelWidths((current) =>
-          current[panel] === nextWidth
-            ? current
-            : { ...current, [panel]: nextWidth },
-        )
+        setPanelWidths((current) => {
+          const maximum = optionsRef.current.getMaximum?.(panel, current) ?? viewportMaximum()
+          const nextWidth = clampPanelWidth(rawWidth, limits, maximum)
+          if (current[panel] === nextWidth) return current
+          const next = { ...current, [panel]: nextWidth }
+          panelWidthsRef.current = next
+          return next
+        })
       }
       const handleUp = () => {
         handle.removeEventListener('pointermove', handleMove)
         handle.removeEventListener('pointerup', handleUp)
         handle.removeEventListener('pointercancel', handleUp)
         if (rawWidth <= Math.round(limits.min * 0.62)) {
-          options.onCollapse?.(panel)
+          optionsRef.current.onCollapse?.(panel)
         } else {
           storePanelWidths(panelWidthsRef.current)
         }
@@ -113,7 +149,7 @@ export function useStudioPanelWidths(options: { onCollapse?: (panel: ResizablePa
       handle.addEventListener('pointerup', handleUp)
       handle.addEventListener('pointercancel', handleUp)
     },
-    [options],
+    [],
   )
 
   return { panelWidths, beginPanelResize }

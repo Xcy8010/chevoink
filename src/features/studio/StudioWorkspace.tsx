@@ -41,7 +41,7 @@ import MemoryGraph from './components/MemoryGraph'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
-import { useStudioPanelWidths } from './panel-widths'
+import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
 
 
@@ -125,6 +125,22 @@ export default function StudioWorkspace() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
+  const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
+    const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
+    const centerReserve = 288
+    if (panel === 'tree') {
+      return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
+    }
+    if (panel === 'agent') {
+      return viewportWidth - centerReserve - (ideTreeOpen ? widths.tree : 46)
+    }
+    const taskWidth = workLeftOpen ? widths.workTask : 46
+    const inspectorWidth = workRightOpen ? widths.workInspector : 46
+    const viewerWidth = workViewer ? widths.workViewer : 0
+    if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
+    if (panel === 'workInspector') return viewportWidth - centerReserve - taskWidth - viewerWidth
+    return viewportWidth - centerReserve - taskWidth - inspectorWidth
+  }, [ideAgentOpen, ideTreeOpen, workLeftOpen, workRightOpen, workViewer])
   const { panelWidths, beginPanelResize } = useStudioPanelWidths({
     onCollapse: (panel) => {
       if (panel === 'tree') setIdeTreeOpen(false)
@@ -133,6 +149,7 @@ export default function StudioWorkspace() {
       if (panel === 'workInspector') setWorkRightOpen(false)
       if (panel === 'workViewer') setWorkViewer(null)
     },
+    getMaximum: getPanelMaximum,
   })
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
   const platformCapabilities = useMemo(() => getPlatformCapabilities(), [])
@@ -4090,7 +4107,12 @@ export default function StudioWorkspace() {
                 onBeginResize={beginPanelResize}
               />
             ) : (
-            <IdePerspective treeWidth={panelWidths.tree} treeOpen={ideTreeOpen}>
+            <IdePerspective
+              treeWidth={panelWidths.tree}
+              treeOpen={ideTreeOpen}
+              agentWidth={panelWidths.agent}
+              agentOpen={ideAgentOpen}
+            >
               <div className="relative min-h-0 border-r border-[var(--border-subtle)]">
                 <IdeNavigationRail
                   tab={ideSidebarTab}
@@ -4214,10 +4236,7 @@ export default function StudioWorkspace() {
                   label="拖拽调整 Agent 对话区宽度"
                   onBegin={beginPanelResize}
                 />
-                <div
-                  className="h-full min-h-0 shrink-0 overflow-hidden"
-                  style={{ width: panelWidths.agent }}
-                >
+                <div className="h-full min-h-0 w-full min-w-0 overflow-hidden">
                   {renderWritingAgent(() => setIdeAgentOpen(false))}
                 </div>
                 </> : <button type="button" onClick={() => setIdeAgentOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开 Agent 区"><PanelRightOpen className="h-4 w-4" /></button>}

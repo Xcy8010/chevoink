@@ -4,6 +4,7 @@ import type { ProjectMemoryType, StoryMemoryLayer, StoryMemoryStatus } from '@pr
 
 import type { MemoryEvidence, MemoryGraph, MemorySearchHit } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
+import { extractCharacterNames } from './memory-entity-normalization.js'
 
 type EvidenceInput = {
   sourceType: MemoryEvidence['sourceType']
@@ -303,15 +304,10 @@ export async function processMemoryExtractionJob(jobId: string): Promise<void> {
   }
 }
 
-const CHARACTER_NAME_BOUNDARY = String.raw`(?:^|[\s，。！？；：、“”‘’（）—])`
-const CHARACTER_ACTION = String.raw`(?:说|问|答|道|看|望|笑|哭|走|跑|站|坐|来|回|发现|觉得|知道|点头|摇头|皱眉|抬头|转身|开口|沉默|握住|拿起)`
-const COMMON_SURNAMES = new Set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵季贾路娄江童颜郭梅盛林钟徐邱骆高夏蔡田樊胡凌霍虞万柯管卢莫房裘缪解应宗丁宣邓郁单杭洪包诸左石崔吉龚程邢裴陆荣翁荀羊甄曲封芮储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白蒲台鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双闻莘党翟谭贡劳姬申扶堵冉宰郦雍郤璩桑桂濮牛寿通边扈燕冀浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东欧沃利蔚越隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公'.split(''))
-const CHARACTER_NAME_STOPWORDS = new Set([
-  '他们', '她们', '我们', '你们', '自己', '有人', '没人', '众人', '所有人', '年轻人', '老人', '男人', '女人',
-  '今天', '昨天', '明天', '此刻', '这时', '那时', '这里', '那里', '外面', '里面', '随后', '忽然', '终于',
-])
 const memoryProjectionVersionCache = new Map<string, string>()
+const memoryProjectionInFlight = new Map<string, Promise<Awaited<ReturnType<typeof syncNovelMemoryProjectionOnce>>>>()
 const MEMORY_PROJECTION_CACHE_LIMIT = 500
+const MEMORY_PROJECTION_ALGORITHM_VERSION = 'character-normalization-v2'
 
 function rememberMemoryProjectionVersion(novelId: string, version: string) {
   memoryProjectionVersionCache.delete(novelId)
@@ -323,27 +319,11 @@ function rememberMemoryProjectionVersion(novelId: string, version: string) {
   }
 }
 
-function extractCharacterNames(content: string): string[] {
-  const candidates = new Set<string>()
-  const patterns = [
-    new RegExp(`${CHARACTER_NAME_BOUNDARY}([\\u3400-\\u9fff]{2,4})(?=${CHARACTER_ACTION})`, 'gmu'),
-    new RegExp(`${CHARACTER_NAME_BOUNDARY}([\\u3400-\\u9fff]{2,4})(?=[：:]?[“\u201c])`, 'gmu'),
-  ]
-  for (const pattern of patterns) {
-    for (const match of content.matchAll(pattern)) {
-      const name = match[1]?.trim()
-      if (!name || CHARACTER_NAME_STOPWORDS.has(name) || !COMMON_SURNAMES.has(name[0])) continue
-      candidates.add(name)
-    }
-  }
-  return [...candidates]
-}
-
 /**
  * 将已有正文投影为可视化记忆图谱，并为尚未抽取的章节补建幂等任务。
  * 全程只做本地规则抽取与数据库 upsert，不调用模型、不额外消耗 token。
  */
-export async function syncNovelMemoryProjection(userId: string, novelId: string) {
+async function syncNovelMemoryProjectionOnce(userId: string, novelId: string) {
   const novel = await prisma.novel.findFirst({
     where: { id: novelId, authorId: userId },
     select: { id: true },
@@ -386,6 +366,7 @@ export async function syncNovelMemoryProjection(userId: string, novelId: string)
   }
 
   const projectionVersion = createHash('sha256').update([
+    MEMORY_PROJECTION_ALGORITHM_VERSION,
     ...chapters.map((chapter) => `${chapter.id}:${chapter.revision}`),
     ...characterCards.map((card) => `${card.title}:${card.status}:${card.updatedAt.toISOString()}`),
   ].join('|')).digest('hex').slice(0, 20)
@@ -395,6 +376,7 @@ export async function syncNovelMemoryProjection(userId: string, novelId: string)
   }
 
   const mentions = new Map<string, { count: number; chapterIds: Set<string>; description?: string; status: StoryMemoryStatus }>()
+  const canonicalCharacterNames = characterCards.map((card) => card.title.trim()).filter(Boolean)
   for (const card of characterCards) {
     const name = card.title.trim()
     if (!name || name.length > 32) continue
@@ -402,7 +384,7 @@ export async function syncNovelMemoryProjection(userId: string, novelId: string)
   }
   const chapterNames = new Map<string, string[]>()
   for (const chapter of chapters) {
-    const names = extractCharacterNames(chapter.content)
+    const names = extractCharacterNames(chapter.content, canonicalCharacterNames)
     chapterNames.set(chapter.id, names)
     for (const name of names) {
       const current = mentions.get(name) ?? { count: 0, chapterIds: new Set<string>(), status: 'inferred' as StoryMemoryStatus }
@@ -416,6 +398,18 @@ export async function syncNovelMemoryProjection(userId: string, novelId: string)
     .filter(([, item]) => item.description || item.count >= 2 || item.chapterIds.size >= 2)
     .sort((left, right) => right[1].count - left[1].count || right[1].chapterIds.size - left[1].chapterIds.size)
     .slice(0, 36)
+  const selectedNameSet = new Set(selectedNames.map(([name]) => name))
+  const staleProjectedEntities = await prisma.storyEntity.findMany({
+    where: { novelId, entityType: 'character', description: { startsWith: '从正文中自动识别' } },
+    select: { id: true, canonicalName: true },
+  })
+  const staleIds = staleProjectedEntities
+    .filter((entity) => !selectedNameSet.has(entity.canonicalName))
+    .map((entity) => entity.id)
+  if (staleIds.length > 0) {
+    // 仅删除旧规则自动生成且本轮不再成立的节点；作者/Agent 确认过的实体不会进入这个集合。
+    await prisma.storyEntity.deleteMany({ where: { id: { in: staleIds } } })
+  }
   const entities = new Map<string, { id: string }>()
   for (const [name, item] of selectedNames) {
     const entity = await prisma.storyEntity.upsert({
@@ -467,6 +461,20 @@ export async function syncNovelMemoryProjection(userId: string, novelId: string)
 
   rememberMemoryProjectionVersion(novelId, projectionVersion)
   return { chapterCount: chapters.length, jobCount: queuedJobIds.length, entityCount: entities.size, relationCount }
+}
+
+/** 同一作品的桌面/手机隐藏视图可能同时请求同步；服务端合并为一条事务链，避免重复重建关系。 */
+export function syncNovelMemoryProjection(userId: string, novelId: string) {
+  const key = `${userId}:${novelId}`
+  const running = memoryProjectionInFlight.get(key)
+  if (running) return running
+  const task = syncNovelMemoryProjectionOnce(userId, novelId)
+  memoryProjectionInFlight.set(key, task)
+  const release = () => {
+    if (memoryProjectionInFlight.get(key) === task) memoryProjectionInFlight.delete(key)
+  }
+  void task.then(release, release)
+  return task
 }
 
 export async function listMemoryReviewInbox(userId: string, novelId: string) {

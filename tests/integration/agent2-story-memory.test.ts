@@ -128,6 +128,12 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
   it('已有正文可无模型调用地初始化关系图，重复同步保持幂等', async () => {
     await prisma.chapter.update({ where: { id: chapterIds[1] }, data: { content: '林舟说：“去钟楼。” 顾棠问：“现在吗？”', revision: { increment: 1 } } })
     await prisma.chapter.update({ where: { id: chapterIds[2] }, data: { content: '顾棠点头，林舟转身走进雨里。', revision: { increment: 1 } } })
+    await prisma.storyEntity.create({
+      data: {
+        novelId, entityType: 'character', canonicalName: '林舟知', status: 'inferred',
+        description: '从正文中自动识别，出现于 1 个章节。',
+      },
+    })
     const first = await syncNovelMemoryProjection(userId, novelId)
     const relationCount = await prisma.entityRelation.count({ where: { fromEntity: { novelId }, relationType: '同章出现' } })
     const second = await syncNovelMemoryProjection(userId, novelId)
@@ -136,6 +142,7 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
     expect(first.entityCount).toBeGreaterThan(0)
     expect(second.jobCount).toBe(0)
     expect(graph.nodes.map((node) => node.label)).toEqual(expect.arrayContaining(['林舟', '顾棠']))
+    expect(graph.nodes.map((node) => node.label)).not.toContain('林舟知')
     expect(repeatedRelationCount).toBe(relationCount)
   })
 })

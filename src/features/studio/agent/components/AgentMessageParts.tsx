@@ -586,6 +586,17 @@ const toolStatusIcon = {
   denied: <ShieldX className="h-3.5 w-3.5 text-amber-500" />,
 } as const
 
+const WRITE_TOOL_NAMES = new Set([
+  'chapter_create', 'chapter_write', 'chapter_append', 'chapter_edit_range', 'chapter_rename',
+  'chapter_move', 'chapter_move_to_volume', 'chapter_split', 'chapter_merge',
+  'volume_create', 'volume_update', 'volume_move', 'volume_delete',
+  'changeset_apply', 'changeset_rollback', 'directive_save', 'directive_supersede',
+  'memory_save', 'memory_relation_save', 'memory_event_save',
+  'plan_save', 'plan_rename', 'plan_delete',
+  'novel_rename', 'novel_update_meta', 'cover_prompt_set', 'cover_apply',
+  'novel_publish', 'novel_archive', 'novel_delete',
+])
+
 /** 工具真实执行耗时：不足 1 秒的瞬时操作不展示，避免满屏无意义的 0.0s */
 function formatToolDuration(durationMs: number | undefined): string | null {
   if (typeof durationMs !== 'number' || durationMs < 1000) {
@@ -613,6 +624,7 @@ const ToolCallCard = memo(function ToolCallCard({
   }, [part.args])
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
+  const writeTool = WRITE_TOOL_NAMES.has(part.toolName)
   // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
   const collapsible = part.toolName === 'web_read' && !!part.display
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
@@ -639,8 +651,12 @@ const ToolCallCard = memo(function ToolCallCard({
   return (
     <div
       className={cn(
-        'relative overflow-hidden border-y bg-transparent',
-        running ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]/35' : 'border-[var(--border-subtle)]',
+        'relative overflow-hidden rounded-[10px] border bg-[var(--surface-muted)]/28 transition-colors',
+        running
+          ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]/55'
+          : writeTool && part.status === 'success'
+            ? 'border-[color:var(--border-strong)] bg-[var(--surface-muted)]/42'
+            : 'border-[var(--border-subtle)]',
       )}
     >
       {/* IDE 式执行中呼吸动画：整卡蒙层脉冲，比单独的 spinner 更醒目 */}
@@ -655,7 +671,7 @@ const ToolCallCard = memo(function ToolCallCard({
         onClick={() => setExpanded((value) => !value)}
         className="relative flex w-full items-center gap-2 px-3 py-2 text-left"
       >
-        <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">
           {part.title || part.toolName}
         </span>
@@ -669,6 +685,10 @@ const ToolCallCard = memo(function ToolCallCard({
             {durationLabel}
           </span>
         ) : null}
+        {writeTool && !running ? <span className={cn(
+          'shrink-0 text-[10px] font-medium',
+          part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
+        )}>{part.status === 'success' ? '已接受' : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
         <span className="shrink-0">{toolStatusIcon[part.status]}</span>
         {collapsible ? (
           expanded ? (

@@ -8,6 +8,7 @@ import { defineTool, type ToolContext, type ToolResult } from './types.js'
 import { placeCreatedChapter, resolveChapterPlacement } from '../../data/volume.js'
 import { enqueueChapterMemoryExtraction } from '../story-memory.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
+import { resolveAgentChapterVolumeId } from './chapter-placement.js'
 
 /**
  * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
@@ -129,7 +130,7 @@ export const chapterCreateTool = defineTool({
   name: 'chapter_create',
   title: '新建章节',
   description:
-    '在当前作品创建一个新章节，默认追加到末尾；传 position 可插入到指定位置（原第 position 章及之后的章节编号自动 +1），用于补写作者删掉的中间章节。仅用于新增章节；重写/重新生成已有章节必须用 chapter_write 覆盖原章节，绝不要另建重复章节（会导致章节编号错乱）。推荐两步流程：先只传 title 创建空章节（作者立刻能在章节树看到新章），再用 chapter_write 写入正文；也可以带 content 一次性创建。返回新章节的 chapterId。',
+    '在当前作品创建一个新章节，默认紧接全书最后一个已有章节（不会误入后方预建的空卷）；传 position 可插入到全书指定位置（原第 position 章及之后的章节编号自动 +1），传 volumeId/positionInVolume 可精确指定卷内位置。作者说“第 N 章”时必须传 position=N。仅用于新增章节；重写已有章节必须用 chapter_write，绝不要另建重复章节。推荐先创建空章节，再用 chapter_write 写正文。返回 chapterId、实际卷和全书序。',
   parameters: z.object({
     title: z.string().min(1).max(120).describe('章节标题'),
     content: z.string().optional().describe('章节正文，可留空'),
@@ -139,7 +140,7 @@ export const chapterCreateTool = defineTool({
       .min(1)
       .optional()
       .describe('插入位置（第 N 章）。缺省或超过现有章节数时追加到末尾；否则插入该位置，原第 N 章及之后的章节整体后移一位'),
-    volumeId: z.string().min(1).optional().describe('目标卷 ID；缺省时使用最后一卷'),
+    volumeId: z.string().min(1).optional().describe('目标卷 ID；缺省时使用全书最后一个已有章节所在卷，而不是后方空卷'),
     positionInVolume: z.number().int().min(1).optional().describe('目标卷内位置（第 N 章）；缺省时追加'),
   }),
   permission: WRITE_PERMISSION,
@@ -151,10 +152,19 @@ export const chapterCreateTool = defineTool({
       const globalTarget = args.position
         ? await tx.chapter.findFirst({ where: { novelId: ctx.novelId, orderIndex: args.position } })
         : null
+      const lastExisting = await tx.chapter.findFirst({
+        where: { novelId: ctx.novelId },
+        orderBy: { orderIndex: 'desc' },
+        select: { volumeId: true },
+      })
       const placement = await resolveChapterPlacement(
         tx,
         ctx.novelId,
-        args.volumeId ?? globalTarget?.volumeId,
+        resolveAgentChapterVolumeId({
+          requestedVolumeId: args.volumeId,
+          globalTargetVolumeId: globalTarget?.volumeId,
+          lastExistingVolumeId: lastExisting?.volumeId,
+        }),
         args.positionInVolume ?? globalTarget?.orderInVolume,
       )
       const chapterCount = await tx.chapter.count({ where: { novelId: ctx.novelId } })
@@ -173,7 +183,10 @@ export const chapterCreateTool = defineTool({
         },
       })
       await placeCreatedChapter(tx, ctx.novelId, created, placement.volume.id, placement.position)
-      return tx.chapter.findUniqueOrThrow({ where: { id: created.id } })
+      return tx.chapter.findUniqueOrThrow({
+        where: { id: created.id },
+        include: { volume: { select: { title: true, orderIndex: true } } },
+      })
     })
     await recalcNovelStats(ctx.novelId)
     recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
@@ -184,8 +197,8 @@ export const chapterCreateTool = defineTool({
     }
 
     return {
-      output: `已创建第 ${chapter.orderIndex} 章《${chapter.title}》，chapterId=${chapter.id}，卷内序=${chapter.orderInVolume}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。`,
-      summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》`,
+      output: `已创建全书第 ${chapter.orderIndex} 章《${chapter.title}》，位于第 ${chapter.volume.orderIndex} 卷《${chapter.volume.title}》卷内第 ${chapter.orderInVolume} 章，chapterId=${chapter.id}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。请以这里返回的实际卷与全书序核对作者目标。`,
+      summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》 · ${chapter.volume.title}`,
       // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
       display: content
         ? {
