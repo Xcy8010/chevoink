@@ -639,8 +639,8 @@ const ToolCallCard = memo(function ToolCallCard({
   return (
     <div
       className={cn(
-        'relative overflow-hidden rounded-[14px] border bg-[var(--surface-muted)]/60',
-        running ? 'border-[var(--border-strong)]' : 'border-[var(--border-subtle)]',
+        'relative overflow-hidden border-y bg-transparent',
+        running ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]/35' : 'border-[var(--border-subtle)]',
       )}
     >
       {/* IDE 式执行中呼吸动画：整卡蒙层脉冲，比单独的 spinner 更醒目 */}
@@ -713,12 +713,12 @@ const ReasoningPart = memo(function ReasoningPart({
 }) {
   // null = 跟随默认（思考中展开、思考结束收起）；true/false = 用户本轮手动指定，思考中也能收起
   const [manualOpen, setManualOpen] = useState<boolean | null>(null)
-  const showBody = manualOpen ?? streaming
-  const bodyRef = useRef<HTMLParagraphElement | null>(null)
+  const showBody = manualOpen ?? false
+  const bodyRef = useRef<HTMLDivElement | null>(null)
   // 是否跟随最新思考文本：默认跟随，用户在思考区内往上翻即暂停，重新滑回底部即恢复
   const followRef = useRef(true)
 
-  // 思考结束时清掉手动状态，恢复「自动收起 + 之后可手动展开回看」的默认行为
+  // 思考结束时清掉手动状态，维持紧凑收起态。
   useEffect(() => {
     if (!streaming) {
       setManualOpen(null)
@@ -757,12 +757,17 @@ const ReasoningPart = memo(function ReasoningPart({
     })
   }, [streaming])
 
+  const visibleText = part.text.trimEnd()
+  const lines = visibleText.split('\n')
+  const summary = streaming ? lines.at(-1) ?? '' : lines[0] ?? ''
+
   return (
-    <div className="rounded-[14px] border border-dashed border-[var(--border-subtle)] px-3 py-2">
+    <div className="relative overflow-hidden" data-reasoning-running={streaming || undefined}>
+      {streaming ? <span aria-hidden className="pointer-events-none absolute inset-y-0 -left-72 z-0 w-72 animate-[reasoning-sweep_2.6s_ease-out_infinite] bg-gradient-to-r from-transparent via-[color:var(--surface-muted)]/70 to-transparent motion-reduce:hidden" /> : null}
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 text-left"
+        className="relative z-10 flex h-8 w-full items-center gap-2 overflow-hidden text-left"
       >
         <Brain
           className={cn(
@@ -770,9 +775,11 @@ const ReasoningPart = memo(function ReasoningPart({
             streaming && 'animate-pulse',
           )}
         />
-        <span className="flex-1 text-[11px] font-medium tracking-[0.08em] text-[var(--text-secondary)]">
-          {streaming ? '思考中…' : '思考过程'}
+        <span className="shrink-0 text-[11px] font-medium text-[var(--text-secondary)]">
+          {streaming ? '思考中' : '思考'}
         </span>
+        <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-[var(--text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-tertiary)]">{summary}</span>
         {showBody ? (
           <ChevronUp className="h-3.5 w-3.5 text-[var(--text-secondary)]" />
         ) : (
@@ -782,13 +789,13 @@ const ReasoningPart = memo(function ReasoningPart({
       {showBody ? (
         /* 这里刻意不加 overscroll-contain：思考区滚到边界后手势要能继续传给外层对话列表，
            否则手指落在思考区上时整个对话就滑不动了 */
-        <p
+        <div
           ref={bodyRef}
           onScroll={handleBodyScroll}
-          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)] [-webkit-overflow-scrolling:auto]"
+          className="max-h-44 overflow-y-auto whitespace-pre-wrap border-l border-[var(--border-subtle)] py-1 pl-[22px] text-xs leading-6 text-[var(--text-tertiary)] [-webkit-overflow-scrolling:auto]"
         >
           {part.text}
-        </p>
+        </div>
       ) : null}
     </div>
   )

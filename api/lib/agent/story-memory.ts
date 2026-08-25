@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type { ProjectMemoryType, StoryMemoryLayer, StoryMemoryStatus } from '@prisma/client'
 
-import type { MemoryEvidence, MemorySearchHit } from '../../../shared/contracts/index.js'
+import type { MemoryEvidence, MemoryGraph, MemorySearchHit } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
 
 type EvidenceInput = {
@@ -310,6 +310,55 @@ export async function listMemoryReviewInbox(userId: string, novelId: string) {
     where: { novelId, OR: [{ reviewStatus: 'pending' }, { status: 'conflicted' }] },
     include: { evidence: true }, orderBy: { updatedAt: 'desc' },
   })
+}
+
+export async function getMemoryGraph(userId: string, novelId: string): Promise<MemoryGraph> {
+  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权查看记忆。')
+
+  const entities = await prisma.storyEntity.findMany({
+    where: { novelId, status: { in: ['confirmed', 'inferred', 'conflicted'] } },
+    include: { aliases: { orderBy: { alias: 'asc' } }, relationsFrom: true },
+    orderBy: [{ updatedAt: 'desc' }, { canonicalName: 'asc' }],
+    take: 240,
+  })
+  const nodeIds = new Set(entities.map((entity) => entity.id))
+  const edges = entities
+    .flatMap((entity) => entity.relationsFrom)
+    .filter((relation) => nodeIds.has(relation.toEntityId))
+    .slice(0, 600)
+  const latestEntityAt = entities[0]?.updatedAt ?? new Date(0)
+  const version = createHash('sha256')
+    .update([
+      ...entities.map((entity) => `${entity.id}:${entity.updatedAt.toISOString()}`),
+      ...edges.map((edge) => `${edge.id}:${edge.state ?? ''}:${edge.confidence}`),
+    ].join('|'))
+    .digest('hex')
+    .slice(0, 16)
+
+  return {
+    novelId,
+    version: version || 'empty',
+    updatedAt: latestEntityAt.toISOString(),
+    nodes: entities.map((entity) => ({
+      id: entity.id,
+      type: entity.entityType,
+      label: entity.canonicalName,
+      description: entity.description,
+      status: entity.status,
+      aliases: entity.aliases.map((alias) => alias.alias),
+      updatedAt: entity.updatedAt.toISOString(),
+    })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: edge.fromEntityId,
+      target: edge.toEntityId,
+      type: edge.relationType,
+      state: edge.state,
+      confidence: edge.confidence,
+      sourceId: edge.sourceId,
+    })),
+  }
 }
 
 export async function resolveMemoryReview(userId: string, memoryId: string, accepted: boolean) {

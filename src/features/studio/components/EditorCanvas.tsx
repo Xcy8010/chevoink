@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FilePenLine, LoaderCircle, MoreHorizontal, RefreshCcw, Save, Settings2, Upload, WandSparkles } from 'lucide-react'
+import { FilePenLine, LoaderCircle, MoreHorizontal, RefreshCcw, Settings2, Upload } from 'lucide-react'
 
 import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
 import Button from '@/components/ui/Button'
@@ -9,7 +9,6 @@ import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingReview, type SaveState, type WorkspaceDocumentView } from '../types'
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
-import { SaveStatusPill } from './StudioControls'
 
 type EditorCanvasProps = {
   chapterDraft: ChapterDraftState | null
@@ -22,7 +21,6 @@ type EditorCanvasProps = {
   selectedCommentCount: number
   onSelectionChange?: (next: { start: number; end: number; text: string }) => void
   onSave: () => void
-  onEnterImmersive: () => void
   onRetryLoad: () => void
   onCreateChapter: () => void
   onOpenChapterSettings: () => void
@@ -65,12 +63,11 @@ export default function EditorCanvas({
   workspaceDocument = null,
   chapterLoading,
   chapterErrorMessage,
-  chapterSaveState,
-  chapterSaveMessage,
+  chapterSaveState: _chapterSaveState,
+  chapterSaveMessage: _chapterSaveMessage,
   latestWordCountLabel,
   onSelectionChange,
-  onSave,
-  onEnterImmersive,
+  onSave: _onSave,
   onRetryLoad,
   onCreateChapter,
   onOpenChapterSettings,
@@ -80,7 +77,7 @@ export default function EditorCanvas({
   onStatusChange: _onStatusChange,
   onChange,
   onWorkspaceDocumentChange,
-  onRetrySave,
+  onRetrySave: _onRetrySave,
   onEditorBlur,
   pendingChapterReview = null,
   pendingChapterReviewBusy = false,
@@ -290,10 +287,6 @@ export default function EditorCanvas({
               <FilePenLine className="h-4 w-4" />
               新建章节
             </Button>
-            <Button onClick={onEnterImmersive} variant="ghost">
-              <WandSparkles className="h-4 w-4" />
-              进入沉浸创作
-            </Button>
           </div>
         </div>
       </Surface>
@@ -314,15 +307,6 @@ export default function EditorCanvas({
         <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2">
           <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]">{latestWordCountLabel}</span>
           <div className="relative flex shrink-0 items-center gap-1.5">
-            <Button
-              onClick={onSave}
-              variant="secondary"
-              size="sm"
-              disabled={chapterSaveState === 'saving' || pendingChapterReviewBusy || Boolean(pendingChapterReview)}
-            >
-              <Save className="h-4 w-4" />
-              保存
-            </Button>
             <button
               type="button"
               onClick={() => setMobileMenuOpen((prev) => !prev)}
@@ -359,17 +343,6 @@ export default function EditorCanvas({
                       {novelPublished ? '更新发布' : '发布作品'}
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false)
-                      onEnterImmersive()
-                    }}
-                    className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left text-sm text-[var(--text-primary)] transition-colors active:bg-[var(--surface-muted)]"
-                  >
-                    <WandSparkles className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
-                    沉浸创作
-                  </button>
                 </div>
               </>
             ) : null}
@@ -423,13 +396,7 @@ export default function EditorCanvas({
 
   return (
     <Surface as="section" padding="md" className={embedded ? `${sectionClassName} border-0 px-5 py-5 shadow-none xl:px-6` : sectionClassName}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-4">
-        <SaveStatusPill
-          state={chapterSaveState}
-          message={chapterSaveMessage}
-          onRetry={onRetrySave}
-          compact
-        />
+      <div className="flex flex-wrap items-center justify-end gap-2 border-b border-[var(--border-subtle)] pb-4">
         <div className="flex flex-wrap items-center gap-2">
           {onPublishNovel ? (
             <Button
@@ -450,19 +417,6 @@ export default function EditorCanvas({
           >
             <Settings2 className="h-4 w-4" />
             章节设置
-          </Button>
-          <Button
-            onClick={onSave}
-            variant="secondary"
-            size="sm"
-            disabled={chapterSaveState === 'saving' || pendingChapterReviewBusy || Boolean(pendingChapterReview)}
-          >
-            <Save className="h-4 w-4" />
-            保存
-          </Button>
-          <Button onClick={onEnterImmersive} variant="ghost" size="sm">
-            <WandSparkles className="h-4 w-4" />
-            沉浸
           </Button>
         </div>
       </div>

@@ -510,6 +510,7 @@ export default function AppShell({ title, description, children }: AppShellProps
           className={cn(
             'hidden shrink-0 md:flex md:h-full md:flex-col md:overflow-y-auto md:transition-[width] md:duration-200',
             isAuthRoute && 'md:hidden',
+            isStudioRoute && 'md:hidden',
             'md:w-[64px]',
             sidebarExpanded ? 'lg:w-[284px]' : 'lg:w-[64px]',
           )}
@@ -645,6 +646,7 @@ export default function AppShell({ title, description, children }: AppShellProps
             className={cn(
               'mx-auto flex h-full max-w-[var(--shell-max-width)] flex-col px-4 md:px-6 xl:px-8',
               isMessagesChatRoute && 'mobile:px-0',
+              isStudioRoute && 'max-w-none px-0 md:px-0 xl:px-0',
             )}
           >
             <header
@@ -653,7 +655,7 @@ export default function AppShell({ title, description, children }: AppShellProps
                 'pointer-events-none fixed left-0 right-0 top-0 z-40 px-4 pt-[calc(var(--safe-top)+8px)] transition-[left] duration-200 md:px-6 md:pt-4 xl:px-8',
                 !isAuthRoute && 'md:left-[64px]',
                 !isAuthRoute && sidebarExpanded && 'lg:left-[284px]',
-                isStudioRoute && 'hidden lg:block',
+                isStudioRoute && 'hidden lg:hidden',
                 // 手机端仅首页/发现/搜索显示顶部导航栏（studio 已有自己的隐藏规则，不叠加）
                 hideMobileHeader && !isStudioRoute && 'hidden md:block',
               )}
@@ -784,6 +786,7 @@ export default function AppShell({ title, description, children }: AppShellProps
                 isReaderRoute && 'flex h-full min-h-0 flex-col space-y-4 pb-0 md:pb-0',
                 // 创作区手机端由自己的底部导航接管，不再为全局底栏留白
                 isStudioRoute && 'flex h-full min-h-0 flex-col space-y-4 md:space-y-4 pb-0 md:pb-0',
+                isStudioRoute && '!space-y-0 !pt-0',
                 // 消息页：列式铺满剩余高度，手机端避让底部导航，桌面端留少量底边距；app-messages-main 供键盘打开时收紧底部留白
                 isMessagesRoute && 'app-messages-main flex h-full min-h-0 flex-col space-y-0 pb-[calc(76px+var(--safe-bottom))] md:pb-6',
                 // 聊天详情态：底栏已隐藏，手机端只留安全区，输入框贴底

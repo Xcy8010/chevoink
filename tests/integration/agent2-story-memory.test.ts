@@ -6,7 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import app from '../../api/app.js'
 import {
   enqueueChapterMemoryExtraction,
+  getMemoryGraph,
   listMemoryReviewInbox,
+  saveEntityRelation,
   saveStoryMemory,
   searchStoryMemory,
 } from '../../api/lib/agent/story-memory.js'
@@ -81,6 +83,21 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
       where: { novelId, memoryType: 'characterCard', title: '林舟', status: 'confirmed' },
     })
     expect(canonical.content).toContain('已经去世')
+  })
+
+  it('关系图只读投影返回实体、关系和稳定版本', async () => {
+    await saveEntityRelation({
+      userId, novelId, fromName: '林舟', toName: '顾棠', relationType: '共同调查',
+      state: '暂时结盟', validFrom: 73, sourceId: chapterIds[72], revision: 1, confidence: 0.96,
+    })
+    const graph = await getMemoryGraph(userId, novelId)
+    const labels = graph.nodes.map((node) => node.label)
+    expect(labels).toEqual(expect.arrayContaining(['林舟', '顾棠']))
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: '共同调查', state: '暂时结盟', confidence: 0.96 }),
+    ]))
+    expect(graph.version).toMatch(/^[a-f0-9]{16}$/)
+    expect(graph.updatedAt).toMatch(/T/)
   })
 
   it('章节变更按 revision 幂等抽取并增量生成章摘要与卷摘要', async () => {

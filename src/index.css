@@ -456,3 +456,7 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   min-width: 44px;
   min-height: 44px;
 }
+@keyframes reasoning-sweep {
+  0% { transform: translateX(0); }
+  90%, 100% { transform: translateX(calc(100vw + 18rem)); }
+}

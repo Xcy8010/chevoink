@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PenLine, RefreshCcw, Settings2, Trash2, Upload, WandSparkles } from 'lucide-react'
+import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -27,21 +27,21 @@ import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
 import ExportDialog from './components/ExportDialog'
 import { buildReviewDiff, resolveReviewHunk } from './components/diff'
-import ImmersiveComposer from './components/ImmersiveComposer'
 import MetaPanel from './components/MetaPanel'
 import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
-import StudioToolbar from './components/StudioToolbar'
+import StudioCommandBar from './components/StudioCommandBar'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
+import WorkInspector, { type WorkInspectorTab } from './components/WorkInspector'
 import IdePerspective from './components/IdePerspective'
+import StudioChapterViewer from './components/StudioChapterViewer'
+import MemoryGraph from './components/MemoryGraph'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
 import { useStudioPanelWidths } from './panel-widths'
-import { SaveStatusPill } from './components/StudioControls'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
-import { chapterStatusLabelMap } from './types'
 
 
 
@@ -113,13 +113,19 @@ export default function StudioWorkspace() {
     if (typeof window === 'undefined') return 'work'
     return window.localStorage.getItem(`chevoink:perspective:${activeNovelId}`) === 'ide' ? 'ide' : 'work'
   })
+  const [workLeftOpen, setWorkLeftOpen] = useState(false)
+  const [workRightOpen, setWorkRightOpen] = useState(false)
+  const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
+  const [workViewer, setWorkViewer] = useState<'chapter' | 'memory' | null>(null)
+  const [ideTreeOpen, setIdeTreeOpen] = useState(true)
+  const [ideAgentOpen, setIdeAgentOpen] = useState(true)
+  const [ideAgentTab, setIdeAgentTab] = useState<'conversation' | 'memory'>('conversation')
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
-  // 创作区（含沉浸创作/弹层 portal）内滚动条静止时隐藏，滚动中才显示
+  // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
   const { panelWidths, beginPanelResize } = useStudioPanelWidths()
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
-  const [isImmersive, setIsImmersive] = useState(false)
   const platformCapabilities = useMemo(() => getPlatformCapabilities(), [])
   const [agentPrompt, setAgentPrompt] = useState('')
   // 惰性初始化：从快照同步恢复当前会话 id，避免跨路由返回时 AgentPanel 先以 null 挂载冲掉进行中的任务直播
@@ -233,7 +239,6 @@ export default function StudioWorkspace() {
       else if (activeChangeSetId) setActiveChangeSetId(null)
       else if (memoryReviewOpen) setMemoryReviewOpen(false)
       else if (mobileMoreOpen) setMobileMoreOpen(false)
-      else if (isImmersive) setIsImmersive(false)
       else if (activeToolPanel) setActiveToolPanel(null)
       else if (mobileView !== 'assistant') setMobileView('assistant')
       else navigate('/')
@@ -242,7 +247,7 @@ export default function StudioWorkspace() {
       // SSE 以 seq 去重续传；这里只失效查询缓存，不重新启动 run，避免 APP 切后台造成重复写入。
       void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId] })
     },
-  }), [activeChangeSetId, activeNovelId, activeToolPanel, isImmersive, memoryReviewOpen, mobileMoreOpen, mobileView, navigate, queryClient, workspaceDialog])
+  }), [activeChangeSetId, activeNovelId, activeToolPanel, memoryReviewOpen, mobileMoreOpen, mobileView, navigate, queryClient, workspaceDialog])
 
   useEffect(() => {
     if (!coverGenerationBusy) {
@@ -1012,6 +1017,7 @@ export default function StudioWorkspace() {
       void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
       void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
       void queryClient.invalidateQueries({ queryKey: ['novel-detail', activeNovelId] })
+      void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId, 'memory-graph'] })
 
       const changedChapterIds = agentChangedChapterIdsRef.current
       agentChangedChapterIdsRef.current = new Set()
@@ -1026,6 +1032,13 @@ export default function StudioWorkspace() {
 
   const handleAgentStreamEvent = useCallback(
     (event: AgentStreamEvent) => {
+      if (event.type === 'tool.result' && event.ok && event.toolName.startsWith('memory_')) {
+        void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId, 'memory-graph'] })
+      }
+      if (event.type === 'run.finished') {
+        void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId, 'memory-graph'] })
+      }
+
       // plan_save：把规划文档直接写进左侧「计划」文件夹并选中，无需用户手动存入
       if (event.type === 'tool.result' && event.ok && event.display?.kind === 'planFile') {
         const display = event.display
@@ -1209,7 +1222,7 @@ export default function StudioWorkspace() {
         void refreshWorkspaceAfterAgentWrite()
       }
     },
-    [captureAgentChapterReview, refreshWorkspaceAfterAgentWrite],
+    [activeNovelId, captureAgentChapterReview, queryClient, refreshWorkspaceAfterAgentWrite],
   )
 
   useEffect(
@@ -1668,8 +1681,6 @@ export default function StudioWorkspace() {
     onSuccess: async () => {
       const deletedNovelId = activeNovelId
       setWorkspaceDialog(null)
-      // 沉浸层是覆盖全屏的独立层，作品已经不存在了要先退出，否则会停留在空作品的写作界面
-      setIsImmersive(false)
       setNovelMessage('作品已删除。')
       if (typeof window !== 'undefined') {
         const lastNovelId = window.localStorage.getItem(STUDIO_LAST_NOVEL_STORAGE_KEY)
@@ -1842,7 +1853,6 @@ export default function StudioWorkspace() {
         description: '上架前需要为作品选择标签，读者才能在分类频道和搜索中找到这部作品。',
         confirmLabel: '展开作品设置',
         onConfirm: () => {
-          // 沉浸层内已支持直接展开作品设置面板，无需退出沉浸
           setActiveToolPanel('meta')
           setMobileView('meta')
         },
@@ -3446,14 +3456,6 @@ export default function StudioWorkspace() {
     }
   }
 
-  function handleEnterImmersive() {
-    setIsImmersive(true)
-  }
-
-  function handleOpenAssistant() {
-    setActiveToolPanel('assistant')
-  }
-
   function handleRequestDeleteChapterFromEditor() {
     if (!chapterDraft) {
       return
@@ -3508,7 +3510,6 @@ export default function StudioWorkspace() {
   const novelTitleState = resolveNovelTitleState(currentNovel)
   const novelTitle = novelTitleState.title
   const novelTitleMissing = novelTitleState.missing
-  const chapterStatusLabel = chapterDraft ? chapterStatusLabelMap[chapterDraft.status] : '待开始'
   const wordCountLabel = formatWordCount(currentNovel.wordCount)
   const chapterCountLabel = `第 ${chapters.length} 章`
   const latestWordCountLabel = formatWordCount(latestWordCount)
@@ -3532,6 +3533,23 @@ export default function StudioWorkspace() {
         `/studio/novel/${currentNovel.id}`,
       )}`
     : undefined
+
+  function handleSelectWorkChapter(chapterId: string) {
+    handleSelectChapter(chapterId)
+    setWorkViewer('chapter')
+  }
+
+  function handleAddViewerSelectionToAgent() {
+    const text = editorSelection.text.trim()
+    if (!text || !chapterDraft) return
+    const volumeTitle = volumes.find((volume) => volume.id === activeChapterListItem?.volumeId)?.title
+    const reference = `引用《${novelTitle}》${volumeTitle ? ` / ${volumeTitle}` : ''} / ${chapterDraft.title || `第 ${chapterDraft.orderIndex} 章`}：\n> ${text.replace(/\n/g, '\n> ')}\n\n`
+    const currentDraft = useAgentStore.getState().composerDraft
+    const nextPrompt = `${currentDraft.trim() ? `${currentDraft.trim()}\n\n` : ''}${reference}`
+    useAgentStore.getState().setComposerDraft(nextPrompt)
+    setAgentPrompt(nextPrompt)
+    toast.success('已把选中正文加入当前对话。')
+  }
 
   // Agent Loop 新链路：首次发送前懒创建会话，并同步任务窗口状态
   async function ensureAgentLoopSession(): Promise<string> {
@@ -3738,17 +3756,6 @@ export default function StudioWorkspace() {
                 </div>
               </>
             )}
-            {/* 保存状态不参与压缩；已保存时只显示短文案，具体时间点击后用 toast 告知 */}
-            <div className="shrink-0">
-              <SaveStatusPill
-                state={chapterSaveState}
-                message={saveDisplayMessage}
-                onRetry={handleRetrySave}
-                compact
-                shortMessage={chapterSaveState === 'saved' ? '已自动保存' : undefined}
-                onPress={() => toast.info(saveDisplayMessage)}
-              />
-            </div>
           </div>
 
           <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
@@ -3767,7 +3774,6 @@ export default function StudioWorkspace() {
                   selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
                   onSelectionChange={setEditorSelection}
                   onSave={() => void persistChapter('manual')}
-                  onEnterImmersive={handleEnterImmersive}
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
@@ -3945,7 +3951,6 @@ export default function StudioWorkspace() {
                     ? [{ key: 'memory', label: '记忆审核', icon: BrainCircuit, action: () => setMemoryReviewOpen(true) }]
                     : []),
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
-                  { key: 'immersive', label: '沉浸创作', icon: WandSparkles, action: () => handleEnterImmersive() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
                   { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },
                   ...(previewHref
@@ -4001,59 +4006,72 @@ export default function StudioWorkspace() {
         </div>
 
         <div className="hidden min-h-0 flex-1 flex-col lg:flex">
-          <StudioToolbar
+          <StudioCommandBar
+            perspective={workspacePerspective}
+            perspectiveSwitchEnabled={featureFlags.dualWorkspace}
+            onPerspectiveChange={setWorkspacePerspective}
             currentNovelId={currentNovel.id}
             novelTitle={novelTitle}
-            novelTitleMissing={novelTitleMissing}
             novelOptions={novelOptions}
             novelsLoading={myNovelsQuery.isLoading}
+            switchingNovel={createNovelMutation.isPending}
             chapterTitle={chapterTitle}
-            chapterStatusLabel={chapterStatusLabel}
-            wordCountLabel={latestWordCountLabel}
-            saveState={chapterSaveState}
-            saveMessage={saveDisplayMessage}
-            onRetrySave={chapterSaveState === 'error' ? handleRetrySave : undefined}
-            onOpenMeta={() => setActiveToolPanel('meta')}
-            onOpenAssistant={handleOpenAssistant}
-            onOpenCover={() => setActiveToolPanel('cover')}
-            onEnterImmersive={handleEnterImmersive}
-            onSaveNovel={handleSaveNovel}
-            onPublishNovel={handlePublishNovel}
-            onDeleteNovel={handleRequestDeleteNovel}
-            onExport={() => setExportDialogOpen(true)}
             onSelectNovel={handleSelectWorkspaceNovel}
             onCreateNovel={handleCreateWorkspaceNovel}
-            onEditNovelTitle={() => setActiveToolPanel('meta')}
-            detailPreviewHref={detailPreviewHref}
+            onPublish={handlePublishNovel}
+            onOpenCover={() => setActiveToolPanel('cover')}
+            onOpenMeta={() => setActiveToolPanel('meta')}
+            onExport={() => setExportDialogOpen(true)}
+            onDeleteNovel={handleRequestDeleteNovel}
             previewHref={previewHref}
-            immersiveDisabled={false}
-            switchingNovel={createNovelMutation.isPending}
-            novelSaving={saveNovelMutation.isPending || deleteNovelMutation.isPending}
-            novelDirty={novelDirty}
-            novelPublished={novelForm?.status === 'published'}
-            perspective={workspacePerspective}
-            onPerspectiveChange={setWorkspacePerspective}
-            perspectiveSwitchEnabled={featureFlags.dualWorkspace}
+            detailPreviewHref={detailPreviewHref}
+            published={novelForm?.status === 'published'}
           />
 
-          <div className="mt-4 min-h-0 flex-1 overflow-hidden pb-2">
+          <div className="min-h-0 flex-1 overflow-hidden">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
                 taskRail={<div className="h-full [&>aside]:w-full [&>aside]:border-l-0">{renderAgentTaskSidebar(true)}</div>}
-                conversation={<div className="h-full min-h-0 px-5 py-4">{renderWritingAgent(undefined, false)}</div>}
-                novelTitle={novelTitle}
-                chapterTitle={chapterTitle}
-                chapterCount={chapters.length}
-                wordCount={latestWordCountLabel}
-                pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
-                activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
-                onOpenIde={() => setWorkspacePerspective('ide')}
-                onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+                conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false)}</div>}
+                inspector={<WorkInspector
+                  tab={workInspectorTab}
+                  onTabChange={setWorkInspectorTab}
+                  workTree={<ChapterSidebar
+                    embedded chapters={chapters} volumes={volumes} savedPlans={savedPlanFiles}
+                    selectedChapterId={selectedChapterId} selectedTreeItemId={selectedTreeItemId}
+                    catalogPreview={catalogPreview} novelWordCountLabel={wordCountLabel}
+                    chapterCountLabel={chapterCountLabel} novelTitle={novelTitle} activeCoverLabel={coverLabel}
+                    onSelectChapter={handleSelectWorkChapter} onSelectPlan={handleSelectPlanFromTree}
+                    onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
+                    onOpenPlanSettings={setPlanSettingsPlanId} onSelectCatalog={handleSelectCatalogFromTree}
+                    onCreateChapter={handleRequestCreateChapter} onCreatePlan={handleRequestCreatePlan}
+                  />}
+                  novelTitle={novelTitle} chapterTitle={chapterTitle} chapterCount={chapters.length}
+                  wordCount={latestWordCountLabel}
+                  pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
+                  activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
+                  onOpenMemory={() => setWorkViewer('memory')}
+                  onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+                />}
+                viewer={workViewer === 'chapter' ? <StudioChapterViewer
+                  draft={chapterDraft} loading={chapterQuery.isLoading} selection={editorSelection}
+                  onChange={handleChapterDraftChange} onSelectionChange={setEditorSelection}
+                  onAddSelection={handleAddViewerSelectionToAgent} onClose={() => setWorkViewer(null)}
+                  onBlur={handleEditorBlurFlush}
+                /> : workViewer === 'memory' && featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : undefined}
+                leftOpen={workLeftOpen}
+                rightOpen={workRightOpen}
+                taskWidth={panelWidths.workTask}
+                inspectorWidth={panelWidths.workInspector}
+                viewerWidth={panelWidths.workViewer}
+                onToggleLeft={() => setWorkLeftOpen((value) => !value)}
+                onToggleRight={() => setWorkRightOpen((value) => !value)}
+                onBeginResize={beginPanelResize}
               />
             ) : (
-            <IdePerspective treeWidth={panelWidths.tree}>
+            <IdePerspective treeWidth={panelWidths.tree} treeOpen={ideTreeOpen}>
               <div className="relative min-h-0 border-r border-[var(--border-subtle)]">
-                <ChapterSidebar
+                {ideTreeOpen ? <><ChapterSidebar
                   embedded
                   chapters={chapters}
                   volumes={volumes}
@@ -4073,12 +4091,14 @@ export default function StudioWorkspace() {
                   onCreateChapter={handleRequestCreateChapter}
                   onCreatePlan={handleRequestCreatePlan}
                 />
+                <button type="button" onClick={() => setIdeTreeOpen(false)} className="absolute right-2 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起作品树"><PanelLeftClose className="h-4 w-4" /></button>
                 <PanelResizeHandle
                   panel="tree"
                   side="right"
                   label="拖拽调整章节树宽度"
                   onBegin={beginPanelResize}
                 />
+                </> : <button type="button" onClick={() => setIdeTreeOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开作品树"><PanelLeftOpen className="h-4 w-4" /></button>}
               </div>
 
               <div className="min-h-0 border-r border-[var(--border-subtle)] bg-[var(--surface-default)]">
@@ -4094,7 +4114,6 @@ export default function StudioWorkspace() {
                   selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
                   onSelectionChange={setEditorSelection}
                   onSave={() => void persistChapter('manual')}
-                  onEnterImmersive={handleEnterImmersive}
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
@@ -4147,19 +4166,23 @@ export default function StudioWorkspace() {
               </div>
 
               <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--app-bg)]">
-                <PanelResizeHandle
+                {ideAgentOpen ? <><PanelResizeHandle
                   panel="agent"
                   side="left"
                   label="拖拽调整 Agent 对话区宽度"
                   onBegin={beginPanelResize}
                 />
                 <div
-                  className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden px-4 py-4"
+                  className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden"
                   style={{ width: panelWidths.agent }}
                 >
-                  {renderWritingAgent(undefined, false)}
+                  <div className="flex h-10 shrink-0 items-end border-b border-[var(--border-subtle)] px-2">
+                    {([{ key: 'conversation' as const, label: '对话', icon: MessageSquareText }, { key: 'memory' as const, label: '记忆', icon: BrainCircuit }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setIdeAgentTab(key)} className={cn('flex h-9 items-center gap-1.5 border-b-2 px-3 text-xs', ideAgentTab === key ? 'border-[var(--text-primary)] text-[var(--text-primary)]' : 'border-transparent text-[var(--text-tertiary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
+                    <button type="button" onClick={() => setIdeAgentOpen(false)} className="ml-auto mb-1 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起 Agent 区"><PanelRightClose className="h-4 w-4" /></button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-hidden px-3 py-2">{ideAgentTab === 'conversation' ? renderWritingAgent(undefined, false) : <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} />}</div>
                 </div>
-                {renderAgentTaskSidebar()}
+                </> : <button type="button" onClick={() => setIdeAgentOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开 Agent 区"><PanelRightOpen className="h-4 w-4" /></button>}
               </div>
             </IdePerspective>
             )}
@@ -4175,116 +4198,6 @@ export default function StudioWorkspace() {
         </div>
       </div>
 
-      {isImmersive ? (
-        <ImmersiveComposer
-          currentNovelId={currentNovel.id}
-          novelTitle={novelTitle}
-          novelTitleMissing={novelTitleMissing}
-          novelOptions={novelOptions}
-          novelsLoading={myNovelsQuery.isLoading}
-          chapterDraft={chapterDraft}
-          chapters={chapters}
-          volumes={volumes}
-          savedPlans={savedPlanFiles}
-          selectedChapterId={selectedChapterId}
-          selectedTreeItemId={selectedTreeItemId}
-          catalogPreview={catalogPreview}
-          workspaceDocument={activeWorkspaceDocument}
-          saveState={chapterSaveState}
-          saveMessage={saveDisplayMessage}
-          wordCountLabel={latestWordCountLabel}
-          onClose={() => setIsImmersive(false)}
-          onSave={() => void persistChapter('manual')}
-          onRetrySave={chapterSaveState === 'error' ? handleRetrySave : undefined}
-          onSelectNovel={handleSelectWorkspaceNovel}
-          onCreateNovel={handleCreateWorkspaceNovel}
-          onEditNovelTitle={() => setActiveToolPanel('meta')}
-          detailPreviewHref={detailPreviewHref}
-          previewHref={previewHref}
-          onExport={() => setExportDialogOpen(true)}
-          onSelectChapter={handleSelectChapter}
-          onSelectPlan={handleSelectPlanFromTree}
-          onDeletePlan={handleRequestDeletePlan}
-          onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
-          onRenamePlan={handleRenamePlan}
-          onSelectCatalog={handleSelectCatalogFromTree}
-          onCreateChapter={handleRequestCreateChapter}
-          onCreatePlan={handleRequestCreatePlan}
-          onDeleteChapter={() => void handleDeleteChapter()}
-          onChange={handleChapterDraftChange}
-          onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
-          onSelectionChange={setEditorSelection}
-          pendingChapterReview={activeChapterPendingReview}
-          pendingChapterReviewBusy={pendingChapterReviewBusy}
-          onKeepPendingReview={() => {
-            if (activeChapterPendingReview) {
-              handleKeepPendingChapterReview(activeChapterPendingReview)
-            }
-          }}
-          onRevertPendingReview={() => {
-            if (activeChapterPendingReview) {
-              handleRequestRejectPendingChapterReview(activeChapterPendingReview)
-            }
-          }}
-          onAcceptReviewHunk={(hunkIndex) => {
-            if (activeChapterPendingReview) {
-              handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
-            }
-          }}
-          onRejectReviewHunk={(hunkIndex) => {
-            if (activeChapterPendingReview) {
-              handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
-            }
-          }}
-          reviewFileIndex={activeReviewFileIndex}
-          reviewFileCount={reviewFileCount}
-          onNavigateReviewFile={handleNavigateReviewFile}
-          pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
-          onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
-          pendingPlanReview={activePlanPendingReview}
-          pendingPlanReviewBusy={pendingPlanReviewBusy}
-          onKeepPendingPlanReview={handleKeepPendingPlanReview}
-          onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
-          onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
-          onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
-          onOpenCover={() => setActiveToolPanel((current) => (current === 'cover' ? null : 'cover'))}
-          onOpenMeta={() => {
-            // 与封面按钮一致：在沉浸层内直接展开/收起作品设置面板，不退出沉浸
-            setActiveToolPanel((current) => (current === 'meta' ? null : 'meta'))
-          }}
-          onPublishNovel={handlePublishNovel}
-          onDeleteNovel={handleRequestDeleteNovel}
-          novelPublished={novelForm?.status === 'published'}
-          novelSaving={saveNovelMutation.isPending || deleteNovelMutation.isPending}
-          agentPanel={renderWritingAgent(undefined, false)}
-          taskSidebar={renderAgentTaskSidebar()}
-          coverPanel={renderCoverToolPanel(() => setActiveToolPanel(null))}
-          showCoverPanel={activeToolPanel === 'cover'}
-          metaPanel={
-            novelForm ? (
-              <Surface as="section" padding="md" className="flex h-full min-h-0 flex-col overflow-hidden md:w-[24rem] xl:w-[26rem]">
-                <MetaPanel
-                  novelForm={novelForm}
-                  wordCountLabel={wordCountLabel}
-                  chapterCountLabel={chapterCountLabel}
-                  coverLabel={coverLabel}
-                  message={novelSaveDisplayMessage}
-                  saving={saveNovelMutation.isPending}
-                  onChange={setNovelForm}
-                  onRequestVisibilityAction={handleRequestNovelVisibilityAction}
-                  onRequestStatusAction={handleRequestNovelStatusAction}
-                  detailPreviewHref={detailPreviewHref}
-                  onOpenCover={() => setActiveToolPanel('cover')}
-                  onSave={handleSaveNovel}
-                  onClose={() => setActiveToolPanel(null)}
-                />
-              </Surface>
-            ) : null
-          }
-          showMetaPanel={activeToolPanel === 'meta'}
-          switchingNovel={createNovelMutation.isPending}
-        />
-      ) : null}
       {editorChapterSettingsOpen && chapterDraft ? (
         <ChapterSettingsPanel
           chapterDraft={chapterDraft}

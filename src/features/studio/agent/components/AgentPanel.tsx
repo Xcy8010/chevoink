@@ -56,6 +56,7 @@ import { AgentMessageParts } from './AgentMessageParts'
 import { AgentPermissionCard } from './AgentPermissionCard'
 import { AgentQuestionCard } from './AgentQuestionCard'
 import { ProcessingHint } from './ProcessingHint'
+import ChevoinkAgentMark from './ChevoinkAgentMark'
 
 /**
  * Agent Loop 主面板（plan/13 §5）：
@@ -662,6 +663,7 @@ export function AgentPanel({
     <div className={cn('flex h-full min-h-0 flex-col', className)}>
       {/* 状态栏 */}
       <div className="relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5">
+        <ChevoinkAgentMark className="h-5 w-5 text-[var(--text-primary)]" />
         <span className="min-w-0 truncate text-sm font-medium text-[var(--text-primary)]">Chevoink Agent</span>
         {phase !== 'idle' ? (
           <span

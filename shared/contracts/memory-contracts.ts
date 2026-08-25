@@ -41,3 +41,36 @@ export const memorySearchHitSchema = z.object({
 })
 
 export type MemorySearchHit = z.infer<typeof memorySearchHitSchema>
+
+export const memoryGraphNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().nullable(),
+  status: storyMemoryStatusSchema,
+  aliases: z.array(z.string()),
+  updatedAt: z.string().datetime(),
+})
+
+export const memoryGraphEdgeSchema = z.object({
+  id: z.string().min(1),
+  source: z.string().min(1),
+  target: z.string().min(1),
+  type: z.string().min(1),
+  state: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  sourceId: z.string().min(1),
+})
+
+/** 创作区关系图是现有实体记忆的只读投影，不形成第二份事实来源。 */
+export const memoryGraphSchema = z.object({
+  novelId: z.string().min(1),
+  version: z.string().min(1),
+  updatedAt: z.string().datetime(),
+  nodes: z.array(memoryGraphNodeSchema),
+  edges: z.array(memoryGraphEdgeSchema),
+})
+
+export type MemoryGraphNode = z.infer<typeof memoryGraphNodeSchema>
+export type MemoryGraphEdge = z.infer<typeof memoryGraphEdgeSchema>
+export type MemoryGraph = z.infer<typeof memoryGraphSchema>

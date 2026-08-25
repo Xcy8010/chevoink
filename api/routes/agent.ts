@@ -39,7 +39,7 @@ import { parseBody } from '../lib/parse-body.js'
 import { prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
-import { listMemoryReviewInbox, resolveMemoryReview } from '../lib/agent/story-memory.js'
+import { getMemoryGraph, listMemoryReviewInbox, resolveMemoryReview } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 
 const router = Router()
@@ -186,6 +186,18 @@ router.get('/novels/:novelId/memory-review', async (req: Request, res: Response)
     requireAgent2Feature('memory2', userId)
     const items = await listMemoryReviewInbox(userId, req.params.novelId)
     res.status(200).json(buildSuccess(requestId, { items }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/memory-graph', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('memory2', userId)
+    const graph = await getMemoryGraph(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { graph }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
