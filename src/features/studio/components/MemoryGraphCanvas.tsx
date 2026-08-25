@@ -13,6 +13,7 @@ import { X } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 
 import type { MemoryGraph, MemoryGraphNode } from '../../../../shared/contracts/index.js'
+import { buildReadableMemoryGraphEdges } from '../lib/memory-graph-layout'
 
 const NODE_COLORS: Record<string, string> = {
   character: '#60a5fa',
@@ -48,19 +49,28 @@ export default function MemoryGraphCanvas({ graph }: { graph: MemoryGraph }) {
     style: { '--memory-node-color': nodeColor(memory.type) } as CSSProperties,
     draggable: false,
   })), [visibleNodes])
-  const edges = useMemo<Edge[]>(() => graph.edges
-    .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
-    .slice(0, 240)
-    .map((edge) => ({
+  const readableEdges = useMemo(
+    () => buildReadableMemoryGraphEdges(graph.edges, visibleIds, visibleNodes.length),
+    [graph.edges, visibleIds, visibleNodes.length],
+  )
+  const edges = useMemo<Edge[]>(() => readableEdges.map((edge) => {
+    const coOccurrence = edge.type === '同章出现'
+    return {
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      label: edge.type,
-      type: 'smoothstep',
-      markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-      style: { strokeWidth: Math.max(1, Math.min(2.4, 1 + edge.confidence)) },
-      labelStyle: { fontSize: 10 },
-    })), [graph.edges, visibleIds])
+      label: coOccurrence ? undefined : edge.type,
+      type: coOccurrence ? 'default' : 'smoothstep',
+      markerEnd: coOccurrence ? undefined : { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+      style: {
+        strokeWidth: coOccurrence ? Math.min(1.8, 0.75 + edge.occurrences * 0.16) : Math.max(1, Math.min(2.4, 1 + edge.confidence)),
+        opacity: coOccurrence ? 0.34 : 0.78,
+      },
+      labelStyle: { fontSize: 10, fontWeight: 500 },
+      labelBgPadding: [5, 3] as [number, number],
+      labelBgBorderRadius: 6,
+    }
+  }), [readableEdges])
   const selected = visibleNodes.find((node) => node.id === selectedId) ?? null
 
   return <div className="memory-flow relative h-full min-h-[300px] w-full overflow-hidden">

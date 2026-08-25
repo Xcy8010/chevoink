@@ -13,6 +13,8 @@ type WorkspaceNovelSwitcherProps = {
   loading?: boolean
   /** 手机端工具条用：按钮占满容器宽度，作品名押左、箭头押右 */
   fullWidth?: boolean
+  /** 桌面命令栏仅压缩顶部触发器，不影响下拉列表项的正常行高。 */
+  compactTrigger?: boolean
   onSelectNovel: (novelId: string) => void
   onCreateNovel: () => void
 }
@@ -28,6 +30,7 @@ export default function WorkspaceNovelSwitcher({
   busy = false,
   loading = false,
   fullWidth = false,
+  compactTrigger = false,
   onSelectNovel,
   onCreateNovel,
 }: WorkspaceNovelSwitcherProps) {
@@ -57,6 +60,7 @@ export default function WorkspaceNovelSwitcher({
         className={cn(
           'inline-flex h-10 min-w-0 max-w-full items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-strong)]',
           fullWidth && 'w-full',
+          compactTrigger && 'h-8 rounded-none',
         )}
       >
         <BookOpen className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
