@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload } from 'lucide-react'
+import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -35,6 +35,7 @@ import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
 import WorkInspector, { type WorkInspectorTab } from './components/WorkInspector'
 import IdePerspective from './components/IdePerspective'
+import IdeNavigationRail from './components/IdeNavigationRail'
 import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
 import { AgentPanel } from './agent/components/AgentPanel'
@@ -118,8 +119,8 @@ export default function StudioWorkspace() {
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
   const [workViewer, setWorkViewer] = useState<'chapter' | 'memory' | null>(null)
   const [ideTreeOpen, setIdeTreeOpen] = useState(true)
+  const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
-  const [ideAgentTab, setIdeAgentTab] = useState<'conversation' | 'memory'>('conversation')
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
@@ -4052,6 +4053,7 @@ export default function StudioWorkspace() {
                   activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
                   onOpenMemory={() => setWorkViewer('memory')}
                   onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+                  compactNavigation={panelWidths.workInspector < 300}
                 />}
                 viewer={workViewer === 'chapter' ? <StudioChapterViewer
                   draft={chapterDraft} loading={chapterQuery.isLoading} selection={editorSelection}
@@ -4066,39 +4068,67 @@ export default function StudioWorkspace() {
                 viewerWidth={panelWidths.workViewer}
                 onToggleLeft={() => setWorkLeftOpen((value) => !value)}
                 onToggleRight={() => setWorkRightOpen((value) => !value)}
+                inspectorTab={workInspectorTab}
+                onSelectInspectorTab={(tab) => {
+                  setWorkInspectorTab(tab)
+                  if (tab === 'memory') setWorkViewer('memory')
+                }}
                 onBeginResize={beginPanelResize}
               />
             ) : (
             <IdePerspective treeWidth={panelWidths.tree} treeOpen={ideTreeOpen}>
               <div className="relative min-h-0 border-r border-[var(--border-subtle)]">
-                {ideTreeOpen ? <><ChapterSidebar
-                  embedded
-                  chapters={chapters}
-                  volumes={volumes}
-                  savedPlans={savedPlanFiles}
-                  selectedChapterId={selectedChapterId}
-                  selectedTreeItemId={selectedTreeItemId}
-                  catalogPreview={catalogPreview}
-                  novelWordCountLabel={wordCountLabel}
-                  chapterCountLabel={chapterCountLabel}
-                  novelTitle={novelTitle}
-                  activeCoverLabel={coverLabel}
-                  onSelectChapter={handleSelectChapter}
-                  onSelectPlan={handleSelectPlanFromTree}
-                  onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
-                  onOpenPlanSettings={setPlanSettingsPlanId}
-                  onSelectCatalog={handleSelectCatalogFromTree}
-                  onCreateChapter={handleRequestCreateChapter}
-                  onCreatePlan={handleRequestCreatePlan}
+                <IdeNavigationRail
+                  tab={ideSidebarTab}
+                  open={ideTreeOpen}
+                  onToggle={() => setIdeTreeOpen((value) => !value)}
+                  onSelect={(tab) => {
+                    setIdeSidebarTab(tab)
+                    setIdeTreeOpen(true)
+                  }}
+                  panel={ideSidebarTab === 'work' ? <ChapterSidebar
+                    embedded
+                    chapters={chapters}
+                    volumes={volumes}
+                    savedPlans={savedPlanFiles}
+                    selectedChapterId={selectedChapterId}
+                    selectedTreeItemId={selectedTreeItemId}
+                    catalogPreview={catalogPreview}
+                    novelWordCountLabel={wordCountLabel}
+                    chapterCountLabel={chapterCountLabel}
+                    novelTitle={novelTitle}
+                    activeCoverLabel={coverLabel}
+                    onSelectChapter={handleSelectChapter}
+                    onSelectPlan={handleSelectPlanFromTree}
+                    onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
+                    onOpenPlanSettings={setPlanSettingsPlanId}
+                    onSelectCatalog={handleSelectCatalogFromTree}
+                    onCreateChapter={handleRequestCreateChapter}
+                    onCreatePlan={handleRequestCreatePlan}
+                  /> : ideSidebarTab === 'memory' && featureFlags.memory2 ? <MemoryGraph
+                    novelId={currentNovel.id}
+                    active={agentRunState.active}
+                  /> : <WorkInspector
+                    tab={ideSidebarTab}
+                    onTabChange={setIdeSidebarTab}
+                    showNavigation={false}
+                    workTree={null}
+                    novelTitle={novelTitle}
+                    chapterTitle={chapterTitle}
+                    chapterCount={chapters.length}
+                    wordCount={latestWordCountLabel}
+                    pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
+                    activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
+                    onOpenMemory={() => setIdeSidebarTab('memory')}
+                    onOpenMemoryReview={featureFlags.memory2 ? () => setMemoryReviewOpen(true) : undefined}
+                  />}
                 />
-                <button type="button" onClick={() => setIdeTreeOpen(false)} className="absolute right-2 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起作品树"><PanelLeftClose className="h-4 w-4" /></button>
-                <PanelResizeHandle
+                {ideTreeOpen ? <PanelResizeHandle
                   panel="tree"
                   side="right"
-                  label="拖拽调整章节树宽度"
+                  label="拖拽调整 IDE 左侧面板宽度"
                   onBegin={beginPanelResize}
-                />
-                </> : <button type="button" onClick={() => setIdeTreeOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开作品树"><PanelLeftOpen className="h-4 w-4" /></button>}
+                /> : null}
               </div>
 
               <div className="min-h-0 border-r border-[var(--border-subtle)] bg-[var(--surface-default)]">
@@ -4173,14 +4203,10 @@ export default function StudioWorkspace() {
                   onBegin={beginPanelResize}
                 />
                 <div
-                  className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden"
+                  className="h-full min-h-0 shrink-0 overflow-hidden"
                   style={{ width: panelWidths.agent }}
                 >
-                  <div className="flex h-10 shrink-0 items-end border-b border-[var(--border-subtle)] px-2">
-                    {([{ key: 'conversation' as const, label: '对话', icon: MessageSquareText }, { key: 'memory' as const, label: '记忆', icon: BrainCircuit }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setIdeAgentTab(key)} className={cn('flex h-9 items-center gap-1.5 border-b-2 px-3 text-xs', ideAgentTab === key ? 'border-[var(--text-primary)] text-[var(--text-primary)]' : 'border-transparent text-[var(--text-tertiary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
-                    <button type="button" onClick={() => setIdeAgentOpen(false)} className="ml-auto mb-1 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起 Agent 区"><PanelRightClose className="h-4 w-4" /></button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-hidden px-3 py-2">{ideAgentTab === 'conversation' ? renderWritingAgent(undefined, false) : <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} />}</div>
+                  {renderWritingAgent(() => setIdeAgentOpen(false))}
                 </div>
                 </> : <button type="button" onClick={() => setIdeAgentOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开 Agent 区"><PanelRightOpen className="h-4 w-4" /></button>}
               </div>

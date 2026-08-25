@@ -79,7 +79,7 @@ export default function AgentTaskSidebar({
 
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-4">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] py-4 pl-4 pr-12">
         <div>
           <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">任务</p>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">{taskWindows.length} 个对话窗口</p>

@@ -129,7 +129,7 @@ function TodoSection({
   const completed = todos.filter((item) => item.status === 'completed').length
 
   return (
-    <div className="overflow-hidden border-y border-[var(--border-subtle)] bg-transparent">
+    <div className="overflow-hidden border-b border-[var(--border-subtle)] bg-transparent last:border-b-0">
       <SectionHeader
         open={open}
         onToggle={() => {
@@ -199,7 +199,7 @@ function ChangesSection({
   }
 
   return (
-    <div className="overflow-hidden border-b border-[var(--border-subtle)] bg-transparent">
+    <div className="overflow-hidden border-b border-[var(--border-subtle)] bg-transparent last:border-b-0">
       <SectionHeader
         open={open}
         onToggle={() => {
@@ -318,7 +318,7 @@ export function AgentActivityBar({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
       <TodoSection todos={todos} todosVersion={todosVersion} runActive={runActive} />
       <ChangesSection
         activities={activities}
