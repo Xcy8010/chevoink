@@ -63,4 +63,27 @@ describe('Work workspace navigation and context', () => {
     expect(markup).not.toContain('作品结构 · 2 卷 2 章')
     expect(markup).not.toContain('科幻悬疑')
   })
+
+  it('hides zero-value change deltas while retaining actual additions and deletions', () => {
+    const markup = renderToStaticMarkup(createElement(WorkInspector, {
+      tab: 'changes',
+      onTabChange: () => undefined,
+      workTree: null,
+      novelTitle: '锈海之门',
+      chapterTitle: '后门',
+      chapterCount: 2,
+      wordCount: '1985 字',
+      pendingReviewCount: 0,
+      contextPanel: null,
+      activities: [
+        { callId: 'memory-1', toolName: 'memory_save', label: '更新作品记忆', chapterId: null, deltaChars: 0, status: 'done' },
+        { callId: 'chapter-1', toolName: 'chapter_write', label: '后门', chapterId: 'chapter-1', deltaChars: 1699, status: 'done' },
+        { callId: 'chapter-2', toolName: 'chapter_edit_range', label: '后门', chapterId: 'chapter-1', deltaChars: -32, status: 'done' },
+      ],
+    }))
+
+    expect(markup).not.toMatch(/>\+0<|>-0</)
+    expect(markup).toContain('+1699')
+    expect(markup).toContain('-32')
+  })
 })
