@@ -4,8 +4,15 @@ import { describe, expect, it } from 'vitest'
 
 import { AgentTaskRail } from '../../src/features/studio/components/AgentTaskSidebar'
 import WorkInspector from '../../src/features/studio/components/WorkInspector'
+import { formatContextTokenCount } from '../../src/features/studio/agent/lib/context-format'
 
 describe('Work workspace navigation and context', () => {
+  it('formats context usage in k units without locale-specific 万 labels', () => {
+    expect(formatContextTokenCount(11_000)).toBe('11k')
+    expect(formatContextTokenCount(128_000)).toBe('128k')
+    expect(formatContextTokenCount(11_500)).toBe('11.5k')
+  })
+
   it('renders one rail marker per task and marks the active task', () => {
     const markup = renderToStaticMarkup(createElement(AgentTaskRail, {
       taskWindows: [

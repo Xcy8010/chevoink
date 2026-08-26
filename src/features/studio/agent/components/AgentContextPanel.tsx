@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArchiveRestore, CheckCircle2, LoaderCircle, MessageSquareText, RefreshCw, ShieldCheck } from 'lucide-react'
 
 import { compactAgentContext, fetchAgentContextState } from '../agentApi'
+import { formatContextTokenCount } from '../lib/context-format'
 import type { ContextState } from '../../../../../shared/contracts/index.js'
 
 type Props = {
   sessionId: string | null
   active?: boolean
-}
-
-function formatTokens(value: number): string {
-  return new Intl.NumberFormat('zh-CN', { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
 }
 
 function SummaryList({ title, items }: { title: string; items: string[] }) {
@@ -101,7 +98,7 @@ export default function AgentContextPanel({ sessionId, active = false }: Props) 
 
     {loading && !state ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />读取上下文状态…</div> : state ? <>
       <section className="mt-5 rounded-[14px] bg-[var(--surface-muted)] p-3.5">
-        <div className="flex items-end justify-between gap-3"><div><p className="text-[11px] text-[var(--text-secondary)]">上下文占用</p><p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">{percent}%</p></div><p className="pb-1 text-right text-[10px] tabular-nums text-[var(--text-tertiary)]">{formatTokens(state.estimatedTokens)} / {formatTokens(state.contextWindowTokens)} tokens</p></div>
+        <div className="flex items-end justify-between gap-3"><div><p className="text-[11px] text-[var(--text-secondary)]">上下文占用</p><p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">{percent}%</p></div><p className="pb-1 text-right text-[10px] tabular-nums text-[var(--text-tertiary)]">{formatContextTokenCount(state.estimatedTokens)} / {formatContextTokenCount(state.contextWindowTokens)}</p></div>
         <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-[var(--surface-default)]">
           <div className={`h-full rounded-full transition-[width] duration-500 ${state.usageRatio >= state.compactionThreshold ? 'bg-rose-500' : state.usageRatio >= state.warningThreshold ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${cappedPercent}%` }} />
           <span className="absolute inset-y-0 w-px bg-[var(--text-tertiary)]/70" style={{ left: `${Math.min(100, state.compactionThreshold * 100)}%` }} />
@@ -120,7 +117,7 @@ export default function AgentContextPanel({ sessionId, active = false }: Props) 
       {message ? <p className="mt-3 rounded-[9px] bg-[var(--surface-muted)] px-3 py-2 text-[10px] leading-5 text-[var(--text-secondary)]">{message}</p> : null}
 
       {checkpoint ? <section className="mt-5 space-y-4 border-t border-[var(--border-subtle)] pt-4">
-        <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-600" /><div><p className="text-xs font-medium text-[var(--text-primary)]">已验证检查点 v{checkpoint.version}</p><p className="mt-0.5 text-[9px] text-[var(--text-tertiary)]">{checkpoint.sourceMessageCount} 条历史消息 · {formatTokens(checkpoint.sourceTokens)} → {formatTokens(checkpoint.summaryTokens)} tokens</p></div></div>
+        <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-600" /><div><p className="text-xs font-medium text-[var(--text-primary)]">已验证检查点 v{checkpoint.version}</p><p className="mt-0.5 text-[9px] text-[var(--text-tertiary)]">{checkpoint.sourceMessageCount} 条历史消息 · {formatContextTokenCount(checkpoint.sourceTokens)} → {formatContextTokenCount(checkpoint.summaryTokens)}</p></div></div>
         <SummaryList title="目标" items={checkpoint.summary.goals} />
         <SummaryList title="约束" items={checkpoint.summary.constraints} />
         <SummaryList title="关键决策" items={checkpoint.summary.decisions} />
