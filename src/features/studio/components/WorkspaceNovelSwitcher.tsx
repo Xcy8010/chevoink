@@ -53,7 +53,14 @@ export default function WorkspaceNovelSwitcher({
   }, [open])
 
   return (
-    <div ref={rootRef} className={cn('relative min-w-0', fullWidth && 'w-full')}>
+    <div
+      ref={rootRef}
+      className={cn(
+        'relative min-w-0',
+        fullWidth && 'w-full',
+        compactTrigger && !fullWidth && 'inline-flex w-auto shrink-0',
+      )}
+    >
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}

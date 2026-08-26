@@ -86,7 +86,12 @@ function SectionHeader({
   stackExtra?: boolean
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+    <div
+      className={cn(
+        'px-3 py-2',
+        stackExtra ? 'flex flex-col items-stretch gap-2' : 'flex items-center gap-2',
+      )}
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -105,7 +110,11 @@ function SectionHeader({
           {summary}
         </span>
       </button>
-      {extra ? <div className={cn(stackExtra && 'flex basis-full justify-end')}>{extra}</div> : null}
+      {extra ? (
+        <div className={cn(stackExtra && 'flex w-full shrink-0 justify-start pl-7')}>
+          {extra}
+        </div>
+      ) : null}
     </div>
   )
 }

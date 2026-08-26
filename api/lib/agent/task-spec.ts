@@ -52,6 +52,8 @@ export function buildTaskSpec(input: {
   creativeFreedom?: CreativeFreedom
 }): TaskSpec {
   const intent = classifyIntent(input.prompt)
+  const requiresStructureValidation = intent === 'structure' || /(?:续写|写完|补完|完成|写到).{0,12}第?[一二两三四五六七八九十百千0-9]+卷|第?[一二两三四五六七八九十百千0-9]+卷.{0,12}(?:续写|写完|补完|完成)/.test(input.prompt)
+  const protectsEarlierContent = /(不|不要|不得|不能|禁止).{0,8}(改动|修改|重写|影响).{0,8}(前面|此前|已有|之前)|保持.{0,8}(前面|此前|已有|之前).{0,8}不变/.test(input.prompt)
   const directives = extractDirectiveCandidates(input.prompt)
   const chapterIds = input.chapterId ? [input.chapterId] : undefined
   const selection = input.chapterId && input.selection?.start !== undefined && input.selection.end !== undefined
@@ -82,8 +84,11 @@ export function buildTaskSpec(input: {
       ...(intent === 'global_transform'
         ? [{ code: 'CHANGESET_VERIFIED', description: '全书变更通过预览、版本校验与原子应用', severity: 'error' as const }]
         : []),
-      ...(intent === 'structure'
+      ...(requiresStructureValidation
         ? [{ code: 'STRUCTURE_VALIDATED', description: '卷章顺序与标题结构通过校验', severity: 'error' as const }]
+        : []),
+      ...(protectsEarlierContent
+        ? [{ code: 'EARLIER_CONTENT_UNCHANGED', description: '任务开始前已有章节正文保持不变，仅新增目标范围内容', severity: 'error' as const }]
         : []),
     ],
     ambiguity: input.prompt.trim().length <= 2 ? 'must_ask' : 'safe_to_assume',

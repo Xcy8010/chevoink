@@ -48,10 +48,12 @@ export default function StudioCommandBar(props: Props) {
         {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('relative inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-200', props.perspective === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
       </div> : null}
       {props.perspectiveSwitchEnabled ? <div className="h-5 w-px bg-[var(--border-subtle)]" /> : null}
-      <div className="max-w-[260px] min-w-[170px]">
+      {/* 触发器按内容收缩；旧的 min-width:170px 会在短书名右侧留下约 40-50px 隐形空白，
+          视觉上把分隔线和「追踪」推远。 */}
+      <div className="w-fit min-w-0 max-w-[260px] shrink-0">
         <WorkspaceNovelSwitcher compactTrigger currentNovelId={props.currentNovelId} currentNovelTitle={props.novelTitle} novels={props.novelOptions} busy={props.switchingNovel} loading={props.novelsLoading} onSelectNovel={props.onSelectNovel} onCreateNovel={props.onCreateNovel} />
       </div>
-      <div className="h-5 w-px bg-[var(--border-subtle)]" />
+      <div className="h-5 w-px shrink-0 bg-[var(--border-subtle)]" />
       <button
         type="button"
         onClick={() => setAutoFollow(!autoFollow)}

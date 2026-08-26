@@ -25,6 +25,7 @@ import type {
   AgentMessagePart,
   AgentToolDisplayPayload,
 } from '../../../../../shared/contracts/index.js'
+import { stripAgentProtocolArtifacts } from '../../../../../shared/agent-output.js'
 
 /**
  * 消息 Parts 渲染器（plan/13 §5.3 + plan/20 §3.3）：
@@ -823,7 +824,7 @@ const ReasoningPart = memo(function ReasoningPart({
 
 /** 兼容历史消息里残留的 Markdown 记号与模型误输出的工具轨迹标记，保持纯文本阅读体验 */
 function sanitizePlainText(text: string): string {
-  return text
+  return stripAgentProtocolArtifacts(text)
     .replace(/^\s*\[调用\s*(?:工具|tool)[^\n]*$/gim, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/^#{1,4}\s+/gm, '')

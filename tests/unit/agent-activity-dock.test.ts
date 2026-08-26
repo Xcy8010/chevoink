@@ -20,7 +20,12 @@ describe('Agent activity presentation', () => {
     expect(markup).toContain('完成第二章')
     expect(markup).toContain('第二章')
     expect(markup).toContain('h-7')
-    expect(markup).toContain('basis-full')
+    expect(markup).toContain('flex-col')
+    expect(markup).toContain('items-stretch')
+    expect(markup).toContain('w-full')
+    expect(markup).toContain('justify-start')
+    expect(markup).toContain('pl-7')
+    expect(markup).not.toContain('justify-end')
   })
 
   it('keeps the inline activity rows collapsed initially', () => {

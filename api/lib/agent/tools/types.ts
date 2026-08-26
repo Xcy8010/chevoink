@@ -15,6 +15,8 @@ export type ToolContext = {
   chapterId: string | null
   sessionId: string
   runId: string
+  /** 作者明确要求“已有/前文保持不变”时，本轮启动前已存在的章节集合。 */
+  protectedChapterIds?: ReadonlySet<string>
   /** 当前工具调用的 callId：供 ask_user 等需要挂起等待前端回应的工具使用 */
   callId: string
   mode: AgentExecutionMode

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { DataAccessError } from '../../prisma.js'
 import {
   createVolumeData,
   deleteVolumeData,
@@ -15,6 +16,17 @@ import { defineTool } from './types.js'
 
 const STRUCTURE_PERMISSION = { plan: 'deny', build: 'allow', review: 'deny' } as const
 const READ_PERMISSION = { plan: 'allow', build: 'allow', review: 'allow' } as const
+
+function assertProtectedChapterUntouched(ctx: { protectedChapterIds?: ReadonlySet<string> }, ...chapterIds: string[]) {
+  const protectedId = chapterIds.find((chapterId) => ctx.protectedChapterIds?.has(chapterId))
+  if (protectedId) {
+    throw new DataAccessError(
+      409,
+      'AUTHOR_SCOPE_PROTECTED',
+      `作者明确要求前文保持不变，章节 ${protectedId} 属于本轮开始前已有内容，禁止移动、拆分或合并。请只操作本轮新建章节。`,
+    )
+  }
+}
 
 export const volumeListTool = defineTool({
   name: 'volume_list',
@@ -122,6 +134,7 @@ function defineChapterMoveTool(name: 'chapter_move' | 'chapter_move_to_volume', 
     permission: STRUCTURE_PERMISSION,
     readOnly: false,
     async execute(ctx, { chapterId, ...input }) {
+      assertProtectedChapterUntouched(ctx, chapterId)
       const chapter = await moveChapterData(ctx.userId, ctx.novelId, chapterId, input)
       return chapter
         ? {
@@ -150,6 +163,7 @@ export const chapterSplitTool = defineTool({
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
   async execute(ctx, { chapterId, ...input }) {
+    assertProtectedChapterUntouched(ctx, chapterId)
     const result = await splitChapterData(ctx.userId, ctx.novelId, chapterId, input)
     return result
       ? { output: `已将《${result.first.title}》拆分，并创建相邻章节《${result.second.title}》（chapterId=${result.second.id}）。`, summary: `拆分《${result.first.title}》` }
@@ -171,6 +185,7 @@ export const chapterMergeTool = defineTool({
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
   async execute(ctx, { targetChapterId, ...input }) {
+    assertProtectedChapterUntouched(ctx, targetChapterId, input.sourceChapterId)
     const chapter = await mergeChaptersData(ctx.userId, ctx.novelId, targetChapterId, input)
     return chapter
       ? {

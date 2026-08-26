@@ -22,4 +22,15 @@ describe('Agent 2.0 P3 TaskSpec', () => {
       { kind: 'must' }, { kind: 'preference' },
     ])
   })
+
+  it('续写指定卷且保护前文时冻结结构与正文后置条件', () => {
+    const spec = buildTaskSpec({
+      runId: 'run-volume', novelId: 'novel-1', chapterId: null,
+      prompt: '在不改动前面内容的情况下续写完整第二卷。',
+    })
+    expect(spec.postconditions.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'STRUCTURE_VALIDATED',
+      'EARLIER_CONTENT_UNCHANGED',
+    ]))
+  })
 })

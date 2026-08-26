@@ -8,6 +8,12 @@ const baselinesByRun = new Map<string, Map<string, number>>()
 
 /** 本 run 最近一次读/写/新建的章节：供模型漏传 chapterId 时做兜底（比「当前打开章节」更贴近意图） */
 const lastTouchedByRun = new Map<string, string>()
+/** 本 run 已成功创建的章节标题 → chapterId；用于拦截模型在结果丢失/后续步骤失败后重复建同名章。 */
+const createdChaptersByRun = new Map<string, Map<string, string>>()
+
+function normalizeChapterTitle(title: string): string {
+  return title.trim().replace(/\s+/g, '').toLocaleLowerCase('zh-CN')
+}
 
 export function recordChapterBaseline(runId: string, chapterId: string, revision: number) {
   let baselines = baselinesByRun.get(runId)
@@ -29,7 +35,21 @@ export function getChapterBaseline(runId: string, chapterId: string): number | n
   return baselinesByRun.get(runId)?.get(chapterId) ?? null
 }
 
+export function recordCreatedChapter(runId: string, title: string, chapterId: string) {
+  let records = createdChaptersByRun.get(runId)
+  if (!records) {
+    records = new Map()
+    createdChaptersByRun.set(runId, records)
+  }
+  records.set(normalizeChapterTitle(title), chapterId)
+}
+
+export function getCreatedChapter(runId: string, title: string): string | null {
+  return createdChaptersByRun.get(runId)?.get(normalizeChapterTitle(title)) ?? null
+}
+
 export function clearRunBaselines(runId: string) {
   baselinesByRun.delete(runId)
   lastTouchedByRun.delete(runId)
+  createdChaptersByRun.delete(runId)
 }

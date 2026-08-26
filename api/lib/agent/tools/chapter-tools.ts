@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import type { Prisma } from '@prisma/client'
 
-import { prisma } from '../../prisma.js'
-import { getChapterBaseline, getLastTouchedChapter, recordChapterBaseline } from '../baseline.js'
+import { DataAccessError, prisma } from '../../prisma.js'
+import { getChapterBaseline, getCreatedChapter, getLastTouchedChapter, recordChapterBaseline, recordCreatedChapter } from '../baseline.js'
 import { recalcNovelStats } from './novel-tools.js'
 import { defineTool, type ToolContext, type ToolResult } from './types.js'
 import { placeCreatedChapter, resolveChapterPlacement } from '../../data/volume.js'
@@ -52,6 +52,16 @@ function buildConflictResult(chapterTitle: string): ToolResult {
   }
 }
 
+function assertChapterMutable(ctx: ToolContext, chapter: { id: string; title: string }) {
+  if (ctx.protectedChapterIds?.has(chapter.id)) {
+    throw new DataAccessError(
+      409,
+      'AUTHOR_SCOPE_PROTECTED',
+      `作者明确要求前文保持不变，章节《${chapter.title}》属于本轮开始前已有内容，禁止写入、改名或改动结构。请只操作本轮新建章节。`,
+    )
+  }
+}
+
 /** 把“读当前版本 → 写入”收敛为单条带 revision 条件的原子更新。 */
 async function updateOwnedChapterAtRevision(
   ctx: ToolContext,
@@ -86,6 +96,7 @@ async function writeChapterContent(
   if (!chapter) {
     return buildChapterNotFound(ctx, chapterId)
   }
+  assertChapterMutable(ctx, chapter)
 
   const baseline = getChapterBaseline(ctx.runId, chapter.id)
   if (baseline !== null && baseline !== chapter.revision) {
@@ -130,7 +141,7 @@ export const chapterCreateTool = defineTool({
   name: 'chapter_create',
   title: '新建章节',
   description:
-    '在当前作品创建一个新章节，默认紧接全书最后一个已有章节（不会误入后方预建的空卷）；传 position 可插入到全书指定位置（原第 position 章及之后的章节编号自动 +1），传 volumeId/positionInVolume 可精确指定卷内位置。作者说“第 N 章”时必须传 position=N。仅用于新增章节；重写已有章节必须用 chapter_write，绝不要另建重复章节。推荐先创建空章节，再用 chapter_write 写正文。返回 chapterId、实际卷和全书序。',
+    '在当前作品原子创建一个新章节。作者说“全书第 N 章”时只传 position=N；作者说“第 M 卷第 N 章/卷内第 N 章”时必须传 volumeOrder=M（或 volumeId）与 positionInVolume=N，严禁改用全书 position，严禁先建到错误卷再移动。未指定位置时紧接全书最后一个已有章节。仅用于新增章节；重写已有章节必须用 chapter_write。创建成功后必须复用返回的 chapterId 写正文，绝不要重复创建同名章。',
   parameters: z.object({
     title: z.string().min(1).max(120).describe('章节标题'),
     content: z.string().optional().describe('章节正文，可留空'),
@@ -139,16 +150,45 @@ export const chapterCreateTool = defineTool({
       .int()
       .min(1)
       .optional()
-      .describe('插入位置（第 N 章）。缺省或超过现有章节数时追加到末尾；否则插入该位置，原第 N 章及之后的章节整体后移一位'),
+      .describe('全书插入位置（仅“全书第 N 章”使用）。不得与 volumeId/volumeOrder/positionInVolume 混用'),
     volumeId: z.string().min(1).optional().describe('目标卷 ID；缺省时使用全书最后一个已有章节所在卷，而不是后方空卷'),
-    positionInVolume: z.number().int().min(1).optional().describe('目标卷内位置（第 N 章）；缺省时追加'),
+    volumeOrder: z.number().int().min(1).optional().describe('目标卷显示序号，例如“第二卷”传 2；与 volumeId 二选一'),
+    positionInVolume: z.number().int().min(1).optional().describe('目标卷内位置；必须同时传 volumeId 或 volumeOrder'),
+  }).superRefine((args, refinement) => {
+    const hasExplicitVolume = Boolean(args.volumeId) || args.volumeOrder !== undefined
+    if (args.volumeId && args.volumeOrder !== undefined) {
+      refinement.addIssue({ code: 'custom', path: ['volumeOrder'], message: 'volumeId 与 volumeOrder 只能传一个' })
+    }
+    if (args.positionInVolume !== undefined && !hasExplicitVolume) {
+      refinement.addIssue({ code: 'custom', path: ['positionInVolume'], message: '卷内位置必须同时指定 volumeId 或 volumeOrder' })
+    }
+    if (args.position !== undefined && (hasExplicitVolume || args.positionInVolume !== undefined)) {
+      refinement.addIssue({ code: 'custom', path: ['position'], message: '全书位置不得与卷内位置混用；第 M 卷第 N 章请只传 volumeOrder/volumeId + positionInVolume' })
+    }
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
     const content = args.content ?? ''
+    const alreadyCreatedId = getCreatedChapter(ctx.runId, args.title)
+    if (alreadyCreatedId) {
+      const existing = await findOwnedChapter(ctx, alreadyCreatedId)
+      if (existing) {
+        return {
+          output: `本轮已经成功创建过《${existing.title}》，chapterId=${existing.id}。为防重复章节，本次未再次创建；请直接复用该 chapterId 写入或修订正文。`,
+          summary: `复用已创建章节《${existing.title}》`,
+          display: { kind: 'chapterRef', chapterId: existing.id, title: existing.title, wordCount: existing.wordCount },
+        }
+      }
+    }
 
     const chapter = await prisma.$transaction(async (tx) => {
+      const volumeByOrder = args.volumeOrder !== undefined
+        ? await tx.volume.findFirst({ where: { novelId: ctx.novelId, orderIndex: args.volumeOrder } })
+        : null
+      if (args.volumeOrder !== undefined && !volumeByOrder) {
+        throw new DataAccessError(400, 'VOLUME_NOT_FOUND', `第 ${args.volumeOrder} 卷不存在，请先用 volume_list 或 novel_get_context 核对卷结构。`)
+      }
       const globalTarget = args.position
         ? await tx.chapter.findFirst({ where: { novelId: ctx.novelId, orderIndex: args.position } })
         : null
@@ -161,7 +201,7 @@ export const chapterCreateTool = defineTool({
         tx,
         ctx.novelId,
         resolveAgentChapterVolumeId({
-          requestedVolumeId: args.volumeId,
+          requestedVolumeId: args.volumeId ?? volumeByOrder?.id,
           globalTargetVolumeId: globalTarget?.volumeId,
           lastExistingVolumeId: lastExisting?.volumeId,
         }),
@@ -190,6 +230,7 @@ export const chapterCreateTool = defineTool({
     })
     await recalcNovelStats(ctx.novelId)
     recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
+    recordCreatedChapter(ctx.runId, chapter.title, chapter.id)
     if (content && isAgent2FeatureEnabled('memory2', ctx.userId)) {
       await enqueueChapterMemoryExtraction({
         novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: content,
@@ -197,7 +238,7 @@ export const chapterCreateTool = defineTool({
     }
 
     return {
-      output: `已创建全书第 ${chapter.orderIndex} 章《${chapter.title}》，位于第 ${chapter.volume.orderIndex} 卷《${chapter.volume.title}》卷内第 ${chapter.orderInVolume} 章，chapterId=${chapter.id}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。请以这里返回的实际卷与全书序核对作者目标。`,
+      output: `已原子创建全书第 ${chapter.orderIndex} 章《${chapter.title}》，位于第 ${chapter.volume.orderIndex} 卷《${chapter.volume.title}》卷内第 ${chapter.orderInVolume} 章，chapterId=${chapter.id}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。创建已成功，后续必须复用该 chapterId，禁止重建同名章。`,
       summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》 · ${chapter.volume.title}`,
       // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
       display: content
@@ -289,6 +330,7 @@ export const chapterEditRangeTool = defineTool({
     if (!chapter) {
       return buildChapterNotFound(ctx, chapterId)
     }
+    assertChapterMutable(ctx, chapter)
 
     const before = chapter.content
 
@@ -377,6 +419,7 @@ export const chapterRenameTool = defineTool({
     if (!chapter) {
       return buildChapterNotFound(ctx, chapterId)
     }
+    assertChapterMutable(ctx, chapter)
 
     const previousTitle = chapter.title
     const baseline = getChapterBaseline(ctx.runId, chapter.id)

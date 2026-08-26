@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { containsAgentProtocolInvocation, stripAgentProtocolArtifacts } from '../../../shared/agent-output.js'
 import type {
   AgentExecutionMode,
   AgentMessagePart,
@@ -128,33 +129,22 @@ function looksLikePseudoToolCall(content: string, toolNames: string[]): boolean 
   return /我(现在|将|马上|立[即刻])\s*(调用|发起|执行)[^。\n]{0,12}工具/.test(content)
 }
 
-/** 报幕式旁白句式表（plan/14 §五 C2）：只收录高置信的执行叙述开场，防误伤真结论 */
-const NARRATION_PATTERNS: RegExp[] = [
-  /^先[^。\n]{0,30}(再|然后)/,
-  /^信息(已|已经)[^。\n]{0,10}掌握/,
-  /^(现在|接下来|下一步)(我)?(开始|制定|落盘|执行|进行|读取|检索|分析)/,
-  /^方向(已)?明确/,
-  /^(好的|明白了|收到)[，。]/,
-  /^我(现在|需要|应该|先|来|将)/,
-  /^让我/,
-  /^(抱歉|不好意思)[，。][^。\n]{0,20}(补上|重新|纠正)/,
-  /^根据[^。\n]{0,10}模式的规则/,
-]
-
-/** 中间轮次的短正文若命中旁白句式，判定为执行叙述（应进思考区而非正文） */
-function isNarrationOnly(content: string): boolean {
-  const trimmed = content.trim()
-  if (!trimmed || trimmed.length > 160) {
-    return false
-  }
-  return NARRATION_PATTERNS.some((pattern) => pattern.test(trimmed))
-}
-
-/** 旁白熔断的流式缓冲上限：超过即视为真结论，转实时流式 */
-const NARRATION_BUFFER_LIMIT = 160
-
 /** 工具参数流式进度的节流步长：每多生成这么多参数字符才发一次 tool.delta，控制事件量 */
 const TOOL_ARGS_PROGRESS_STEP = 200
+
+/** 连续结构写失败达到阈值后硬熔断，禁止模型换参数盲试或“先建错卷再搬”。 */
+const STRUCTURE_MUTATION_TOOLS = new Set([
+  'chapter_create',
+  'chapter_move',
+  'chapter_move_to_volume',
+  'chapter_split',
+  'chapter_merge',
+  'volume_create',
+  'volume_update',
+  'volume_move',
+  'volume_delete',
+])
+const STRUCTURE_FAILURE_LIMIT = 3
 
 /** 长上下文防稀释阈值（plan/14 §三 A4）：超过后每轮在队尾刷新一条轻量提醒 */
 const CONTEXT_REMINDER_THRESHOLD_CHARS = 60000
@@ -571,7 +561,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     ])
 
     const parsedTaskSpec = taskSpecSchema.safeParse(storedRun.taskSpec)
-    const taskSpec: TaskSpec = parsedTaskSpec.success
+    let taskSpec: TaskSpec = parsedTaskSpec.success
       ? parsedTaskSpec.data
       : buildTaskSpec({
           runId,
@@ -581,7 +571,20 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           selection: params.selection,
           creativeFreedom: params.creativeFreedom,
         })
-    if (!parsedTaskSpec.success) {
+    let taskSpecChanged = !parsedTaskSpec.success
+    const protectsEarlierContent = taskSpec.postconditions.some((item) => item.code === 'EARLIER_CONTENT_UNCHANGED')
+    if (protectsEarlierContent && (!params.resume || !taskSpec.scope.chapterIds?.length)) {
+      const existingChapters = await prisma.chapter.findMany({
+        where: { novelId: params.novelId, authorId: params.userId },
+        select: { id: true },
+      })
+      taskSpec = {
+        ...taskSpec,
+        scope: { ...taskSpec.scope, chapterIds: existingChapters.map((chapter) => chapter.id) },
+      }
+      taskSpecChanged = true
+    }
+    if (taskSpecChanged) {
       await prisma.agentRun.update({ where: { id: runId }, data: { taskSpec: taskSpec as unknown as object } })
     }
     if (!params.resume) {
@@ -636,6 +639,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       chapterId: params.chapterId,
       sessionId: params.sessionId,
       runId,
+      protectedChapterIds: protectsEarlierContent ? new Set(taskSpec.scope.chapterIds ?? []) : undefined,
       callId: '',
       mode: params.mode,
       emit: (event) => bus.emit(event),
@@ -654,6 +658,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // 续跑时从会话恢复既有清单，新任务从空开始（避免上一个任务的残留待办干扰）
     let todoItems: AgentTodoItem[] = params.resume ? await loadSessionTodoItems(params.sessionId) : []
     let todoReminders = 0
+    let consecutiveStructureFailures = 0
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
       role: 'user',
@@ -683,10 +688,6 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const messageId = randomUUID()
       bus.emit({ type: 'message.start', messageId, role: 'assistant' })
 
-      // C2 旁白熔断：正文先攛一小段缓冲，短旁白等轮次结束后裁决是否改道进思考区；超过上限视为真结论，转实时流式
-      let textBuffer = ''
-      let textStreamed = false
-
       // 工具执行条提前显示：模型还在流式生成工具参数（写章节正文可能持续分钟级）时
       // 就先播报 tool.call（args 为 null），前端按 callId upsert，执行完毕的正式事件就地更新同一张卡片
       const announcedToolNames = new Map<string, string>()
@@ -699,16 +700,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
-            if (textStreamed) {
-              bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })
-              return
-            }
-            textBuffer += chunk.delta
-            if (textBuffer.length > NARRATION_BUFFER_LIMIT) {
-              bus.emit({ type: 'text.delta', messageId, delta: textBuffer })
-              textStreamed = true
-              textBuffer = ''
-            }
+            // 正文要等本轮结束后确认它不是工具协议残片/中间执行旁白再展示。
+            // reasoning 与工具参数进度仍实时推送，不影响用户感知执行进度。
+            return
           } else if (chunk.type === 'reasoning-delta') {
             bus.emit({ type: 'reasoning.delta', messageId, delta: chunk.delta })
           } else if (chunk.type === 'tool-call-start') {
@@ -757,49 +751,60 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
       })
 
-      // C2 旁白熔断裁决：中间轮次（后续还有工具调用）的短旁白降级为 reasoning 推送，不删内容只改道；最终轮正文永不改道
-      const demoteNarration =
-        !textStreamed &&
-        result.finishReason === 'tool_calls' &&
-        !!result.content &&
-        isNarrationOnly(result.content)
+      const cleanContent = result.content ? stripAgentProtocolArtifacts(result.content) : ''
+      // 只要本轮真实产生工具调用，同行文本就是执行旁白而非最终答复，一律改道思考区。
+      const demoteNarration = result.toolCalls.length > 0 && Boolean(cleanContent)
 
-      if (!textStreamed && textBuffer) {
-        if (demoteNarration) {
-          bus.emit({ type: 'reasoning.delta', messageId, delta: `\n${textBuffer}` })
-        } else {
-          bus.emit({ type: 'text.delta', messageId, delta: textBuffer })
-        }
+      if (cleanContent) {
+        bus.emit({
+          type: demoteNarration ? 'reasoning.delta' : 'text.delta',
+          messageId,
+          delta: demoteNarration ? `\n${cleanContent}` : cleanContent,
+        })
       }
 
       const parts: AgentMessagePart[] = []
-      if (result.reasoning || (demoteNarration && result.content)) {
+      if (result.reasoning || (demoteNarration && cleanContent)) {
         parts.push({
           type: 'reasoning',
           text: demoteNarration
-            ? [result.reasoning, result.content].filter(Boolean).join('\n')
+            ? [result.reasoning, cleanContent].filter(Boolean).join('\n')
             : (result.reasoning as string),
         })
       }
-      if (result.content && !demoteNarration) {
-        parts.push({ type: 'text', text: result.content })
-        lastAssistantText = result.content
+      if (cleanContent && !demoteNarration) {
+        parts.push({ type: 'text', text: cleanContent })
+        lastAssistantText = cleanContent
       }
 
-      if (result.finishReason !== 'tool_calls') {
-        // 伪工具调用：模型把调用写进了正文（压缩标记/参数 JSON/“我现在调用”句式），实际没有执行。回填系统提示让它重新发起真调用，而不是直接结束 run
-        if (result.content && looksLikePseudoToolCall(result.content, toolNameList) && pseudoToolCallRetries < 2) {
+      const invalidToolProtocol =
+        result.toolCalls.length === 0 &&
+        (result.finishReason === 'tool_calls' || containsAgentProtocolInvocation(result.content) || looksLikePseudoToolCall(result.content, toolNameList))
+
+      if (invalidToolProtocol) {
+        if (pseudoToolCallRetries < 2) {
           pseudoToolCallRetries += 1
-          await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+          // 协议失败的执行叙述不能作为真实交付落库；只保留 reasoning 供展开排障。
+          const diagnosticParts = parts.filter((part) => part.type === 'reasoning')
+          await persistMessage(messageId, runId, params.sessionId, 'assistant', diagnosticParts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
             content:
-              '[系统] 你刚才把工具调用写成了文本，并没有发起真正的工具调用，操作完全没有执行。请立刻通过 function calling 重新发起需要的工具调用，绝对不要在回复文本里描述、模拟或预告调用。',
+              '[系统/P0] 你刚才没有产生任何可执行的 function call，却返回了工具协议标记或伪调用文本；操作完全没有执行。立即使用 API 原生 function calling 重试，正文信道必须为空。禁止输出 <invoke>、</invoke>、<tool_call> 或任何工具参数文本。',
           })
           continue
         }
 
+        const failureText = '模型连续返回无效工具调用协议，本轮已安全停止，未将这些文本视为已执行操作。请重新发起任务。'
+        bus.emit({ type: 'text.delta', messageId, delta: failureText })
+        await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: failureText }])
+        bus.emit({ type: 'step.finish', turn, usage: result.usage })
+        await finalizeRun(runId, bus, 'failed', usage, turn, failureText, failureText)
+        return
+      }
+
+      if (result.finishReason !== 'tool_calls') {
         // C3：规划类任务未经 plan_save 落盘就想收尾，回填提醒（最多 2 次）防止全程只聊天不落盘
         if (expectsPlanSave && !planSavePerformed && planSaveReminders < 2) {
           planSaveReminders += 1
@@ -833,6 +838,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         return
       }
 
+      let structureCircuitTripped = false
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           throw new DOMException('run aborted', 'AbortError')
@@ -845,12 +851,35 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         if (call.name === 'todo_write' && outcome.part.status === 'success' && outcome.part.display?.kind === 'todoList') {
           todoItems = outcome.part.display.items
         }
+        if (STRUCTURE_MUTATION_TOOLS.has(call.name)) {
+          if (outcome.part.status === 'success') {
+            consecutiveStructureFailures = 0
+          } else if (outcome.part.status === 'failed') {
+            consecutiveStructureFailures += 1
+            if (consecutiveStructureFailures >= STRUCTURE_FAILURE_LIMIT) {
+              structureCircuitTripped = true
+            }
+          }
+        }
         parts.push(outcome.part)
         messages.push({ role: 'tool', toolCallId: call.id, content: outcome.observation })
+        if (structureCircuitTripped) {
+          break
+        }
       }
 
       await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
       bus.emit({ type: 'step.finish', turn, usage: result.usage })
+
+      if (structureCircuitTripped) {
+        const failureText = '卷章结构操作已连续失败 3 次，安全熔断已停止后续写入，避免重复建章、错卷和序号进一步漂移。请检查任务状态中的变更后重新发起。'
+        const failureMessageId = randomUUID()
+        bus.emit({ type: 'message.start', messageId: failureMessageId, role: 'assistant' })
+        bus.emit({ type: 'text.delta', messageId: failureMessageId, delta: failureText })
+        await persistMessage(failureMessageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: failureText }])
+        await finalizeRun(runId, bus, 'failed', usage, turn, failureText, failureText)
+        return
+      }
 
       if (usage.totalTokens >= env.agentRunTokenBudget) {
         messages.push({

@@ -269,6 +269,11 @@ export async function moveChapterData(
   return prisma.$transaction(async (tx) => {
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, novelId } })
     if (!chapter) return null
+    // 网络/模型重试可能重复提交同一个移动。目标已就位时按幂等成功返回，
+    // 不再因第一次移动递增 revision 而把第二次请求误报成冲突。
+    if (chapter.volumeId === input.targetVolumeId && chapter.orderInVolume === input.position) {
+      return toChapter(chapter)
+    }
     assertExpectedRevision(input.expectedRevision, chapter.revision, '章节')
     const layout = await loadLayout(tx, novelId)
     const target = layout.byVolume.get(input.targetVolumeId)
