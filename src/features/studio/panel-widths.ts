@@ -10,7 +10,7 @@ const STUDIO_PANEL_WIDTHS_STORAGE_KEY = 'studio-panel-widths'
 export const TREE_PANEL_WIDTH_LIMITS = { min: 200, fallback: 264 }
 export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, fallback: 424 }
 export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
-export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 220, fallback: 264 }
+export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 260, fallback: 520 }
 export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 420 }
 
 export type StudioPanelWidths = { tree: number; agent: number; workTask: number; workInspector: number; workViewer: number }
@@ -61,7 +61,10 @@ function readStoredPanelWidths(): StudioPanelWidths {
       tree: clampPanelWidth(Number(parsed.tree) || fallback.tree, TREE_PANEL_WIDTH_LIMITS),
       agent: clampPanelWidth(Number(parsed.agent) || fallback.agent, AGENT_PANEL_WIDTH_LIMITS),
       workTask: clampPanelWidth(Number(parsed.workTask) || fallback.workTask, WORK_TASK_PANEL_WIDTH_LIMITS),
-      workInspector: clampPanelWidth(Number(parsed.workInspector) || fallback.workInspector, WORK_INSPECTOR_PANEL_WIDTH_LIMITS),
+      workInspector: clampPanelWidth(
+        Number(parsed.workInspector) >= 360 ? Number(parsed.workInspector) : fallback.workInspector,
+        WORK_INSPECTOR_PANEL_WIDTH_LIMITS,
+      ),
       workViewer: clampPanelWidth(Number(parsed.workViewer) || fallback.workViewer, WORK_VIEWER_PANEL_WIDTH_LIMITS),
     }
   } catch {
@@ -110,7 +113,7 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
     return () => window.removeEventListener('resize', normalizeForViewport)
   }, [normalizeForViewport, options.getMaximum])
 
-  // 拖拽调宽：指针按下后追踪位移，松手时持久化到 localStorage
+  // 拖拽调宽：触达折叠阈值即刻收起，不再要求用户松开鼠标后才看到结果。
   const beginPanelResize = useCallback(
     (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
@@ -119,12 +122,35 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
       const startWidth = panelWidthsRef.current[panel]
       const limits = PANEL_LIMITS[panel]
       handle.setPointerCapture(event.pointerId)
+      document.documentElement.dataset.studioResizing = 'true'
       let rawWidth = startWidth
+      let finished = false
+
+      const finish = (collapse: boolean) => {
+        if (finished) return
+        finished = true
+        handle.removeEventListener('pointermove', handleMove)
+        handle.removeEventListener('pointerup', handleUp)
+        handle.removeEventListener('pointercancel', handleUp)
+        if (handle.hasPointerCapture(event.pointerId)) {
+          handle.releasePointerCapture(event.pointerId)
+        }
+        delete document.documentElement.dataset.studioResizing
+        if (collapse) {
+          optionsRef.current.onCollapse?.(panel)
+        } else {
+          storePanelWidths(panelWidthsRef.current)
+        }
+      }
 
       const handleMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
         const growsRight = panel === 'tree' || panel === 'workTask'
         rawWidth = growsRight ? startWidth + delta : startWidth - delta
+        if (rawWidth <= Math.round(limits.min * 0.62)) {
+          finish(true)
+          return
+        }
         setPanelWidths((current) => {
           const maximum = optionsRef.current.getMaximum?.(panel, current) ?? viewportMaximum()
           const nextWidth = clampPanelWidth(rawWidth, limits, maximum)
@@ -135,14 +161,7 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
         })
       }
       const handleUp = () => {
-        handle.removeEventListener('pointermove', handleMove)
-        handle.removeEventListener('pointerup', handleUp)
-        handle.removeEventListener('pointercancel', handleUp)
-        if (rawWidth <= Math.round(limits.min * 0.62)) {
-          optionsRef.current.onCollapse?.(panel)
-        } else {
-          storePanelWidths(panelWidthsRef.current)
-        }
+        finish(false)
       }
 
       handle.addEventListener('pointermove', handleMove)

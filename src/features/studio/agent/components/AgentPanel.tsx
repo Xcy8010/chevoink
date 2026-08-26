@@ -69,10 +69,10 @@ type AgentPanelProps = {
   ensureSession: () => Promise<EntityId>
   /** SSE 事件透传：宿主据此同步章节树/编辑器等工作区状态 */
   onStreamEvent?: (event: AgentStreamEvent) => void
-  /** 待审查变更总数（正文审查 + 计划审查）：驱动工作区变更头部的 ✓/✕ 一键审查按钮 */
+  /** 待审查变更总数（正文审查 + 计划审查）：驱动工作区变更头部的接受/拒绝按钮 */
   pendingReviewCount?: number
   reviewBusy?: boolean
-  /** ✓ 一键采纳全部待审变更 / ✕ 一键撤回（宿主弹自定义确认框） */
+  /** 一键接受全部待审变更 / 拒绝并撤回（宿主弹自定义确认框） */
   onApproveAllReviews?: () => void
   onRejectAllReviews?: () => void
   /** 历史任务对话：点击列表项切换会话 */
@@ -85,6 +85,10 @@ type AgentPanelProps = {
   onWorkspaceRollback?: () => void
   onClose?: () => void
   className?: string
+  /** Work 宽屏存在独立任务停靠区时，内联待办/变更自动隐藏。 */
+  activityPresentation?: 'inline' | 'responsive'
+  /** 手机工作台把 Agent 标题与任务按钮并入作品选择同一行。 */
+  mobileIntegratedHeader?: boolean
 }
 
 export function AgentPanel({
@@ -104,6 +108,8 @@ export function AgentPanel({
   onWorkspaceRollback,
   onClose,
   className,
+  activityPresentation = 'inline',
+  mobileIntegratedHeader = false,
 }: AgentPanelProps) {
   const runId = useAgentStore((state) => state.runId)
   const phase = useAgentStore((state) => state.phase)
@@ -632,15 +638,19 @@ export function AgentPanel({
     : null
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-col', className)}>
+    <div className={cn('relative flex h-full min-h-0 flex-col', className)}>
       {/* 状态栏 */}
-      <div className="relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5">
-        <ChevoinkAgentMark className="h-5 w-5 text-[var(--text-primary)]" />
+      <div className={cn(
+        'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
+        mobileIntegratedHeader && 'absolute -top-[52px] left-[34%] right-0 z-20 h-[52px] border-b-0 bg-[var(--app-bg)] px-2 py-1',
+      )}>
+        <ChevoinkAgentMark className="h-6 w-6 shrink-0" />
         <span className="min-w-0 truncate text-sm font-medium text-[var(--text-primary)]">Chevoink Agent</span>
         {phase !== 'idle' ? (
           <span
             className={cn(
               'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+              mobileIntegratedHeader && 'hidden',
               active
                 ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]'
                 : phase === 'failed'
@@ -651,7 +661,7 @@ export function AgentPanel({
             {phaseLabel[phase] ?? phase}
           </span>
         ) : null}
-        <span className="ml-auto shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">
+        <span className={cn('ml-auto shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]', mobileIntegratedHeader && 'hidden')}>
           {currentTurn > 0 ? `第 ${currentTurn} 轮 · ` : ''}
           {usage.totalTokens > 0 ? `${usage.totalTokens.toLocaleString()} tokens` : ''}
         </span>
@@ -984,9 +994,9 @@ export function AgentPanel({
         )}
       </div>
 
-      {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开；待审时头部提供 ✓/✕ 一键审查） */}
+      {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开） */}
       {workspaceActivities.length > 0 || todos.length > 0 || pendingReviewCount > 0 ? (
-        <div className="px-4 pb-2">
+        <div className={cn('px-4 pb-2', activityPresentation === 'responsive' && '2xl:hidden')}>
           <AgentActivityBar
             activities={workspaceActivities}
             activitiesVersion={activitiesVersion}

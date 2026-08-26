@@ -688,7 +688,7 @@ const ToolCallCard = memo(function ToolCallCard({
         {writeTool && !running ? <span className={cn(
           'shrink-0 text-[10px] font-medium',
           part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
-        )}>{part.status === 'success' ? '已接受' : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
+        )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
         <span className="shrink-0">{toolStatusIcon[part.status]}</span>
         {collapsible ? (
           expanded ? (

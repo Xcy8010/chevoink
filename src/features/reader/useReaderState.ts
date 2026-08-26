@@ -216,6 +216,7 @@ export function useReaderState() {
     return counts
   }, [chapterComments])
   const chapterList = asArray(reader?.chapterList)
+  const volumes = asArray(reader?.volumes)
   const chapterTitle = reader?.currentChapter.title?.trim() || '未命名章节'
   const novelTitle = reader ? getDisplayTitle(reader.novel) : '未命名作品'
   const currentIndex = reader
@@ -332,8 +333,9 @@ export function useReaderState() {
   const previousHref = reader?.previousChapterId ? buildReadHref(reader.previousChapterId) : null
   const nextHref = reader?.nextChapterId ? buildReadHref(reader.nextChapterId) : null
 
+  const currentVolume = reader ? volumes.find((volume) => volume.id === reader.currentChapter.volumeId) ?? null : null
   const metaLine = reader
-    ? `第 ${reader.currentChapter.orderIndex} 章 · ${numberFormatter.format(reader.currentChapter.wordCount)} 字 · ${formatDateTime(reader.currentChapter.publishedAt)}`
+    ? `${currentVolume ? `第 ${currentVolume.orderIndex} 卷《${currentVolume.title}》 · ` : ''}第 ${reader.currentChapter.orderInVolume} 章 · ${numberFormatter.format(reader.currentChapter.wordCount)} 字 · ${formatDateTime(reader.currentChapter.publishedAt)}`
     : ''
 
   // 听书播放引擎（方案 17）：三端共用，创作区预览（fromStudio）不启用
@@ -479,6 +481,8 @@ export function useReaderState() {
     paragraphs,
     chapterComments,
     chapterList,
+    volumes,
+    currentVolume,
     chapterTitle,
     novelTitle,
     currentIndex,

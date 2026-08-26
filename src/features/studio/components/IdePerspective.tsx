@@ -12,7 +12,7 @@ type IdePerspectiveProps = {
 export default function IdePerspective({ children, treeWidth, treeOpen = true, agentWidth, agentOpen = true }: IdePerspectiveProps) {
   return (
     <div
-      className="grid h-full min-h-0 overflow-hidden border-y border-[var(--border-subtle)] bg-[var(--surface-default)]"
+      className="studio-resizable-grid grid h-full min-h-0 overflow-hidden border-y border-[var(--border-subtle)] bg-[var(--surface-default)]"
       style={{ gridTemplateColumns: `${treeOpen ? treeWidth : 46}px minmax(0,1fr) ${agentOpen ? agentWidth : 46}px` }}
     >
       {children}

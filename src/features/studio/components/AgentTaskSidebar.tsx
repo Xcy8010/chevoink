@@ -1,15 +1,45 @@
 import { useEffect, useState } from 'react'
-import { PencilLine, SquarePlus, Trash2 } from 'lucide-react'
+import { ChevronRight, MessageSquareText, PencilLine, SquarePlus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
-type AgentTaskSidebarItem = {
+export type AgentTaskSidebarItem = {
   id: string
   title: string
   updatedAt: string
   temporary: boolean
   prompt: string
   artifactsCount: number
+}
+
+export function AgentTaskRail({
+  taskWindows,
+  activeTaskWindowId,
+  taskSwitchLocked,
+  onExpand,
+  onCreateTaskWindow,
+  onSelectTaskWindow,
+}: Pick<AgentTaskSidebarProps, 'taskWindows' | 'activeTaskWindowId' | 'taskSwitchLocked' | 'onCreateTaskWindow' | 'onSelectTaskWindow'> & { onExpand: () => void }) {
+  return (
+    <nav className="flex h-full w-[54px] flex-col items-center gap-1 overflow-hidden py-2" aria-label="任务快捷栏">
+      <button type="button" onClick={onExpand} className="mb-1 inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="展开任务区" title="展开任务区">
+        <ChevronRight className="h-4 w-4" />
+      </button>
+      <button type="button" onClick={onCreateTaskWindow} disabled={taskSwitchLocked} className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-40" aria-label="新建任务" title="新建任务">
+        <SquarePlus className="h-4 w-4" />
+      </button>
+      <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto [scrollbar-width:none]">
+        {taskWindows.map((taskWindow) => {
+          const active = taskWindow.id === activeTaskWindowId
+          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} disabled={taskSwitchLocked} className={cn('relative flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors disabled:opacity-55', active ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-label={taskWindow.title} title={taskWindow.title}>
+            {active ? <span className="absolute -left-[7px] h-5 w-0.5 rounded-full bg-emerald-500" aria-hidden /> : null}
+            <MessageSquareText className="h-4 w-4" />
+          </button>
+        })}
+      </div>
+    </nav>
+  )
 }
 
 type AgentTaskSidebarProps = {

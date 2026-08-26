@@ -1,10 +1,10 @@
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, Lock, MoveRight } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import Empty from '@/components/Empty'
 import { isPublicReadableChapter } from '@/features/discover/api'
-import type { ChapterListItem } from '../../../../shared/contracts'
+import type { ChapterListItem, VolumeListItem } from '../../../../shared/contracts'
 
 const numberFormatter = new Intl.NumberFormat('zh-CN')
 
@@ -24,6 +24,7 @@ const formatDate = (value: string | null) =>
 
 type ChapterDirectoryProps = {
   chapters: ChapterListItem[]
+  volumes: VolumeListItem[]
   novelId: string
   /** 本地阅读进度命中的章节，高亮"在读" */
   currentChapterId: string | null
@@ -38,6 +39,7 @@ type ChapterDirectoryProps = {
 /** 章节目录：序号 + 标题 + 字数/时间，分隔线列表排布，支持正倒序切换与“在读”高亮 */
 export default function ChapterDirectory({
   chapters,
+  volumes,
   novelId,
   currentChapterId,
   dense = false,
@@ -84,21 +86,31 @@ export default function ChapterDirectory({
             scrollable ? 'max-h-[calc(100vh-18rem)] overflow-y-auto pr-1' : '',
           ].join(' ')}
         >
-          {orderedChapters.map((chapter) => {
+          {orderedChapters.map((chapter, index) => {
             const isReadable = isPublicReadableChapter(chapter)
             const isReading = currentChapterId === chapter.id
+            const previous = index > 0 ? orderedChapters[index - 1] : null
+            const volume = volumes.find((item) => item.id === chapter.volumeId)
+            const showVolumeHeading = !previous || previous.volumeId !== chapter.volumeId
+            const volumeHeading = showVolumeHeading ? (
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-[var(--border-subtle)] bg-[var(--surface-default)]/95 px-1 py-2 backdrop-blur">
+                <span className="text-xs font-semibold text-[var(--text-primary)]">{volume ? `第 ${volume.orderIndex} 卷 · ${volume.title}` : '未分卷章节'}</span>
+                <span className="text-[10px] text-[var(--text-tertiary)]">卷内目录</span>
+              </div>
+            ) : null
 
             if (!isReadable) {
               return (
+                <Fragment key={chapter.id}>
+                {volumeHeading}
                 <div
-                  key={chapter.id}
                   className={[
                     'flex items-center gap-3 opacity-45',
                     dense ? 'py-2.5' : 'py-3',
                   ].join(' ')}
                 >
                   <span className="w-7 shrink-0 text-right text-xs tabular-nums text-[var(--text-tertiary)]">
-                    {chapter.orderIndex}
+                    {chapter.orderInVolume}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-secondary)]">
                     {chapter.title}
@@ -108,12 +120,14 @@ export default function ChapterDirectory({
                     未开放
                   </span>
                 </div>
+                </Fragment>
               )
             }
 
             return (
+              <Fragment key={chapter.id}>
+              {volumeHeading}
               <Link
-                key={chapter.id}
                 to={`/novel/${novelId}/read/${chapter.id}`}
                 className={[
                   'group flex items-center gap-3 transition-colors hover:bg-[var(--surface-muted)]',
@@ -126,7 +140,7 @@ export default function ChapterDirectory({
                     isReading ? 'font-semibold text-[var(--color-brand)]' : 'text-[var(--text-tertiary)]',
                   ].join(' ')}
                 >
-                  {chapter.orderIndex}
+                  {chapter.orderInVolume}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
@@ -164,6 +178,7 @@ export default function ChapterDirectory({
                   />
                 )}
               </Link>
+              </Fragment>
             )
           })}
         </div>

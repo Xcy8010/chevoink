@@ -70,7 +70,7 @@ export function DetailTabContent({
   showMeta = false,
   relatedVariant = 'grid',
 }: DetailTabContentProps) {
-  const { activeTab, chapters, novelId, readingProgress, relatedNovels } = state
+  const { activeTab, chapters, volumes, novelId, readingProgress, relatedNovels } = state
 
   if (activeTab === 'comments') {
     return (
@@ -92,6 +92,7 @@ export function DetailTabContent({
     <div className="pt-5">
       <ChapterDirectory
         chapters={chapters}
+        volumes={volumes}
         novelId={novelId ?? ''}
         currentChapterId={readingProgress?.chapterId ?? null}
         dense={dense}

@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { Link } from 'react-router-dom'
 
 import Empty from '@/components/Empty'
@@ -13,7 +14,7 @@ type ReaderDirectoryProps = {
 
 /** 章节目录列表：当前章高亮，未发布章节置灰 */
 export default function ReaderDirectory({ state, onNavigate }: ReaderDirectoryProps) {
-  const { chapterList, reader, fromStudio, buildReadHref } = state
+  const { chapterList, volumes, reader, fromStudio, buildReadHref } = state
   if (!reader) return null
 
   if (chapterList.length === 0) {
@@ -27,25 +28,31 @@ export default function ReaderDirectory({ state, onNavigate }: ReaderDirectoryPr
 
   return (
     <div className="space-y-1.5 p-1">
-      {chapterList.map((chapter) => {
+      {chapterList.map((chapter, index) => {
         const isReadable = fromStudio || isPublicReadableChapter(chapter)
         const isActive = chapter.id === reader.currentChapter.id
+        const previous = index > 0 ? chapterList[index - 1] : null
+        const volume = volumes.find((item) => item.id === chapter.volumeId)
+        const volumeHeading = !previous || previous.volumeId !== chapter.volumeId ? <div className="sticky top-0 z-10 mt-2 flex items-center justify-between border-y border-[var(--border-subtle)] bg-[var(--surface-default)]/95 px-3 py-2 backdrop-blur"><span className="text-xs font-semibold text-[var(--text-primary)]">{volume ? `第 ${volume.orderIndex} 卷 · ${volume.title}` : '未分卷章节'}</span><span className="text-[10px] text-[var(--text-tertiary)]">{volume?.chapterCount ?? 0} 章</span></div> : null
 
         if (!isReadable) {
           return (
+            <Fragment key={chapter.id}>
+            {volumeHeading}
             <div
-              key={chapter.id}
               className="rounded-[var(--radius-md)] px-3 py-2.5 text-sm text-[var(--text-tertiary)]"
             >
               <p className="font-medium">{chapter.title}</p>
-              <p className="mt-0.5 text-xs">第 {chapter.orderIndex} 章 · 待更新</p>
+              <p className="mt-0.5 text-xs">卷内第 {chapter.orderInVolume} 章 · 待更新</p>
             </div>
+            </Fragment>
           )
         }
 
         return (
+          <Fragment key={chapter.id}>
+          {volumeHeading}
           <Link
-            key={chapter.id}
             to={buildReadHref(chapter.id)}
             onClick={onNavigate}
             className={cn(
@@ -57,9 +64,10 @@ export default function ReaderDirectory({ state, onNavigate }: ReaderDirectoryPr
           >
             <p className="font-medium">{chapter.title}</p>
             <p className={cn('mt-0.5 text-xs', isActive ? 'text-white/75' : 'text-[var(--text-tertiary)]')}>
-              第 {chapter.orderIndex} 章
+              卷内第 {chapter.orderInVolume} 章 · 全书第 {chapter.orderIndex} 章
             </p>
           </Link>
+          </Fragment>
         )
       })}
     </div>

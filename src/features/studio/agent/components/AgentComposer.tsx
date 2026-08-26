@@ -1,7 +1,6 @@
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, Crosshair, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
 
-import { cn } from '@/lib/utils'
 import {
   MAX_AGENT_FILE_COUNT,
   MAX_AGENT_IMAGE_COUNT,
@@ -48,8 +47,6 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   const removeAttachment = useAgentStore((state) => state.removeComposerAttachment)
   const uploading = useAgentStore((state) => state.composerUploading)
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
-  const autoFollow = useAgentStore((state) => state.autoFollow)
-  const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
   const [sending, setSending] = useState(false)
   const [attachError, setAttachError] = useState<string | null>(null)
@@ -272,22 +269,6 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
             className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Paperclip className="h-4 w-4" />
-          </button>
-          {/* 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文；手机端屏幕窄且编辑器不同屏，隐藏该入口 */}
-          <button
-            type="button"
-            onClick={() => setAutoFollow(!autoFollow)}
-            title={autoFollow ? '自动追踪已开启：Agent 写到哪章，编辑器跟到哪章' : '自动追踪已关闭：留在当前章节不跳转'}
-            aria-pressed={autoFollow}
-            className={cn(
-              'hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors md:inline-flex',
-              autoFollow
-                ? 'bg-[var(--surface-contrast)] text-[var(--text-contrast)]'
-                : 'bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-            )}
-          >
-            <Crosshair className="h-3 w-3" />
-            追踪
           </button>
         </div>
         {running ? (

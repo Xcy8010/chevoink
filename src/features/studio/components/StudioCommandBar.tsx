@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpenText, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PenLine, Settings2, Upload } from 'lucide-react'
+import { BookOpenText, Crosshair, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PenLine, Settings2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
 import type { Novel } from '../../../../shared/contracts/index.js'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
+import { useAgentStore } from '../agent/agentStore'
 
 type Props = {
   perspective: 'work' | 'ide'
@@ -28,6 +29,8 @@ type Props = {
 }
 
 export default function StudioCommandBar(props: Props) {
+  const autoFollow = useAgentStore((state) => state.autoFollow)
+  const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -40,13 +43,29 @@ export default function StudioCommandBar(props: Props) {
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--app-bg)] px-2.5">
-      {props.perspectiveSwitchEnabled ? <div className="inline-flex h-8 items-center border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-0.5" aria-label="切换创作模式">
-        {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors', props.perspective === key ? 'bg-[var(--surface-default)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
+      {props.perspectiveSwitchEnabled ? <div className="relative inline-flex h-8 items-center overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-0.5" aria-label="切换创作模式">
+        <span aria-hidden className={cn('absolute bottom-0.5 top-0.5 w-[calc(50%-2px)] bg-[var(--surface-default)] shadow-sm transition-transform duration-200 ease-out', props.perspective === 'ide' && 'translate-x-full')} />
+        {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('relative inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-200', props.perspective === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
       </div> : null}
       <div className="h-5 w-px bg-[var(--border-subtle)]" />
       <div className="max-w-[260px] min-w-[170px]">
         <WorkspaceNovelSwitcher compactTrigger currentNovelId={props.currentNovelId} currentNovelTitle={props.novelTitle} novels={props.novelOptions} busy={props.switchingNovel} loading={props.novelsLoading} onSelectNovel={props.onSelectNovel} onCreateNovel={props.onCreateNovel} />
       </div>
+      <button
+        type="button"
+        onClick={() => setAutoFollow(!autoFollow)}
+        title={autoFollow ? '自动追踪已开启：Agent 写到哪章，编辑器跟到哪章' : '自动追踪已关闭：留在当前章节不跳转'}
+        aria-pressed={autoFollow}
+        className={cn(
+          'inline-flex h-8 shrink-0 items-center gap-1.5 border px-2.5 text-xs font-medium transition-all duration-200',
+          autoFollow
+            ? 'border-[var(--surface-contrast)] bg-[var(--surface-contrast)] text-[var(--text-contrast)]'
+            : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]',
+        )}
+      >
+        <Crosshair className="h-3.5 w-3.5" />
+        追踪
+      </button>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <button type="button" onClick={props.onPublish} className="inline-flex h-8 items-center gap-1.5 bg-[var(--surface-contrast)] px-3 text-xs font-medium text-[var(--text-contrast)] hover:opacity-90"><Upload className="h-3.5 w-3.5" />{props.published ? '更新发布' : '发布'}</button>
         {props.previewHref ? <Link to={props.previewHref} className="hidden h-8 items-center gap-1.5 border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)] xl:inline-flex"><BookOpenText className="h-3.5 w-3.5" />预览</Link> : null}

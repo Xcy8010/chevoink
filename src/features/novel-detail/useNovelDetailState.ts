@@ -120,6 +120,7 @@ export function useNovelDetailState() {
 
   const detail = detailQuery.data ?? null
   const chapters = asArray(detail?.chapters)
+  const volumes = asArray(detail?.volumes)
   const topComments = asArray(detail?.topComments)
   const relatedNovels = asArray(detail?.relatedNovels)
   // 自己的根评论固定排在最前，其余保持服务端顺序（sort 稳定）
@@ -529,6 +530,7 @@ export function useNovelDetailState() {
     commentsQuery,
     detail,
     chapters,
+    volumes,
     publishedChapters,
     topComments,
     relatedNovels,

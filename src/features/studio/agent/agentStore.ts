@@ -71,7 +71,11 @@ export type WorkspaceActivity = {
   label: string
   chapterId: string | null
   deltaChars: number | null
+  before?: string
+  after?: string
+  summary?: string
   status: 'running' | 'done' | 'failed'
+  accepted?: boolean
 }
 
 /** 会对工作区（章节树/正文/作品信息）产生写入的工具集合 */
@@ -91,6 +95,14 @@ export const WORKSPACE_WRITE_TOOLS = new Set([
   'volume_delete',
   'changeset_apply',
   'changeset_rollback',
+  'plan_save',
+  'plan_rename',
+  'plan_delete',
+  'directive_save',
+  'directive_supersede',
+  'memory_save',
+  'memory_relation_save',
+  'memory_event_save',
   'novel_rename',
   'novel_update_meta',
   'cover_prompt_set',
@@ -116,6 +128,14 @@ const WRITE_TOOL_LABELS: Record<string, string> = {
   volume_delete: '删除卷',
   changeset_apply: '应用全书变更',
   changeset_rollback: '回滚全书变更',
+  plan_save: '保存计划',
+  plan_rename: '重命名计划',
+  plan_delete: '删除计划',
+  directive_save: '保存创作要求',
+  directive_supersede: '更新创作要求',
+  memory_save: '更新作品记忆',
+  memory_relation_save: '更新人物关系',
+  memory_event_save: '记录故事事件',
   novel_rename: '重命名作品',
   novel_update_meta: '更新作品设置',
   cover_prompt_set: '设置封面描述',
@@ -169,12 +189,45 @@ type AgentStoreState = {
   removeComposerAttachment: (id: string) => void
   bumpComposerUploading: (delta: number) => void
   setAutoFollow: (value: boolean) => void
+  /** 将刚通过作者审查的写入活动标记为已接受；执行成功本身仍只是已完成。 */
+  markWorkspaceActivitiesAccepted: (criteria: { chapterId?: string; toolNames?: string[]; all?: boolean }) => void
 }
 
 const emptyUsage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 
 // 自动追踪开关持久化：刷新/重开页面后保持用户上次的选择（默认开启）
 const AUTO_FOLLOW_STORAGE_KEY = 'chevoink-agent-auto-follow'
+const ACCEPTED_TOOL_CALLS_STORAGE_KEY = 'chevoink-agent-accepted-tool-calls'
+
+function readAcceptedToolCalls(): Set<string> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(ACCEPTED_TOOL_CALLS_STORAGE_KEY) ?? '[]')
+    return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+let acceptedToolCalls = readAcceptedToolCalls()
+
+function persistAcceptedToolCalls() {
+  try {
+    const recent = Array.from(acceptedToolCalls).slice(-500)
+    acceptedToolCalls = new Set(recent)
+    window.localStorage.setItem(ACCEPTED_TOOL_CALLS_STORAGE_KEY, JSON.stringify(recent))
+  } catch {
+    // 持久化不可用时，本会话内仍保留正确状态。
+  }
+}
+
+function decorateAcceptedMessages(messages: AgentUIMessage[]): AgentUIMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) =>
+      part.type === 'tool-call' && acceptedToolCalls.has(part.callId) ? { ...part, accepted: true } : part,
+    ),
+  }))
+}
 
 function readStoredAutoFollow(): boolean {
   try {
@@ -193,7 +246,7 @@ function writeStoredAutoFollow(value: boolean) {
 }
 
 /** 从工具事件提取变更条所需的章节/字数信息 */
-function activityFromDisplay(display: unknown): { label: string | null; chapterId: string | null; deltaChars: number | null } {
+function activityFromDisplay(display: unknown): { label: string | null; chapterId: string | null; deltaChars: number | null; before?: string; after?: string } {
   if (display && typeof display === 'object' && 'kind' in display) {
     const payload = display as { kind: string; [key: string]: unknown }
     if (payload.kind === 'chapterDiff') {
@@ -203,6 +256,8 @@ function activityFromDisplay(display: unknown): { label: string | null; chapterI
         label: typeof payload.chapterTitle === 'string' ? payload.chapterTitle : null,
         chapterId: typeof payload.chapterId === 'string' ? payload.chapterId : null,
         deltaChars: after.length - before.length,
+        before,
+        after,
       }
     }
     if (payload.kind === 'chapterRef') {
@@ -242,7 +297,11 @@ function deriveSessionStateFromMessages(messages: AgentUIMessage[]): {
         label: extracted.label ?? WRITE_TOOL_LABELS[part.toolName] ?? part.title,
         chapterId: extracted.chapterId,
         deltaChars: extracted.deltaChars,
+        before: extracted.before,
+        after: extracted.after,
+        summary: part.summary,
         status: part.status === 'failed' ? 'failed' : 'done',
+        accepted: Boolean(part.accepted || acceptedToolCalls.has(part.callId)),
       })
     }
   }
@@ -374,9 +433,10 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
     }),
 
-  restoreMessages: (messages) =>
+  restoreMessages: (messages) => {
+    const restored = decorateAcceptedMessages(messages)
     set({
-      messages,
+      messages: restored,
       phase: 'idle',
       runId: null,
       activeSessionId: null,
@@ -384,8 +444,9 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       pendingQuestion: null,
       errorMessage: null,
       // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
-      ...deriveSessionStateFromMessages(messages),
-    }),
+      ...deriveSessionStateFromMessages(restored),
+    })
+  },
 
   resetRun: () =>
     set({
@@ -424,6 +485,32 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     writeStoredAutoFollow(value)
     set({ autoFollow: value })
   },
+
+  markWorkspaceActivitiesAccepted: (criteria) =>
+    set((state) => {
+      const matching = state.workspaceActivities.filter((activity) => {
+        if (activity.status !== 'done' || activity.accepted) return false
+        if (criteria.all) return true
+        if (criteria.chapterId && activity.chapterId === criteria.chapterId) return true
+        return Boolean(criteria.toolNames?.includes(activity.toolName))
+      })
+      const selected = criteria.all || criteria.chapterId ? matching : matching.slice(-1)
+      const callIds = new Set(selected.map((activity) => activity.callId))
+      if (callIds.size === 0) return state
+      for (const callId of callIds) acceptedToolCalls.add(callId)
+      persistAcceptedToolCalls()
+      return {
+        workspaceActivities: state.workspaceActivities.map((activity) =>
+          callIds.has(activity.callId) ? { ...activity, accepted: true } : activity,
+        ),
+        messages: state.messages.map((message) => ({
+          ...message,
+          parts: message.parts.map((part) =>
+            part.type === 'tool-call' && callIds.has(part.callId) ? { ...part, accepted: true } : part,
+          ),
+        })),
+      }
+    }),
 
   applyEvent: (event) =>
     set((state) => {
@@ -555,6 +642,9 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
                     label: extracted.label ?? activity.label,
                     chapterId: extracted.chapterId ?? activity.chapterId,
                     deltaChars: extracted.deltaChars ?? activity.deltaChars,
+                    before: extracted.before ?? activity.before,
+                    after: extracted.after ?? activity.after,
+                    summary: event.summary,
                   }
                 : activity,
             ),

@@ -8,7 +8,6 @@ import {
   FileText,
   ListTodo,
   LoaderCircle,
-  X,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -18,7 +17,7 @@ import type { WorkspaceActivity } from '../agentStore'
 /**
  * Agent 任务停靠区（输入框上方）：待办清单 + 工作区变更两个折叠区块。
  * - 默认折叠，仅被触发（agent 更新待办 / 新增变更）时自动展开；用户可点击头部手动开合
- * - 工作区变更头部显示当前任务窗口累计变更数；有待审变更时头部提供 ✓ 一键采纳 / ✕ 一键撤回
+ * - 工作区变更头部显示当前任务窗口累计变更数；有待审变更时提供明确的「接受 / 拒绝」操作
  */
 
 function deltaLabel(activity: WorkspaceActivity): string | null {
@@ -174,7 +173,7 @@ function TodoSection({
   )
 }
 
-/** 工作区变更区块：头部 n 个变更 + 待审时 ✓/✕，展开显示当前任务窗口全部变更 */
+/** 工作区变更区块：头部 n 个变更 + 待审操作，展开显示当前任务窗口全部变更 */
 function ChangesSection({
   activities,
   activitiesVersion,
@@ -216,25 +215,25 @@ function ChangesSection({
                 type="button"
                 onClick={onApproveAllReviews}
                 disabled={reviewBusy}
-                aria-label="一键采纳全部变更"
-                title="一键采纳全部变更"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="接受全部待审变更"
+                title="接受全部待审变更"
+                className="inline-flex min-h-8 items-center justify-center rounded-[8px] border border-[var(--border-subtle)] bg-[var(--surface-contrast)] px-2.5 text-[11px] font-medium text-[var(--text-contrast)] transition-all hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {reviewBusy ? (
                   <LoaderCircle className="h-3 w-3 animate-spin" />
                 ) : (
-                  <Check className="h-3.5 w-3.5" />
+                  '接受'
                 )}
               </button>
               <button
                 type="button"
                 onClick={onRejectAllReviews}
                 disabled={reviewBusy}
-                aria-label="一键撤回全部变更"
-                title="一键撤回全部变更"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-500 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="拒绝全部待审变更"
+                title="拒绝全部待审变更"
+                className="inline-flex min-h-8 items-center justify-center rounded-[8px] border border-[var(--border-strong)] px-2.5 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <X className="h-3.5 w-3.5" />
+                拒绝
               </button>
             </span>
           ) : null

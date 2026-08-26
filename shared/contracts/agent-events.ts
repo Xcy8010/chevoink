@@ -211,6 +211,8 @@ export type AgentMessagePart =
       summary?: string
       display?: AgentToolDisplayPayload
       durationMs?: number
+      /** 写入结果已经过作者审查并明确采纳；普通执行成功只表示“已完成”。 */
+      accepted?: boolean
       /** 参数流式生成进度（已生成的参数字符数），仅 running 态有意义 */
       progressChars?: number
       /** 写操作的回滚快照：仅服务端持久化使用，消息列表接口返回前会剥离 */

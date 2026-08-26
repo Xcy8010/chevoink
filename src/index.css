@@ -540,3 +540,29 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 }
 
 .memory-flow .react-flow__controls-button:hover { background: var(--surface-muted); }
+@keyframes studio-perspective-enter {
+  from { opacity: 0; transform: translateY(4px) scale(0.997); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.studio-perspective-enter {
+  animation: studio-perspective-enter 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.studio-resizable-panel,
+.studio-resizable-grid {
+  transition-property: width, grid-template-columns;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html[data-studio-resizing='true'] .studio-resizable-panel,
+html[data-studio-resizing='true'] .studio-resizable-grid {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-perspective-enter { animation: none; }
+  .studio-resizable-panel,
+  .studio-resizable-grid { transition: none; }
+}

@@ -18,10 +18,9 @@ import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
 import ChapterSidebar from './components/ChapterSidebar'
 import ChangeSetDrawer from './components/ChangeSetDrawer'
-import MemoryReviewDrawer from './components/MemoryReviewDrawer'
 import PlanSettingsPanel from './components/PlanSettingsPanel'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
-import AgentTaskSidebar from './components/AgentTaskSidebar'
+import AgentTaskSidebar, { AgentTaskRail } from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
 import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
@@ -39,6 +38,7 @@ import IdeNavigationRail from './components/IdeNavigationRail'
 import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
 import { AgentPanel } from './agent/components/AgentPanel'
+import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
 import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
@@ -91,7 +91,6 @@ export default function StudioWorkspace() {
   const [volumes, setVolumes] = useState<StudioPayload['volumes']>([])
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [activeChangeSetId, setActiveChangeSetId] = useState<string | null>(null)
-  const [memoryReviewOpen, setMemoryReviewOpen] = useState(false)
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null)
   const [selectedTreeItemId, setSelectedTreeItemId] = useState<string | null>(null)
   const [catalogDocument, setCatalogDocument] = useState<{
@@ -122,6 +121,10 @@ export default function StudioWorkspace() {
   const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
+  const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
+  const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
+  const agentTodos = useAgentStore((state) => state.todos)
+  const agentTodosVersion = useAgentStore((state) => state.todosVersion)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
@@ -263,7 +266,6 @@ export default function StudioWorkspace() {
     onBack: () => {
       if (workspaceDialog) setWorkspaceDialog(null)
       else if (activeChangeSetId) setActiveChangeSetId(null)
-      else if (memoryReviewOpen) setMemoryReviewOpen(false)
       else if (mobileMoreOpen) setMobileMoreOpen(false)
       else if (activeToolPanel) setActiveToolPanel(null)
       else if (mobileView !== 'assistant') setMobileView('assistant')
@@ -273,7 +275,7 @@ export default function StudioWorkspace() {
       // SSE 以 seq 去重续传；这里只失效查询缓存，不重新启动 run，避免 APP 切后台造成重复写入。
       void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId] })
     },
-  }), [activeChangeSetId, activeNovelId, activeToolPanel, memoryReviewOpen, mobileMoreOpen, mobileView, navigate, queryClient, workspaceDialog])
+  }), [activeChangeSetId, activeNovelId, activeToolPanel, mobileMoreOpen, mobileView, navigate, queryClient, workspaceDialog])
 
   useEffect(() => {
     if (!coverGenerationBusy) {
@@ -1277,6 +1279,10 @@ export default function StudioWorkspace() {
     () => chapters.find((item) => item.id === selectedChapterId) ?? null,
     [chapters, selectedChapterId],
   )
+  const activeVolumeTitle = useMemo(
+    () => volumes.find((volume) => volume.id === activeChapterListItem?.volumeId)?.title ?? null,
+    [activeChapterListItem?.volumeId, volumes],
+  )
   const savedPlanFiles = useMemo(() => {
     const localPlans = buildWorkspacePlanFiles(agentArtifacts)
     const localBackendIds = new Set(
@@ -1391,6 +1397,17 @@ export default function StudioWorkspace() {
       agentTaskWindows[0] ??
       null,
     [activeAgentTaskWindowId, agentTaskWindows],
+  )
+  const agentTaskSidebarItems = useMemo(
+    () => agentTaskWindows.map((taskWindow) => ({
+      id: taskWindow.id,
+      title: taskWindow.title,
+      updatedAt: taskWindow.updatedAt,
+      temporary: taskWindow.temporary,
+      prompt: taskWindow.prompt,
+      artifactsCount: taskWindow.artifacts.length,
+    })),
+    [agentTaskWindows],
   )
 
   useEffect(() => {
@@ -2664,6 +2681,7 @@ export default function StudioWorkspace() {
 
     setPendingChapterReviewBusy(true)
     try {
+      useAgentStore.getState().markWorkspaceActivitiesAccepted({ chapterId: review.chapterId })
       setPendingChapterReviews((current) => current.filter((item) => item.id !== review.id))
       // 本章定夺完毕：若还有其它章待审，在当前章底部给出「下一个文件」流转入口
       setReviewHandoffChapterId(review.chapterId)
@@ -2856,6 +2874,7 @@ export default function StudioWorkspace() {
     if (!pendingPlanReview || pendingPlanReviewBusy) {
       return
     }
+    useAgentStore.getState().markWorkspaceActivitiesAccepted({ toolNames: ['plan_save'] })
     setPendingPlanReview(null)
     setChapterSaveState('saved')
     setChapterSaveMessage(`已保留对计划《${pendingPlanReview.title}》的修订。`)
@@ -3033,13 +3052,14 @@ export default function StudioWorkspace() {
     })
   }
 
-  // 工作区变更头部的✓一键全部采纳：逐章保留全部待审正文，再保留待审计划
+  // 工作区变更头部的一键接受：逐章保留全部待审正文，再保留待审计划
   function handleApproveAllPendingReviews() {
     if (pendingChapterReviewBusy || pendingPlanReviewBusy) {
       return
     }
 
     for (const review of pendingChapterReviewsRef.current) {
+      useAgentStore.getState().markWorkspaceActivitiesAccepted({ chapterId: review.chapterId })
       if (review.artifactId) {
         updateAgentArtifact(review.artifactId, (current) => ({
           ...current,
@@ -3053,7 +3073,7 @@ export default function StudioWorkspace() {
     setChapterSaveMessage('已保留本次全部变更。')
   }
 
-  // ✕一键全部撤回：合并成一个确认框，确认后依次回滚全部待审正文与计划
+  // 一键拒绝全部：合并成一个确认框，确认后依次回滚全部待审正文与计划
   function handleRequestRejectAllPendingReviews() {
     if (pendingChapterReviewBusy || pendingPlanReviewBusy) {
       return
@@ -3609,7 +3629,12 @@ export default function StudioWorkspace() {
     return createdSession.id
   }
 
-  function renderWritingAgent(close?: () => void, showCloseAction = true) {
+  function renderWritingAgent(
+    close?: () => void,
+    showCloseAction = true,
+    activityPresentation: 'inline' | 'responsive' = 'inline',
+    mobileIntegratedHeader = false,
+  ) {
     return (
       <AgentPanel
           sessionId={agentSessionId}
@@ -3646,6 +3671,8 @@ export default function StudioWorkspace() {
           }}
           onWorkspaceRollback={() => void refreshWorkspaceAfterAgentWrite()}
           onClose={showCloseAction ? close : undefined}
+          activityPresentation={activityPresentation}
+          mobileIntegratedHeader={mobileIntegratedHeader}
         />
       )
   }
@@ -3657,14 +3684,7 @@ export default function StudioWorkspace() {
 
     return (
       <AgentTaskSidebar
-        taskWindows={agentTaskWindows.map((taskWindow) => ({
-          id: taskWindow.id,
-          title: taskWindow.title,
-          updatedAt: taskWindow.updatedAt,
-          temporary: taskWindow.temporary,
-          prompt: taskWindow.prompt,
-          artifactsCount: taskWindow.artifacts.length,
-        }))}
+        taskWindows={agentTaskSidebarItems}
         activeTaskWindowId={activeAgentTaskWindowId}
         taskSwitchLocked={agentRunState.active}
         fallbackDescription={chapterTitle || '查看这轮任务的完整上下文。'}
@@ -3768,7 +3788,7 @@ export default function StudioWorkspace() {
             ) : (
               <>
                 {/* 作品选择器占满剩余宽度，作品名尽量完整显示；右侧保存状态保持短标签 */}
-                <div className="min-w-0 flex-1">
+                <div className={cn('min-w-0 flex-1 transition-[max-width] duration-200', mobileView === 'assistant' && 'max-w-[33%]')}>
                   <WorkspaceNovelSwitcher
                     currentNovelId={currentNovel.id}
                     currentNovelTitle={novelTitle}
@@ -3879,7 +3899,7 @@ export default function StudioWorkspace() {
 
             {mobileView === 'assistant' ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                {renderWritingAgent(undefined, false)}
+                {renderWritingAgent(undefined, false, 'inline', true)}
               </div>
             ) : null}
 
@@ -3980,10 +4000,7 @@ export default function StudioWorkspace() {
                   { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
                   { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
                   ...(featureFlags.memory2
-                    ? [
-                        { key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') },
-                        { key: 'memory-review', label: '记忆审核', icon: BrainCircuit, action: () => setMemoryReviewOpen(true) },
-                      ]
+                    ? [{ key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') }]
                     : []),
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
@@ -4063,10 +4080,30 @@ export default function StudioWorkspace() {
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">
+            <div key={workspacePerspective} className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
                 taskRail={<div className="h-full [&>aside]:w-full [&>aside]:border-l-0">{renderAgentTaskSidebar(true)}</div>}
-                conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false)}</div>}
+                compactTaskRail={<AgentTaskRail
+                  taskWindows={agentTaskSidebarItems}
+                  activeTaskWindowId={activeAgentTaskWindowId}
+                  taskSwitchLocked={agentRunState.active}
+                  onExpand={() => setWorkLeftOpen(true)}
+                  onCreateTaskWindow={handleCreateAgentTaskWindow}
+                  onSelectTaskWindow={(taskWindowId) => void handleSelectAgentTaskWindow(taskWindowId)}
+                />}
+                conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
+                activityDock={<div className="flex h-full min-h-0 flex-col p-3"><p className="mb-2 px-1 text-[10px] font-medium uppercase tracking-[.12em] text-[var(--text-tertiary)]">任务状态</p><AgentActivityBar
+                  activities={workspaceActivities}
+                  activitiesVersion={workspaceActivitiesVersion}
+                  todos={agentTodos}
+                  todosVersion={agentTodosVersion}
+                  runActive={agentRunState.active}
+                  pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
+                  reviewBusy={pendingChapterReviewBusy || pendingPlanReviewBusy}
+                  onApproveAllReviews={handleApproveAllPendingReviews}
+                  onRejectAllReviews={handleRequestRejectAllPendingReviews}
+                /></div>}
                 inspector={<WorkInspector
                   tab={workInspectorTab}
                   onTabChange={setWorkInspectorTab}
@@ -4080,10 +4117,12 @@ export default function StudioWorkspace() {
                     onOpenPlanSettings={setPlanSettingsPlanId} onSelectCatalog={handleSelectCatalogFromTree}
                     onCreateChapter={handleRequestCreateChapter} onCreatePlan={handleRequestCreatePlan}
                   />}
-                  novelTitle={novelTitle} chapterTitle={chapterTitle} chapterCount={chapters.length}
+                  novelTitle={novelTitle} volumeTitle={activeVolumeTitle} chapterTitle={chapterTitle} chapterCount={chapters.length}
                   wordCount={latestWordCountLabel}
                   pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
                   activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
+                  selectedTextLength={editorSelection.text.length}
+                  activities={workspaceActivities}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
@@ -4150,11 +4189,14 @@ export default function StudioWorkspace() {
                     showNavigation={false}
                     workTree={null}
                     novelTitle={novelTitle}
+                    volumeTitle={activeVolumeTitle}
                     chapterTitle={chapterTitle}
                     chapterCount={chapters.length}
                     wordCount={latestWordCountLabel}
                     pendingReviewCount={pendingChapterReviews.length + (pendingPlanReview ? 1 : 0)}
                     activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
+                    selectedTextLength={editorSelection.text.length}
+                    activities={workspaceActivities}
                   />}
                 />
                 {ideTreeOpen ? <PanelResizeHandle
@@ -4243,6 +4285,7 @@ export default function StudioWorkspace() {
               </div>
             </IdePerspective>
             )}
+            </div>
           </div>
 
           {activeToolPanel && activeToolPanel !== 'assistant' ? (
@@ -4329,7 +4372,6 @@ export default function StudioWorkspace() {
         onClose={() => setActiveChangeSetId(null)}
         onChanged={refreshWorkspaceAfterAgentWrite}
       /> : null}
-      {featureFlags.memory2 ? <MemoryReviewDrawer open={memoryReviewOpen} novelId={currentNovel.id} onClose={() => setMemoryReviewOpen(false)} /> : null}
     </>
   )
 }
