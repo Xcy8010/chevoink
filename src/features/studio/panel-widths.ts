@@ -38,6 +38,32 @@ function clampPanelWidth(value: number, limits: { min: number }, maximum = viewp
   return Math.min(Math.max(limits.min, maximum), Math.max(limits.min, Math.round(value)))
 }
 
+/**
+ * 相邻面板共享固定总宽度时，把主面板的拖拽增量从相邻面板中等量取回。
+ * 这用于 Work 模式的「查看器 + 右侧栏」边界，避免查看器占满可用空间后
+ * 右侧栏只能缩小、无法继续向左放大。
+ */
+export function resizeLinkedPanels({
+  requestedPrimaryWidth,
+  primaryStartWidth,
+  linkedStartWidth,
+  primaryMin,
+  linkedMin,
+}: {
+  requestedPrimaryWidth: number
+  primaryStartWidth: number
+  linkedStartWidth: number
+  primaryMin: number
+  linkedMin: number
+}): { primaryWidth: number; linkedWidth: number } {
+  const totalWidth = Math.max(primaryMin + linkedMin, Math.round(primaryStartWidth + linkedStartWidth))
+  const primaryWidth = Math.min(
+    totalWidth - linkedMin,
+    Math.max(primaryMin, Math.round(requestedPrimaryWidth)),
+  )
+  return { primaryWidth, linkedWidth: totalWidth - primaryWidth }
+}
+
 function readStoredPanelWidths(): StudioPanelWidths {
   const fallback: StudioPanelWidths = {
     tree: TREE_PANEL_WIDTH_LIMITS.fallback,
@@ -120,7 +146,7 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
 
   // 拖拽调宽：触达折叠阈值即刻收起，不再要求用户松开鼠标后才看到结果。
   const beginPanelResize = useCallback(
-    (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>) => {
+    (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>, linkedPanel?: ResizablePanel) => {
       event.preventDefault()
       const handle = event.currentTarget
       const startX = event.clientX
@@ -129,6 +155,16 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
       const renderedWidth = handle.parentElement?.getBoundingClientRect().width
       const startWidth = renderedWidth && renderedWidth > 0 ? renderedWidth : panelWidthsRef.current[panel]
       const limits = PANEL_LIMITS[panel]
+      const layout = handle.closest<HTMLElement>('[data-studio-layout]')
+      const linkedElement = linkedPanel
+        ? layout?.querySelector<HTMLElement>(`[data-studio-panel="${linkedPanel}"]`)
+        : null
+      const renderedLinkedWidth = linkedElement?.getBoundingClientRect().width
+      const startLinkedWidth = linkedPanel
+        ? renderedLinkedWidth && renderedLinkedWidth > 0
+          ? renderedLinkedWidth
+          : panelWidthsRef.current[linkedPanel]
+        : null
       handle.setPointerCapture(event.pointerId)
       document.documentElement.dataset.studioResizing = 'true'
       let rawWidth = startWidth
@@ -160,6 +196,19 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
           return
         }
         setPanelWidths((current) => {
+          if (linkedPanel && startLinkedWidth !== null) {
+            const linked = resizeLinkedPanels({
+              requestedPrimaryWidth: rawWidth,
+              primaryStartWidth: startWidth,
+              linkedStartWidth: startLinkedWidth,
+              primaryMin: limits.min,
+              linkedMin: PANEL_LIMITS[linkedPanel].min,
+            })
+            if (current[panel] === linked.primaryWidth && current[linkedPanel] === linked.linkedWidth) return current
+            const next = { ...current, [panel]: linked.primaryWidth, [linkedPanel]: linked.linkedWidth }
+            panelWidthsRef.current = next
+            return next
+          }
           const maximum = optionsRef.current.getMaximum?.(panel, current) ?? viewportMaximum()
           const nextWidth = clampPanelWidth(rawWidth, limits, maximum)
           if (current[panel] === nextWidth) return current

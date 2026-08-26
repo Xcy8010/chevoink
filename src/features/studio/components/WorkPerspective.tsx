@@ -23,7 +23,7 @@ type Props = {
   onToggleRight: () => void
   inspectorTab: WorkInspectorTab
   onSelectInspectorTab: (tab: WorkInspectorTab) => void
-  onBeginResize: (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>) => void
+  onBeginResize: (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>, linkedPanel?: ResizablePanel) => void
 }
 
 const inspectorRailItems = [
@@ -73,8 +73,8 @@ export default function WorkPerspective({ taskRail, compactTaskRail, conversatio
     return () => observer.disconnect()
   }, [])
 
-  return <div ref={rootRef} data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
-    <aside className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: leftOpen ? taskWidth : 54 }}>
+  return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
+    <aside data-studio-panel="workTask" className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: leftOpen ? taskWidth : 54 }}>
       {leftOpen ? <><div className="h-full min-h-0 overflow-hidden">{taskRail}</div><button type="button" onClick={onToggleLeft} className="absolute right-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起任务区"><PanelLeftClose className="h-4 w-4" /></button><PanelResizeHandle panel="workTask" side="right" label="调整任务区宽度" onBegin={onBeginResize} /></> : compactTaskRail ?? <div className="flex h-full flex-col items-center py-2"><button type="button" onClick={onToggleLeft} className="inline-flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开任务区"><ChevronRight className="h-4 w-4" /></button><div className="mt-3 h-px w-5 bg-[var(--border-subtle)]" /><ListTodo className="mt-4 h-4 w-4 text-[var(--text-tertiary)]" /></div>}
     </aside>
     <main
@@ -82,9 +82,9 @@ export default function WorkPerspective({ taskRail, compactTaskRail, conversatio
       style={{ paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0 }}
     >{conversation}</main>
     {showActivityDock ? <aside className="h-full min-h-0 w-[296px] shrink-0 bg-[var(--surface-default)] px-3 py-4">{activityDock}</aside> : null}
-    {viewer ? <section className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-l border-[var(--border-subtle)]" style={{ width: resolvedViewerWidth }}><PanelResizeHandle panel="workViewer" side="left" label="调整查看器宽度" onBegin={onBeginResize} />{viewer}</section> : null}
-    <aside className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: rightOpen ? resolvedInspectorWidth : 46 }}>
-      {rightOpen ? <><button type="button" onClick={onToggleRight} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button><PanelResizeHandle panel="workInspector" side="left" label="调整检查区宽度" onBegin={onBeginResize} /><div className="h-full min-h-0 overflow-hidden">{inspector}</div></> : <div className="flex h-full flex-col items-center py-2"><button type="button" onClick={onToggleRight} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button><div className="my-3 h-px w-5 bg-[var(--border-subtle)]" />{inspectorRailItems.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => { onSelectInspectorTab(key); onToggleRight() }} className={cn('mb-1 inline-flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors', inspectorTab === key ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-label={label} title={label}><Icon className="h-4 w-4" /></button>)}</div>}
+    {viewer ? <section data-studio-panel="workViewer" className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-l border-[var(--border-subtle)]" style={{ width: resolvedViewerWidth }}><PanelResizeHandle panel="workViewer" side="left" label="调整查看器宽度" onBegin={onBeginResize} />{viewer}</section> : null}
+    <aside data-studio-panel="workInspector" className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: rightOpen ? resolvedInspectorWidth : 46 }}>
+      {rightOpen ? <><button type="button" onClick={onToggleRight} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button><PanelResizeHandle panel="workInspector" linkedPanel={viewer ? 'workViewer' : undefined} side="left" label="调整检查区宽度" onBegin={onBeginResize} /><div className="h-full min-h-0 overflow-hidden">{inspector}</div></> : <div className="flex h-full flex-col items-center py-2"><button type="button" onClick={onToggleRight} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button><div className="my-3 h-px w-5 bg-[var(--border-subtle)]" />{inspectorRailItems.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => { onSelectInspectorTab(key); onToggleRight() }} className={cn('mb-1 inline-flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors', inspectorTab === key ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-label={label} title={label}><Icon className="h-4 w-4" /></button>)}</div>}
     </aside>
   </div>
 }
