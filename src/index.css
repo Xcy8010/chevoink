@@ -552,8 +552,9 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 .studio-resizable-panel,
 .studio-resizable-grid {
   transition-property: width, grid-template-columns;
-  transition-duration: 180ms;
+  transition-duration: 220ms;
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: width, grid-template-columns;
 }
 
 html[data-studio-resizing='true'] .studio-resizable-panel,

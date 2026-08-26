@@ -55,13 +55,14 @@ export function resizeLinkedPanels({
   linkedStartWidth: number
   primaryMin: number
   linkedMin: number
-}): { primaryWidth: number; linkedWidth: number } {
+}): { primaryWidth: number; linkedWidth: number; collapseLinked: boolean } {
   const totalWidth = Math.max(primaryMin + linkedMin, Math.round(primaryStartWidth + linkedStartWidth))
+  const collapseLinked = totalWidth - requestedPrimaryWidth <= Math.round(linkedMin * 0.62)
   const primaryWidth = Math.min(
     totalWidth - linkedMin,
     Math.max(primaryMin, Math.round(requestedPrimaryWidth)),
   )
-  return { primaryWidth, linkedWidth: totalWidth - primaryWidth }
+  return { primaryWidth, linkedWidth: totalWidth - primaryWidth, collapseLinked }
 }
 
 function readStoredPanelWidths(): StudioPanelWidths {
@@ -194,6 +195,27 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
         if (rawWidth <= Math.round(limits.min * 0.62)) {
           finish(true)
           return
+        }
+        if (linkedPanel && startLinkedWidth !== null) {
+          const linked = resizeLinkedPanels({
+            requestedPrimaryWidth: rawWidth,
+            primaryStartWidth: startWidth,
+            linkedStartWidth: startLinkedWidth,
+            primaryMin: limits.min,
+            linkedMin: PANEL_LIMITS[linkedPanel].min,
+          })
+          if (linked.collapseLinked) {
+            const next = {
+              ...panelWidthsRef.current,
+              [panel]: linked.primaryWidth,
+              [linkedPanel]: linked.linkedWidth,
+            }
+            panelWidthsRef.current = next
+            setPanelWidths(next)
+            finish(false)
+            optionsRef.current.onCollapse?.(linkedPanel)
+            return
+          }
         }
         setPanelWidths((current) => {
           if (linkedPanel && startLinkedWidth !== null) {

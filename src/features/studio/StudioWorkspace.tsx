@@ -4299,16 +4299,32 @@ export default function StudioWorkspace() {
               </div>
 
               <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--app-bg)]">
-                {ideAgentOpen ? <><PanelResizeHandle
+                {ideAgentOpen ? <PanelResizeHandle
                   panel="agent"
                   side="left"
                   label="拖拽调整 Agent 对话区宽度"
                   onBegin={beginPanelResize}
-                />
-                <div className="h-full min-h-0 w-full min-w-0 overflow-hidden">
+                /> : null}
+                <div
+                  aria-hidden={!ideAgentOpen}
+                  className={cn(
+                    'absolute inset-0 h-full min-h-0 w-full min-w-0 overflow-hidden transition-[opacity,transform] duration-200 ease-out',
+                    ideAgentOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0',
+                  )}
+                >
                   {renderWritingAgent(() => setIdeAgentOpen(false))}
                 </div>
-                </> : <button type="button" onClick={() => setIdeAgentOpen(true)} className="mx-auto mt-2 flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开 Agent 区"><PanelRightOpen className="h-4 w-4" /></button>}
+                <button
+                  type="button"
+                  onClick={() => setIdeAgentOpen(true)}
+                  className={cn(
+                    'absolute left-1/2 top-2 flex h-8 w-8 -translate-x-1/2 items-center justify-center text-[var(--text-secondary)] transition-opacity duration-200 hover:bg-[var(--surface-muted)]',
+                    ideAgentOpen ? 'pointer-events-none opacity-0' : 'opacity-100',
+                  )}
+                  aria-label="展开 Agent 区"
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </button>
               </div>
             </IdePerspective>
             )}

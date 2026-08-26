@@ -10,7 +10,7 @@ describe('studio linked panel resize', () => {
       linkedStartWidth: 900,
       primaryMin: 260,
       linkedMin: 320,
-    })).toEqual({ primaryWidth: 680, linkedWidth: 640 })
+    })).toEqual({ primaryWidth: 680, linkedWidth: 640, collapseLinked: false })
   })
 
   it('keeps both panels usable at either drag extreme', () => {
@@ -20,7 +20,7 @@ describe('studio linked panel resize', () => {
       linkedStartWidth: 900,
       primaryMin: 260,
       linkedMin: 320,
-    })).toEqual({ primaryWidth: 1000, linkedWidth: 320 })
+    })).toEqual({ primaryWidth: 1000, linkedWidth: 320, collapseLinked: true })
 
     expect(resizeLinkedPanels({
       requestedPrimaryWidth: 100,
@@ -28,6 +28,24 @@ describe('studio linked panel resize', () => {
       linkedStartWidth: 900,
       primaryMin: 260,
       linkedMin: 320,
-    })).toEqual({ primaryWidth: 260, linkedWidth: 1060 })
+    })).toEqual({ primaryWidth: 260, linkedWidth: 1060, collapseLinked: false })
+  })
+
+  it('collapses the viewer only after dragging past its minimum-width resistance', () => {
+    expect(resizeLinkedPanels({
+      requestedPrimaryWidth: 1100,
+      primaryStartWidth: 420,
+      linkedStartWidth: 900,
+      primaryMin: 260,
+      linkedMin: 320,
+    }).collapseLinked).toBe(false)
+
+    expect(resizeLinkedPanels({
+      requestedPrimaryWidth: 1130,
+      primaryStartWidth: 420,
+      linkedStartWidth: 900,
+      primaryMin: 260,
+      linkedMin: 320,
+    }).collapseLinked).toBe(true)
   })
 })
