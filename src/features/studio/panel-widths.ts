@@ -11,7 +11,7 @@ export const TREE_PANEL_WIDTH_LIMITS = { min: 200, fallback: 264 }
 export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, fallback: 424 }
 export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
 export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 260, fallback: 520 }
-export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 420 }
+export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 900 }
 
 export type StudioPanelWidths = { tree: number; agent: number; workTask: number; workInspector: number; workViewer: number }
 export type ResizablePanel = keyof StudioPanelWidths
@@ -65,7 +65,12 @@ function readStoredPanelWidths(): StudioPanelWidths {
         Number(parsed.workInspector) >= 360 ? Number(parsed.workInspector) : fallback.workInspector,
         WORK_INSPECTOR_PANEL_WIDTH_LIMITS,
       ),
-      workViewer: clampPanelWidth(Number(parsed.workViewer) || fallback.workViewer, WORK_VIEWER_PANEL_WIDTH_LIMITS),
+      // 2.0 旧默认只有 420px，会把四区布局挤成“小预览”。低于可用阅读宽度的旧值
+      // 自动升级到新版比例；用户后续主动拖拽的新值仍会正常持久化。
+      workViewer: clampPanelWidth(
+        Number(parsed.workViewer) >= 520 ? Number(parsed.workViewer) : fallback.workViewer,
+        WORK_VIEWER_PANEL_WIDTH_LIMITS,
+      ),
     }
   } catch {
     return fallback
@@ -119,7 +124,10 @@ export function useStudioPanelWidths(options: PanelResizeOptions = {}) {
       event.preventDefault()
       const handle = event.currentTarget
       const startX = event.clientX
-      const startWidth = panelWidthsRef.current[panel]
+      // 某些组合布局会按视口比例收敛默认宽度；拖拽必须从用户眼前的实际宽度起步，
+      // 不能从尚未收敛的持久化值起步，否则第一像素移动就会发生面板跳变。
+      const renderedWidth = handle.parentElement?.getBoundingClientRect().width
+      const startWidth = renderedWidth && renderedWidth > 0 ? renderedWidth : panelWidthsRef.current[panel]
       const limits = PANEL_LIMITS[panel]
       handle.setPointerCapture(event.pointerId)
       document.documentElement.dataset.studioResizing = 'true'

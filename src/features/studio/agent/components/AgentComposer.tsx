@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
 import { ArrowUp, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
 
 import {
@@ -49,6 +49,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
   const [sending, setSending] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [attachError, setAttachError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
@@ -74,29 +75,52 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
     }
   }
 
+  const processIncomingFiles = async (files: File[]) => {
+    if (files.length === 0) return
+    setAttachError(null)
+    let remainingImages = MAX_AGENT_IMAGE_COUNT - imageCount
+    let remainingFiles = MAX_AGENT_FILE_COUNT - fileCount
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        if (remainingImages <= 0) {
+          setAttachError(`最多添加 ${MAX_AGENT_IMAGE_COUNT} 张参考图，超出的已忽略。`)
+          continue
+        }
+        remainingImages -= 1
+        try {
+          const dataUrl = await prepareAgentImage(file)
+          await uploadOne('image', file.name || `粘贴图片-${Date.now()}.png`, dataUrl)
+        } catch (error) {
+          setAttachError(error instanceof Error ? error.message : '图片处理失败，请重试。')
+        }
+        continue
+      }
+
+      if (remainingFiles <= 0) {
+        setAttachError(`最多添加 ${MAX_AGENT_FILE_COUNT} 个文件，超出的已忽略。`)
+        continue
+      }
+      const invalid = validateAgentFile(file)
+      if (invalid) {
+        setAttachError(invalid)
+        continue
+      }
+      remainingFiles -= 1
+      try {
+        await uploadOne('file', file.name, await readFileAsDataUrl(file))
+      } catch (error) {
+        setAttachError(error instanceof Error ? error.message : '文件读取失败，请重试。')
+      }
+    }
+  }
+
   const handlePickImages = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
     event.target.value = ''
     if (files.length === 0) {
       return
     }
-    const slots = MAX_AGENT_IMAGE_COUNT - imageCount
-    if (slots <= 0) {
-      setAttachError(`最多添加 ${MAX_AGENT_IMAGE_COUNT} 张参考图。`)
-      return
-    }
-    if (files.length > slots) {
-      setAttachError(`最多还能添加 ${slots} 张参考图，超出的已忽略。`)
-    }
-    setAttachError(null)
-    for (const file of files.slice(0, slots)) {
-      try {
-        const dataUrl = await prepareAgentImage(file)
-        await uploadOne('image', file.name, dataUrl)
-      } catch (error) {
-        setAttachError(error instanceof Error ? error.message : '图片处理失败，请重试。')
-      }
-    }
+    await processIncomingFiles(files)
   }
 
   const handlePickFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -105,28 +129,24 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
     if (files.length === 0) {
       return
     }
-    const slots = MAX_AGENT_FILE_COUNT - fileCount
-    if (slots <= 0) {
-      setAttachError(`最多添加 ${MAX_AGENT_FILE_COUNT} 个文件。`)
-      return
-    }
-    if (files.length > slots) {
-      setAttachError(`最多还能添加 ${slots} 个文件，超出的已忽略。`)
-    }
-    for (const file of files.slice(0, slots)) {
-      const invalid = validateAgentFile(file)
-      if (invalid) {
-        setAttachError(invalid)
-        continue
-      }
-      setAttachError(null)
-      try {
-        const dataUrl = await readFileAsDataUrl(file)
-        await uploadOne('file', file.name, dataUrl)
-      } catch (error) {
-        setAttachError(error instanceof Error ? error.message : '文件读取失败，请重试。')
-      }
-    }
+    await processIncomingFiles(files)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+    if (files.length === 0) return
+    event.preventDefault()
+    void processIncomingFiles(files)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setDragActive(false)
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length > 0) void processIncomingFiles(files)
   }
 
   const handleSend = async () => {
@@ -157,7 +177,14 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   }
 
   return (
-    <div className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2.5 shadow-sm">
+    <div
+      onDragEnter={(event) => { event.preventDefault(); setDragActive(true) }}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragActive(true) }}
+      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false) }}
+      onDrop={handleDrop}
+      className={`relative rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
+    >
+      {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加图片或文件</div> : null}
       {(attachments.length > 0 || uploading > 0) && (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
           {attachments.map((attachment) =>
@@ -215,6 +242,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         rows={2}
         disabled={disabled}
         placeholder="告诉我要做什么，我会自主完成…"

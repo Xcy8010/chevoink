@@ -57,11 +57,14 @@ export async function listLoopSessionMessages(
     throw new DataAccessError(404, 'NOT_FOUND', '会话不存在或无权访问。')
   }
 
-  const records = await prisma.agentMessage.findMany({
+  const newestRecords = await prisma.agentMessage.findMany({
     where: { sessionId },
-    orderBy: { createdAt: 'asc' },
-    take: 200,
+    // 必须先取最新窗口再恢复为时间正序。旧实现按 asc + take 会永久截掉
+    // 长会话末尾的工具操作与最终总结，刷新后看起来就像“上一轮消失”。
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 500,
   })
+  const records = newestRecords.reverse()
 
   const messages: AgentUIMessage[] = []
   for (const record of records) {

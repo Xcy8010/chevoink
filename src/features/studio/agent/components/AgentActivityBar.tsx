@@ -32,12 +32,12 @@ function deltaLabel(activity: WorkspaceActivity): string | null {
  * 连续更新会重置倒计时，在最后一次更新的 1.2 秒后才收起。
  * 返回 cancelAutoCollapse 供用户手动开合时取消挂起的自动收起，避免看着看着被折叠。
  */
-function useAutoExpand(version: number, setOpen: (open: boolean) => void) {
+function useAutoExpand(version: number, setOpen: (open: boolean) => void, enabled = true) {
   const lastVersionRef = useRef(version)
   const collapseTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (version > lastVersionRef.current) {
+    if (enabled && version > lastVersionRef.current) {
       lastVersionRef.current = version
       setOpen(true)
       if (collapseTimerRef.current !== null) {
@@ -48,7 +48,7 @@ function useAutoExpand(version: number, setOpen: (open: boolean) => void) {
         setOpen(false)
       }, 1200)
     }
-  }, [version, setOpen])
+  }, [enabled, version, setOpen])
 
   // 卸载时清理未触发的收起定时器
   useEffect(
@@ -75,6 +75,7 @@ function SectionHeader({
   title,
   summary,
   extra,
+  stackExtra = false,
 }: {
   open: boolean
   onToggle: () => void
@@ -82,9 +83,10 @@ function SectionHeader({
   title: string
   summary: string
   extra?: React.ReactNode
+  stackExtra?: boolean
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 px-3 py-2">
       <button
         type="button"
         onClick={onToggle}
@@ -103,7 +105,7 @@ function SectionHeader({
           {summary}
         </span>
       </button>
-      {extra}
+      {extra ? <div className={cn(stackExtra && 'flex basis-full justify-end')}>{extra}</div> : null}
     </div>
   )
 }
@@ -113,13 +115,17 @@ function TodoSection({
   todos,
   todosVersion,
   runActive,
+  defaultOpen = false,
+  autoCollapse = true,
 }: {
   todos: AgentTodoItem[]
   todosVersion: number
   runActive: boolean
+  defaultOpen?: boolean
+  autoCollapse?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const cancelAutoCollapse = useAutoExpand(todosVersion, setOpen)
+  const [open, setOpen] = useState(defaultOpen)
+  const cancelAutoCollapse = useAutoExpand(todosVersion, setOpen, autoCollapse)
 
   if (todos.length === 0) {
     return null
@@ -181,6 +187,9 @@ function ChangesSection({
   reviewBusy,
   onApproveAllReviews,
   onRejectAllReviews,
+  defaultOpen = false,
+  autoCollapse = true,
+  stackActions = false,
 }: {
   activities: WorkspaceActivity[]
   activitiesVersion: number
@@ -188,9 +197,12 @@ function ChangesSection({
   reviewBusy: boolean
   onApproveAllReviews?: () => void
   onRejectAllReviews?: () => void
+  defaultOpen?: boolean
+  autoCollapse?: boolean
+  stackActions?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const cancelAutoCollapse = useAutoExpand(activitiesVersion, setOpen)
+  const [open, setOpen] = useState(defaultOpen)
+  const cancelAutoCollapse = useAutoExpand(activitiesVersion, setOpen, autoCollapse)
 
   // 无变更记录但有待审项（如刷新后仅恢复了审查态）时仍需展示，保证 ✓/✕ 入口可达
   if (activities.length === 0 && pendingReviewCount === 0) {
@@ -208,6 +220,7 @@ function ChangesSection({
         icon={<FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
         title="工作区变更"
         summary={`${activities.length} 个变更${pendingReviewCount > 0 ? ` · ${pendingReviewCount} 项待审` : ''}`}
+        stackExtra={stackActions}
         extra={
           pendingReviewCount > 0 ? (
             <span className="flex shrink-0 items-center gap-1.5">
@@ -217,7 +230,7 @@ function ChangesSection({
                 disabled={reviewBusy}
                 aria-label="接受全部待审变更"
                 title="接受全部待审变更"
-                className="inline-flex min-h-8 items-center justify-center rounded-[8px] border border-[var(--border-subtle)] bg-[var(--surface-contrast)] px-2.5 text-[11px] font-medium text-[var(--text-contrast)] transition-all hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-7 items-center justify-center rounded-[8px] border border-[var(--border-subtle)] bg-[var(--surface-contrast)] px-2.5 text-[11px] font-medium text-[var(--text-contrast)] transition-all hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {reviewBusy ? (
                   <LoaderCircle className="h-3 w-3 animate-spin" />
@@ -231,7 +244,7 @@ function ChangesSection({
                 disabled={reviewBusy}
                 aria-label="拒绝全部待审变更"
                 title="拒绝全部待审变更"
-                className="inline-flex min-h-8 items-center justify-center rounded-[8px] border border-[var(--border-strong)] px-2.5 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-7 items-center justify-center rounded-[8px] border border-[var(--border-strong)] px-2.5 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 拒绝
               </button>
@@ -325,7 +338,7 @@ export function AgentActivityBar({
         ? 'rounded-[18px] bg-[var(--surface-muted)] px-1 py-1 shadow-[0_1px_0_rgba(255,255,255,0.025)_inset]'
         : 'rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)]',
     )}>
-      <TodoSection todos={todos} todosVersion={todosVersion} runActive={runActive} />
+      <TodoSection todos={todos} todosVersion={todosVersion} runActive={runActive} defaultOpen={appearance === 'dock'} autoCollapse={appearance !== 'dock'} />
       <ChangesSection
         activities={activities}
         activitiesVersion={activitiesVersion}
@@ -333,6 +346,9 @@ export function AgentActivityBar({
         reviewBusy={reviewBusy}
         onApproveAllReviews={onApproveAllReviews}
         onRejectAllReviews={onRejectAllReviews}
+        defaultOpen={appearance === 'dock'}
+        autoCollapse={appearance !== 'dock'}
+        stackActions={appearance === 'dock'}
       />
     </div>
   )

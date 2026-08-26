@@ -39,6 +39,7 @@ import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
+import AgentContextPanel from './agent/components/AgentContextPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
 import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
@@ -116,7 +117,7 @@ export default function StudioWorkspace() {
   const [workLeftOpen, setWorkLeftOpen] = useState(false)
   const [workRightOpen, setWorkRightOpen] = useState(false)
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
-  const [workViewer, setWorkViewer] = useState<'chapter' | null>(null)
+  const [workViewer, setWorkViewer] = useState<'chapter' | 'document' | null>(null)
   const [ideTreeOpen, setIdeTreeOpen] = useState(true)
   const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
@@ -3291,11 +3292,13 @@ export default function StudioWorkspace() {
 
   function handleSelectCatalogFromTree() {
     setSelectedTreeItemId('catalog')
+    setWorkViewer('document')
     setMobileView('editor')
   }
 
   function handleSelectPlanFromTree(planId: string) {
     setSelectedTreeItemId(`plan:${planId}`)
+    setWorkViewer('document')
     if (agentArtifacts.some((artifact) => artifact.id === planId)) {
       setActiveAgentArtifactId(planId)
     }
@@ -3587,9 +3590,11 @@ export default function StudioWorkspace() {
 
   function handleAddViewerSelectionToAgent() {
     const text = editorSelection.text.trim()
-    if (!text || !chapterDraft) return
+    if (!text) return
     const volumeTitle = volumes.find((volume) => volume.id === activeChapterListItem?.volumeId)?.title
-    const reference = `引用《${novelTitle}》${volumeTitle ? ` / ${volumeTitle}` : ''} / ${chapterDraft.title || `第 ${chapterDraft.orderIndex} 章`}：\n> ${text.replace(/\n/g, '\n> ')}\n\n`
+    const sourceTitle = activeWorkspaceDocument?.title ?? (chapterDraft ? `${volumeTitle ? `${volumeTitle} / ` : ''}${chapterDraft.title || `第 ${chapterDraft.orderIndex} 章`}` : '')
+    if (!sourceTitle) return
+    const reference = `引用《${novelTitle}》 / ${sourceTitle}：\n> ${text.replace(/\n/g, '\n> ')}\n\n`
     const currentDraft = useAgentStore.getState().composerDraft
     const nextPrompt = `${currentDraft.trim() ? `${currentDraft.trim()}\n\n` : ''}${reference}`
     useAgentStore.getState().setComposerDraft(nextPrompt)
@@ -4080,7 +4085,7 @@ export default function StudioWorkspace() {
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">
-            <div key={workspacePerspective} className="studio-perspective-enter h-full min-h-0">
+            <div className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
                 taskRail={<div className="h-full [&>aside]:w-full [&>aside]:border-l-0">{renderAgentTaskSidebar(true)}</div>}
@@ -4131,11 +4136,15 @@ export default function StudioWorkspace() {
                   activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                   taskCount={agentTaskSidebarItems.length}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
+                  contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
-                viewer={workViewer === 'chapter' ? <StudioChapterViewer
-                  draft={chapterDraft} loading={chapterQuery.isLoading} selection={editorSelection}
+                viewer={workViewer ? <StudioChapterViewer
+                  draft={workViewer === 'chapter' ? chapterDraft : null}
+                  workspaceDocument={workViewer === 'document' ? activeWorkspaceDocument : null}
+                  loading={workViewer === 'chapter' && chapterQuery.isLoading} selection={editorSelection}
                   onChange={handleChapterDraftChange} onSelectionChange={setEditorSelection}
+                  onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
                   onAddSelection={handleAddViewerSelectionToAgent} onClose={() => setWorkViewer(null)}
                   onBlur={handleEditorBlurFlush}
                 /> : undefined}
@@ -4145,10 +4154,14 @@ export default function StudioWorkspace() {
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
                 onToggleLeft={() => setWorkLeftOpen((value) => !value)}
-                onToggleRight={() => setWorkRightOpen((value) => !value)}
+                onToggleRight={() => {
+                  if (!workRightOpen && workInspectorTab === 'work' && selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
+                  setWorkRightOpen((value) => !value)
+                }}
                 inspectorTab={workInspectorTab}
                 onSelectInspectorTab={(tab) => {
                   setWorkInspectorTab(tab)
+                  if (tab === 'work' && selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
                 }}
                 onBeginResize={beginPanelResize}
               />
@@ -4210,6 +4223,7 @@ export default function StudioWorkspace() {
                     projectNotes={projectNotes}
                     activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                     taskCount={agentTaskSidebarItems.length}
+                    contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   />}
                 />
                 {ideTreeOpen ? <PanelResizeHandle

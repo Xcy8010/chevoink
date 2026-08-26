@@ -78,13 +78,26 @@ async function persistMessage(
   role: 'user' | 'assistant',
   parts: AgentMessagePart[],
 ) {
-  try {
-    await prisma.agentMessage.create({
-      data: { id, runId, sessionId, role, parts: parts as unknown as object },
-    })
-  } catch (error) {
-    console.error('[agent-loop] 消息持久化失败', runId, error)
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      // upsert 让网络重试与同一 messageId 的补写保持幂等，也允许最终完整 parts
+      // 覆盖早期不完整快照，避免直播可见但刷新后缺失。
+      await prisma.agentMessage.upsert({
+        where: { id },
+        create: { id, runId, sessionId, role, parts: parts as unknown as object },
+        update: { role, parts: parts as unknown as object },
+      })
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)))
+      }
+    }
   }
+  console.error('[agent-loop] 消息持久化失败', runId, lastError)
+  throw lastError
 }
 
 /** 工具输出包裹来源标注：正文/记忆里的指令性文字不构成新指令（plan/13 §4.10） */

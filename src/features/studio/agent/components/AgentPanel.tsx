@@ -238,6 +238,13 @@ export function AgentPanel({
       return
     }
 
+    // Work / IDE 只是同一任务的两种视图。消息已经属于当前会话时直接复用
+    // Zustand 中的完整内容，避免重新拉取、闪现 loading，亦避免旧响应覆盖直播收尾。
+    if (live.loadedSessionId === sessionId) {
+      setHistoryLoading(false)
+      return
+    }
+
     // 切换/重载会话语义上就是「跳到对话最新处」：强制复位贴底跟随。
     // 否则旧对话内容清空/替换时容器高度骤减，浏览器把 scrollTop 钳制回 0 并触发 scroll 事件，
     // 会被误判为用户上滑而关闭自动滚底，导致历史载入后永远停在最顶部
@@ -249,7 +256,7 @@ export function AgentPanel({
     useAgentStore.getState().resetRun()
 
     if (!sessionId) {
-      useAgentStore.getState().restoreMessages([])
+      useAgentStore.getState().restoreMessages([], null)
       setHistoryLoading(false)
       return
     }
@@ -267,16 +274,18 @@ export function AgentPanel({
             .getState()
             .restoreMessages(
               history.filter((message) => !(message.runId === activeRunId && message.role === 'assistant')),
+              sessionId,
             )
           useAgentStore.getState().resumeRun(activeRunId, sessionId)
           connect(activeRunId, 0)
         } else {
-          useAgentStore.getState().restoreMessages(history)
+          useAgentStore.getState().restoreMessages(history, sessionId)
         }
       })
       .catch(() => {
         if (!cancelled) {
-          useAgentStore.getState().restoreMessages([])
+          // 网络失败不能把该会话标记成“已恢复”，否则 Work/IDE 切换后也不会重试。
+          useAgentStore.getState().restoreMessages([], null)
         }
       })
       .finally(() => {
@@ -553,7 +562,7 @@ export function AgentPanel({
     }
     try {
       const { messages: history } = await fetchAgentSessionMessages(sessionId)
-      useAgentStore.getState().restoreMessages(history)
+      useAgentStore.getState().restoreMessages(history, sessionId)
     } catch {
       /* 拉取失败保留现有消息 */
     }

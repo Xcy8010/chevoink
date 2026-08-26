@@ -159,6 +159,8 @@ type AgentStoreState = {
   errorMessage: string | null
   /** 当前 run 所属会话：面板重挂载（沉浸切换/路由往返）时用于判断能否续接直播而非重置 */
   activeSessionId: string | null
+  /** 当前 messages 已完成恢复的会话；用于 Work/IDE 切换时复用同一份会话而不闪烁重载。 */
+  loadedSessionId: string | null
   /** 输入框草稿：提升到全局 store，避免面板重挂载时丢失未发送内容 */
   composerDraft: string
   /** 输入框附件（已上传成功的元数据）：同草稿提升全局，沉浸/普通视图重挂载不丢 */
@@ -180,7 +182,7 @@ type AgentStoreState = {
   beginRun: (runId: string, userPrompt: string, sessionId: string | null, attachments?: AgentAttachmentMeta[]) => void
   /** 续接服务端仍在进行的 run（刷新后恢复）：不追加用户消息，从 seq 0 重放事件重建直播 */
   resumeRun: (runId: string, sessionId: string | null) => void
-  restoreMessages: (messages: AgentUIMessage[]) => void
+  restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
   resetRun: () => void
   clearError: () => void
   setComposerDraft: (value: string) => void
@@ -372,6 +374,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   outputSummary: '',
   errorMessage: null,
   activeSessionId: null,
+  loadedSessionId: null,
   composerDraft: '',
   composerAttachments: [],
   composerUploading: 0,
@@ -386,6 +389,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       runId,
       phase: 'starting',
       activeSessionId: sessionId,
+      loadedSessionId: sessionId,
       pendingApproval: null,
       pendingQuestion: null,
       usage: emptyUsage,
@@ -423,6 +427,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       runId,
       phase: 'starting',
       activeSessionId: sessionId,
+      loadedSessionId: sessionId,
       pendingApproval: null,
       pendingQuestion: null,
       usage: emptyUsage,
@@ -433,13 +438,14 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
     }),
 
-  restoreMessages: (messages) => {
+  restoreMessages: (messages, sessionId = null) => {
     const restored = decorateAcceptedMessages(messages)
     set({
       messages: restored,
       phase: 'idle',
       runId: null,
       activeSessionId: null,
+      loadedSessionId: sessionId,
       pendingApproval: null,
       pendingQuestion: null,
       errorMessage: null,
@@ -453,6 +459,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       runId: null,
       phase: 'idle',
       activeSessionId: null,
+      loadedSessionId: null,
       pendingApproval: null,
       pendingQuestion: null,
       usage: emptyUsage,
