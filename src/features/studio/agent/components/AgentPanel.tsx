@@ -642,10 +642,10 @@ export function AgentPanel({
       {/* 状态栏 */}
       <div className={cn(
         'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
-        mobileIntegratedHeader && 'absolute -top-[52px] left-[34%] right-0 z-20 h-[52px] border-b-0 bg-[var(--app-bg)] px-2 py-1',
+        mobileIntegratedHeader && 'absolute -top-[52px] left-[44%] right-0 z-30 h-[52px] gap-1 border-b-0 bg-[var(--app-bg)] px-1.5 py-1',
       )}>
-        <ChevoinkAgentMark className="h-6 w-6 shrink-0" />
-        <span className="min-w-0 truncate text-sm font-medium text-[var(--text-primary)]">Chevoink Agent</span>
+        <ChevoinkAgentMark className={cn('h-6 w-6 shrink-0', mobileIntegratedHeader && 'h-5 w-5')} />
+        <span className={cn('min-w-0 truncate text-sm font-medium text-[var(--text-primary)]', mobileIntegratedHeader && 'text-xs')}>Chevoink Agent</span>
         {phase !== 'idle' ? (
           <span
             className={cn(
@@ -669,7 +669,8 @@ export function AgentPanel({
           type="button"
           onClick={toggleHistory}
           className={cn(
-            'shrink-0 rounded-md p-1 transition-colors',
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-1 transition-colors',
+            mobileIntegratedHeader && 'ml-auto',
             historyOpen
               ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]'
               : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
@@ -685,7 +686,7 @@ export function AgentPanel({
             setHistoryOpen(false)
             onNewSession?.()
           }}
-          className="shrink-0 rounded-md p-1 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-1 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
           aria-label="新建任务对话"
           title="新建任务对话"
         >
@@ -996,7 +997,7 @@ export function AgentPanel({
 
       {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开） */}
       {workspaceActivities.length > 0 || todos.length > 0 || pendingReviewCount > 0 ? (
-        <div className={cn('px-4 pb-2', activityPresentation === 'responsive' && '2xl:hidden')}>
+        <div className={cn('px-4 pb-2', activityPresentation === 'responsive' && 'agent-activity-responsive')}>
           <AgentActivityBar
             activities={workspaceActivities}
             activitiesVersion={activitiesVersion}

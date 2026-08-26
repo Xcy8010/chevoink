@@ -128,7 +128,7 @@ function TodoSection({
   const completed = todos.filter((item) => item.status === 'completed').length
 
   return (
-    <div className="overflow-hidden border-b border-[var(--border-subtle)] bg-transparent last:border-b-0">
+    <div className="overflow-hidden bg-transparent">
       <SectionHeader
         open={open}
         onToggle={() => {
@@ -140,7 +140,7 @@ function TodoSection({
         summary={`${completed}/${todos.length} 已完成`}
       />
       {open ? (
-        <ul className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)] py-1">
+        <ul className="max-h-40 overflow-y-auto pb-1">
           {todos.map((item, index) => (
             <li key={`${index}-${item.content}`} className="flex items-start gap-2 px-3 py-1.5 text-xs">
               <span className="mt-0.5 shrink-0">
@@ -198,7 +198,7 @@ function ChangesSection({
   }
 
   return (
-    <div className="overflow-hidden border-b border-[var(--border-subtle)] bg-transparent last:border-b-0">
+    <div className="overflow-hidden bg-transparent">
       <SectionHeader
         open={open}
         onToggle={() => {
@@ -240,7 +240,7 @@ function ChangesSection({
         }
       />
       {open ? (
-        <ul className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)]">
+        <ul className="max-h-40 overflow-y-auto pb-1">
           {activities.map((activity) => {
             const delta = deltaLabel(activity)
             const running = activity.status === 'running'
@@ -301,6 +301,7 @@ export function AgentActivityBar({
   reviewBusy,
   onApproveAllReviews,
   onRejectAllReviews,
+  appearance = 'inline',
 }: {
   activities: WorkspaceActivity[]
   activitiesVersion: number
@@ -311,13 +312,19 @@ export function AgentActivityBar({
   reviewBusy: boolean
   onApproveAllReviews?: () => void
   onRejectAllReviews?: () => void
+  appearance?: 'inline' | 'dock'
 }) {
   if (activities.length === 0 && todos.length === 0 && pendingReviewCount === 0) {
     return null
   }
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className={cn(
+      'flex flex-col overflow-hidden',
+      appearance === 'dock'
+        ? 'rounded-[18px] bg-[var(--surface-muted)] px-1 py-1 shadow-[0_1px_0_rgba(255,255,255,0.025)_inset]'
+        : 'rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)]',
+    )}>
       <TodoSection todos={todos} todosVersion={todosVersion} runActive={runActive} />
       <ChangesSection
         activities={activities}

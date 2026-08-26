@@ -561,6 +561,10 @@ html[data-studio-resizing='true'] .studio-resizable-grid {
   transition: none;
 }
 
+.work-perspective[data-activity-dock='visible'] .agent-activity-responsive {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .studio-perspective-enter { animation: none; }
   .studio-resizable-panel,

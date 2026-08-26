@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronRight, MessageSquareText, PencilLine, SquarePlus, Trash2 } from 'lucide-react'
+import { ChevronRight, PencilLine, SquarePlus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -29,12 +29,11 @@ export function AgentTaskRail({
         <SquarePlus className="h-4 w-4" />
       </button>
       <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto [scrollbar-width:none]">
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-[7px] overflow-y-auto py-2 [scrollbar-width:none]">
         {taskWindows.map((taskWindow) => {
           const active = taskWindow.id === activeTaskWindowId
-          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} disabled={taskSwitchLocked} className={cn('relative flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors disabled:opacity-55', active ? 'bg-[var(--surface-muted)] text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-label={taskWindow.title} title={taskWindow.title}>
-            {active ? <span className="absolute -left-[7px] h-5 w-0.5 rounded-full bg-emerald-500" aria-hidden /> : null}
-            <MessageSquareText className="h-4 w-4" />
+          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} disabled={taskSwitchLocked} className="group flex h-[7px] w-9 shrink-0 items-center justify-center disabled:opacity-55" aria-label={taskWindow.title} title={taskWindow.title} aria-current={active ? 'page' : undefined}>
+            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200', active ? 'w-4 bg-[var(--text-primary)] opacity-95' : 'w-2.5 bg-[var(--text-tertiary)] opacity-45 group-hover:w-3.5 group-hover:opacity-80')} aria-hidden />
           </button>
         })}
       </div>

@@ -3788,7 +3788,7 @@ export default function StudioWorkspace() {
             ) : (
               <>
                 {/* 作品选择器占满剩余宽度，作品名尽量完整显示；右侧保存状态保持短标签 */}
-                <div className={cn('min-w-0 flex-1 transition-[max-width] duration-200', mobileView === 'assistant' && 'max-w-[33%]')}>
+                <div className={cn('min-w-0 flex-1 transition-[max-width] duration-200', mobileView === 'assistant' && 'max-w-[44%]')}>
                   <WorkspaceNovelSwitcher
                     currentNovelId={currentNovel.id}
                     currentNovelTitle={novelTitle}
@@ -3898,7 +3898,7 @@ export default function StudioWorkspace() {
             ) : null}
 
             {mobileView === 'assistant' ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="relative z-20 flex min-h-0 flex-1 flex-col overflow-visible">
                 {renderWritingAgent(undefined, false, 'inline', true)}
               </div>
             ) : null}
@@ -4093,7 +4093,7 @@ export default function StudioWorkspace() {
                   onSelectTaskWindow={(taskWindowId) => void handleSelectAgentTaskWindow(taskWindowId)}
                 />}
                 conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
-                activityDock={<div className="flex h-full min-h-0 flex-col p-3"><p className="mb-2 px-1 text-[10px] font-medium uppercase tracking-[.12em] text-[var(--text-tertiary)]">任务状态</p><AgentActivityBar
+                activityDock={(workspaceActivities.length > 0 || agentTodos.length > 0 || pendingChapterReviews.length > 0 || Boolean(pendingPlanReview)) ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><AgentActivityBar
                   activities={workspaceActivities}
                   activitiesVersion={workspaceActivitiesVersion}
                   todos={agentTodos}
@@ -4103,7 +4103,8 @@ export default function StudioWorkspace() {
                   reviewBusy={pendingChapterReviewBusy || pendingPlanReviewBusy}
                   onApproveAllReviews={handleApproveAllPendingReviews}
                   onRejectAllReviews={handleRequestRejectAllPendingReviews}
-                /></div>}
+                  appearance="dock"
+                /></div></div> : undefined}
                 inspector={<WorkInspector
                   tab={workInspectorTab}
                   onTabChange={setWorkInspectorTab}
@@ -4123,6 +4124,12 @@ export default function StudioWorkspace() {
                   activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
                   selectedTextLength={editorSelection.text.length}
                   activities={workspaceActivities}
+                  volumes={volumes}
+                  chapters={chapters}
+                  plans={savedPlanFiles}
+                  projectNotes={projectNotes}
+                  activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
+                  taskCount={agentTaskSidebarItems.length}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
@@ -4197,6 +4204,12 @@ export default function StudioWorkspace() {
                     activeArtifactTitle={agentArtifacts.find((artifact) => artifact.id === activeAgentArtifactId)?.title ?? null}
                     selectedTextLength={editorSelection.text.length}
                     activities={workspaceActivities}
+                    volumes={volumes}
+                    chapters={chapters}
+                    plans={savedPlanFiles}
+                    projectNotes={projectNotes}
+                    activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
+                    taskCount={agentTaskSidebarItems.length}
                   />}
                 />
                 {ideTreeOpen ? <PanelResizeHandle
