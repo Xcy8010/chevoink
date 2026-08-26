@@ -205,38 +205,161 @@ export function PostDetailSkeleton() {
   )
 }
 
-/** 创作区骨架屏：左侧目录条列 + 中部编辑区 + 右侧面板条列 */
+const studioMessageWidths = ['w-11/12', 'w-full', 'w-4/5'] as const
+
+function StudioMessageLines({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={cn('space-y-3', compact && 'space-y-2.5')}>
+      {studioMessageWidths.map((width, index) => (
+        <Skeleton key={width} className={cn(compact ? 'h-3' : 'h-3.5', width, index === 2 && 'opacity-80')} />
+      ))}
+    </div>
+  )
+}
+
+/** 创作区骨架屏：按真实 Work 工作区分别适配桌面端与手机端 */
 export function StudioSkeleton() {
   return (
-    <div className="grid min-h-[70vh] gap-4 lg:grid-cols-[240px_minmax(0,1fr)_320px]" aria-busy="true" aria-label="创作区加载中">
-      <div className="hidden space-y-2 rounded-[var(--radius-xl)] border border-[var(--border-subtle)] p-3 lg:block">
-        <Skeleton className="h-9 w-full rounded-[14px]" />
-        <div className="space-y-1.5 pt-2">
-          {Array.from({ length: 8 }).map((_, index) => (
-            <Skeleton key={index} className="h-8 rounded-[10px]" {...{ style: { width: `${72 + ((index * 9) % 26)}%` } }} />
-          ))}
-        </div>
-      </div>
-      <div className="space-y-4 rounded-[var(--radius-xl)] border border-[var(--border-subtle)] p-5">
-        <div className="flex items-center justify-between gap-3">
-          <Skeleton className="h-5 w-32" />
-          <div className="flex gap-2">
-            <Skeleton className="h-8 w-20 rounded-[12px]" />
-            <Skeleton className="h-8 w-14 rounded-[12px]" />
+    <div
+      className="flex h-full min-h-[70vh] min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]"
+      aria-busy="true"
+      aria-label="创作区加载中"
+    >
+      {/* 手机端：复刻作品选择、一体化 Agent 顶栏、工作台与安全区底栏，避免加载完成时整页跳动。 */}
+      <div className="flex min-h-0 flex-1 flex-col lg:hidden" data-studio-skeleton="mobile">
+        <div className="flex h-[52px] shrink-0 items-center gap-2 px-1" data-studio-region="mobile-header">
+          <Skeleton className="h-11 w-[44%] shrink-0 rounded-[16px]" />
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-1.5">
+            <Skeleton className="h-5 w-5 shrink-0 rounded-full" />
+            <Skeleton className="h-3.5 min-w-0 flex-1" />
+            <Skeleton className="h-7 w-7 shrink-0 rounded-[8px]" />
+            <Skeleton className="h-7 w-7 shrink-0 rounded-[8px]" />
           </div>
         </div>
-        <Skeleton className="h-7 w-3/5" />
-        <div className="space-y-3 pt-2">
-          {Array.from({ length: 10 }).map((_, index) => (
-            <Skeleton key={index} className="h-4" {...{ style: { width: `${84 + ((index * 7) % 16)}%` } }} />
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-2 pt-3" data-studio-region="mobile-conversation">
+          <div className="min-h-0 flex-1 space-y-5 overflow-hidden py-2">
+            <StudioMessageLines compact />
+            <div className="ml-auto w-2/3 rounded-[22px] bg-[var(--surface-muted)] p-4">
+              <Skeleton className="h-3.5 w-4/5" />
+            </div>
+            <Skeleton className="h-3 w-28" />
+            <StudioMessageLines compact />
+            <div className="ml-auto w-1/2 rounded-[22px] bg-[var(--surface-muted)] p-4">
+              <Skeleton className="h-3.5 w-3/4" />
+            </div>
+          </div>
+
+          <div className="mb-2 shrink-0 overflow-hidden rounded-[18px] border border-[var(--border-subtle)]" data-studio-region="mobile-activity">
+            <div className="flex h-11 items-center gap-3 px-4">
+              <Skeleton className="h-4 w-4 rounded-full" />
+              <Skeleton className="h-3.5 w-28" />
+              <Skeleton className="ml-auto h-3 w-14" />
+            </div>
+            <div className="flex h-11 items-center gap-3 border-t border-[var(--border-subtle)] px-4">
+              <Skeleton className="h-4 w-4 rounded-[5px]" />
+              <Skeleton className="h-3.5 w-32" />
+            </div>
+          </div>
+
+          <div className="h-[126px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-4" data-studio-region="mobile-composer">
+            <Skeleton className="h-3.5 w-3/4" />
+            <div className="mt-12 flex items-center gap-3">
+              <Skeleton className="h-7 w-7 rounded-[8px]" />
+              <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
+              <Skeleton className="h-7 w-7 rounded-[8px]" />
+              <Skeleton className="ml-auto h-10 w-10 rounded-full" />
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="studio-bottom-nav flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1"
+          data-studio-region="mobile-bottom-nav"
+        >
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div key={index} className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-1" data-studio-nav-item>
+              <Skeleton className="h-5 w-5 rounded-[6px]" />
+              <Skeleton className="h-2.5 w-8" />
+            </div>
           ))}
         </div>
       </div>
-      <div className="hidden space-y-3 rounded-[var(--radius-xl)] border border-[var(--border-subtle)] p-4 lg:block">
-        <Skeleton className="h-5 w-24" />
-        <SkeletonText lines={3} />
-        <Skeleton className="h-24 w-full rounded-[var(--radius-lg)]" />
-        <SkeletonText lines={4} />
+
+      {/* 桌面端：默认 Work 模式的紧凑任务条、居中对话区和检查器条。 */}
+      <div className="hidden min-h-0 flex-1 flex-col lg:flex" data-studio-skeleton="desktop">
+        <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-3" data-studio-region="desktop-command-bar">
+          <Skeleton className="h-9 w-40 rounded-[4px]" />
+          <div className="h-6 w-px bg-[var(--border-subtle)]" />
+          <Skeleton className="h-9 w-40 rounded-[4px]" />
+          <div className="h-6 w-px bg-[var(--border-subtle)]" />
+          <Skeleton className="h-9 w-20 rounded-[4px]" />
+          <div className="ml-auto flex gap-2">
+            <Skeleton className="h-9 w-24 rounded-[4px]" />
+            <Skeleton className="h-9 w-20 rounded-[4px]" />
+            <Skeleton className="h-9 w-9 rounded-[4px]" />
+            <Skeleton className="h-9 w-24 rounded-[4px]" />
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <aside className="flex w-[54px] shrink-0 flex-col items-center gap-4 border-r border-[var(--border-subtle)] py-4" data-studio-region="desktop-task-rail">
+            <Skeleton className="h-6 w-6 rounded-[6px]" />
+            <div className="h-px w-7 bg-[var(--border-subtle)]" />
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className={cn('h-1 w-4 rounded-full', index === 1 && 'w-6')} />
+            ))}
+          </aside>
+
+          <main className="flex min-w-0 flex-1 justify-center overflow-hidden" data-studio-region="desktop-conversation">
+            <div className="flex h-full min-h-0 w-full max-w-[960px] flex-col px-8">
+              <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)]">
+                <Skeleton className="h-6 w-6 rounded-full" />
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="ml-auto h-7 w-7 rounded-[8px]" />
+                <Skeleton className="h-7 w-7 rounded-[8px]" />
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-8 overflow-hidden px-5 py-8">
+                <StudioMessageLines />
+                <div className="ml-auto w-2/5 rounded-[22px] bg-[var(--surface-muted)] p-5">
+                  <Skeleton className="h-3.5 w-4/5" />
+                </div>
+                <Skeleton className="h-3 w-32" />
+                <StudioMessageLines />
+                <StudioMessageLines />
+              </div>
+
+              <div className="mb-2 shrink-0 overflow-hidden rounded-[18px] border border-[var(--border-subtle)]" data-studio-region="desktop-activity">
+                <div className="flex h-10 items-center gap-3 px-4">
+                  <Skeleton className="h-4 w-4 rounded-full" />
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="ml-auto h-3 w-16" />
+                </div>
+                <div className="flex h-10 items-center gap-3 border-t border-[var(--border-subtle)] px-4">
+                  <Skeleton className="h-4 w-4 rounded-[5px]" />
+                  <Skeleton className="h-3.5 w-36" />
+                </div>
+              </div>
+
+              <div className="mb-4 h-[132px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-5" data-studio-region="desktop-composer">
+                <Skeleton className="h-3.5 w-2/5" />
+                <div className="mt-14 flex items-center gap-3">
+                  <Skeleton className="h-7 w-7 rounded-[8px]" />
+                  <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
+                  <Skeleton className="h-7 w-7 rounded-[8px]" />
+                  <Skeleton className="ml-auto h-10 w-10 rounded-full" />
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <aside className="flex w-[46px] shrink-0 flex-col items-center gap-5 border-l border-[var(--border-subtle)] py-4" data-studio-region="desktop-inspector-rail">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <Skeleton key={index} className="h-5 w-5 rounded-[6px]" />
+            ))}
+          </aside>
+        </div>
       </div>
     </div>
   )
