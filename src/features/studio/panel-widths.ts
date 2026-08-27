@@ -7,7 +7,8 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 
 const STUDIO_PANEL_WIDTHS_STORAGE_KEY = 'studio-panel-widths'
 
-export const TREE_PANEL_WIDTH_LIMITS = { min: 200, fallback: 264 }
+const LEGACY_TREE_PANEL_FALLBACK = 264
+export const TREE_PANEL_WIDTH_LIMITS = { min: 240, fallback: 420 }
 export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, fallback: 424 }
 export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
 export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 260, fallback: 520 }
@@ -85,7 +86,11 @@ function readStoredPanelWidths(): StudioPanelWidths {
     }
     const parsed = JSON.parse(raw) as Partial<StudioPanelWidths>
     return {
-      tree: clampPanelWidth(Number(parsed.tree) || fallback.tree, TREE_PANEL_WIDTH_LIMITS),
+      // 2.0 旧默认 264px 对卷→章的层级树过窄；只迁移精确旧默认，保留用户主动拖拽的宽度。
+      tree: clampPanelWidth(
+        Number(parsed.tree) === LEGACY_TREE_PANEL_FALLBACK ? fallback.tree : Number(parsed.tree) || fallback.tree,
+        TREE_PANEL_WIDTH_LIMITS,
+      ),
       agent: clampPanelWidth(Number(parsed.agent) || fallback.agent, AGENT_PANEL_WIDTH_LIMITS),
       workTask: clampPanelWidth(Number(parsed.workTask) || fallback.workTask, WORK_TASK_PANEL_WIDTH_LIMITS),
       workInspector: clampPanelWidth(

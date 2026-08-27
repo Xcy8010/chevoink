@@ -187,6 +187,7 @@ export type NovelPlanFileItem = {
   content: string
   createdAt: string
   updatedAt: string
+  orderIndex: number | null
 }
 
 /** 计划文件夹：作品维度拉取已存入云端的创作计划（跨会话聚合） */
@@ -212,7 +213,7 @@ export async function createNovelPlanFile(
 /** 计划文件夹：同步改名/改正文，saved=false 从云端文件夹移除 */
 export async function updateNovelPlanFile(
   artifactId: string,
-  patch: { title?: string; content?: string; saved?: boolean },
+  patch: { title?: string; content?: string; saved?: boolean; position?: number },
 ): Promise<NovelPlanFileItem> {
   const data = await requestData<{ item: NovelPlanFileItem }>(`/api/agent/plans/${artifactId}`, {
     method: 'PATCH',

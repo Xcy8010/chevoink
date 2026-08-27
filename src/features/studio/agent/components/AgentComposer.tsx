@@ -45,6 +45,9 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   const setAttachments = useAgentStore((state) => state.setComposerAttachments)
   const addAttachment = useAgentStore((state) => state.addComposerAttachment)
   const removeAttachment = useAgentStore((state) => state.removeComposerAttachment)
+  const references = useAgentStore((state) => state.composerReferences)
+  const removeReference = useAgentStore((state) => state.removeComposerReference)
+  const clearReferences = useAgentStore((state) => state.clearComposerReferences)
   const uploading = useAgentStore((state) => state.composerUploading)
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
@@ -61,7 +64,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   const fileFull = fileCount >= MAX_AGENT_FILE_COUNT
 
   const canSend =
-    !running && !disabled && !sending && uploading === 0 && prompt.trim().length > 0
+    !running && !disabled && !sending && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
 
   const uploadOne = async (kind: 'image' | 'file', name: string, dataUrl: string) => {
     bumpUploading(1)
@@ -151,15 +154,25 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
 
   const handleSend = async () => {
     const trimmed = prompt.trim()
-    if (!trimmed || running || disabled || sending || uploading > 0) {
+    if ((!trimmed && references.length === 0) || running || disabled || sending || uploading > 0) {
       return
     }
+    const referenceBlock = references
+      .map((reference) => {
+        const lineLabel = reference.startLine === reference.endLine
+          ? `L${reference.startLine}`
+          : `L${reference.startLine}-${reference.endLine}`
+        return `[引用：${reference.name} ${lineLabel}]\n${reference.text}`
+      })
+      .join('\n\n')
+    const effectivePrompt = [referenceBlock, trimmed].filter(Boolean).join('\n\n')
     const pending = attachments
     setSending(true)
     try {
-      await onSend(trimmed, pending, creativeFreedom)
+      await onSend(effectivePrompt, pending, creativeFreedom)
       setPrompt('')
       setAttachments([])
+      clearReferences()
       setAttachError(null)
     } catch {
       // 面板已展示错误提示；保留草稿与附件供用户重试
@@ -170,6 +183,11 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Backspace' && !prompt && references.length > 0) {
+      event.preventDefault()
+      removeReference(references[references.length - 1].id)
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       void handleSend()
@@ -185,8 +203,29 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
       className={`relative rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
     >
       {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加图片或文件</div> : null}
-      {(attachments.length > 0 || uploading > 0) && (
+      {(references.length > 0 || attachments.length > 0 || uploading > 0) && (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+          {references.map((reference) => (
+            <div
+              key={reference.id}
+              className="group flex h-7 shrink-0 items-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-primary)]"
+              title={`${reference.name} · 第 ${reference.startLine}-${reference.endLine} 行`}
+            >
+              <button
+                type="button"
+                onClick={() => removeReference(reference.id)}
+                aria-label={`移除引用 ${reference.name}`}
+                className="mr-1 inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]"
+              >
+                <FileText className="h-3.5 w-3.5 group-hover:hidden" />
+                <X className="hidden h-3.5 w-3.5 group-hover:block" />
+              </button>
+              <span className="max-w-40 truncate">{reference.name}</span>
+              <span className="ml-1 shrink-0 text-[var(--text-tertiary)]">
+                {reference.startLine === reference.endLine ? reference.startLine : `${reference.startLine}-${reference.endLine}`}
+              </span>
+            </div>
+          ))}
           {attachments.map((attachment) =>
             attachment.kind === 'image' ? (
               <div key={attachment.id} className="group relative h-14 w-14 shrink-0">

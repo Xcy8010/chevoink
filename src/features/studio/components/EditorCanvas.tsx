@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FilePenLine, LoaderCircle, MoreHorizontal, RefreshCcw, Settings2, Upload } from 'lucide-react'
+import { FilePenLine, FolderPlus, LoaderCircle, MessageSquarePlus, MoreHorizontal, RefreshCcw, Settings2, Upload } from 'lucide-react'
 
 import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
 import Button from '@/components/ui/Button'
@@ -20,9 +20,12 @@ type EditorCanvasProps = {
   latestWordCountLabel: string
   selectedCommentCount: number
   onSelectionChange?: (next: { start: number; end: number; text: string }) => void
+  selection?: { start: number; end: number; text: string }
+  onAddSelection?: () => void
   onSave: () => void
   onRetryLoad: () => void
   onCreateChapter: () => void
+  onCreateVolume?: () => void
   onOpenChapterSettings: () => void
   /** 打开当前计划的设置抽屉（改名 / 删除） */
   onOpenPlanSettings?: () => void
@@ -67,9 +70,12 @@ export default function EditorCanvas({
   chapterSaveMessage: _chapterSaveMessage,
   latestWordCountLabel,
   onSelectionChange,
+  selection,
+  onAddSelection,
   onSave: _onSave,
   onRetryLoad,
   onCreateChapter,
+  onCreateVolume,
   onOpenChapterSettings,
   onOpenPlanSettings,
   onPublishNovel,
@@ -135,10 +141,16 @@ export default function EditorCanvas({
                 计划设置
               </Button>
             ) : (
-              <Button onClick={onCreateChapter} variant="ghost" size="sm" className="shrink-0">
+              <div className="flex shrink-0 items-center gap-1">
+              {onCreateVolume ? <Button onClick={onCreateVolume} variant="ghost" size="sm">
+                <FolderPlus className="h-4 w-4" />
+                新建卷
+              </Button> : null}
+              <Button onClick={onCreateChapter} variant="ghost" size="sm">
                 <FilePenLine className="h-4 w-4" />
                 新建章节
               </Button>
+              </div>
             )}
           </div>
           {workspaceDocument.kind === 'plan' && pendingPlanReview ? (
@@ -193,17 +205,31 @@ export default function EditorCanvas({
             ) : null}
             <p className="text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
           </div>
+          <div className="flex items-center gap-2">
+          {selection?.text.trim() ? (
+            <Button onClick={onAddSelection} variant="ghost" size="sm">
+              <MessageSquarePlus className="h-4 w-4" />
+              添加到输入框
+            </Button>
+          ) : null}
           {workspaceDocument.kind === 'plan' ? (
             <Button onClick={() => onOpenPlanSettings?.()} variant="primary" size="sm">
               <Settings2 className="h-4 w-4" />
               计划设置
             </Button>
           ) : (
+            <div className="flex items-center gap-1">
+            {onCreateVolume ? <Button onClick={onCreateVolume} variant="ghost" size="sm">
+              <FolderPlus className="h-4 w-4" />
+              新建卷
+            </Button> : null}
             <Button onClick={onCreateChapter} variant="ghost" size="sm">
               <FilePenLine className="h-4 w-4" />
               新建章节
             </Button>
+            </div>
           )}
+          </div>
         </div>
 
         <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pr-1 pb-2">
@@ -404,6 +430,12 @@ export default function EditorCanvas({
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {selection?.text.trim() ? (
+            <Button onClick={onAddSelection} variant="ghost" size="sm">
+              <MessageSquarePlus className="h-4 w-4" />
+              添加到输入框
+            </Button>
+          ) : null}
           {onPublishNovel ? (
             <Button
               onClick={onPublishNovel}

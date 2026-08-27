@@ -208,6 +208,7 @@ export type WorkspacePlanFile = {
   artifactId: string
   /** 云端 AgentArtifact id：用于本地/服务端计划去重与同步 */
   backendArtifactId?: string | null
+  orderIndex?: number | null
 }
 
 export type WorkspaceDocumentView = {

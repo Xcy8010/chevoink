@@ -66,8 +66,9 @@ const updateAgentPlanSchema = z
     title: z.string().optional(),
     content: z.string().optional(),
     saved: z.boolean().optional(),
+    position: z.number().int().positive().optional(),
   })
-  .refine((patch) => patch.title !== undefined || patch.content !== undefined || patch.saved !== undefined)
+  .refine((patch) => patch.title !== undefined || patch.content !== undefined || patch.saved !== undefined || patch.position !== undefined)
 
 const resolveMemoryReviewSchema = z.object({ accepted: z.boolean() })
 

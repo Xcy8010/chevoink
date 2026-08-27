@@ -91,6 +91,7 @@ export function buildServerPlanFile(item: NovelPlanFileItem): WorkspacePlanFile 
     createdAt: item.createdAt,
     artifactId: `server-${item.id}`,
     backendArtifactId: item.id,
+    orderIndex: item.orderIndex,
   }
 }
 

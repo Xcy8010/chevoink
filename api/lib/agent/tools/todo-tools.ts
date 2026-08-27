@@ -23,8 +23,47 @@ const todoWriteParameters = z.object({
     )
     .min(1)
     .max(20)
+    .superRefine((items, ctx) => {
+      if (items.filter((item) => item.status === 'in_progress').length > 1) {
+        ctx.addIssue({ code: 'custom', message: '同一时刻只能有一项待办处于进行中。' })
+      }
+    })
     .describe('完整的待办清单（全量替换，不是增量）。更新单项状态时也必须把其余项原样带上，否则会丢失'),
 })
+
+function parseTodoArtifact(content: string | null | undefined): AgentTodoItem[] {
+  if (!content) return []
+  try {
+    const parsed = JSON.parse(content) as AgentTodoItem[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 待办进度状态机：一次只能真实完成一项，且必须先进入进行中。
+ * 这是服务端纪律线，避免模型在收尾时一次性把整张清单全部打勾。
+ */
+export function validateTodoProgression(previous: AgentTodoItem[], next: AgentTodoItem[]): string | null {
+  const previousByContent = new Map(previous.map((item) => [item.content, item.status]))
+  const newlyCompleted = next.filter(
+    (item) => item.status === 'completed' && previousByContent.get(item.content) !== 'completed',
+  )
+
+  if (newlyCompleted.length > 1) {
+    return '一次 todo_write 只能完成一项待办。请在每项工作真实完成后立即单独更新，再继续下一项。'
+  }
+  if (newlyCompleted.some((item) => previousByContent.get(item.content) !== 'in_progress')) {
+    return '待办不能从未开始直接跳到已完成。请先把当前项标记为 in_progress，完成后再单独标记 completed。'
+  }
+  for (const item of next) {
+    if (previousByContent.get(item.content) === 'completed' && item.status !== 'completed') {
+      return `已完成的待办“${item.content}”不能回退状态；如需返工，请新增一条明确的返工待办。`
+    }
+  }
+  return null
+}
 
 /** 会话级待办清单在 agent_artifacts 里的定位条件（metadata.todoList=true，不进计划文件夹） */
 function todoArtifactWhere(sessionId: string) {
@@ -103,25 +142,31 @@ export const todoWriteTool = defineTool({
   name: 'todo_write',
   title: '更新待办清单',
   description:
-    '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再逐项执行：开始做某项前把它标为 in_progress，做完立即标为 completed 并顺手带上其余项原样提交。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者"要不要继续"。每次调用都要传入完整清单（全量替换）。',
+    '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再严格逐项执行：开工前只把当前一项标为 in_progress；该项真实交付后立即单独标为 completed，再把下一项标为 in_progress。严禁在任务末尾批量完成多项，服务端会拒绝；严禁 pending 直接跳 completed。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者“要不要继续”。每次调用都要传入完整清单（全量替换）。',
   parameters: todoWriteParameters,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
   async execute(ctx, args) {
-    const items = args.items as AgentTodoItem[]
-    const completed = items.filter((item) => item.status === 'completed').length
-    const content = JSON.stringify(items)
-
     // 会话内 upsert：一份清单贯穿整个任务窗口，续跑/刷新都能恢复
     const existing = await prisma.agentArtifact.findFirst({
       where: todoArtifactWhere(ctx.sessionId),
       orderBy: { updatedAt: 'desc' },
-      select: { id: true },
+      select: { id: true, content: true, metadata: true },
     })
+    const metadata = existing?.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
+      ? existing.metadata as Record<string, unknown>
+      : {}
+    const previous = metadata.todoRunId === ctx.runId ? parseTodoArtifact(existing?.content) : []
+    const items = args.items as AgentTodoItem[]
+    const progressionError = validateTodoProgression(previous, items)
+    if (progressionError) throw new Error(progressionError)
+
+    const completed = items.filter((item) => item.status === 'completed').length
+    const content = JSON.stringify(items)
     if (existing) {
       await prisma.agentArtifact.update({
         where: { id: existing.id },
-        data: { content, summary: `待办 ${completed}/${items.length}` },
+        data: { content, summary: `待办 ${completed}/${items.length}`, metadata: { ...metadata, todoList: true, todoRunId: ctx.runId } },
       })
     } else {
       await prisma.agentArtifact.create({
@@ -131,7 +176,7 @@ export const todoWriteTool = defineTool({
           title: '任务待办清单',
           summary: `待办 ${completed}/${items.length}`,
           content,
-          metadata: { todoList: true },
+          metadata: { todoList: true, todoRunId: ctx.runId },
         },
       })
     }

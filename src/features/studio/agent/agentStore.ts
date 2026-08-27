@@ -78,6 +78,15 @@ export type WorkspaceActivity = {
   accepted?: boolean
 }
 
+/** 从章节/计划查看器选入输入框的结构化引用；正文独立保存，避免删除引用时污染草稿换行。 */
+export type ComposerReference = {
+  id: string
+  name: string
+  startLine: number
+  endLine: number
+  text: string
+}
+
 /** 会对工作区（章节树/正文/作品信息）产生写入的工具集合 */
 export const WORKSPACE_WRITE_TOOLS = new Set([
   'chapter_create',
@@ -165,6 +174,8 @@ type AgentStoreState = {
   composerDraft: string
   /** 输入框附件（已上传成功的元数据）：同草稿提升全局，沉浸/普通视图重挂载不丢 */
   composerAttachments: AgentAttachmentMeta[]
+  /** 查看器选区引用：以附件标签展示，发送时才序列化进提示词。 */
+  composerReferences: ComposerReference[]
   /** 正在上传中的附件数量：上传完成前禁止发送 */
   composerUploading: number
   /** 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文（默认开启） */
@@ -189,6 +200,9 @@ type AgentStoreState = {
   setComposerAttachments: (list: AgentAttachmentMeta[]) => void
   addComposerAttachment: (meta: AgentAttachmentMeta) => void
   removeComposerAttachment: (id: string) => void
+  addComposerReference: (reference: ComposerReference) => void
+  removeComposerReference: (id: string) => void
+  clearComposerReferences: () => void
   bumpComposerUploading: (delta: number) => void
   setAutoFollow: (value: boolean) => void
   /** 将刚通过作者审查的写入活动标记为已接受；执行成功本身仍只是已完成。 */
@@ -377,6 +391,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   loadedSessionId: null,
   composerDraft: '',
   composerAttachments: [],
+  composerReferences: [],
   composerUploading: 0,
   autoFollow: readStoredAutoFollow(),
   workspaceActivities: [],
@@ -484,6 +499,19 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     set((state) => ({
       composerAttachments: state.composerAttachments.filter((attachment) => attachment.id !== id),
     })),
+
+  addComposerReference: (reference) =>
+    set((state) => ({
+      composerReferences: [
+        ...state.composerReferences.filter((item) => item.id !== reference.id),
+        reference,
+      ],
+    })),
+
+  removeComposerReference: (id) =>
+    set((state) => ({ composerReferences: state.composerReferences.filter((item) => item.id !== id) })),
+
+  clearComposerReferences: () => set({ composerReferences: [] }),
 
   bumpComposerUploading: (delta) =>
     set((state) => ({ composerUploading: Math.max(0, state.composerUploading + delta) })),

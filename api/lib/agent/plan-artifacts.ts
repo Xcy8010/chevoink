@@ -14,6 +14,7 @@ export type NovelPlanArtifact = {
   content: string
   createdAt: string
   updatedAt: string
+  orderIndex: number | null
 }
 
 function toNovelPlanArtifact(artifact: {
@@ -23,7 +24,11 @@ function toNovelPlanArtifact(artifact: {
   content: string
   createdAt: Date
   updatedAt: Date
+  metadata?: Prisma.JsonValue | null
 }): NovelPlanArtifact {
+  const metadata = artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+    ? artifact.metadata as Record<string, unknown>
+    : {}
   return {
     id: artifact.id,
     runId: artifact.runId,
@@ -31,6 +36,9 @@ function toNovelPlanArtifact(artifact: {
     content: artifact.content,
     createdAt: artifact.createdAt.toISOString(),
     updatedAt: artifact.updatedAt.toISOString(),
+    orderIndex: typeof metadata.planOrder === 'number' && Number.isInteger(metadata.planOrder)
+      ? metadata.planOrder
+      : null,
   }
 }
 
@@ -55,7 +63,7 @@ export async function listNovelPlanArtifacts(
       run: { userId, novelId },
     },
     orderBy: { createdAt: 'asc' },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
+    select: { id: true, runId: true, title: true, content: true, metadata: true, createdAt: true, updatedAt: true },
   })
 
   // 同名去重（plan/14 §四 B3）：历史重复落盘的同名计划只保留最后更新的一份，无需数据迁移
@@ -66,7 +74,13 @@ export async function listNovelPlanArtifacts(
       latestByTitle.set(artifact.title, artifact)
     }
   }
-  const deduped = artifacts.filter((artifact) => latestByTitle.get(artifact.title)?.id === artifact.id)
+  const deduped = artifacts
+    .filter((artifact) => latestByTitle.get(artifact.title)?.id === artifact.id)
+    .sort((left, right) => {
+      const leftOrder = toNovelPlanArtifact(left).orderIndex ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = toNovelPlanArtifact(right).orderIndex ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder || left.createdAt.getTime() - right.createdAt.getTime()
+    })
 
   return { items: deduped.map(toNovelPlanArtifact) }
 }
@@ -128,7 +142,7 @@ export async function createNovelPlanArtifact(
       metadata: { path: ['savedAsPlan'], equals: true },
       run: { userId, novelId },
     },
-    select: { title: true },
+    select: { title: true, metadata: true },
   })
   const usedTitles = new Set(existing.map((artifact) => artifact.title.trim()))
 
@@ -146,9 +160,18 @@ export async function createNovelPlanArtifact(
       artifactType: 'chapterPlan',
       title: nextTitle,
       content: '',
-      metadata: { savedAsPlan: true, manualCreated: true },
+      metadata: {
+        savedAsPlan: true,
+        manualCreated: true,
+        planOrder: existing.reduce((maximum, item, index) => {
+          const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+            ? item.metadata as Record<string, unknown>
+            : {}
+          return Math.max(maximum, typeof metadata.planOrder === 'number' ? metadata.planOrder : index + 1)
+        }, 0) + 1,
+      },
     },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
+    select: { id: true, runId: true, title: true, content: true, metadata: true, createdAt: true, updatedAt: true },
   })
 
   return { item: toNovelPlanArtifact(artifact) }
@@ -158,10 +181,11 @@ export async function createNovelPlanArtifact(
 export async function updateNovelPlanArtifact(
   userId: string,
   artifactId: string,
-  patch: { title?: string; content?: string; saved?: boolean },
+  patch: { title?: string; content?: string; saved?: boolean; position?: number },
 ): Promise<{ item: NovelPlanArtifact }> {
   const artifact = await prisma.agentArtifact.findFirst({
     where: { id: artifactId, artifactType: 'chapterPlan', run: { userId } },
+    include: { run: { select: { novelId: true } } },
   })
 
   if (!artifact) {
@@ -177,6 +201,39 @@ export async function updateNovelPlanArtifact(
     metadata.savedAsPlan = patch.saved
   }
 
+  if (typeof patch.position === 'number') {
+    const siblings = await prisma.agentArtifact.findMany({
+      where: {
+        artifactType: 'chapterPlan',
+        metadata: { path: ['savedAsPlan'], equals: true },
+        run: { userId, novelId: artifact.run.novelId },
+      },
+      orderBy: { createdAt: 'asc' },
+    })
+    siblings.sort((left, right) => {
+      const leftMeta = left.metadata && typeof left.metadata === 'object' && !Array.isArray(left.metadata) ? left.metadata as Record<string, unknown> : {}
+      const rightMeta = right.metadata && typeof right.metadata === 'object' && !Array.isArray(right.metadata) ? right.metadata as Record<string, unknown> : {}
+      const leftOrder = typeof leftMeta.planOrder === 'number' ? leftMeta.planOrder : Number.MAX_SAFE_INTEGER
+      const rightOrder = typeof rightMeta.planOrder === 'number' ? rightMeta.planOrder : Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder || left.createdAt.getTime() - right.createdAt.getTime()
+    })
+    const currentIndex = siblings.findIndex((item) => item.id === artifact.id)
+    if (currentIndex >= 0) {
+      const [moved] = siblings.splice(currentIndex, 1)
+      siblings.splice(Math.max(0, Math.min(patch.position - 1, siblings.length)), 0, moved)
+      await prisma.$transaction(siblings.map((item, index) => {
+        const itemMetadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? { ...(item.metadata as Record<string, unknown>) }
+          : {}
+        return prisma.agentArtifact.update({
+          where: { id: item.id },
+          data: { metadata: { ...itemMetadata, planOrder: index + 1 } as Prisma.InputJsonValue },
+        })
+      }))
+      metadata.planOrder = siblings.findIndex((item) => item.id === artifact.id) + 1
+    }
+  }
+
   const updated = await prisma.agentArtifact.update({
     where: { id: artifact.id },
     data: {
@@ -184,7 +241,7 @@ export async function updateNovelPlanArtifact(
       ...(typeof patch.content === 'string' ? { content: patch.content } : {}),
       metadata: metadata as Prisma.InputJsonValue,
     },
-    select: { id: true, runId: true, title: true, content: true, createdAt: true, updatedAt: true },
+    select: { id: true, runId: true, title: true, content: true, metadata: true, createdAt: true, updatedAt: true },
   })
 
   return { item: toNovelPlanArtifact(updated) }

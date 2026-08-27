@@ -12,7 +12,7 @@ import { updateShelfCover } from '@/features/home/local-shelf'
 import { cn } from '@/lib/utils'
 import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type { AgentStreamEvent, Chapter, CoverAsset, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
-import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, deleteWritingAgentSession, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
+import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteWritingAgentSession, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
 import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
@@ -1286,17 +1286,30 @@ export default function StudioWorkspace() {
   )
   const savedPlanFiles = useMemo(() => {
     const localPlans = buildWorkspacePlanFiles(agentArtifacts)
+    const serverByBackendId = new Map(
+      serverPlanFiles
+        .filter((plan): plan is WorkspacePlanFile & { backendArtifactId: string } => Boolean(plan.backendArtifactId))
+        .map((plan) => [plan.backendArtifactId, plan]),
+    )
+    const orderedLocalPlans = localPlans.map((plan) => ({
+      ...plan,
+      orderIndex: plan.backendArtifactId ? serverByBackendId.get(plan.backendArtifactId)?.orderIndex ?? null : null,
+    }))
     const localBackendIds = new Set(
-      localPlans.map((plan) => plan.backendArtifactId).filter((id): id is string => Boolean(id)),
+      orderedLocalPlans.map((plan) => plan.backendArtifactId).filter((id): id is string => Boolean(id)),
     )
 
     // 本地（活跃任务窗口）优先，云端补齐其他窗口/历史会话的计划
     return [
-      ...localPlans,
+      ...orderedLocalPlans,
       ...serverPlanFiles.filter(
         (plan) => !plan.backendArtifactId || !localBackendIds.has(plan.backendArtifactId),
       ),
-    ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    ].sort((left, right) => {
+      const leftOrder = left.orderIndex ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = right.orderIndex ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder || new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    })
   }, [agentArtifacts, serverPlanFiles])
   // 计划设置抽屉指向的计划：计划被删除/切换作品后自动收起
   const planSettingsPlan = planSettingsPlanId
@@ -2310,17 +2323,24 @@ export default function StudioWorkspace() {
     setChapterSaveMessage('正在创建新章节...')
 
     try {
-      const nextOrderIndex = chapters.length + 1
+      const targetVolume = volumes.find((volume) => volume.id === activeChapterListItem?.volumeId) ?? volumes.at(-1)
+      if (!targetVolume) throw new Error('请先新建一卷，再创建章节。')
+      const nextOrderInVolume = chapters.filter((chapter) => chapter.volumeId === targetVolume.id).length + 1
       const savedChapter = await createChapterDraft(activeNovelId, {
-        title: `第 ${nextOrderIndex} 章`,
+        title: `第 ${nextOrderInVolume} 章`,
         summary: '新建章节',
         content: '',
         status: 'draft',
         visibility: 'private',
+        volumeId: targetVolume.id,
+        orderInVolume: nextOrderInVolume,
       })
 
       queryClient.setQueryData<Chapter>(['studio-chapter', activeNovelId, savedChapter.id], savedChapter)
       setChapters((current) => upsertChapterItem(current, toChapterListItem(savedChapter)))
+      setVolumes((current) => current.map((volume) => volume.id === targetVolume.id
+        ? { ...volume, chapterCount: volume.chapterCount + 1 }
+        : volume))
       setSelectedChapterId(savedChapter.id)
       setChapterDraft(buildChapterDraft(savedChapter))
       setChapterDirty(false)
@@ -2354,6 +2374,9 @@ export default function StudioWorkspace() {
           },
           draftChapter: savedChapter.status === 'draft' ? savedChapter : current.draftChapter,
           chapters: upsertChapterItem(current.chapters, toChapterListItem(savedChapter)),
+          volumes: current.volumes.map((volume) => volume.id === targetVolume.id
+            ? { ...volume, chapterCount: volume.chapterCount + 1 }
+            : volume),
         }
       })
     } catch (error) {
@@ -3296,6 +3319,78 @@ export default function StudioWorkspace() {
     setMobileView('editor')
   }
 
+  async function handleCreateLocalVolume() {
+    setChapterSaveState('saving')
+    setChapterSaveMessage('正在创建新卷...')
+    try {
+      const nextOrder = volumes.length + 1
+      const created = await createVolume(activeNovelId, {
+        title: `第 ${nextOrder} 卷`,
+        position: nextOrder,
+      })
+      const nextVolume: StudioPayload['volumes'][number] = { ...created, chapterCount: 0, wordCount: 0 }
+      setVolumes((current) => [...current, nextVolume].sort((left, right) => left.orderIndex - right.orderIndex))
+      syncStudioPayload((current) => current ? {
+        ...current,
+        volumes: [...current.volumes, nextVolume].sort((left, right) => left.orderIndex - right.orderIndex),
+      } : current)
+      setChapterSaveState('saved')
+      setChapterSaveMessage(`已创建“${created.title}”，现在可以在卷内新建章节。`)
+    } catch (error) {
+      setChapterSaveState('error')
+      setChapterSaveMessage(error instanceof Error ? error.message : '新卷创建失败，请稍后重试。')
+    }
+  }
+
+  function handleRequestCreateVolume() {
+    setWorkspaceDialog({
+      title: '确认新建卷',
+      description: '新卷会追加到作品末尾；后续新建章节将按作品 → 卷 → 章节的层级存放。确定现在新建吗？',
+      confirmLabel: '确认新建',
+      cancelLabel: '取消',
+      tone: 'default',
+      onConfirm: handleCreateLocalVolume,
+    })
+  }
+
+  async function handleMoveChapterInTree(chapterId: string, targetVolumeId: string, position: number) {
+    if (chapterDirty) {
+      toast.error('请等待当前章节自动保存后再调整顺序。')
+      return
+    }
+    const target = chapters.find((chapter) => chapter.id === chapterId)
+    if (!target || (target.volumeId === targetVolumeId && target.orderInVolume === position)) return
+    try {
+      await moveChapter(activeNovelId, chapterId, {
+        targetVolumeId,
+        position,
+        expectedRevision: target.revision,
+      })
+      await refreshWorkspaceAfterAgentWrite()
+      toast.success('章节顺序已更新。')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '章节移动失败，请重试。')
+    }
+  }
+
+  async function handleMovePlanInTree(planId: string, position: number) {
+    const target = savedPlanFiles.find((plan) => plan.id === planId)
+    if (!target?.backendArtifactId) {
+      toast.error('这份计划仍在同步中，请稍后再排序。')
+      return
+    }
+    const currentIndex = savedPlanFiles.findIndex((plan) => plan.id === planId)
+    if (currentIndex === position - 1) return
+    try {
+      await updateNovelPlanFile(target.backendArtifactId, { position })
+      const items = await listNovelPlanFiles(activeNovelId)
+      setServerPlanFiles(items.map(buildServerPlanFile))
+      toast.success('计划顺序已更新。')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '计划移动失败，请重试。')
+    }
+  }
+
   function handleSelectPlanFromTree(planId: string) {
     setSelectedTreeItemId(`plan:${planId}`)
     setWorkViewer('document')
@@ -3594,12 +3689,18 @@ export default function StudioWorkspace() {
     const volumeTitle = volumes.find((volume) => volume.id === activeChapterListItem?.volumeId)?.title
     const sourceTitle = activeWorkspaceDocument?.title ?? (chapterDraft ? `${volumeTitle ? `${volumeTitle} / ` : ''}${chapterDraft.title || `第 ${chapterDraft.orderIndex} 章`}` : '')
     if (!sourceTitle) return
-    const reference = `引用《${novelTitle}》 / ${sourceTitle}：\n> ${text.replace(/\n/g, '\n> ')}\n\n`
-    const currentDraft = useAgentStore.getState().composerDraft
-    const nextPrompt = `${currentDraft.trim() ? `${currentDraft.trim()}\n\n` : ''}${reference}`
-    useAgentStore.getState().setComposerDraft(nextPrompt)
-    setAgentPrompt(nextPrompt)
-    toast.success('已把选中正文加入当前对话。')
+    const sourceContent = activeWorkspaceDocument?.content ?? chapterDraft?.content ?? ''
+    const startLine = sourceContent.slice(0, editorSelection.start).split('\n').length
+    const endLine = startLine + Math.max(0, text.split('\n').length - 1)
+    const name = `${sourceTitle.replace(/[\\/:*?"<>|]/g, '-').trim() || '正文'}.md`
+    useAgentStore.getState().addComposerReference({
+      id: `${activeNovelId}:${selectedTreeItemId ?? selectedChapterId ?? 'document'}:${editorSelection.start}:${editorSelection.end}`,
+      name,
+      startLine,
+      endLine,
+      text,
+    })
+    toast.success('已把选中内容添加到输入框。')
   }
 
   // Agent Loop 新链路：首次发送前懒创建会话，并同步任务窗口状态
@@ -3824,9 +3925,12 @@ export default function StudioWorkspace() {
                   latestWordCountLabel={latestWordCountLabel}
                   selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
                   onSelectionChange={setEditorSelection}
+                  selection={editorSelection}
+                  onAddSelection={handleAddViewerSelectionToAgent}
                   onSave={() => void persistChapter('manual')}
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
+                  onCreateVolume={handleRequestCreateVolume}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
                   onOpenPlanSettings={() => {
                     if (selectedTreeItemId?.startsWith('plan:')) {
@@ -3897,7 +4001,10 @@ export default function StudioWorkspace() {
                   onOpenPlanSettings={setPlanSettingsPlanId}
                   onSelectCatalog={handleSelectCatalogFromTree}
                   onCreateChapter={handleRequestCreateChapter}
+                  onCreateVolume={handleRequestCreateVolume}
                   onCreatePlan={handleRequestCreatePlan}
+                  onMoveChapter={handleMoveChapterInTree}
+                  onMovePlan={handleMovePlanInTree}
                 />
               </div>
             ) : null}
@@ -4121,7 +4228,8 @@ export default function StudioWorkspace() {
                     onSelectChapter={handleSelectWorkChapter} onSelectPlan={handleSelectPlanFromTree}
                     onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
                     onOpenPlanSettings={setPlanSettingsPlanId} onSelectCatalog={handleSelectCatalogFromTree}
-                    onCreateChapter={handleRequestCreateChapter} onCreatePlan={handleRequestCreatePlan}
+                    onCreateVolume={handleRequestCreateVolume} onCreateChapter={handleRequestCreateChapter} onCreatePlan={handleRequestCreatePlan}
+                    onMoveChapter={handleMoveChapterInTree} onMovePlan={handleMovePlanInTree}
                   />}
                   novelTitle={novelTitle} volumeTitle={activeVolumeTitle} chapterTitle={chapterTitle} chapterCount={chapters.length}
                   wordCount={latestWordCountLabel}
@@ -4145,7 +4253,9 @@ export default function StudioWorkspace() {
                   loading={workViewer === 'chapter' && chapterQuery.isLoading} selection={editorSelection}
                   onChange={handleChapterDraftChange} onSelectionChange={setEditorSelection}
                   onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
-                  onAddSelection={handleAddViewerSelectionToAgent} onClose={() => setWorkViewer(null)}
+                  onAddSelection={handleAddViewerSelectionToAgent}
+                  onCreateVolume={handleRequestCreateVolume} onCreateChapter={handleRequestCreateChapter}
+                  onClose={() => setWorkViewer(null)}
                   onBlur={handleEditorBlurFlush}
                 /> : undefined}
                 leftOpen={workLeftOpen}
@@ -4199,7 +4309,10 @@ export default function StudioWorkspace() {
                     onOpenPlanSettings={setPlanSettingsPlanId}
                     onSelectCatalog={handleSelectCatalogFromTree}
                     onCreateChapter={handleRequestCreateChapter}
+                    onCreateVolume={handleRequestCreateVolume}
                     onCreatePlan={handleRequestCreatePlan}
+                    onMoveChapter={handleMoveChapterInTree}
+                    onMovePlan={handleMovePlanInTree}
                   /> : ideSidebarTab === 'memory' && featureFlags.memory2 ? <MemoryGraph
                     novelId={currentNovel.id}
                     active={agentRunState.active}
@@ -4246,9 +4359,12 @@ export default function StudioWorkspace() {
                   latestWordCountLabel={latestWordCountLabel}
                   selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
                   onSelectionChange={setEditorSelection}
+                  selection={editorSelection}
+                  onAddSelection={handleAddViewerSelectionToAgent}
                   onSave={() => void persistChapter('manual')}
                   onRetryLoad={() => chapterQuery.refetch()}
                   onCreateChapter={handleRequestCreateChapter}
+                  onCreateVolume={handleRequestCreateVolume}
                   onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
                   onOpenPlanSettings={() => {
                     if (selectedTreeItemId?.startsWith('plan:')) {

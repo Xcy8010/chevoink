@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronRight, FilePlus2, FileText, FolderTree, NotebookPen, NotebookText, ScrollText, Settings2 } from 'lucide-react'
+import { useState, type DragEvent } from 'react'
+import { ChevronDown, ChevronRight, FilePlus2, FileText, FolderPlus, FolderTree, GripVertical, NotebookPen, NotebookText, ScrollText, Settings2 } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
@@ -40,7 +40,10 @@ type ChapterSidebarProps = {
   onSelectPlan: (planId: string) => void
   onSelectCatalog: () => void
   onCreateChapter: () => void
+  onCreateVolume?: () => void
   onCreatePlan: () => void
+  onMoveChapter?: (chapterId: string, targetVolumeId: string, position: number) => void | Promise<void>
+  onMovePlan?: (planId: string, position: number) => void | Promise<void>
   /** 打开章节设置抽屉（会先切到该章） */
   onOpenChapterSettings: (chapterId: string) => void
   /** 打开计划设置抽屉（改名 / 删除） */
@@ -57,7 +60,10 @@ export default function ChapterSidebar({
   chapterCountLabel,
   novelTitle,
   onCreateChapter,
+  onCreateVolume,
   onCreatePlan,
+  onMoveChapter,
+  onMovePlan,
   onOpenChapterSettings,
   onOpenPlanSettings,
   onSelectCatalog,
@@ -68,6 +74,8 @@ export default function ChapterSidebar({
   const [novelExpanded, setNovelExpanded] = useState(true)
   const [planFolderExpanded, setPlanFolderExpanded] = useState(true)
   const [chapterFolderExpanded, setChapterFolderExpanded] = useState(true)
+  const [draggedItem, setDraggedItem] = useState<{ kind: 'chapter' | 'plan'; id: string } | null>(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
   const volumeGroups = volumes.map((volume) => ({
     volume,
     chapters: chapters.filter((chapter) => chapter.volumeId === volume.id),
@@ -86,8 +94,11 @@ export default function ChapterSidebar({
           <p className="text-sm font-semibold text-[var(--text-primary)]">作品树</p>
           <span className="text-xs text-[var(--text-tertiary)]">{chapterCountLabel}</span>
         </div>
-        {/* 侧栏宽度有限，两个新建入口平分一行 */}
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className={cn('mt-2 grid items-center gap-1', onCreateVolume ? 'grid-cols-3' : 'grid-cols-2')}>
+          {onCreateVolume ? <Button onClick={onCreateVolume} variant="ghost" size="sm" className="min-w-0 justify-center px-1.5">
+            <FolderPlus className="h-4 w-4" />
+            新建卷
+          </Button> : null}
           <Button onClick={onCreateChapter} variant="ghost" size="sm" className="flex-1 justify-center px-2">
             <FilePlus2 className="h-4 w-4" />
             新建章节
@@ -151,11 +162,33 @@ export default function ChapterSidebar({
                     savedPlans.map((plan, index) => (
                       <div
                         key={plan.id}
+                        draggable={Boolean(onMovePlan)}
+                        onDragStart={(event) => {
+                          setDraggedItem({ kind: 'plan', id: plan.id })
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('text/plain', `plan:${plan.id}`)
+                        }}
+                        onDragEnd={() => { setDraggedItem(null); setDropTarget(null) }}
+                        onDragOver={(event) => {
+                          if (draggedItem?.kind !== 'plan') return
+                          event.preventDefault()
+                          setDropTarget(`plan:${plan.id}`)
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault()
+                          if (draggedItem?.kind === 'plan' && draggedItem.id !== plan.id) {
+                            void onMovePlan?.(draggedItem.id, index + 1)
+                          }
+                          setDraggedItem(null)
+                          setDropTarget(null)
+                        }}
                         className={cn(
-                          'group flex items-center gap-1 rounded-[10px] transition',
+                          'group flex items-center gap-1 rounded-[10px] border-t border-transparent transition',
                           selectedTreeItemId === `plan:${plan.id}` ? 'bg-[var(--surface-muted)]' : 'hover:bg-[var(--surface-muted)]',
+                          dropTarget === `plan:${plan.id}` && 'border-t-[var(--text-primary)]',
                         )}
                       >
+                        <GripVertical className="ml-1 h-3.5 w-3.5 shrink-0 cursor-grab text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
                         <button
                           type="button"
                           onClick={() => onSelectPlan(plan.id)}
@@ -213,7 +246,25 @@ export default function ChapterSidebar({
                 <div className="ml-4 border-l border-[var(--border-subtle)] pl-2">
                   {volumeGroups.map(({ volume, chapters: volumeChapters }) => (
                     <div key={volume.id} className="py-0.5">
-                      <div className="flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                      <div
+                        onDragOver={(event) => {
+                          if (draggedItem?.kind !== 'chapter') return
+                          event.preventDefault()
+                          setDropTarget(`volume:${volume.id}`)
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault()
+                          if (draggedItem?.kind === 'chapter') {
+                            void onMoveChapter?.(draggedItem.id, volume.id, volumeChapters.length + 1)
+                          }
+                          setDraggedItem(null)
+                          setDropTarget(null)
+                        }}
+                        className={cn(
+                          'flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors',
+                          dropTarget === `volume:${volume.id}` && 'border-[var(--border-strong)] bg-[var(--surface-muted)]',
+                        )}
+                      >
                         <NotebookText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                         <span className="truncate">第 {volume.orderIndex} 卷 · {volume.title}</span>
                         <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">{volumeChapters.length} 章</span>
@@ -227,11 +278,35 @@ export default function ChapterSidebar({
                     return (
                       <div
                         key={chapter.id}
+                        draggable={Boolean(onMoveChapter)}
+                        onDragStart={(event) => {
+                          setDraggedItem({ kind: 'chapter', id: chapter.id })
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('text/plain', `chapter:${chapter.id}`)
+                        }}
+                        onDragEnd={() => { setDraggedItem(null); setDropTarget(null) }}
+                        onDragOver={(event: DragEvent<HTMLDivElement>) => {
+                          if (draggedItem?.kind !== 'chapter') return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setDropTarget(`chapter:${chapter.id}`)
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          if (draggedItem?.kind === 'chapter' && draggedItem.id !== chapter.id) {
+                            void onMoveChapter?.(draggedItem.id, volume.id, chapter.orderInVolume)
+                          }
+                          setDraggedItem(null)
+                          setDropTarget(null)
+                        }}
                         className={cn(
-                          'group flex items-center gap-1 rounded-[10px] transition',
+                          'group flex items-center gap-1 rounded-[10px] border-t border-transparent transition',
                           chapterActive ? 'bg-[var(--surface-muted)]' : 'hover:bg-[var(--surface-muted)]',
+                          dropTarget === `chapter:${chapter.id}` && 'border-t-[var(--text-primary)]',
                         )}
                       >
+                        <GripVertical className="ml-1 h-3.5 w-3.5 shrink-0 cursor-grab text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
                         <button
                           type="button"
                           onClick={() => onSelectChapter(chapter.id)}
