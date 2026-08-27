@@ -3699,6 +3699,7 @@ export default function StudioWorkspace() {
       startLine,
       endLine,
       text,
+      offset: useAgentStore.getState().composerDraft.length,
     })
     toast.success('已把选中内容添加到输入框。')
   }

@@ -1,4 +1,13 @@
-import { useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react'
 import { ArrowUp, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
 
 import {
@@ -9,7 +18,8 @@ import {
 import type { CreativeFreedom } from '../../../../../shared/contracts/index.js'
 import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agent-attachments'
 import { uploadAgentAttachment } from '../agentApi'
-import { useAgentStore } from '../agentStore'
+import { useAgentStore, type ComposerReference } from '../agentStore'
+import { buildComposerPrompt, formatReferenceLineLabel } from '../composer-content'
 
 /**
  * Agent 输入区：
@@ -37,24 +47,124 @@ type AgentComposerProps = {
   onCreativeFreedomChange: (value: CreativeFreedom) => void
 }
 
+type ParsedComposerContent = {
+  draft: string
+  references: ComposerReference[]
+}
+
+function referenceLineLabel(reference: ComposerReference): string {
+  return formatReferenceLineLabel(reference)
+}
+
+function composerSignature(draft: string, references: ComposerReference[]): string {
+  return JSON.stringify({
+    draft,
+    references: references.map(({ id, offset }) => ({ id, offset })),
+  })
+}
+
+function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
+  const chip = document.createElement('span')
+  chip.dataset.composerReference = reference.id
+  chip.contentEditable = 'false'
+  chip.title = `${reference.name} · 第 ${referenceLineLabel(reference)} 行`
+  chip.className = 'group mx-0.5 inline-flex h-7 max-w-[min(18rem,75vw)] select-none items-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 align-middle text-[11px] leading-none text-[var(--text-primary)]'
+
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.tabIndex = -1
+  remove.dataset.removeComposerReference = reference.id
+  remove.setAttribute('aria-label', `移除引用 ${reference.name}`)
+  remove.className = 'mr-1 inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]'
+
+  const fileIcon = document.createElement('span')
+  fileIcon.className = 'block text-[9px] font-semibold uppercase text-sky-500 group-hover:hidden'
+  fileIcon.textContent = reference.name.split('.').pop()?.slice(0, 3) || '文'
+  const removeIcon = document.createElement('span')
+  removeIcon.className = 'hidden text-sm leading-none group-hover:block'
+  removeIcon.textContent = '×'
+  remove.append(fileIcon, removeIcon)
+
+  const name = document.createElement('span')
+  name.className = 'max-w-40 truncate'
+  name.textContent = reference.name
+  const lines = document.createElement('span')
+  lines.className = 'ml-1 shrink-0 text-[var(--text-tertiary)]'
+  lines.textContent = referenceLineLabel(reference)
+  chip.append(remove, name, lines)
+  return chip
+}
+
+function readComposerContent(root: HTMLDivElement, knownReferences: ComposerReference[]): ParsedComposerContent {
+  const referenceMap = new Map(knownReferences.map((reference) => [reference.id, reference]))
+  const references: ComposerReference[] = []
+  let draft = ''
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      draft += node.textContent ?? ''
+      continue
+    }
+    if (!(node instanceof HTMLElement)) continue
+    const referenceId = node.dataset.composerReference
+    if (referenceId) {
+      const reference = referenceMap.get(referenceId)
+      if (reference) references.push({ ...reference, offset: draft.length })
+      continue
+    }
+    if (node.tagName === 'BR') {
+      draft += '\n'
+      continue
+    }
+    draft += node.textContent ?? ''
+  }
+  return { draft, references }
+}
+
+function writeComposerContent(root: HTMLDivElement, draft: string, references: ComposerReference[]): void {
+  root.replaceChildren()
+  const ordered = [...references].sort((left, right) => left.offset - right.offset)
+  let cursor = 0
+  for (const reference of ordered) {
+    const offset = Math.max(cursor, Math.min(draft.length, reference.offset))
+    if (offset > cursor) root.append(document.createTextNode(draft.slice(cursor, offset)))
+    root.append(createReferenceNode(reference))
+    cursor = offset
+  }
+  if (cursor < draft.length) root.append(document.createTextNode(draft.slice(cursor)))
+}
+
+function insertPlainText(root: HTMLDivElement, value: string): void {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
+    root.append(document.createTextNode(value))
+    return
+  }
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  const text = document.createTextNode(value)
+  range.insertNode(text)
+  range.setStartAfter(text)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange }: AgentComposerProps) {
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
-  const setPrompt = useAgentStore((state) => state.setComposerDraft)
   const attachments = useAgentStore((state) => state.composerAttachments)
   const setAttachments = useAgentStore((state) => state.setComposerAttachments)
   const addAttachment = useAgentStore((state) => state.addComposerAttachment)
   const removeAttachment = useAgentStore((state) => state.removeComposerAttachment)
   const references = useAgentStore((state) => state.composerReferences)
-  const removeReference = useAgentStore((state) => state.removeComposerReference)
-  const clearReferences = useAgentStore((state) => state.clearComposerReferences)
+  const setComposerContent = useAgentStore((state) => state.setComposerContent)
   const uploading = useAgentStore((state) => state.composerUploading)
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
   const [sending, setSending] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [attachError, setAttachError] = useState<string | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const editorRef = useRef<HTMLDivElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -65,6 +175,30 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
 
   const canSend =
     !running && !disabled && !sending && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const current = readComposerContent(editor, references)
+    const domReferenceIds = Array.from(editor.querySelectorAll<HTMLElement>('[data-composer-reference]'))
+      .map((node) => node.dataset.composerReference)
+      .filter(Boolean)
+    const desiredReferenceIds = references.map((reference) => reference.id)
+    if (
+      composerSignature(current.draft, current.references) !== composerSignature(prompt, references)
+      || JSON.stringify(domReferenceIds) !== JSON.stringify(desiredReferenceIds)
+    ) {
+      writeComposerContent(editor, prompt, references)
+    }
+  }, [prompt, references])
+
+  const syncComposerFromDom = (): ParsedComposerContent => {
+    const editor = editorRef.current
+    if (!editor) return { draft: prompt, references }
+    const next = readComposerContent(editor, references)
+    setComposerContent(next.draft, next.references)
+    return next
+  }
 
   const uploadOne = async (kind: 'image' | 'file', name: string, dataUrl: string) => {
     bumpUploading(1)
@@ -135,14 +269,19 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
     await processIncomingFiles(files)
   }
 
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const files = Array.from(event.clipboardData.items)
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => Boolean(file))
-    if (files.length === 0) return
+    if (files.length > 0) {
+      event.preventDefault()
+      void processIncomingFiles(files)
+      return
+    }
     event.preventDefault()
-    void processIncomingFiles(files)
+    insertPlainText(event.currentTarget, event.clipboardData.getData('text/plain'))
+    syncComposerFromDom()
   }
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -153,45 +292,51 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   }
 
   const handleSend = async () => {
-    const trimmed = prompt.trim()
-    if ((!trimmed && references.length === 0) || running || disabled || sending || uploading > 0) {
+    const current = syncComposerFromDom()
+    if ((!current.draft.trim() && current.references.length === 0) || running || disabled || sending || uploading > 0) {
       return
     }
-    const referenceBlock = references
-      .map((reference) => {
-        const lineLabel = reference.startLine === reference.endLine
-          ? `L${reference.startLine}`
-          : `L${reference.startLine}-${reference.endLine}`
-        return `[引用：${reference.name} ${lineLabel}]\n${reference.text}`
-      })
-      .join('\n\n')
-    const effectivePrompt = [referenceBlock, trimmed].filter(Boolean).join('\n\n')
+    const effectivePrompt = buildComposerPrompt(current.draft, current.references)
     const pending = attachments
     setSending(true)
     try {
       await onSend(effectivePrompt, pending, creativeFreedom)
-      setPrompt('')
+      setComposerContent('', [])
       setAttachments([])
-      clearReferences()
       setAttachError(null)
     } catch {
       // 面板已展示错误提示；保留草稿与附件供用户重试
     } finally {
       setSending(false)
-      textareaRef.current?.focus()
+      editorRef.current?.focus()
     }
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Backspace' && !prompt && references.length > 0) {
       event.preventDefault()
-      removeReference(references[references.length - 1].id)
+      setComposerContent('', references.slice(0, -1))
+      return
+    }
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault()
+      insertPlainText(event.currentTarget, '\n')
+      syncComposerFromDom()
       return
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       void handleSend()
     }
+  }
+
+  const handleEditorClick = (event: MouseEvent<HTMLDivElement>) => {
+    const removeButton = (event.target as HTMLElement).closest<HTMLElement>('[data-remove-composer-reference]')
+    if (!removeButton) return
+    event.preventDefault()
+    removeButton.closest<HTMLElement>('[data-composer-reference]')?.remove()
+    syncComposerFromDom()
+    editorRef.current?.focus()
   }
 
   return (
@@ -203,29 +348,8 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
       className={`relative rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
     >
       {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加图片或文件</div> : null}
-      {(references.length > 0 || attachments.length > 0 || uploading > 0) && (
+      {(attachments.length > 0 || uploading > 0) && (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-          {references.map((reference) => (
-            <div
-              key={reference.id}
-              className="group flex h-7 shrink-0 items-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-primary)]"
-              title={`${reference.name} · 第 ${reference.startLine}-${reference.endLine} 行`}
-            >
-              <button
-                type="button"
-                onClick={() => removeReference(reference.id)}
-                aria-label={`移除引用 ${reference.name}`}
-                className="mr-1 inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]"
-              >
-                <FileText className="h-3.5 w-3.5 group-hover:hidden" />
-                <X className="hidden h-3.5 w-3.5 group-hover:block" />
-              </button>
-              <span className="max-w-40 truncate">{reference.name}</span>
-              <span className="ml-1 shrink-0 text-[var(--text-tertiary)]">
-                {reference.startLine === reference.endLine ? reference.startLine : `${reference.startLine}-${reference.endLine}`}
-              </span>
-            </div>
-          ))}
           {attachments.map((attachment) =>
             attachment.kind === 'image' ? (
               <div key={attachment.id} className="group relative h-14 w-14 shrink-0">
@@ -276,17 +400,27 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
       {attachError && (
         <p className="mb-1.5 px-1 text-[11px] text-red-500">{attachError}</p>
       )}
-      <textarea
-        ref={textareaRef}
-        value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        rows={2}
-        disabled={disabled}
-        placeholder="告诉我要做什么，我会自主完成…"
-        className="max-h-40 w-full resize-none bg-transparent px-1.5 py-1 text-sm leading-6 text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none disabled:opacity-50"
-      />
+      <div className="relative min-h-12">
+        {!prompt && references.length === 0 ? (
+          <span className="pointer-events-none absolute left-1.5 top-1 text-sm leading-6 text-[var(--text-secondary)]">
+            告诉我要做什么，我会自主完成…
+          </span>
+        ) : null}
+        <div
+          ref={editorRef}
+          role="textbox"
+          aria-label="Agent 提示词"
+          aria-multiline="true"
+          contentEditable={!disabled}
+          suppressContentEditableWarning
+          onInput={syncComposerFromDom}
+          onClick={handleEditorClick}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          className="max-h-40 min-h-12 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-1.5 py-1 text-sm leading-7 text-[var(--text-primary)] focus:outline-none data-[disabled=true]:opacity-50"
+          data-disabled={disabled}
+        />
+      </div>
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <div className="flex shrink-0 items-center gap-1.5">
           <input

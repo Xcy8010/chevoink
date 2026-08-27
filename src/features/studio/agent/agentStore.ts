@@ -85,6 +85,8 @@ export type ComposerReference = {
   startLine: number
   endLine: number
   text: string
+  /** 在纯文本草稿中的插入位置；用于 Work/IDE 切换后恢复行内引用位置。 */
+  offset: number
 }
 
 /** 会对工作区（章节树/正文/作品信息）产生写入的工具集合 */
@@ -203,6 +205,7 @@ type AgentStoreState = {
   addComposerReference: (reference: ComposerReference) => void
   removeComposerReference: (id: string) => void
   clearComposerReferences: () => void
+  setComposerContent: (draft: string, references: ComposerReference[]) => void
   bumpComposerUploading: (delta: number) => void
   setAutoFollow: (value: boolean) => void
   /** 将刚通过作者审查的写入活动标记为已接受；执行成功本身仍只是已完成。 */
@@ -512,6 +515,9 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     set((state) => ({ composerReferences: state.composerReferences.filter((item) => item.id !== id) })),
 
   clearComposerReferences: () => set({ composerReferences: [] }),
+
+  setComposerContent: (draft, references) =>
+    set({ composerDraft: draft, composerReferences: references }),
 
   bumpComposerUploading: (delta) =>
     set((state) => ({ composerUploading: Math.max(0, state.composerUploading + delta) })),
