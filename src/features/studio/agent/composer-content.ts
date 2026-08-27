@@ -6,6 +6,12 @@ function referenceLineLabel(reference: ComposerReference): string {
     : `${reference.startLine}-${reference.endLine}`
 }
 
+export function referenceKindLabel(reference: ComposerReference): string {
+  if (reference.kind === 'catalog') return '目录'
+  if (reference.kind === 'plan') return '计划'
+  return '章节'
+}
+
 /** 按输入框中的真实位置组装提示词；已从 DOM 删除的引用不会进入请求。 */
 export function buildComposerPrompt(draft: string, references: ComposerReference[]): string {
   const ordered = [...references].sort((left, right) => left.offset - right.offset)
@@ -14,7 +20,7 @@ export function buildComposerPrompt(draft: string, references: ComposerReference
   for (const reference of ordered) {
     const offset = Math.max(cursor, Math.min(draft.length, reference.offset))
     parts.push(draft.slice(cursor, offset))
-    parts.push(`\n\n[引用：${reference.name} L${referenceLineLabel(reference)}]\n${reference.text}\n\n`)
+    parts.push(`\n\n[${referenceKindLabel(reference)}引用：${reference.name} L${referenceLineLabel(reference)}]\n${reference.text}\n\n`)
     cursor = offset
   }
   parts.push(draft.slice(cursor))

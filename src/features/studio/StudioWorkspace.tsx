@@ -3692,9 +3692,11 @@ export default function StudioWorkspace() {
     const sourceContent = activeWorkspaceDocument?.content ?? chapterDraft?.content ?? ''
     const startLine = sourceContent.slice(0, editorSelection.start).split('\n').length
     const endLine = startLine + Math.max(0, text.split('\n').length - 1)
-    const name = `${sourceTitle.replace(/[\\/:*?"<>|]/g, '-').trim() || '正文'}.md`
+    const referenceKind = activeWorkspaceDocument?.kind ?? 'chapter'
+    const name = sourceTitle.trim().replace(/\.md$/i, '') || (referenceKind === 'catalog' ? '目录' : referenceKind === 'plan' ? '创作计划' : '章节正文')
     useAgentStore.getState().addComposerReference({
       id: `${activeNovelId}:${selectedTreeItemId ?? selectedChapterId ?? 'document'}:${editorSelection.start}:${editorSelection.end}`,
+      kind: referenceKind,
       name,
       startLine,
       endLine,

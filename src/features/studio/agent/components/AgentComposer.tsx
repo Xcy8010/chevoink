@@ -19,7 +19,7 @@ import type { CreativeFreedom } from '../../../../../shared/contracts/index.js'
 import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agent-attachments'
 import { uploadAgentAttachment } from '../agentApi'
 import { useAgentStore, type ComposerReference } from '../agentStore'
-import { buildComposerPrompt, formatReferenceLineLabel } from '../composer-content'
+import { buildComposerPrompt, formatReferenceLineLabel, referenceKindLabel } from '../composer-content'
 
 /**
  * Agent 输入区：
@@ -78,8 +78,8 @@ function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
   remove.className = 'mr-1 inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]'
 
   const fileIcon = document.createElement('span')
-  fileIcon.className = 'block text-[9px] font-semibold uppercase text-sky-500 group-hover:hidden'
-  fileIcon.textContent = reference.name.split('.').pop()?.slice(0, 3) || '文'
+  fileIcon.className = 'block text-[10px] font-semibold text-sky-500 group-hover:hidden'
+  fileIcon.textContent = reference.kind === 'catalog' ? '目' : reference.kind === 'plan' ? '计' : '章'
   const removeIcon = document.createElement('span')
   removeIcon.className = 'hidden text-sm leading-none group-hover:block'
   removeIcon.textContent = '×'
@@ -91,6 +91,7 @@ function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
   const lines = document.createElement('span')
   lines.className = 'ml-1 shrink-0 text-[var(--text-tertiary)]'
   lines.textContent = referenceLineLabel(reference)
+  chip.setAttribute('aria-label', `${referenceKindLabel(reference)}引用：${reference.name}，第 ${referenceLineLabel(reference)} 行`)
   chip.append(remove, name, lines)
   return chip
 }
