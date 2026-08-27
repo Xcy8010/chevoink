@@ -97,10 +97,14 @@ export function buildServerPlanFile(item: NovelPlanFileItem): WorkspacePlanFile 
 
 
 
-export function buildCatalogPreview(novelTitle: string, chapters: StudioPayload['chapters']) {
+export function buildCatalogPreview(
+  novelTitle: string,
+  chapters: StudioPayload['chapters'],
+  volumes: StudioPayload['volumes'] = [],
+) {
   const normalizedTitle = novelTitle.trim() || '当前作品'
 
-  if (chapters.length === 0) {
+  if (chapters.length === 0 && volumes.length === 0) {
     return {
       title: '目录',
       description: `《${normalizedTitle}》的目录文件会放在这里。`,
@@ -108,19 +112,52 @@ export function buildCatalogPreview(novelTitle: string, chapters: StudioPayload[
     }
   }
 
+  const orderedChapters = [...chapters].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedVolumes = [...volumes].sort((left, right) => left.orderIndex - right.orderIndex)
+  const volumeIds = new Set(orderedVolumes.map((volume) => volume.id))
+  const formatChapter = (chapter: StudioPayload['chapters'][number], order: number) => {
+    const title = chapter.title.trim() || `第 ${order} 章`
+    const summary = chapter.summary?.trim()
+    return summary
+      ? `第 ${order} 章  ${title}\n摘要：${summary}`
+      : `第 ${order} 章  ${title}`
+  }
+  const catalogEntries = orderedVolumes.length > 0
+    ? [
+        ...orderedVolumes.map((volume) => {
+          const fallbackTitle = `第 ${volume.orderIndex} 卷`
+          const normalizedVolumeTitle = volume.title.trim()
+          const volumeTitle = normalizedVolumeTitle
+            ? /^第\s*[0-9零一二三四五六七八九十百两]+\s*卷/u.test(normalizedVolumeTitle)
+              ? normalizedVolumeTitle
+              : `${fallbackTitle}  ${normalizedVolumeTitle}`
+            : fallbackTitle
+          const volumeChapters = orderedChapters
+            .filter((chapter) => chapter.volumeId === volume.id)
+            .sort((left, right) => left.orderInVolume - right.orderInVolume || left.orderIndex - right.orderIndex)
+          const chapterLines = volumeChapters.length > 0
+            ? volumeChapters.map((chapter) => formatChapter(chapter, chapter.orderInVolume))
+            : ['当前卷还没有已保存章节。']
+          return [volumeTitle, ...chapterLines].join('\n\n')
+        }),
+        ...(() => {
+          const ungroupedChapters = orderedChapters.filter((chapter) => !volumeIds.has(chapter.volumeId))
+          return ungroupedChapters.length > 0
+            ? [['未分卷', ...ungroupedChapters.map((chapter) => formatChapter(chapter, chapter.orderIndex))].join('\n\n')]
+            : []
+        })(),
+      ]
+    : orderedChapters.map((chapter) => formatChapter(chapter, chapter.orderIndex))
+
   return {
     title: '目录',
-    description: `共 ${chapters.length} 章，写新章节或修改章节标题后会自动更新。`,
+    description: volumes.length > 0
+      ? `共 ${volumes.length} 卷 ${chapters.length} 章，卷章结构或标题变更后会自动更新。`
+      : `共 ${chapters.length} 章，写新章节或修改章节标题后会自动更新。`,
     content: [
       `《${normalizedTitle}》目录`,
       '',
-      ...chapters.map((chapter) => {
-        const title = chapter.title.trim() || `第 ${chapter.orderIndex} 章`
-        const summary = chapter.summary?.trim()
-        return summary
-          ? `第 ${chapter.orderIndex} 章  ${title}\n摘要：${summary}`
-          : `第 ${chapter.orderIndex} 章  ${title}`
-      }),
+      ...catalogEntries,
     ].join('\n\n'),
   }
 }
@@ -134,15 +171,15 @@ export function mergeCatalogContentWithChapters(currentContent: string, nextCata
   }
 
   const lines = normalizedCurrent.split('\n')
-  const firstChapterLineIndex = lines.findIndex((line) =>
-    /^第\s*[0-9零一二三四五六七八九十百两]+\s*章/u.test(line.trim()),
+  const firstGeneratedLineIndex = lines.findIndex((line) =>
+    /^(?:第\s*[0-9零一二三四五六七八九十百两]+\s*[卷章]|未分卷)/u.test(line.trim()),
   )
 
-  if (firstChapterLineIndex < 0) {
+  if (firstGeneratedLineIndex < 0) {
     return [normalizedCurrent, '', nextCatalogContent.split('\n').slice(2).join('\n')].filter(Boolean).join('\n')
   }
 
-  const prefix = lines.slice(0, firstChapterLineIndex).join('\n').trimEnd()
+  const prefix = lines.slice(0, firstGeneratedLineIndex).join('\n').trimEnd()
   const generatedChapterSection = nextCatalogContent.split('\n').slice(2).join('\n')
 
   return [prefix, generatedChapterSection].filter(Boolean).join('\n\n')

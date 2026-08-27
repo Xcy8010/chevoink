@@ -1320,8 +1320,9 @@ export default function StudioWorkspace() {
       buildCatalogPreview(
         currentNovel?.displayTitle?.trim() || currentNovel?.title?.trim() || novelForm?.displayTitle.trim() || novelForm?.title.trim() || '当前作品',
         chapters,
+        volumes,
       ),
-    [chapters, currentNovel?.displayTitle, currentNovel?.title, novelForm?.displayTitle, novelForm?.title],
+    [chapters, currentNovel?.displayTitle, currentNovel?.title, novelForm?.displayTitle, novelForm?.title, volumes],
   )
   useEffect(() => {
     setCatalogDocument((current) => {
@@ -4268,13 +4269,19 @@ export default function StudioWorkspace() {
                 viewerWidth={panelWidths.workViewer}
                 onToggleLeft={() => setWorkLeftOpen((value) => !value)}
                 onToggleRight={() => {
-                  if (!workRightOpen && workInspectorTab === 'work' && selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
+                  if (!workRightOpen && workInspectorTab === 'work') {
+                    if (selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
+                    else if (selectedTreeItemId === 'catalog' || selectedTreeItemId?.startsWith('plan:')) setWorkViewer('document')
+                  }
                   setWorkRightOpen((value) => !value)
                 }}
                 inspectorTab={workInspectorTab}
                 onSelectInspectorTab={(tab) => {
                   setWorkInspectorTab(tab)
-                  if (tab === 'work' && selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
+                  if (tab === 'work') {
+                    if (selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
+                    else if (selectedTreeItemId === 'catalog' || selectedTreeItemId?.startsWith('plan:')) setWorkViewer('document')
+                  }
                 }}
                 onBeginResize={beginPanelResize}
               />

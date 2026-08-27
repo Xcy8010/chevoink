@@ -222,6 +222,27 @@ describe('plan-review：目录预览与合并', () => {
     expect(withChapters.content).toContain('摘要：转折')
   })
 
+  it('buildCatalogPreview：按卷展示章节并保留未分卷章节', () => {
+    const preview = buildCatalogPreview('星海', [
+      chapterItem({ id: 'c3', volumeId: 'missing', orderIndex: 3, orderInVolume: 1, title: '遗章' }),
+      chapterItem({ id: 'c2', volumeId: 'v1', orderIndex: 2, orderInVolume: 2, title: '回声' }),
+      chapterItem({ id: 'c1', volumeId: 'v1', orderIndex: 1, orderInVolume: 1, title: '起点' }),
+    ] as never, [
+      { id: 'v1', title: '启航', orderIndex: 1 },
+      { id: 'v2', title: '第二卷 深海', orderIndex: 2 },
+    ] as never)
+
+    expect(preview.description).toBe('共 2 卷 3 章，卷章结构或标题变更后会自动更新。')
+    expect(preview.content).toContain('第 1 卷  启航\n\n第 1 章  起点\n\n第 2 章  回声')
+    expect(preview.content).toContain('第二卷 深海\n\n当前卷还没有已保存章节。')
+    expect(preview.content).toContain('未分卷\n\n第 3 章  遗章')
+
+    const emptyVolume = buildCatalogPreview('星海', [], [
+      { id: 'v1', title: '启航', orderIndex: 1 },
+    ] as never)
+    expect(emptyVolume.content).toContain('第 1 卷  启航\n\n当前卷还没有已保存章节。')
+  })
+
   it('mergeCatalogContentWithChapters：保留用户手写前缀，替换生成章节段', () => {
     const next = ['《星海》目录', '', '第 1 章  新生成'].join('\n')
     expect(mergeCatalogContentWithChapters('   ', next)).toBe(next)
@@ -229,6 +250,11 @@ describe('plan-review：目录预览与合并', () => {
     expect(merged).toContain('我的自定义开头')
     expect(merged).toContain('第 1 章  新生成')
     expect(merged).not.toContain('旧章节')
+
+    const volumeNext = ['《星海》目录', '', '第 1 卷  新卷', '', '第 1 章  新章节'].join('\n')
+    const volumeMerged = mergeCatalogContentWithChapters('我的自定义开头\n第 1 卷  旧卷\n第 1 章  旧章节', volumeNext)
+    expect(volumeMerged).toContain('第 1 卷  新卷')
+    expect(volumeMerged).not.toContain('旧卷')
   })
 
   it('buildChapterReviewDescription：三种模式文案', () => {
