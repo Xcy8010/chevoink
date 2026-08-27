@@ -23,6 +23,7 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\""
   },
   "dependencies": {
+    "@milkdown/crepe": "^7.22.1",
     "@mozilla/readability": "^0.6.0",
     "@prisma/client": "6.12.0",
     "@tanstack/react-query": "^5.83.0",

@@ -9,6 +9,7 @@ import type { ChapterStatus } from '../../../../shared/contracts/index.js'
 import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingReview, type SaveState, type WorkspaceDocumentView } from '../types'
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
+import PlanMarkdownEditor from './PlanMarkdownEditor'
 
 type EditorCanvasProps = {
   chapterDraft: ChapterDraftState | null
@@ -163,6 +164,16 @@ export default function EditorCanvas({
               onRejectHunk={onRejectPlanReviewHunk}
               className="min-h-[50vh]"
             />
+          ) : workspaceDocument.kind === 'plan' ? (
+            <PlanMarkdownEditor
+              documentId={workspaceDocument.id}
+              markdown={workspaceDocument.content}
+              editable={workspaceDocument.editableContent}
+              mobile
+              onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
+              onBlur={onEditorBlur}
+              onSelectionChange={onSelectionChange}
+            />
           ) : workspaceDocument.editableContent ? (
             <AutoGrowTextarea
               value={workspaceDocument.content}
@@ -173,7 +184,7 @@ export default function EditorCanvas({
                 })
               }
               className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
-              placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+              placeholder="在这里维护目录内容。"
             />
           ) : (
             <div className="whitespace-pre-wrap break-words composer-body-text text-[var(--text-primary)]">
@@ -245,7 +256,16 @@ export default function EditorCanvas({
             />
           ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1 py-1">
-            {workspaceDocument.editableContent ? (
+            {workspaceDocument.kind === 'plan' ? (
+              <PlanMarkdownEditor
+                documentId={workspaceDocument.id}
+                markdown={workspaceDocument.content}
+                editable={workspaceDocument.editableContent}
+                onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
+                onBlur={onEditorBlur}
+                onSelectionChange={onSelectionChange}
+              />
+            ) : workspaceDocument.editableContent ? (
               <textarea
                 value={workspaceDocument.content}
                 onChange={(event) =>
@@ -256,7 +276,7 @@ export default function EditorCanvas({
                 }
                 rows={20}
                 className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
-                placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
+                placeholder="在这里维护目录内容。"
               />
             ) : (
               <div className="whitespace-pre-wrap break-words text-sm leading-8 text-[var(--text-primary)]">

@@ -144,6 +144,101 @@ html.dark .studio-workspace {
   --border-strong: rgba(148, 163, 184, 0.2);
 }
 
+/* 计划专用 Markdown 编辑器：保持 Markdown 为唯一数据源，预览态由 Milkdown 所见即所得编辑。 */
+.plan-rich-markdown .milkdown {
+  min-height: 100%;
+  color: var(--text-primary);
+  background: transparent;
+  --crepe-base-font-size: 15px;
+  --crepe-font-title: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --crepe-font-default: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --crepe-font-code: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --crepe-color-background: transparent;
+  --crepe-color-on-background: var(--text-primary);
+  --crepe-color-surface: var(--surface-muted);
+  --crepe-color-surface-low: var(--surface-default);
+  --crepe-color-on-surface: var(--text-primary);
+  --crepe-color-on-surface-variant: var(--text-secondary);
+  --crepe-color-outline: var(--border-strong);
+  --crepe-color-primary: var(--text-primary);
+  --crepe-color-secondary: var(--surface-muted);
+  --crepe-color-on-secondary: var(--text-primary);
+  --crepe-color-inverse: var(--surface-contrast);
+  --crepe-color-on-inverse: var(--text-contrast);
+  --crepe-color-inline-code: var(--text-primary);
+  --crepe-color-error: var(--color-error);
+  --crepe-color-hover: var(--surface-muted);
+  --crepe-color-selected: var(--accent-soft);
+  --crepe-color-inline-area: var(--surface-muted);
+  --crepe-shadow-1: var(--shadow-card);
+  --crepe-shadow-2: var(--shadow-elevated);
+}
+
+.plan-rich-markdown .milkdown .ProseMirror {
+  min-height: 100%;
+  padding: 8px 4px 72px;
+  caret-color: var(--text-primary);
+}
+
+.plan-rich-markdown .milkdown .ProseMirror > :first-child {
+  margin-top: 0;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror h1 {
+  font-size: 1.8em;
+  font-weight: 700;
+  line-height: 1.25;
+  margin-top: 28px;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror h2 {
+  font-size: 1.45em;
+  font-weight: 700;
+  line-height: 1.35;
+  margin-top: 24px;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror h3 {
+  font-size: 1.2em;
+  font-weight: 650;
+  line-height: 1.4;
+  margin-top: 20px;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror p,
+.plan-rich-markdown .milkdown .ProseMirror li {
+  line-height: 1.9;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror table {
+  width: 100%;
+  margin: 18px 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror th,
+.plan-rich-markdown .milkdown .ProseMirror td {
+  min-width: 7rem;
+  border: 1px solid var(--border-strong);
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.plan-rich-markdown .milkdown .ProseMirror th {
+  background: var(--surface-muted);
+  font-weight: 650;
+}
+
+.plan-rich-markdown[data-mobile='true'] .milkdown .ProseMirror {
+  padding: 6px 2px 48px;
+}
+
+.plan-rich-markdown[data-mobile='true'] .milkdown {
+  --crepe-base-font-size: 16px;
+}
+
 html,
 body,
 #root {
