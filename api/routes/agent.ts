@@ -41,6 +41,7 @@ import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
 import { getMemoryGraph, listMemoryReviewInbox, resolveMemoryReview, syncNovelMemoryProjection } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
+import { listNovelSkills, updateNovelSkill } from '../lib/agent/skills/service.js'
 
 const router = Router()
 
@@ -71,6 +72,12 @@ const updateAgentPlanSchema = z
   .refine((patch) => patch.title !== undefined || patch.content !== undefined || patch.saved !== undefined || patch.position !== undefined)
 
 const resolveMemoryReviewSchema = z.object({ accepted: z.boolean() })
+const updateNovelSkillSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    lockedVersion: z.string().trim().min(1).nullable().optional(),
+  })
+  .refine((patch) => patch.enabled !== undefined || patch.lockedVersion !== undefined)
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -225,6 +232,31 @@ router.post('/memory/:memoryId/review', async (req: Request, res: Response): Pro
     const body = parseBody(resolveMemoryReviewSchema, req.body, '请明确接受或拒绝该记忆候选。')
     const memory = await resolveMemoryReview(userId, req.params.memoryId, body.accepted)
     res.status(200).json(buildSuccess(requestId, { memory }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/skills', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const payload = await listNovelSkills(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/novels/:novelId/skills/:skillId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const patch = parseBody(updateNovelSkillSchema, req.body, '请提供有效的技能设置。')
+    const payload = await updateNovelSkill(userId, req.params.novelId, req.params.skillId, patch)
+    res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

@@ -7,6 +7,7 @@ import type { AgentDefinition } from './agents.js'
 import { OPERATION_KNOWLEDGE } from './knowledge/operation.js'
 import { buildGeneralWritingDigest, buildGenreWritingDigest } from './knowledge/writing.js'
 import { buildSkillExecutionDigest, routeSkills, type SkillRouteDecision } from './skills/index.js'
+import { resolveEnabledBuiltinSkillIds } from './skills/service.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import {
   listActiveDirectives,
@@ -320,12 +321,17 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   ])
 
   // Skill OS 3.0：服务端确定性召回并完整加载本轮 Skill，模型不再自行决定“要不要加载”。
-  const skillRoute = isAgent2FeatureEnabled('skill2', input.userId)
+  const skillFeatureEnabled = isAgent2FeatureEnabled('skill2', input.userId)
+  const enabledSkillIds = skillFeatureEnabled
+    ? await resolveEnabledBuiltinSkillIds(input.userId, input.novelId)
+    : null
+  const skillRoute = skillFeatureEnabled
     ? routeSkills({
         mode: input.mode,
         prompt: input.prompt,
         intent: input.taskSpec.intent,
         freedom: input.taskSpec.creativeFreedom,
+        enabledSkillIds: enabledSkillIds ?? undefined,
       })
     : null
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null

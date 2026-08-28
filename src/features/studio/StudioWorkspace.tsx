@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload } from 'lucide-react'
+import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -37,6 +37,7 @@ import IdePerspective from './components/IdePerspective'
 import IdeNavigationRail from './components/IdeNavigationRail'
 import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
+import SkillsPanel from './components/SkillsPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import AgentContextPanel from './agent/components/AgentContextPanel'
@@ -3884,7 +3885,7 @@ export default function StudioWorkspace() {
       >
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
           <div className="flex shrink-0 items-center gap-2 px-0.5 pb-2 pt-1">
-            {mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context' ? (
+            {mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context' || mobileView === 'skills' ? (
               <>
                 <button
                   type="button"
@@ -3895,7 +3896,7 @@ export default function StudioWorkspace() {
                   返回
                 </button>
                 <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : mobileView === 'context' ? '会话上下文' : '作品设置'}
+                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : mobileView === 'context' ? '会话上下文' : mobileView === 'skills' ? '作品技能' : '作品设置'}
                 </p>
               </>
             ) : (
@@ -4034,6 +4035,12 @@ export default function StudioWorkspace() {
               </div>
             ) : null}
 
+            {mobileView === 'skills' ? (
+              <div className="min-h-0 flex-1 overflow-hidden border-t border-[var(--border-subtle)]">
+                <SkillsPanel novelId={currentNovel.id} />
+              </div>
+            ) : null}
+
             {mobileView === 'cover' ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {renderCoverToolPanel(() => setMobileView('assistant'))}
@@ -4104,7 +4111,7 @@ export default function StudioWorkspace() {
                 onClick={() => setMobileMoreOpen(true)}
                 className={cn(
                   'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
-                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context'
+                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context' || mobileView === 'skills'
                     ? 'font-medium text-[var(--text-primary)]'
                     : 'text-[var(--text-tertiary)] active:text-[var(--text-primary)]',
                 )}
@@ -4128,6 +4135,7 @@ export default function StudioWorkspace() {
                     ? [{ key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') }]
                     : []),
                   { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
+                  { key: 'skills', label: '作品技能', icon: Sparkles, action: () => setMobileView('skills') },
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
                   { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },
@@ -4258,6 +4266,7 @@ export default function StudioWorkspace() {
                   activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                   taskCount={agentTaskSidebarItems.length}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
+                  skillsPanel={<SkillsPanel novelId={currentNovel.id} />}
                   contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
@@ -4356,6 +4365,7 @@ export default function StudioWorkspace() {
                     projectNotes={projectNotes}
                     activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                     taskCount={agentTaskSidebarItems.length}
+                    skillsPanel={<SkillsPanel novelId={currentNovel.id} />}
                     contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   />}
                 />

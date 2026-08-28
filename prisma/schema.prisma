@@ -875,6 +875,60 @@ model AgentSkillRun {
   @@map("agent_skill_runs")
 }
 
+model AgentSkillDefinition {
+  id             String                   @id @db.VarChar(160)
+  ownerUserId    String?                  @map("owner_user_id") @db.VarChar(64)
+  name           String                   @db.VarChar(120)
+  description    String
+  source         String                   @db.VarChar(24)
+  visibility     String                   @db.VarChar(24)
+  license        String                   @db.VarChar(64)
+  status         String                   @db.VarChar(24)
+  defaultVersion String                   @map("default_version") @db.VarChar(32)
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+  versions       AgentSkillVersion[]
+  installations  AgentSkillInstallation[]
+
+  @@index([ownerUserId, status])
+  @@index([source, status])
+  @@map("agent_skill_definitions")
+}
+
+model AgentSkillVersion {
+  id           String               @id @default(cuid()) @db.VarChar(64)
+  skillId      String               @map("skill_id") @db.VarChar(160)
+  version      String               @db.VarChar(32)
+  instructions Json
+  manifest     Json
+  contentHash  String               @map("content_hash") @db.VarChar(64)
+  status       String               @db.VarChar(24)
+  createdAt    DateTime             @default(now()) @map("created_at")
+  skill        AgentSkillDefinition @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, version])
+  @@index([skillId, createdAt])
+  @@map("agent_skill_versions")
+}
+
+model AgentSkillInstallation {
+  id            String               @id @default(cuid()) @db.VarChar(64)
+  skillId       String               @map("skill_id") @db.VarChar(160)
+  userId        String               @map("user_id") @db.VarChar(64)
+  scope         String               @db.VarChar(24)
+  scopeId       String               @map("scope_id") @db.VarChar(64)
+  enabled       Boolean              @default(true)
+  lockedVersion String?              @map("locked_version") @db.VarChar(32)
+  priority      Int                  @default(0)
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+  skill         AgentSkillDefinition @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, userId, scope, scopeId])
+  @@index([userId, scope, scopeId, enabled])
+  @@map("agent_skill_installations")
+}
+
 model AgentArtifact {
   id           String            @id @default(cuid()) @db.VarChar(64)
   runId        String            @map("run_id") @db.VarChar(64)

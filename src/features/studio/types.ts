@@ -17,7 +17,7 @@ import type {
 } from '../../../shared/contracts/index.js'
 
 export type EditableNovelStatus = 'draft' | 'published' | 'completed' | 'archived'
-export type MobileView = 'editor' | 'chapters' | 'assistant' | 'memory' | 'context' | 'cover' | 'meta'
+export type MobileView = 'editor' | 'chapters' | 'assistant' | 'memory' | 'context' | 'skills' | 'cover' | 'meta'
 export type ToolPanel = 'meta' | 'assistant' | 'cover'
 export type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 export type AgentTaskType =

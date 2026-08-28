@@ -35,6 +35,7 @@ import type {
   SplitChapterRequest,
   MergeChaptersRequest,
   MemoryGraph,
+  NovelSkillsPayload,
   StructureReport,
   BulkReplacePreviewRequest,
   ProjectSearchRequest,
@@ -42,6 +43,7 @@ import type {
   UpdateAgentSessionRequest,
   UpdateAgentSessionResponse,
   UpdateNovelRequest,
+  UpdateNovelSkillRequest,
 } from '../../../shared/contracts/index.js'
 
 type RequestDataOptions = RequestInit & {
@@ -236,6 +238,21 @@ export async function syncNovelMemoryGraph(novelId: string): Promise<MemoryGraph
     method: 'POST',
   })
   return data.graph
+}
+
+export function getNovelSkills(novelId: string): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills`)
+}
+
+export function updateNovelSkill(
+  novelId: string,
+  skillId: string,
+  patch: UpdateNovelSkillRequest,
+): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
 }
 
 /** 发布作品：同时批量发布选中章节并设置可见范围 */

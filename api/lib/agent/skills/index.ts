@@ -295,6 +295,7 @@ export function routeSkills(input: {
   intent: TaskIntent
   phase?: SkillPhase
   freedom: CreativeFreedom
+  enabledSkillIds?: ReadonlySet<string>
 }): SkillRouteDecision {
   const phase = input.phase ?? inferSkillPhase(input.intent)
   const normalizedPrompt = input.prompt.trim()
@@ -309,7 +310,7 @@ export function routeSkills(input: {
   }
 
   const candidates = skillCatalog
-    .filter((skill) => skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
+    .filter((skill) => (input.enabledSkillIds?.has(skill.id) ?? true) && skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
       skill.phases.includes(phase) && !skill.negativeTriggers.some((pattern) => pattern.test(normalizedPrompt)))
     .map((skill) => {
       const matchedTriggers = skill.triggers.filter((trigger) => trigger.pattern.test(normalizedPrompt))
