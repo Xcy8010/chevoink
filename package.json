@@ -20,6 +20,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "cleanup:demo-data": "node scripts/cleanup-demo-data.mjs",
     "agent2:ops": "tsx scripts/agent2-ops.ts",
+    "agent3:eval": "tsx scripts/agent3-eval.ts",
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\""
   },
   "dependencies": {

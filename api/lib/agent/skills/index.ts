@@ -64,6 +64,7 @@ export type SkillRouteDecision = {
 const MINOR_EDIT_PATTERN = /(?:只|仅)?(?:改|修改|修正|检查)?(?:一个|几个|一下)?(?:错别字|标点|空格|标题|序号|格式|排版)(?:即可|就行|不要动其他|不改内容)?/i
 const NON_CREATIVE_PATTERN = /(?:发布|下架|删除|导出|移动.{0,12}(?:章|卷)|(?:章|卷).{0,12}移动|创建.{0,8}(?:章|卷)|(?:章|卷).{0,8}创建|字数统计|查询字数|打开|关闭|折叠|排序)/i
 const noNegativeTriggers = [MINOR_EDIT_PATTERN, NON_CREATIVE_PATTERN]
+const PRESERVE_INTENTIONAL_STYLE_PATTERN = /(?:不要|无需|不应|不能|别).{0,24}(?:仅因|因为|直接|强行).{0,24}(?:判断为?AI味|判错|润色|改成白话|删掉术语)/i
 
 /**
  * Agent 3.0 首批内置中文网文 Skill Pack。
@@ -137,7 +138,10 @@ export const skillCatalog: AgentSkill[] = [
     attribution: '角色状态组织方法参考 OpenFic 公开项目，未复制源提示词或作品文本。',
     status: 'active', intents: ['write', 'revise', 'plan', 'review'], modes: ['plan', 'build', 'review'],
     phases: ['plan', 'draft', 'critique', 'revision'], strength: 'soft',
-    triggers: [{ pattern: /(人物|角色|对话|声口|口吻|关系|争执|交锋|主角|配角|聊天)/, reasonCode: 'CHARACTER_VOICE', weight: 30 }],
+    triggers: [
+      { pattern: /(人物|角色|声口|口吻|知识边界|回避方式)/, reasonCode: 'CHARACTER_VOICE', weight: 30 },
+      { pattern: /(对话|关系|争执|交锋|主角|配角|聊天)/, reasonCode: 'CHARACTER_VOICE', weight: 12 },
+    ],
     negativeTriggers: noNegativeTriggers,
     synopsis: '让人物因目的和经历不同而说不同的话，不靠口头禅标签化。',
     resources: {
@@ -171,7 +175,7 @@ export const skillCatalog: AgentSkill[] = [
     version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
     intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
     triggers: [{ pattern: /(AI味|机械|僵硬|不自然|套话|润色|文风|语言|华丽|堆砌|虚浮)/i, reasonCode: 'STYLE_RISK_HIGH', weight: 38 }],
-    negativeTriggers: noNegativeTriggers,
+    negativeTriggers: [...noNegativeTriggers, PRESERVE_INTENTIONAL_STYLE_PATTERN],
     synopsis: '删除通常优先于同义替换，不用另一套公式覆盖作者声音。',
     resources: {
       draft: '首次写作也要避免空泛判断、连续同构句、无铺垫稀有意象和解释性复述。先写清人物动作与后果，再决定是否需要修辞；一个有效细节胜过一串形容词，但不要机械执行“展示而非讲述”。',
@@ -219,7 +223,7 @@ export const skillCatalog: AgentSkill[] = [
     attribution: '分层记忆与证据召回思想参考 TencentDB-Agent-Memory，规则与实现均为 Chevoink 重写。',
     status: 'active', intents: ['write', 'revise', 'review', 'structure'], modes: ['build', 'review'],
     phases: ['draft', 'critique', 'revision', 'commit'], strength: 'soft',
-    triggers: [{ pattern: /(连续|一致|时间线|伏笔|设定|关系|持有物|伤势|知识|前文|矛盾|冲突)/, reasonCode: 'CONTINUITY_AUDIT', weight: 32 }],
+    triggers: [{ pattern: /(连续|一致|时间线|伏笔|设定|持有物|伤势|知识状态|前文|矛盾|(?:核对|检查).{0,16}关系|关系.{0,8}(?:一致|前后|冲突|状态))/, reasonCode: 'CONTINUITY_AUDIT', weight: 32 }],
     negativeTriggers: [MINOR_EDIT_PATTERN, /(?:发布|下架|导出|折叠|打开|关闭)/i],
     synopsis: '事实结论必须可追溯，没有证据的疑点只标待核实。',
     resources: {
@@ -236,7 +240,7 @@ export const skillCatalog: AgentSkill[] = [
     description: '识别近期章节重复的开场、意象、冲突解法、句式和结尾功能。',
     version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
     intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
-    triggers: [{ pattern: /(重复|雷同|套路|同样|又是|新鲜|变化|去重)/, reasonCode: 'REPETITION_RISK', weight: 30 }],
+    triggers: [{ pattern: /(重复|雷同|套路|同样|又是|新鲜感|去重)/, reasonCode: 'REPETITION_RISK', weight: 30 }],
     negativeTriggers: noNegativeTriggers,
     synopsis: '避免近期章节同构，但不追求为了不同而不同。',
     resources: {
@@ -332,7 +336,23 @@ export function routeSkills(input: {
   const explicitSignals = candidates.filter((candidate) => candidate.reasonCodes.length > 0).length
   const maxLoaded = explicitSignals >= 2 || input.intent === 'write' || input.intent === 'plan' ? 3 : 2
   const selectedCandidates: SkillRouteCandidate[] = []
-  for (const candidate of candidates) {
+  const foundationIds = new Set(['cn-webfiction-draft.v3', 'cn-scene-task.v3'])
+  const specialistReasonPriority = (candidate: SkillRouteCandidate): number => {
+    if (candidate.reasonCodes.includes('CHAPTER_BRIDGE')) return 2_000
+    if (candidate.reasonCodes.includes('CONTINUITY_AUDIT')) return 1_500
+    return candidate.score
+  }
+  const explicitlyMatchedSpecialists = input.intent === 'write'
+    ? candidates
+        .filter((candidate) => candidate.reasonCodes.length > 0 && candidate.score >= 40 && !foundationIds.has(candidate.skill.id))
+        .sort((left, right) => specialistReasonPriority(right) - specialistReasonPriority(left) || right.score - left.score)
+        .slice(0, maxLoaded - 1)
+    : []
+  const orderedCandidates = [
+    ...explicitlyMatchedSpecialists,
+    ...candidates.filter((candidate) => !explicitlyMatchedSpecialists.includes(candidate)),
+  ]
+  for (const candidate of orderedCandidates) {
     if (selectedCandidates.length >= maxLoaded) break
     const conflicts = selectedCandidates.some((selected) => selected.skill.conflicts.includes(candidate.skill.id) || candidate.skill.conflicts.includes(selected.skill.id))
     if (!conflicts) selectedCandidates.push(candidate)
