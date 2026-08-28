@@ -15,6 +15,11 @@ import type {
   AdminPostRow,
   AdminUserDetailPayload,
   AdminUserRow,
+  AdminAgentEvalResults,
+  AdminAgentEvalSuiteRow,
+  AdminCreateAgentEvalSampleRequest,
+  AgentBlindReviewAssignment,
+  AgentBlindReviewSubmission,
 } from '../../../shared/contracts/index.js'
 import { requestJson } from '@/app/api-client'
 
@@ -84,6 +89,58 @@ export function adminChangeMyPassword(
 
 export function getAdminDashboard(): Promise<AdminDashboardPayload> {
   return requestJson<AdminDashboardPayload>('/api/admin/dashboard')
+}
+
+/* ---------------- Agent 3.0 专家盲评 ---------------- */
+
+export function listAdminAgentEvalSuites(): Promise<{ suites: AdminAgentEvalSuiteRow[] }> {
+  return requestJson('/api/admin/evals/suites')
+}
+
+export function createAdminAgentEvalSuite(payload: {
+  name: string
+  datasetVersion: string
+  rubricVersion: string
+}): Promise<AdminAgentEvalSuiteRow> {
+  return requestJson('/api/admin/evals/suites', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function addAdminAgentEvalSample(
+  suiteId: string,
+  payload: AdminCreateAgentEvalSampleRequest,
+): Promise<{ id: string; code: string }> {
+  return requestJson(`/api/admin/evals/suites/${suiteId}/samples`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateAdminAgentEvalSuiteStatus(
+  suiteId: string,
+  status: 'active' | 'completed',
+): Promise<AdminAgentEvalSuiteRow> {
+  return requestJson(`/api/admin/evals/suites/${suiteId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  })
+}
+
+export function getNextAdminBlindReview(suiteId?: string): Promise<{ assignment: AgentBlindReviewAssignment | null }> {
+  return requestJson(`/api/admin/evals/review/next${buildQueryString({ suiteId })}`)
+}
+
+export function submitAdminBlindReview(
+  sampleId: string,
+  payload: AgentBlindReviewSubmission,
+): Promise<{ ok: true }> {
+  return requestJson(`/api/admin/evals/samples/${sampleId}/reviews`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getAdminAgentEvalResults(suiteId: string): Promise<AdminAgentEvalResults> {
+  return requestJson(`/api/admin/evals/suites/${suiteId}/results`)
 }
 
 /* ---------------- 用户管理 ---------------- */

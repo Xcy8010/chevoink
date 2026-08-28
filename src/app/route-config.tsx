@@ -66,6 +66,7 @@ const AdminPostsPage = lazyPage(() => import('@/features/admin/pages/AdminPostsP
 const AdminPostDetailPage = lazyPage(() => import('@/features/admin/pages/AdminPostDetailPage'))
 const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCommentsPage'))
 const AdminMessagesPage = lazyPage(() => import('@/features/admin/pages/AdminMessagesPage'))
+const AdminAgentEvalsPage = lazyPage(() => import('@/features/admin/pages/AdminAgentEvalsPage'))
 const AdminLogsPage = lazyPage(() => import('@/features/admin/pages/AdminLogsPage'))
 const AdminSettingsPage = lazyPage(() => import('@/features/admin/pages/AdminSettingsPage'))
 
@@ -370,6 +371,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminMessagesPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/evals',
+    title: 'Agent 3.0 创作盲评',
+    description: '以匿名候选和统一量表开展中文网文专家盲评。',
+    element: (
+      <AdminLayout>
+        <AdminAgentEvalsPage />
       </AdminLayout>
     ),
     useShell: false,

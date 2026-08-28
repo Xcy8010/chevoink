@@ -48,8 +48,23 @@ import {
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
 import { normalizePhoneNumber } from '../lib/phone.js'
+import { DataAccessError } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { sendAuthSmsCode, verifyAuthSmsCode } from '../lib/sms-service.js'
+import {
+  addAgentEvalSample,
+  createAgentEvalSuite,
+  getAgentEvalResults,
+  getNextBlindReview,
+  listAgentEvalSuites,
+  submitBlindReview,
+  updateAgentEvalSuiteStatus,
+} from '../lib/agent/blind-review.js'
+import {
+  AGENT_EVAL_DIMENSIONS,
+  AGENT_EVAL_MECHANICAL_REASONS,
+  type AgentBlindReviewSubmission,
+} from '../../shared/contracts/index.js'
 
 const router = Router()
 
@@ -81,6 +96,50 @@ const adminSetRoleSchema = z.object({
 const adminDeleteNovelSchema = z.object({
   confirmTitle: nonEmptyText,
 })
+
+const agentEvalSuiteSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  datasetVersion: z.string().trim().min(1).max(64),
+  rubricVersion: z.string().trim().min(1).max(64),
+})
+
+const agentEvalCandidateSchema = z.object({
+  origin: z.enum(['agent2', 'agent3', 'human']),
+  content: z.string().trim().min(1).max(20_000),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+})
+
+const agentEvalSampleSchema = z.object({
+  code: z.string().trim().min(1).max(64),
+  title: z.string().trim().min(1).max(160),
+  genre: z.string().trim().min(1).max(48),
+  task: z.string().trim().min(1).max(48),
+  style: z.string().trim().min(1).max(48),
+  evaluationBrief: z.string().trim().min(1).max(2_000),
+  sourceClass: z.enum(['synthetic', 'public_domain', 'licensed', 'user_opt_in']),
+  sourceReference: z.string().trim().min(1).max(500),
+  consentReceiptId: z.string().trim().max(160).optional(),
+  candidates: z.array(agentEvalCandidateSchema).length(3),
+})
+
+const agentEvalStatusSchema = z.object({ status: z.enum(['active', 'completed']) })
+const agentEvalRatingSchema = z.record(
+  z.string(),
+  z.object(Object.fromEntries(AGENT_EVAL_DIMENSIONS.map((dimension) => [dimension, z.number().int().min(1).max(5)])) as Record<(typeof AGENT_EVAL_DIMENSIONS)[number], z.ZodNumber>),
+)
+const agentEvalReviewSchema = z.object({
+  candidateRatings: agentEvalRatingSchema,
+  guessedOrigins: z.record(z.string(), z.enum(['agent2', 'agent3', 'human', 'unsure'])),
+  mechanicalReasons: z.record(z.string(), z.array(z.enum(AGENT_EVAL_MECHANICAL_REASONS)).max(AGENT_EVAL_MECHANICAL_REASONS.length)),
+  preferredLabel: z.string().trim().min(1).max(8),
+  notes: z.string().trim().max(2_000).optional(),
+})
+
+function requireSuperAdmin(admin: { isSuperAdmin: boolean }): void {
+  if (!admin.isSuperAdmin) {
+    throw new DataAccessError(403, 'SUPER_ADMIN_REQUIRED', '该操作仅限超级管理员。')
+  }
+}
 
 /** 强密码校验：至少 12 位，含大小写、数字与符号 */
 function validateStrongPassword(password: string): string | null {
@@ -788,6 +847,124 @@ router.get('/conversations/:conversationId/messages', async (req: Request, res: 
       return
     }
     res.status(200).json(buildSuccess(requestId, { messages: payload }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+/* ---------------- Agent 3.0 专家盲评 ---------------- */
+
+router.get('/evals/suites', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    await requireAdmin(req)
+    res.status(200).json(buildSuccess(requestId, { suites: await listAgentEvalSuites() }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/evals/suites', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(agentEvalSuiteSchema, req.body, '请完整填写评测套件信息。')
+    const suite = await createAgentEvalSuite({ ...body, adminId: admin.id })
+    await recordAdminAuditLog({
+      adminId: admin.id,
+      action: 'agent_eval.suite_create',
+      targetType: 'agent_eval_suite',
+      targetId: suite.id,
+      detail: { datasetVersion: suite.datasetVersion, rubricVersion: suite.rubricVersion },
+      ip: getRequestIp(req),
+    })
+    res.status(201).json(buildSuccess(requestId, suite))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/evals/suites/:suiteId/samples', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(agentEvalSampleSchema, req.body, '请完整填写盲评样本。')
+    const sample = await addAgentEvalSample(req.params.suiteId, body)
+    await recordAdminAuditLog({
+      adminId: admin.id,
+      action: 'agent_eval.sample_create',
+      targetType: 'agent_eval_sample',
+      targetId: sample.id,
+      detail: { suiteId: req.params.suiteId, code: sample.code },
+      ip: getRequestIp(req),
+    })
+    res.status(201).json(buildSuccess(requestId, sample))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/evals/suites/:suiteId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(agentEvalStatusSchema, req.body, '请选择有效的套件状态。')
+    const suite = await updateAgentEvalSuiteStatus(req.params.suiteId, body.status)
+    await recordAdminAuditLog({
+      adminId: admin.id,
+      action: 'agent_eval.suite_status',
+      targetType: 'agent_eval_suite',
+      targetId: suite.id,
+      detail: { status: suite.status },
+      ip: getRequestIp(req),
+    })
+    res.status(200).json(buildSuccess(requestId, suite))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/evals/review/next', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    const suiteId = typeof req.query.suiteId === 'string' && req.query.suiteId.trim() ? req.query.suiteId : undefined
+    const assignment = await getNextBlindReview(admin.id, suiteId)
+    res.status(200).json(buildSuccess(requestId, { assignment }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/evals/samples/:sampleId/reviews', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    const body = parseBody(agentEvalReviewSchema, req.body, '请完成全部候选评分后提交。')
+    const result = await submitBlindReview(admin.id, req.params.sampleId, body as AgentBlindReviewSubmission)
+    await recordAdminAuditLog({
+      adminId: admin.id,
+      action: 'agent_eval.review_submit',
+      targetType: 'agent_eval_sample',
+      targetId: req.params.sampleId,
+      detail: { submitted: true },
+      ip: getRequestIp(req),
+    })
+    res.status(201).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/evals/suites/:suiteId/results', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    res.status(200).json(buildSuccess(requestId, await getAgentEvalResults(req.params.suiteId)))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

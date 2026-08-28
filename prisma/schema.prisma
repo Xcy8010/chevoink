@@ -1209,3 +1209,73 @@ model AdminAuditLog {
   @@index([targetType, targetId])
   @@map("admin_audit_logs")
 }
+
+model AgentEvalSuite {
+  id               String            @id @default(cuid()) @db.VarChar(64)
+  name             String            @db.VarChar(160)
+  datasetVersion   String            @map("dataset_version") @db.VarChar(64)
+  rubricVersion    String            @map("rubric_version") @db.VarChar(64)
+  status           String            @default("draft") @db.VarChar(24)
+  createdByAdminId String            @map("created_by_admin_id") @db.VarChar(64)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  samples          AgentEvalSample[]
+
+  @@index([status, createdAt])
+  @@map("agent_eval_suites")
+}
+
+model AgentEvalSample {
+  id                  String               @id @default(cuid()) @db.VarChar(64)
+  suiteId             String               @map("suite_id") @db.VarChar(64)
+  code                String               @db.VarChar(64)
+  title               String               @db.VarChar(160)
+  genre               String               @db.VarChar(48)
+  task                 String               @db.VarChar(48)
+  style                String               @db.VarChar(48)
+  evaluationBrief     String               @map("evaluation_brief")
+  sourceClass         String               @map("source_class") @db.VarChar(32)
+  sourceReferenceHash String               @map("source_reference_hash") @db.VarChar(64)
+  consentReceiptId    String?              @map("consent_receipt_id") @db.VarChar(160)
+  createdAt           DateTime             @default(now()) @map("created_at")
+  suite               AgentEvalSuite       @relation(fields: [suiteId], references: [id], onDelete: Cascade)
+  candidates          AgentEvalCandidate[]
+  reviews             AgentBlindReview[]
+
+  @@unique([suiteId, code])
+  @@index([suiteId, createdAt])
+  @@map("agent_eval_samples")
+}
+
+model AgentEvalCandidate {
+  id          String          @id @default(cuid()) @db.VarChar(64)
+  sampleId    String          @map("sample_id") @db.VarChar(64)
+  blindLabel  String          @map("blind_label") @db.VarChar(8)
+  origin      String          @db.VarChar(24)
+  content     String
+  contentHash String          @map("content_hash") @db.VarChar(64)
+  metadata    Json            @default("{}")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  sample      AgentEvalSample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  @@unique([sampleId, blindLabel])
+  @@index([sampleId, origin])
+  @@map("agent_eval_candidates")
+}
+
+model AgentBlindReview {
+  id                String          @id @default(cuid()) @db.VarChar(64)
+  sampleId          String          @map("sample_id") @db.VarChar(64)
+  reviewerHash      String          @map("reviewer_hash") @db.VarChar(64)
+  candidateRatings  Json            @map("candidate_ratings")
+  guessedOrigins    Json            @map("guessed_origins")
+  mechanicalReasons Json            @map("mechanical_reasons")
+  preferredLabel    String          @map("preferred_label") @db.VarChar(8)
+  notes             String?
+  submittedAt       DateTime        @default(now()) @map("submitted_at")
+  sample            AgentEvalSample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  @@unique([sampleId, reviewerHash])
+  @@index([reviewerHash, submittedAt])
+  @@map("agent_blind_reviews")
+}
