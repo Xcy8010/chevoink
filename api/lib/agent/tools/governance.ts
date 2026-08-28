@@ -31,6 +31,7 @@ export const AGENT_TOOL_GOVERNANCE = {
   memory_review_list: { category: 'read', risk: 'low', postconditions: ['conflicts_not_silently_resolved'] },
   skill_catalog: { category: 'read', risk: 'low', postconditions: ['metadata_only'] },
   skill_load: { category: 'read', risk: 'low', postconditions: ['phase_resource_only', 'soft_guidance_only'] },
+  skill_run_explain: { category: 'read', risk: 'low', postconditions: ['route_receipt_only'] },
   session_history_search: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
   session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
   chapter_create: {
@@ -90,6 +91,11 @@ export const AGENT_TOOL_GOVERNANCE = {
   memory_event_save: { category: 'write', risk: 'medium', postconditions: ['memory_source_recorded', 'timeline_updated'] },
   creative_critique: { category: 'workflow', risk: 'medium', postconditions: ['isolated_critique_context', 'artifact_persisted', 'chapter_unchanged'] },
   creative_revision_draft: { category: 'workflow', risk: 'medium', postconditions: ['selected_findings_only', 'artifact_persisted', 'chapter_unchanged'] },
+  skill_create_draft: { category: 'workflow', risk: 'medium', postconditions: ['private_scope', 'disabled_by_default', 'static_audit_recorded'] },
+  skill_test: { category: 'workflow', risk: 'low', postconditions: ['prompt_hashed', 'eval_recorded', 'content_unchanged'] },
+  skill_enable: { category: 'workflow', risk: 'medium', postconditions: ['published_version_only', 'next_turn_effect'] },
+  skill_rollback: { category: 'workflow', risk: 'medium', postconditions: ['published_version_only', 'history_preserved'] },
+  skill_publish: { category: 'workflow', risk: 'medium', postconditions: ['explicit_confirmation', 'audit_passed', 'eval_passed'] },
   ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
 } as const satisfies Record<string, AgentToolGovernance>
 

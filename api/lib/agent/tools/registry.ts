@@ -57,7 +57,18 @@ import {
 } from './changeset-tools.js'
 import { directiveListTool, directiveSaveTool, directiveSupersedeTool } from './directive-tools.js'
 import { memoryEventSaveTool, memoryRelationSaveTool, memoryReviewListTool } from './memory-tools.js'
-import { creativeCritiqueTool, creativeRevisionDraftTool, skillCatalogTool, skillLoadTool } from './skill-tools.js'
+import {
+  creativeCritiqueTool,
+  creativeRevisionDraftTool,
+  skillCatalogTool,
+  skillCreateDraftTool,
+  skillEnableTool,
+  skillLoadTool,
+  skillPublishTool,
+  skillRollbackTool,
+  skillRunExplainTool,
+  skillTestTool,
+} from './skill-tools.js'
 import { sessionHistorySearchTool, sessionMessageReadTool } from './session-history-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
@@ -85,6 +96,7 @@ export const allTools: AgentTool<any>[] = [
   memoryReviewListTool,
   skillCatalogTool,
   skillLoadTool,
+  skillRunExplainTool,
   sessionHistorySearchTool,
   sessionMessageReadTool,
   // 写
@@ -128,6 +140,11 @@ export const allTools: AgentTool<any>[] = [
   memoryEventSaveTool,
   creativeCritiqueTool,
   creativeRevisionDraftTool,
+  skillCreateDraftTool,
+  skillTestTool,
+  skillEnableTool,
+  skillRollbackTool,
+  skillPublishTool,
   // 交互
   askUserTool,
 ]

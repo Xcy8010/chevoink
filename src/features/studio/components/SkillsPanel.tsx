@@ -1,8 +1,12 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, History, LoaderCircle, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
+import { Check, History, Import, LoaderCircle, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { useToast } from '@/components/ui/toast-context'
+import type { AgentSkillListItem } from '../../../../shared/contracts/index.js'
 import { getNovelSkills, updateNovelSkill } from '../api'
+import SkillManagerDialog from './SkillManagerDialog'
 
 const phaseNames: Record<string, string> = {
   research: '调研', plan: '规划', scene: '场景', draft: '正文', critique: '审阅', revision: '修订', commit: '落库',
@@ -15,6 +19,8 @@ function lastUsedLabel(value: string | null): string {
 
 export default function SkillsPanel({ novelId, className }: { novelId: string; className?: string }) {
   const queryClient = useQueryClient()
+  const toast = useToast()
+  const [dialog, setDialog] = useState<'create' | 'import' | AgentSkillListItem | null>(null)
   const queryKey = ['studio', novelId, 'skills'] as const
   const skillsQuery = useQuery({
     queryKey,
@@ -24,6 +30,7 @@ export default function SkillsPanel({ novelId, className }: { novelId: string; c
   const updateMutation = useMutation({
     mutationFn: ({ skillId, enabled }: { skillId: string; enabled: boolean }) => updateNovelSkill(novelId, skillId, { enabled }),
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
+    onError: (error) => toast.error(error instanceof Error ? error.message : '技能状态更新失败。'),
   })
 
   if (skillsQuery.isLoading) {
@@ -41,7 +48,9 @@ export default function SkillsPanel({ novelId, className }: { novelId: string; c
         <Sparkles className="h-4 w-4 text-emerald-500" />
         <h2 className="text-sm font-semibold text-[var(--text-primary)]">技能</h2>
         <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{payload.enabledCount}/{payload.totalCount} 已启用</span>
-        <button type="button" onClick={() => void skillsQuery.refetch()} className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="刷新技能" title="刷新技能"><RefreshCw className={cn('h-3.5 w-3.5', skillsQuery.isFetching && 'animate-spin')} /></button>
+        <button type="button" onClick={() => setDialog('create')} className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="创建技能" title="创建技能"><Plus className="h-4 w-4" /></button>
+        <button type="button" onClick={() => setDialog('import')} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="导入第三方技能" title="导入第三方技能"><Import className="h-4 w-4" /></button>
+        <button type="button" onClick={() => void skillsQuery.refetch()} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="刷新技能" title="刷新技能"><RefreshCw className={cn('h-3.5 w-3.5', skillsQuery.isFetching && 'animate-spin')} /></button>
       </div>
       <p className="mt-1.5 text-[11px] leading-5 text-[var(--text-secondary)]">Agent 会按任务自动召回已启用技能；关闭后从下一轮开始生效。</p>
     </header>
@@ -74,11 +83,16 @@ export default function SkillsPanel({ novelId, className }: { novelId: string; c
             <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-[var(--text-tertiary)]">
               <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3 w-3" />{skill.source === 'builtin' ? 'Chevoink 内置' : '自定义'} · {skill.license}</span>
               <span className="inline-flex items-center gap-1"><History className="h-3 w-3" />{lastUsedLabel(skill.lastUsedAt)}{skill.usageCount > 0 ? ` · ${skill.usageCount} 次` : ''}</span>
+              <button type="button" onClick={() => setDialog(skill)} className="ml-auto text-[var(--text-secondary)] underline underline-offset-4">详情 / 测试</button>
             </div>
           </article>
         })}
       </div>
       {payload.recentRuns.length > 0 ? <div className="mt-4 border-t border-[var(--border-subtle)] pt-3"><p className="px-1 text-[10px] font-medium text-[var(--text-secondary)]">最近路由</p>{payload.recentRuns.slice(0, 3).map((run) => <div key={run.runId} className="mt-2 rounded-[9px] border border-[var(--border-subtle)] px-2.5 py-2 text-[10px] text-[var(--text-secondary)]"><div className="flex items-center gap-2"><span>{phaseNames[run.phase] ?? run.phase}</span><span className="ml-auto tabular-nums text-[var(--text-tertiary)]">置信度 {Math.round(run.confidence * 100)}%</span></div><p className="mt-1 truncate text-[var(--text-tertiary)]">{run.selected.map((item) => item.name).join('、') || '本轮未加载技能'}</p></div>)}</div> : null}
     </div>
+    {dialog ? <SkillManagerDialog novelId={novelId} skill={dialog === 'create' || dialog === 'import' ? null : dialog} importMode={dialog === 'import'} onClose={() => setDialog(null)} onPayload={(next) => {
+      queryClient.setQueryData(queryKey, next)
+      if (typeof dialog === 'object') setDialog(next.items.find((item) => item.id === dialog.id) ?? null)
+    }} /> : null}
   </section>
 }

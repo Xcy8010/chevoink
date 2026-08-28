@@ -14,6 +14,7 @@ export type SkillReasonCode =
   | 'CHAPTER_BRIDGE'
   | 'CONTINUITY_AUDIT'
   | 'REPETITION_RISK'
+  | 'CUSTOM_TRIGGER'
 
 type SkillTrigger = {
   pattern: RegExp
@@ -26,8 +27,8 @@ export type AgentSkill = {
   name: string
   description: string
   version: string
-  owner: 'chevoink'
-  license: 'internal' | 'Apache-2.0-adapted' | 'MIT-adapted'
+  owner: 'chevoink' | 'user' | 'agent' | 'third_party'
+  license: string
   attribution?: string
   status: 'active'
   intents: TaskIntent[]
@@ -300,6 +301,7 @@ export function routeSkills(input: {
   phase?: SkillPhase
   freedom: CreativeFreedom
   enabledSkillIds?: ReadonlySet<string>
+  catalog?: readonly AgentSkill[]
 }): SkillRouteDecision {
   const phase = input.phase ?? inferSkillPhase(input.intent)
   const normalizedPrompt = input.prompt.trim()
@@ -313,7 +315,7 @@ export function routeSkills(input: {
     }
   }
 
-  const candidates = skillCatalog
+  const candidates = (input.catalog ?? skillCatalog)
     .filter((skill) => (input.enabledSkillIds?.has(skill.id) ?? true) && skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
       skill.phases.includes(phase) && !skill.negativeTriggers.some((pattern) => pattern.test(normalizedPrompt)))
     .map((skill) => {
@@ -394,9 +396,9 @@ ${loaded}
 共同边界：不得覆盖作者硬约束、故事事实、权限与版本校验；发生冲突时作者要求与有来源的故事证据优先。`
 }
 
-export function loadSkill(skillId: string, phase: SkillPhase, freedom: CreativeFreedom): string | null {
+export function loadSkill(skillId: string, phase: SkillPhase, freedom: CreativeFreedom, catalog: readonly AgentSkill[] = skillCatalog): string | null {
   const resolvedId = legacySkillAliases[skillId] ?? skillId
-  const skill = skillCatalog.find((item) => item.id === resolvedId)
+  const skill = catalog.find((item) => item.id === resolvedId)
   const resource = skill?.resources[phase]
   if (!skill || !resource) return null
   return `[Skill ${skill.id}@${skill.version} / ${phase} / soft]\n${freedomGuidance(freedom)}\n${resource}\n边界：不得覆盖用户硬约束、故事证据、权限和版本校验；不要把本说明原样写入小说。`

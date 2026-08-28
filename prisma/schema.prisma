@@ -889,6 +889,8 @@ model AgentSkillDefinition {
   updatedAt      DateTime                 @updatedAt @map("updated_at")
   versions       AgentSkillVersion[]
   installations  AgentSkillInstallation[]
+  audits          AgentSkillAudit[]
+  evals           AgentSkillEval[]
 
   @@index([ownerUserId, status])
   @@index([source, status])
@@ -927,6 +929,39 @@ model AgentSkillInstallation {
   @@unique([skillId, userId, scope, scopeId])
   @@index([userId, scope, scopeId, enabled])
   @@map("agent_skill_installations")
+}
+
+model AgentSkillAudit {
+  id              String               @id @default(cuid()) @db.VarChar(64)
+  skillId         String               @map("skill_id") @db.VarChar(160)
+  version         String               @db.VarChar(32)
+  status          String               @db.VarChar(24)
+  findings        Json                 @default("[]")
+  manifestHash    String               @map("manifest_hash") @db.VarChar(64)
+  createdByUserId String               @map("created_by_user_id") @db.VarChar(64)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  skill           AgentSkillDefinition @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([skillId, version, createdAt])
+  @@map("agent_skill_audits")
+}
+
+model AgentSkillEval {
+  id         String               @id @default(cuid()) @db.VarChar(64)
+  skillId    String               @map("skill_id") @db.VarChar(160)
+  version    String               @db.VarChar(32)
+  userId     String               @map("user_id") @db.VarChar(64)
+  novelId    String               @map("novel_id") @db.VarChar(64)
+  promptHash String               @map("prompt_hash") @db.VarChar(64)
+  input      Json
+  result     Json
+  passed     Boolean
+  createdAt  DateTime             @default(now()) @map("created_at")
+  skill      AgentSkillDefinition @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([skillId, version, createdAt])
+  @@index([userId, novelId, createdAt])
+  @@map("agent_skill_evals")
 }
 
 model AgentArtifact {

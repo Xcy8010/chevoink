@@ -36,6 +36,12 @@ import type {
   MergeChaptersRequest,
   MemoryGraph,
   NovelSkillsPayload,
+  AgentSkillTestResult,
+  AgentSkillDetail,
+  CreateNovelSkillRequest,
+  CreateNovelSkillVersionRequest,
+  ImportThirdPartySkillRequest,
+  TestNovelSkillRequest,
   StructureReport,
   BulkReplacePreviewRequest,
   ProjectSearchRequest,
@@ -253,6 +259,59 @@ export function updateNovelSkill(
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
+}
+
+export function createNovelSkill(novelId: string, payload: CreateNovelSkillRequest): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills`, {
+    method: 'POST', body: JSON.stringify(payload),
+  })
+}
+
+export function importThirdPartyNovelSkillApi(novelId: string, payload: ImportThirdPartySkillRequest): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills/import`, {
+    method: 'POST', body: JSON.stringify(payload),
+  })
+}
+
+export async function getNovelSkillDetailApi(novelId: string, skillId: string, version?: string): Promise<AgentSkillDetail> {
+  const query = version ? `?version=${encodeURIComponent(version)}` : ''
+  const data = await requestData<{ detail: AgentSkillDetail }>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}/detail${query}`)
+  return data.detail
+}
+
+export function createNovelSkillVersion(
+  novelId: string,
+  skillId: string,
+  payload: CreateNovelSkillVersionRequest,
+): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}/versions`, {
+    method: 'POST', body: JSON.stringify(payload),
+  })
+}
+
+export async function testNovelSkillApi(
+  novelId: string,
+  skillId: string,
+  payload: TestNovelSkillRequest,
+): Promise<AgentSkillTestResult> {
+  const data = await requestData<{ result: AgentSkillTestResult }>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}/test`, {
+    method: 'POST', body: JSON.stringify(payload),
+  })
+  return data.result
+}
+
+export function publishNovelSkill(
+  novelId: string,
+  skillId: string,
+  version: string,
+): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}/publish`, {
+    method: 'POST', body: JSON.stringify({ version }),
+  })
+}
+
+export function deleteNovelSkillApi(novelId: string, skillId: string): Promise<NovelSkillsPayload> {
+  return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' })
 }
 
 /** 发布作品：同时批量发布选中章节并设置可见范围 */

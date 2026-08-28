@@ -52,7 +52,7 @@ export function getToolsForAgent(
       ;['memory_review_list', 'memory_relation_save', 'memory_event_save'].forEach((name) => disabled.add(name))
     }
     if (!featureFlags.skill2) {
-      ;['skill_catalog', 'skill_load', 'creative_critique', 'creative_revision_draft'].forEach((name) => disabled.add(name))
+      ;['skill_catalog', 'skill_load', 'skill_run_explain', 'skill_create_draft', 'skill_test', 'skill_enable', 'skill_rollback', 'skill_publish', 'creative_critique', 'creative_revision_draft'].forEach((name) => disabled.add(name))
     }
     modeTools = modeTools.filter((tool) => !disabled.has(tool.name))
   }

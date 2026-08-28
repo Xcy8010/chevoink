@@ -2,7 +2,15 @@ import { z } from 'zod'
 
 import { generateTextCompletion } from '../../ai-service.js'
 import { prisma } from '../../prisma.js'
-import { loadSkill, skillCatalog, type CreativeFreedom, type SkillPhase } from '../skills/index.js'
+import { loadSkill, type CreativeFreedom, type SkillPhase } from '../skills/index.js'
+import {
+  createNovelSkillDraft,
+  listNovelSkills,
+  publishNovelSkillVersion,
+  resolveEnabledRuntimeSkills,
+  testNovelSkill,
+  updateNovelSkill,
+} from '../skills/service.js'
 import { defineTool } from './types.js'
 
 const FREEDOM = z.enum(['stable', 'balanced', 'bold']).default('balanced')
@@ -13,8 +21,9 @@ export const skillCatalogTool = defineTool({
   description: '查看可用 Skill 3.0 元数据。只返回名称、版本、阶段和说明，不加载完整工作流。',
   parameters: z.object({ phase: PHASE.optional() }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
-  async execute(_ctx, args) {
-    const items = args.phase ? skillCatalog.filter((item) => item.phases.includes(args.phase!)) : skillCatalog
+  async execute(ctx, args) {
+    const runtime = await resolveEnabledRuntimeSkills(ctx.userId, ctx.novelId)
+    const items = args.phase ? runtime.filter((item) => item.phases.includes(args.phase!)) : runtime
     return {
       output: items.map((item) => `${item.id}@${item.version} [${item.phases.join('/')}] ${item.synopsis}${item.attribution ? ` 来源说明：${item.attribution}` : ''}`).join('\n'),
       summary: `创作能力 · ${items.length} 项`,
@@ -27,16 +36,117 @@ export const skillLoadTool = defineTool({
   description: '按阶段加载一个 Skill 的完整主工作流。自动路由已加载的 Skill 无需重复调用；仅在任务阶段变化或作者明确指定时使用。',
   parameters: z.object({ skillId: z.string().min(1), phase: PHASE, creativeFreedom: FREEDOM }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
-  async execute(_ctx, args) {
-    const content = loadSkill(args.skillId, args.phase, args.creativeFreedom)
+  async execute(ctx, args) {
+    const runtime = await resolveEnabledRuntimeSkills(ctx.userId, ctx.novelId)
+    const content = loadSkill(args.skillId, args.phase, args.creativeFreedom, runtime)
     return content
       ? { output: content, summary: `加载 ${args.skillId} · ${args.phase}` }
       : { output: `Skill ${args.skillId} 不存在或不支持 ${args.phase} 阶段。` }
   },
 })
 
-function skillResources(skillIds: string[], phase: SkillPhase, freedom: CreativeFreedom): string {
-  return skillIds.map((id) => loadSkill(id, phase, freedom)).filter(Boolean).join('\n\n')
+const CUSTOM_INTENT = z.enum(['plan', 'write', 'revise', 'review', 'structure', 'global_transform'])
+const CUSTOM_MODE = z.enum(['plan', 'build', 'review'])
+const customSkillDraftSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(500),
+  intents: z.array(CUSTOM_INTENT).min(1).max(6),
+  modes: z.array(CUSTOM_MODE).min(1).max(3),
+  phases: z.array(PHASE).min(1).max(7),
+  triggerPhrases: z.array(z.string().min(1).max(80)).min(1).max(24),
+  negativeTriggerPhrases: z.array(z.string().min(1).max(80)).min(1).max(24),
+  instructions: z.object({
+    research: z.string().optional(), plan: z.string().optional(), scene: z.string().optional(), draft: z.string().optional(),
+    critique: z.string().optional(), revision: z.string().optional(), commit: z.string().optional(),
+  }),
+  tokenBudget: z.number().int().min(100).max(1_500).optional(),
+  priority: z.number().int().min(0).max(150).optional(),
+})
+
+export const skillCreateDraftTool = defineTool({
+  name: 'skill_create_draft', title: '草拟作品技能',
+  description: '仅当作者明确要求把长期写作偏好保存为技能时使用。创建的是私有、关闭、未发布草稿，必须先测试并由作者确认发布；普通单轮要求禁止保存成技能。',
+  parameters: customSkillDraftSchema,
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
+  async execute(ctx, args) {
+    const payload = await createNovelSkillDraft(ctx.userId, ctx.novelId, { ...args, source: 'agent' })
+    const draft = payload.items.find((item) => item.source === 'agent' && item.name === args.name)
+    return {
+      output: draft
+        ? `已创建私有技能草稿 ${draft.id}@${draft.activeVersion}。当前未启用；请先调用 skill_test，再请作者确认是否发布。`
+        : '技能草稿已创建，当前未启用。',
+      summary: `草拟技能「${args.name}」`,
+    }
+  },
+})
+
+export const skillTestTool = defineTool({
+  name: 'skill_test', title: '测试作品技能',
+  description: '针对作者自有技能运行一条确定性触发/负触发测试并保存结果。只有在创建或修改技能后使用，禁止为普通创作任务例行测试。',
+  parameters: z.object({
+    skillId: z.string().min(1), version: z.string().optional(), prompt: z.string().min(1).max(4_000),
+    intent: CUSTOM_INTENT, mode: CUSTOM_MODE, phase: PHASE, expectMatch: z.boolean(),
+  }),
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
+  async execute(ctx, args) {
+    const result = await testNovelSkill(ctx.userId, ctx.novelId, args.skillId, args)
+    return {
+      output: `测试${result.passed ? '通过' : '失败'}：实际${result.matched ? '命中' : '未命中'}，预期${result.expected ? '命中' : '未命中'}，score=${result.score}，负触发=${result.blockedByNegativeTrigger ? '是' : '否'}。`,
+      summary: `测试技能 · ${result.passed ? '通过' : '失败'}`,
+    }
+  },
+})
+
+export const skillEnableTool = defineTool({
+  name: 'skill_enable', title: '启停作品技能',
+  description: '仅在作者明确要求启用或关闭某个已发布技能时使用；关闭从下一轮立即生效。未发布草稿不能启用。',
+  parameters: z.object({ skillId: z.string().min(1), enabled: z.boolean() }),
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
+  async execute(ctx, args) {
+    await updateNovelSkill(ctx.userId, ctx.novelId, args.skillId, { enabled: args.enabled })
+    return { output: `技能 ${args.skillId} 已${args.enabled ? '启用' : '关闭'}，从下一轮开始生效。`, summary: `${args.enabled ? '启用' : '关闭'}技能` }
+  },
+})
+
+export const skillRollbackTool = defineTool({
+  name: 'skill_rollback', title: '回滚作品技能',
+  description: '仅在作者明确指定技能与目标已发布版本时回滚作品安装；不会覆盖或删除历史版本。',
+  parameters: z.object({ skillId: z.string().min(1), version: z.string().min(1) }),
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
+  async execute(ctx, args) {
+    await updateNovelSkill(ctx.userId, ctx.novelId, args.skillId, { lockedVersion: args.version })
+    return { output: `技能 ${args.skillId} 已回滚并锁定到 ${args.version}。`, summary: `回滚技能到 ${args.version}` }
+  },
+})
+
+export const skillPublishTool = defineTool({
+  name: 'skill_publish', title: '发布作品技能',
+  description: '发布已通过静态审计和确定性测试的作者私有技能版本。会改变后续 Agent 行为，必须得到作者本轮明确确认。',
+  parameters: z.object({ skillId: z.string().min(1), version: z.string().min(1) }),
+  permission: { plan: 'ask', build: 'ask', review: 'ask' }, readOnly: false, alwaysConfirm: true,
+  async execute(ctx, args) {
+    await publishNovelSkillVersion(ctx.userId, ctx.novelId, args.skillId, args.version)
+    return { output: `技能 ${args.skillId}@${args.version} 已发布并启用。`, summary: `发布技能 ${args.version}` }
+  },
+})
+
+export const skillRunExplainTool = defineTool({
+  name: 'skill_run_explain', title: '解释技能路由',
+  description: '仅在作者询问本轮为什么使用或没有使用某技能时读取最近路由回执；禁止每轮例行调用。',
+  parameters: z.object({ runId: z.string().optional() }),
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
+  async execute(ctx, args) {
+    const payload = await listNovelSkills(ctx.userId, ctx.novelId)
+    const run = args.runId ? payload.recentRuns.find((item) => item.runId === args.runId) : payload.recentRuns[0]
+    return run
+      ? { output: `阶段=${run.phase}；已选=${run.selected.map((item) => `${item.id}@${item.version}`).join('、') || '无'}；原因=${run.reasonCodes.join('、') || '无明确触发'}；置信度=${run.confidence}；估算 token=${run.estimatedTokens}。`, summary: '解释技能路由' }
+      : { output: '当前作品暂无可解释的技能路由记录。', summary: '暂无技能路由记录' }
+  },
+})
+
+async function skillResources(userId: string, novelId: string, skillIds: string[], phase: SkillPhase, freedom: CreativeFreedom): Promise<string> {
+  const runtime = await resolveEnabledRuntimeSkills(userId, novelId)
+  return skillIds.map((id) => loadSkill(id, phase, freedom, runtime)).filter(Boolean).join('\n\n')
 }
 
 async function ownedChapter(userId: string, novelId: string, chapterId: string) {
@@ -57,7 +167,7 @@ export const creativeCritiqueTool = defineTool({
     const start = args.start ?? 0
     const end = Math.min(args.end ?? chapter.content.length, chapter.content.length)
     const text = chapter.content.slice(start, end)
-    const resources = skillResources(args.skillIds, 'critique', args.creativeFreedom)
+    const resources = await skillResources(ctx.userId, ctx.novelId, args.skillIds, 'critique', args.creativeFreedom)
     const critique = await generateTextCompletion(
       `你是与写作者上下文隔离的小说批评编辑。只依据给定原文指出问题，不续写、不改写、不套固定检查表。每条含编号、短引文、问题和修改方向；把事实硬伤与审美建议分开。\n${resources}`,
       `章节：${chapter.title}，revision=${chapter.revision}，范围=[${start},${end})\n原文：\n${text}`,
@@ -89,7 +199,7 @@ export const creativeRevisionDraftTool = defineTool({
     const start = args.start ?? 0
     const end = Math.min(args.end ?? chapter.content.length, chapter.content.length)
     const source = chapter.content.slice(start, end)
-    const resources = skillResources(args.skillIds, 'revision', args.creativeFreedom)
+    const resources = await skillResources(ctx.userId, ctx.novelId, args.skillIds, 'revision', args.creativeFreedom)
     const revised = await generateTextCompletion(
       `你是与 Draft/Critique 上下文隔离的修订编辑。只落实 selectedFindings，不顺手应用其他建议，不改变未授权事实和情节。只输出可替换原文的修订文本。\n${resources}`,
       `作者选中的批评项：\n${args.selectedFindings.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n待修订原文：\n${source}`,

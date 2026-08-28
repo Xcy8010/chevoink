@@ -41,7 +41,17 @@ import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
 import { getMemoryGraph, listMemoryReviewInbox, resolveMemoryReview, syncNovelMemoryProjection } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
-import { listNovelSkills, updateNovelSkill } from '../lib/agent/skills/service.js'
+import {
+  createNovelSkillDraft,
+  createNovelSkillVersion,
+  deleteNovelSkill,
+  getNovelSkillDetail,
+  importThirdPartyNovelSkill,
+  listNovelSkills,
+  publishNovelSkillVersion,
+  testNovelSkill,
+  updateNovelSkill,
+} from '../lib/agent/skills/service.js'
 
 const router = Router()
 
@@ -78,6 +88,47 @@ const updateNovelSkillSchema = z
     lockedVersion: z.string().trim().min(1).nullable().optional(),
   })
   .refine((patch) => patch.enabled !== undefined || patch.lockedVersion !== undefined)
+
+const skillIntentSchema = z.enum(['plan', 'write', 'revise', 'review', 'structure', 'global_transform'])
+const skillModeSchema = z.enum(['plan', 'build', 'review'])
+const skillPhaseSchema = z.enum(['research', 'plan', 'scene', 'draft', 'critique', 'revision', 'commit'])
+const skillDraftSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(500),
+  intents: z.array(skillIntentSchema).min(1).max(6),
+  modes: z.array(skillModeSchema).min(1).max(3),
+  phases: z.array(skillPhaseSchema).min(1).max(7),
+  triggerPhrases: z.array(z.string().trim().min(1).max(80)).min(1).max(24),
+  negativeTriggerPhrases: z.array(z.string().trim().min(1).max(80)).min(1).max(24),
+  instructions: z.object({
+    research: z.string().max(12_000).optional(),
+    plan: z.string().max(12_000).optional(),
+    scene: z.string().max(12_000).optional(),
+    draft: z.string().max(12_000).optional(),
+    critique: z.string().max(12_000).optional(),
+    revision: z.string().max(12_000).optional(),
+    commit: z.string().max(12_000).optional(),
+  }),
+  tokenBudget: z.number().int().min(100).max(1_500).optional(),
+  priority: z.number().int().min(0).max(150).optional(),
+})
+const createSkillVersionSchema = skillDraftSchema.extend({
+  version: z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/i).max(32),
+})
+const importThirdPartySkillSchema = skillDraftSchema.extend({
+  license: z.enum(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'CC0-1.0', 'Unlicense']),
+  attribution: z.string().trim().min(1).max(500),
+  sourcePackage: z.string().trim().min(1).max(240).regex(/^[a-z0-9_.-]+\/[a-z0-9_.-]+(?:@[a-f0-9_.-]+)?$/i),
+})
+const testSkillSchema = z.object({
+  version: z.string().trim().max(32).optional(),
+  prompt: z.string().trim().min(1).max(4_000),
+  intent: skillIntentSchema,
+  mode: skillModeSchema,
+  phase: skillPhaseSchema,
+  expectMatch: z.boolean(),
+})
+const publishSkillSchema = z.object({ version: z.string().trim().min(1).max(32) })
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -256,6 +307,96 @@ router.patch('/novels/:novelId/skills/:skillId', async (req: Request, res: Respo
     requireAgent2Feature('skill2', userId)
     const patch = parseBody(updateNovelSkillSchema, req.body, '请提供有效的技能设置。')
     const payload = await updateNovelSkill(userId, req.params.novelId, req.params.skillId, patch)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/skills/:skillId/detail', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const version = typeof req.query.version === 'string' && req.query.version.trim() ? req.query.version.trim() : undefined
+    const detail = await getNovelSkillDetail(userId, req.params.novelId, req.params.skillId, version)
+    res.status(200).json(buildSuccess(requestId, { detail }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const body = parseBody(skillDraftSchema, req.body, '请完整填写技能名称、触发条件、禁用条件和阶段说明。')
+    const payload = await createNovelSkillDraft(userId, req.params.novelId, { ...body, source: 'user' })
+    res.status(201).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills/import', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const body = parseBody(importThirdPartySkillSchema, req.body, '导入第三方技能必须提供受支持许可证、归属说明和固定来源包。')
+    const payload = await importThirdPartyNovelSkill(userId, req.params.novelId, body)
+    res.status(201).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills/:skillId/versions', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const body = parseBody(createSkillVersionSchema, req.body, '请提供有效的新版本内容与语义版本号。')
+    const payload = await createNovelSkillVersion(userId, req.params.novelId, req.params.skillId, body)
+    res.status(201).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills/:skillId/test', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const body = parseBody(testSkillSchema, req.body, '请提供测试提示词、任务类型、阶段和预期结果。')
+    const result = await testNovelSkill(userId, req.params.novelId, req.params.skillId, body)
+    res.status(200).json(buildSuccess(requestId, { result }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills/:skillId/publish', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const body = parseBody(publishSkillSchema, req.body, '请选择要发布的技能版本。')
+    const payload = await publishNovelSkillVersion(userId, req.params.novelId, req.params.skillId, body.version)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/novels/:novelId/skills/:skillId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skill2', userId)
+    const payload = await deleteNovelSkill(userId, req.params.novelId, req.params.skillId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
