@@ -249,6 +249,7 @@ export function toChapterListItem(chapter: Chapter): StudioPayload['chapters'][n
     visibility: chapter.visibility,
     commentCount: chapter.commentCount,
     revision: chapter.revision,
+    publishedRevision: chapter.publishedRevision,
     publishedAt: chapter.publishedAt,
   }
 }

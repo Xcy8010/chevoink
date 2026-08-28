@@ -61,7 +61,8 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 11. 站内作品参考走平台工具：作者要求查看/参考站内作品（含自己未公开的作品）时，用 platform_novel_search 按书名定位、platform_novel_read 读介绍/分类/标签/章节正文；二创、借鉴、写序章类任务必须先读参考作品的简介与相关章节再动笔，禁止盲写，引用他人作品仅限已上架内容；当前作品自身内容仍用 novel_get_context/chapter_read，不要用平台工具读当前作品。
 12. 找类似作品走特征词而非拆书名：作者要找类似/同类/同风格作品时，先用 platform_novel_read 读参考作品的标签、分类与简介，提炼题材特征词（标签/分类/核心题材），用特征词调 platform_novel_search 搜同类候选并对比标签与简介判断相似度，严禁把参考作品书名逐字拆分穷举搜索；站内没有合适候选时用 web_search 搜站外类似作品推荐（如「《x》 类似作品 推荐」或题材词+小说推荐），摘要不足用 web_read 深读，推荐时注明来源。
 13. 字数用工具数据不手数：任何字数核对（是否达到作者要求、改动前后篇幅）一律引用工具返回的字数；改写片段用 chapter_edit_range 传 oldText 锚点定位，严禁在思考信道逐字计数算下标。
-14. 全书改动必须走变更集：改名、术语替换、跨章批量修改先 project_search / impact_analyze，再 bulk_replace_preview 或 entity_rename_preview；向作者展示 ChangeSet 后才 changeset_apply。禁止逐章读取、逐章整段覆盖，应用后用 project_search 和 structure_validate 验证。`
+14. 全书改动必须走变更集：改名、术语替换、跨章批量修改先 project_search / impact_analyze，再 bulk_replace_preview 或 entity_rename_preview；向作者展示 ChangeSet 后才 changeset_apply。禁止逐章读取、逐章整段覆盖，应用后用 project_search 和 structure_validate 验证。
+15. 会话原文按需检索：正常任务直接使用当前历史与压缩检查点，严禁每轮例行扫描会话。只有作者明确要求核对/引用早前原话（如“第一条提示词是什么”“你之前完整回复了什么”），或系统明确提示早前消息未进入当前窗口且当前任务依赖该细节时，才用 session_history_search 定位；需要完整内容再用 session_message_read 按消息读取。没有查到时如实说明，禁止根据摘要或记忆猜测原话。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。
@@ -233,9 +234,8 @@ async function loadSessionHistory(
   budgetChars: number,
   after: Date | null,
 ): Promise<ChatMessage[]> {
-  // 必须取「最近」的 60 条（desc + reverse）：之前用 asc 取到的是最早 60 条，
-  // 长会话里最新几轮（含助手上一轮结尾的提问）被整体截掉，
-  // 作者回「好的/继续」时模型根本看不到自己刚问过什么
+  // 与会话恢复窗口保持一致取最近 500 条，再由字符预算裁剪。旧版固定 60 条会让
+  // 工具密集型任务在上下文仅占很少时也提前丢掉首轮用户需求。
   const records = await prisma.agentMessage.findMany({
     where: {
       sessionId,
@@ -243,8 +243,8 @@ async function loadSessionHistory(
       role: { in: ['user', 'assistant'] },
       ...(after ? { createdAt: { gt: after } } : {}),
     },
-    orderBy: { createdAt: 'desc' },
-    take: 60,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 500,
   })
   records.reverse()
 
@@ -274,7 +274,7 @@ async function loadSessionHistory(
   }
 
   if (dropped > 0) {
-    kept.unshift({ role: 'system', content: `[早前对话共 ${dropped} 条已省略，如需细节可用 memory_search 或直接询问用户]` })
+    kept.unshift({ role: 'system', content: `[早前对话共 ${dropped} 条未进入当前窗口；如需核对原话，按需使用 session_history_search / session_message_read，禁止猜测]` })
   }
 
   return kept

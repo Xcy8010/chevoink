@@ -261,7 +261,16 @@ async function readPlatformNovel(
   if (chapterId) {
     const chapter = await prisma.chapter.findFirst({
       where: { ...chapterWhere, id: chapterId },
-      select: { id: true, title: true, content: true, wordCount: true },
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        wordCount: true,
+        publishedTitle: true,
+        publishedContent: true,
+        publishedWordCount: true,
+        publishedRevision: true,
+      },
     })
 
     if (!chapter) {
@@ -272,19 +281,21 @@ async function readPlatformNovel(
       }
     }
 
-    const slice = chapter.content.slice(offset, offset + limit)
-    const hasMore = offset + limit < chapter.content.length
+    const chapterTitle = !isOwner && chapter.publishedRevision != null ? chapter.publishedTitle ?? chapter.title : chapter.title
+    const chapterContent = !isOwner && chapter.publishedRevision != null ? chapter.publishedContent ?? '' : chapter.content
+    const slice = chapterContent.slice(offset, offset + limit)
+    const hasMore = offset + limit < chapterContent.length
     const output = [
       `作品：《${title}》 作者：${novel.author.nickname} · ${novelStatusLabel(isOwner, novel.status)} · 总字数：${novel.wordCount}`,
-      `章节《${chapter.title}》 总长 ${chapter.content.length} 字，当前返回 [${offset}, ${offset + slice.length})${hasMore ? '，后续还有内容，可继续用 offset 分段读取' : '（已到结尾）'}`,
+      `章节《${chapterTitle}》 总长 ${chapterContent.length} 字，当前返回 [${offset}, ${offset + slice.length})${hasMore ? '，后续还有内容，可继续用 offset 分段读取' : '（已到结尾）'}`,
       '正文：',
       slice || '（本章暂无正文）',
     ].join('\n')
 
     return {
       output,
-      summary: `已查看《${title}》·《${chapter.title}》`,
-      display: { ...display, chapterTitle: chapter.title },
+      summary: `已查看《${title}》·《${chapterTitle}》`,
+      display: { ...display, chapterTitle },
     }
   }
 
@@ -292,11 +303,14 @@ async function readPlatformNovel(
     where: chapterWhere,
     orderBy: { orderIndex: 'asc' },
     take: CHAPTER_LIST_IN_OUTPUT,
-    select: { id: true, title: true, orderIndex: true, wordCount: true },
+    select: { id: true, title: true, orderIndex: true, wordCount: true, publishedTitle: true, publishedWordCount: true, publishedRevision: true },
   })
 
   const chapterLines = chapters.map(
-    (chapter) => `- [${chapter.id}] 第${chapter.orderIndex}章《${chapter.title}》 ${chapter.wordCount}字`,
+    (chapter) => {
+      const publishedSnapshot = !isOwner && chapter.publishedRevision != null
+      return `- [${chapter.id}] 第${chapter.orderIndex}章《${publishedSnapshot ? chapter.publishedTitle ?? chapter.title : chapter.title}》 ${publishedSnapshot ? chapter.publishedWordCount ?? 0 : chapter.wordCount}字`
+    },
   )
   if (novel.chapterCount > chapters.length) {
     chapterLines.push(`（仅列出前 ${chapters.length} 章，共 ${novel.chapterCount} 章）`)

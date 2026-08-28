@@ -49,3 +49,17 @@ export function assistantHasParts(messages: AgentUIMessage[], runId: string | nu
   }
   return false
 }
+
+/** 首次发送时空历史请求可能晚于本地 beginRun 返回；此时旧响应不得覆盖正在直播的消息。 */
+export function shouldKeepLiveSessionMessages(
+  runId: string | null,
+  phase: string,
+  activeSessionId: string | null,
+  requestedSessionId: string,
+): boolean {
+  return Boolean(
+    runId &&
+      ['starting', 'running', 'awaiting_approval', 'awaiting_input'].includes(phase) &&
+      activeSessionId === requestedSessionId,
+  )
+}

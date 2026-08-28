@@ -44,7 +44,7 @@ import {
   stopAgentLoopRun,
 } from '../agentApi'
 import { isRunActive, useAgentStore } from '../agentStore'
-import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel } from '../lib/panel-helpers'
+import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
@@ -265,6 +265,11 @@ export function AgentPanel({
     fetchAgentSessionMessages(sessionId)
       .then(({ messages: history, activeRunId }) => {
         if (cancelled) {
+          return
+        }
+        const live = useAgentStore.getState()
+        if (shouldKeepLiveSessionMessages(live.runId, live.phase, live.activeSessionId, sessionId)) {
+          // 新会话首次发送会与空历史请求并发；直播态始终比更早发出的历史快照新。
           return
         }
         if (activeRunId) {

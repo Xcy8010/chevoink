@@ -31,6 +31,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   memory_review_list: { category: 'read', risk: 'low', postconditions: ['conflicts_not_silently_resolved'] },
   skill_catalog: { category: 'read', risk: 'low', postconditions: ['metadata_only'] },
   skill_load: { category: 'read', risk: 'low', postconditions: ['phase_resource_only', 'soft_guidance_only'] },
+  session_history_search: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
+  session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
   chapter_create: {
     category: 'structure',
     risk: 'medium',

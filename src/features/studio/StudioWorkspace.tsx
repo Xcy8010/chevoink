@@ -1657,6 +1657,7 @@ export default function StudioWorkspace() {
                 visibility: variables.visibility,
                 publishedAt: item.publishedAt ?? publishedAtFallback,
                 revision: item.revision + 1,
+                publishedRevision: item.revision + 1,
               }
             : item,
         ),
@@ -1683,6 +1684,7 @@ export default function StudioWorkspace() {
                       visibility: variables.visibility,
                       publishedAt: item.publishedAt ?? publishedAtFallback,
                       revision: item.revision + 1,
+                      publishedRevision: item.revision + 1,
                     }
                   : item,
               ),
@@ -1702,6 +1704,7 @@ export default function StudioWorkspace() {
                 visibility: variables.visibility,
                 publishedAt: current.publishedAt ?? publishedAtFallback,
                 revision: current.revision + 1,
+                publishedRevision: current.revision + 1,
               }
             : current,
         )
@@ -3881,7 +3884,7 @@ export default function StudioWorkspace() {
       >
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
           <div className="flex shrink-0 items-center gap-2 px-0.5 pb-2 pt-1">
-            {mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' ? (
+            {mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context' ? (
               <>
                 <button
                   type="button"
@@ -3892,7 +3895,7 @@ export default function StudioWorkspace() {
                   返回
                 </button>
                 <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : '作品设置'}
+                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : mobileView === 'context' ? '会话上下文' : '作品设置'}
                 </p>
               </>
             ) : (
@@ -4025,6 +4028,12 @@ export default function StudioWorkspace() {
               </div>
             ) : null}
 
+            {mobileView === 'context' ? (
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] p-3">
+                <AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />
+              </div>
+            ) : null}
+
             {mobileView === 'cover' ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {renderCoverToolPanel(() => setMobileView('assistant'))}
@@ -4095,7 +4104,7 @@ export default function StudioWorkspace() {
                 onClick={() => setMobileMoreOpen(true)}
                 className={cn(
                   'flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[14px] px-2 text-[11px] leading-4 transition-colors',
-                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory'
+                  mobileMoreOpen || mobileView === 'cover' || mobileView === 'meta' || mobileView === 'memory' || mobileView === 'context'
                     ? 'font-medium text-[var(--text-primary)]'
                     : 'text-[var(--text-tertiary)] active:text-[var(--text-primary)]',
                 )}
@@ -4118,6 +4127,7 @@ export default function StudioWorkspace() {
                   ...(featureFlags.memory2
                     ? [{ key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') }]
                     : []),
+                  { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
                   { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },

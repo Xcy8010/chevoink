@@ -33,4 +33,14 @@ describe('Agent 工具治理清单', () => {
       expect(tool?.permission.build).toBe('ask')
     }
   })
+
+  it('会话原文工具只读且明确禁止每轮例行扫描', () => {
+    const search = allTools.find((item) => item.name === 'session_history_search')
+    const read = allTools.find((item) => item.name === 'session_message_read')
+
+    expect(search?.readOnly).toBe(true)
+    expect(read?.readOnly).toBe(true)
+    expect(search?.description).toContain('普通写作、续写、改稿与已有上下文足够时禁止调用')
+    expect(read?.description).toContain('禁止为了“以防万一”批量读取整段会话')
+  })
 })

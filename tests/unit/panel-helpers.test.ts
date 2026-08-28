@@ -5,6 +5,7 @@ import {
   formatSessionTime,
   getMessageText,
   phaseLabel,
+  shouldKeepLiveSessionMessages,
 } from '../../src/features/studio/agent/lib/panel-helpers.js'
 import type { AgentMessagePart, AgentUIMessage } from '../../shared/contracts/index.js'
 
@@ -79,5 +80,13 @@ describe('assistantHasParts', () => {
   it('匹配的助手消息分部为空或无匹配 run 时为 false', () => {
     expect(assistantHasParts([makeMessage('assistant', 'r1')], 'r1')).toBe(false)
     expect(assistantHasParts([makeMessage('assistant', 'r1', [{ type: 'text', text: 'x' }])], 'r2')).toBe(false)
+  })
+})
+
+describe('shouldKeepLiveSessionMessages', () => {
+  it('同一会话已有直播 run 时拒绝用迟到的空历史覆盖首条提示词', () => {
+    expect(shouldKeepLiveSessionMessages('run-1', 'running', 'session-1', 'session-1')).toBe(true)
+    expect(shouldKeepLiveSessionMessages('run-1', 'succeeded', 'session-1', 'session-1')).toBe(false)
+    expect(shouldKeepLiveSessionMessages('run-1', 'running', 'session-2', 'session-1')).toBe(false)
   })
 })

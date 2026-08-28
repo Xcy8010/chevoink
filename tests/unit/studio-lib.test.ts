@@ -294,7 +294,7 @@ describe('plan-review：章节列表操作', () => {
   it('toChapterListItem：字段白名单映射', () => {
     const item = toChapterListItem(fakeChapter())
     expect(Object.keys(item).sort()).toEqual(
-      ['commentCount', 'id', 'novelId', 'volumeId', 'orderInVolume', 'orderIndex', 'publishedAt', 'revision', 'status', 'summary', 'title', 'visibility', 'wordCount'].sort(),
+      ['commentCount', 'id', 'novelId', 'volumeId', 'orderInVolume', 'orderIndex', 'publishedAt', 'publishedRevision', 'revision', 'status', 'summary', 'title', 'visibility', 'wordCount'].sort(),
     )
   })
 })

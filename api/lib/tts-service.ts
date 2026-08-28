@@ -84,7 +84,8 @@ export async function synthesizeTtsBatchData(input: SynthesizeTtsInput): Promise
     throw new DataAccessError(404, 'NOT_FOUND', '未找到可收听的章节。')
   }
 
-  const paragraphs = splitTtsParagraphs(chapter.content)
+  const publishedContent = chapter.publishedRevision == null ? chapter.content : chapter.publishedContent ?? ''
+  const paragraphs = splitTtsParagraphs(publishedContent)
   const batches = splitTtsBatches(paragraphs)
   const batch = batches[input.batchIndex]
 
@@ -93,7 +94,7 @@ export async function synthesizeTtsBatchData(input: SynthesizeTtsInput): Promise
   }
 
   const cacheKey = createHash('sha1')
-    .update(`${chapter.id}:${chapter.revision}:${input.voiceId}:${batch.index}`)
+    .update(`${chapter.id}:${chapter.publishedRevision ?? chapter.revision}:${input.voiceId}:${batch.index}`)
     .digest('hex')
   const cacheDirectory = getTtsCacheDirectory()
   const filePath = path.join(cacheDirectory, `${cacheKey}.mp3`)

@@ -346,6 +346,8 @@ export interface Chapter {
   commentCount: number
   /** 内容与结构写入版本；客户端保存与 Agent 工具写入必须据此做乐观并发校验。 */
   revision: number
+  /** 最近一次发布快照对应的创作稿版本；与 revision 不同表示有待发布更新。 */
+  publishedRevision?: number | null
   publishedAt: string | null
   createdAt: string
   updatedAt: string
@@ -365,6 +367,7 @@ export interface ChapterListItem {
   visibility: Visibility
   commentCount: number
   revision: number
+  publishedRevision?: number | null
   publishedAt: string | null
   [key: string]: unknown
 }

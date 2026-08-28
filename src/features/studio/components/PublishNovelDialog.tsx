@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 
 import Button from '@/components/ui/Button'
 import type { ChapterListItem, Visibility } from '../../../../shared/contracts'
+import { getPublishableChapters, hasUnpublishedChapterChanges } from '../lib/publish-chapters'
 
 type PublishNovelDialogProps = {
   open: boolean
@@ -44,9 +45,9 @@ export default function PublishNovelDialog({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [visibility, setVisibility] = useState<Visibility>('public')
 
-  // 已发布且公开的章节无需重复发布，不进入可选列表，避免误选后重发一次
+  // 已发布但创作稿有更新的章节必须重新进入列表，显式发布后才同步到阅读区。
   const publishableChapters = useMemo(
-    () => chapters.filter((chapter) => !(chapter.status === 'published' && chapter.visibility === 'public')),
+    () => getPublishableChapters(chapters),
     [chapters],
   )
 
@@ -65,8 +66,13 @@ export default function PublishNovelDialog({
 
   // 发布后作品必须至少有一个公开章节：要么已有公开已发布章节，要么本次以公开可见范围发布新章节
   const hasPublicPublishedChapter = useMemo(
-    () => chapters.some((chapter) => chapter.status === 'published' && chapter.visibility === 'public'),
-    [chapters],
+    () => chapters.some(
+      (chapter) =>
+        chapter.status === 'published' &&
+        chapter.visibility === 'public' &&
+        !selectedIds.has(chapter.id),
+    ),
+    [chapters, selectedIds],
   )
   const willHavePublicChapter = hasPublicPublishedChapter || (visibility === 'public' && selectedIds.size > 0)
 
@@ -177,7 +183,7 @@ export default function PublishNovelDialog({
                     第 {chapter.orderIndex} 章 · {chapter.title || '未命名章节'}
                   </span>
                   <span className="shrink-0 text-xs text-[var(--text-secondary)]">
-                    {CHAPTER_STATUS_LABEL[chapter.status]} · {CHAPTER_VISIBILITY_LABEL[chapter.visibility]}
+                    {hasUnpublishedChapterChanges(chapter) ? '待更新' : CHAPTER_STATUS_LABEL[chapter.status]} · {CHAPTER_VISIBILITY_LABEL[chapter.visibility]}
                   </span>
                 </button>
               )

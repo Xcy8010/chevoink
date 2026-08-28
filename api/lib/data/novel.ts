@@ -9,7 +9,7 @@ import { NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
 import { hotScore, RECOMMEND_ALGORITHM_VERSIONS } from '../../../shared/recommend/scoring.js'
 import { storeNovelCoverDataUrl, storeNovelCoverFromRemoteUrl } from '../novel-cover-storage.js'
 import { DataAccessError, prisma } from '../prisma.js'
-import { buildPagination, buildSlug, chapterListItemSelect, commentInclude, ensureNonEmptyText, ensureNovelOwner, ensureUserExists, novelInclude, recalculateNovelStats, toChapterListItem, toComment, toNovel, toNovelCard, toVolumeListItem } from './internal.js'
+import { buildPagination, buildSlug, chapterListItemSelect, commentInclude, ensureNonEmptyText, ensureNovelOwner, ensureUserExists, novelInclude, recalculateNovelStats, toChapterListItem, toComment, toNovel, toNovelCard, toPublishedChapterListItem, toPublishedVolumeListItem, toVolumeListItem } from './internal.js'
 import { publicChapterWhere } from './chapter.js'
 import { searchableNovelWhere } from './search.js'
 import { DEFAULT_VOLUME_TITLE } from './volume.js'
@@ -203,19 +203,36 @@ export async function publishNovelData(
 
   const updated = await prisma.$transaction(async (tx) => {
     if (chapterIds.length > 0) {
-      await tx.chapter.updateMany({
+      const selectedChapters = await tx.chapter.findMany({
         where: { novelId, id: { in: chapterIds } },
-        data: {
-          status: 'published',
-          visibility,
-          revision: { increment: 1 },
+        select: {
+          id: true,
+          title: true,
+          summary: true,
+          content: true,
+          wordCount: true,
+          revision: true,
+          publishedAt: true,
         },
       })
-      // updateMany 无法按行做 publishedAt ?? now 兜底，单独补一次空值填充
-      await tx.chapter.updateMany({
-        where: { novelId, id: { in: chapterIds }, publishedAt: null },
-        data: { publishedAt: now },
-      })
+      await Promise.all(
+        selectedChapters.map((chapter) =>
+          tx.chapter.update({
+            where: { id: chapter.id },
+            data: {
+              status: 'published',
+              visibility,
+              publishedTitle: chapter.title,
+              publishedSummary: chapter.summary,
+              publishedContent: chapter.content,
+              publishedWordCount: chapter.wordCount,
+              publishedRevision: chapter.revision + 1,
+              revision: { increment: 1 },
+              publishedAt: chapter.publishedAt ?? now,
+            },
+          }),
+        ),
+      )
     }
 
     // 发布前置校验：作品至少要有一个公开的已发布章节，否则 0 章节/全私密的作品会对外展示空壳
@@ -378,7 +395,12 @@ export async function getNovelDetailData(
     }),
     prisma.volume.findMany({
       where: { novelId },
-      include: { chapters: { where: chapterWhere, select: { wordCount: true } } },
+      include: {
+        chapters: {
+          where: chapterWhere,
+          select: { wordCount: true, publishedWordCount: true, publishedRevision: true },
+        },
+      },
       orderBy: { orderIndex: 'asc' },
     }),
     prisma.comment.findMany({
@@ -446,8 +468,12 @@ export async function getNovelDetailData(
 
   return {
     novel: novelPayload,
-    volumes: volumeRecords.map(toVolumeListItem),
-    chapters: chapterRecords.map(toChapterListItem),
+    volumes: volumeRecords.map((volume) =>
+      isOwner ? toVolumeListItem(volume) : toPublishedVolumeListItem(volume),
+    ),
+    chapters: chapterRecords.map((chapter) =>
+      isOwner ? toChapterListItem(chapter) : toPublishedChapterListItem(chapter),
+    ),
     topComments: commentRecords.map(toComment),
     relatedNovels: relatedRecords.map((record) => toNovelCard(record)),
     /** 相关推荐算法版本（方案 Phase 0） */

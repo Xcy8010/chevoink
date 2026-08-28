@@ -7,7 +7,7 @@ import type { Prisma } from '@prisma/client'
 import type { Chapter, CreateChapterRequest, ReaderPayload, StudioPayload, UpdateChapterRequest, Visibility } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { CHAPTER_REVISION_CONFLICT_CODE, CHAPTER_REVISION_CONFLICT_MESSAGE, isChapterRevisionCurrent } from './chapter-revision.js'
-import { PLACEHOLDER_NOVEL_TITLES, chapterListItemSelect, ensureNonEmptyText, ensureNovelOwner, recalculateNovelStats, resolveEffectiveNovelTitle, toChapter, toChapterListItem, toCoverAsset, toNovel, toVolumeListItem, volumeListItemInclude } from './internal.js'
+import { PLACEHOLDER_NOVEL_TITLES, chapterListItemSelect, ensureNonEmptyText, ensureNovelOwner, recalculateNovelStats, resolveEffectiveNovelTitle, toChapter, toChapterListItem, toCoverAsset, toNovel, toPublishedChapter, toPublishedChapterListItem, toPublishedVolumeListItem, toVolumeListItem, volumeListItemInclude } from './internal.js'
 import { normalizeCoverImageUrl } from './novel.js'
 import { normalizeNovelStructure, placeCreatedChapter, resolveChapterPlacement } from './volume.js'
 import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
@@ -98,7 +98,7 @@ export async function getReaderPayloadData(
       include: {
         chapters: {
           where: { status: { not: 'draft' } },
-          select: { wordCount: true },
+          select: { wordCount: true, publishedWordCount: true, publishedRevision: true },
         },
       },
       orderBy: { orderIndex: 'asc' },
@@ -137,9 +137,9 @@ export async function getReaderPayloadData(
       slug: novel.slug,
       coverUrl: novel.coverAsset?.imageUrl ?? null,
     },
-    currentChapter: toChapter(currentChapter),
-    volumes: volumeRecords.map(toVolumeListItem),
-    chapterList: visibleChapters.map(toChapterListItem),
+    currentChapter: toPublishedChapter(currentChapter),
+    volumes: volumeRecords.map(toPublishedVolumeListItem),
+    chapterList: visibleChapters.map(toPublishedChapterListItem),
     previousChapterId: currentIndex > 0 ? visibleChapters[currentIndex - 1].id : null,
     nextChapterId:
       currentIndex >= 0 && currentIndex < visibleChapters.length - 1
@@ -174,6 +174,11 @@ export async function createChapterData(
         wordCount: input.content.length,
         status: input.status,
         visibility: input.visibility ?? defaultVisibility,
+        publishedTitle: input.status === 'published' ? ensureNonEmptyText(input.title, 'title') : null,
+        publishedSummary: input.status === 'published' ? input.summary?.trim() || null : null,
+        publishedContent: input.status === 'published' ? input.content : null,
+        publishedWordCount: input.status === 'published' ? input.content.length : null,
+        publishedRevision: input.status === 'published' ? 1 : null,
         publishedAt: input.status === 'published' ? new Date() : null,
       },
     })
@@ -225,16 +230,27 @@ export async function updateChapterData(
   }
 
   const nextStatus = input.status ?? existing.status
+  const publishingForFirstTime = nextStatus === 'published' && existing.status !== 'published'
+  const nextTitle = input.title === undefined ? existing.title : ensureNonEmptyText(input.title, 'title')
+  const nextSummary = input.summary === undefined ? existing.summary : input.summary
+  const nextContent = input.content ?? existing.content
+  const nextRevision = existing.revision + 1
 
   const updated = await prisma.$transaction(async (tx) => {
     const data: Prisma.ChapterUpdateManyMutationInput = {
-      title: input.title === undefined ? undefined : ensureNonEmptyText(input.title, 'title'),
+      title: input.title === undefined ? undefined : nextTitle,
       summary: input.summary === undefined ? undefined : input.summary,
       content: input.content ?? undefined,
       status: input.status ?? undefined,
       visibility: input.visibility ?? undefined,
       wordCount: input.content === undefined ? undefined : input.content.length,
       revision: { increment: 1 },
+      // 已发布章节的普通保存只更新创作稿；只有首次进入 published 才建立读者快照。
+      publishedTitle: publishingForFirstTime ? nextTitle : undefined,
+      publishedSummary: publishingForFirstTime ? nextSummary : undefined,
+      publishedContent: publishingForFirstTime ? nextContent : undefined,
+      publishedWordCount: publishingForFirstTime ? nextContent.length : undefined,
+      publishedRevision: publishingForFirstTime ? nextRevision : undefined,
       publishedAt:
         input.status === undefined
           ? undefined

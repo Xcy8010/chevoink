@@ -75,6 +75,11 @@ type ChapterRecord = {
   visibility: Chapter['visibility']
   commentCount?: number | null
   revision?: number | null
+  publishedTitle?: string | null
+  publishedSummary?: string | null
+  publishedContent?: string | null
+  publishedWordCount?: number | null
+  publishedRevision?: number | null
   publishedAt?: Date | string | null
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
@@ -90,7 +95,11 @@ type VolumeRecord = {
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
   _count?: { chapters?: number | null } | null
-  chapters?: Array<{ wordCount?: number | null }> | null
+  chapters?: Array<{
+    wordCount?: number | null
+    publishedWordCount?: number | null
+    publishedRevision?: number | null
+  }> | null
 }
 
 type CommentRecord = {
@@ -419,6 +428,7 @@ export function toChapter(record: ChapterRecord): Chapter {
     visibility: record.visibility,
     commentCount: record.commentCount ?? 0,
     revision: record.revision ?? 1,
+    publishedRevision: record.publishedRevision ?? null,
     publishedAt: toIso(record.publishedAt),
     createdAt: toIso(record.createdAt) ?? nowIso(),
     updatedAt: toIso(record.updatedAt) ?? nowIso(),
@@ -443,6 +453,43 @@ export function toChapterListItem(record: ChapterRecord): ChapterListItem {
     visibility: chapter.visibility,
     commentCount: chapter.commentCount,
     revision: chapter.revision,
+    publishedRevision: chapter.publishedRevision,
+    publishedAt: chapter.publishedAt,
+  }
+}
+
+/** 阅读侧只消费最近一次显式发布的不可变快照；历史数据无快照时兼容回退到当前字段。 */
+export function toPublishedChapter(record: ChapterRecord): Chapter {
+  const chapter = toChapter(record)
+  if (record.status !== 'published' || record.publishedRevision == null) {
+    return chapter
+  }
+  return {
+    ...chapter,
+    title: record.publishedTitle ?? chapter.title,
+    summary: record.publishedSummary ?? null,
+    content: record.publishedContent ?? '',
+    wordCount: record.publishedWordCount ?? 0,
+    revision: record.publishedRevision,
+  }
+}
+
+export function toPublishedChapterListItem(record: ChapterRecord): ChapterListItem {
+  const chapter = toPublishedChapter(record)
+  return {
+    id: chapter.id,
+    novelId: chapter.novelId,
+    title: chapter.title,
+    summary: chapter.summary,
+    orderIndex: chapter.orderIndex,
+    volumeId: chapter.volumeId,
+    orderInVolume: chapter.orderInVolume,
+    wordCount: chapter.wordCount,
+    status: chapter.status,
+    visibility: chapter.visibility,
+    commentCount: chapter.commentCount,
+    revision: chapter.revision,
+    publishedRevision: chapter.publishedRevision,
     publishedAt: chapter.publishedAt,
   }
 }
@@ -464,6 +511,10 @@ export const chapterListItemSelect = {
   visibility: true,
   commentCount: true,
   revision: true,
+  publishedTitle: true,
+  publishedSummary: true,
+  publishedWordCount: true,
+  publishedRevision: true,
   publishedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -494,6 +545,19 @@ export function toVolumeListItem(record: VolumeRecord): VolumeListItem {
     chapterCount: record._count?.chapters ?? record.chapters?.length ?? 0,
     wordCount: record.chapters?.reduce((total, chapter) => total + (chapter.wordCount ?? 0), 0) ?? 0,
   }
+}
+
+/** 非作者目录中的卷统计同样锁定在最近一次发布快照，避免创作稿字数提前泄露。 */
+export function toPublishedVolumeListItem(record: VolumeRecord): VolumeListItem {
+  return toVolumeListItem({
+    ...record,
+    chapters: record.chapters?.map((chapter) => ({
+      wordCount:
+        chapter.publishedRevision == null
+          ? chapter.wordCount
+          : chapter.publishedWordCount ?? 0,
+    })),
+  })
 }
 
 export const volumeListItemInclude = {
