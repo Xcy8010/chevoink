@@ -6,11 +6,11 @@ import { loadSkill, skillCatalog, type CreativeFreedom, type SkillPhase } from '
 import { defineTool } from './types.js'
 
 const FREEDOM = z.enum(['stable', 'balanced', 'bold']).default('balanced')
-const PHASE = z.enum(['draft', 'critique', 'revision'])
+const PHASE = z.enum(['research', 'plan', 'scene', 'draft', 'critique', 'revision', 'commit'])
 
 export const skillCatalogTool = defineTool({
   name: 'skill_catalog', title: '查看创作能力',
-  description: '查看可用 Skill 2.0 元数据。Skill 都是软技巧，不是强制检查表；按任务最多组合三个。',
+  description: '查看可用 Skill 3.0 元数据。只返回名称、版本、阶段和说明，不加载完整工作流。',
   parameters: z.object({ phase: PHASE.optional() }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
   async execute(_ctx, args) {
@@ -24,7 +24,7 @@ export const skillCatalogTool = defineTool({
 
 export const skillLoadTool = defineTool({
   name: 'skill_load', title: '加载创作能力',
-  description: '按 draft/critique/revision 阶段加载一个 Skill 的精简资源。只在候选确实有帮助时调用，最多加载三个。',
+  description: '按阶段加载一个 Skill 的完整主工作流。自动路由已加载的 Skill 无需重复调用；仅在任务阶段变化或作者明确指定时使用。',
   parameters: z.object({ skillId: z.string().min(1), phase: PHASE, creativeFreedom: FREEDOM }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
   async execute(_ctx, args) {

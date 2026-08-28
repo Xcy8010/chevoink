@@ -1,113 +1,382 @@
 import type { AgentExecutionMode, TaskIntent } from '../../../../shared/contracts/index.js'
 
 export type CreativeFreedom = 'stable' | 'balanced' | 'bold'
-export type SkillPhase = 'draft' | 'critique' | 'revision'
+export type SkillPhase = 'research' | 'plan' | 'scene' | 'draft' | 'critique' | 'revision' | 'commit'
+export type SkillReasonCode =
+  | 'PROJECT_POSITIONING'
+  | 'LONG_OUTLINE'
+  | 'WRITE_CHAPTER'
+  | 'SCENE_CAUSALITY'
+  | 'CHARACTER_VOICE'
+  | 'EMOTION_GROUNDING'
+  | 'STYLE_RISK_HIGH'
+  | 'STYLE_CONTINUITY'
+  | 'CHAPTER_BRIDGE'
+  | 'CONTINUITY_AUDIT'
+  | 'REPETITION_RISK'
+
+type SkillTrigger = {
+  pattern: RegExp
+  reasonCode: SkillReasonCode
+  weight: number
+}
 
 export type AgentSkill = {
   id: string
   name: string
+  description: string
   version: string
-  license: 'internal' | 'MIT-adapted'
+  owner: 'chevoink'
+  license: 'internal' | 'Apache-2.0-adapted' | 'MIT-adapted'
   attribution?: string
+  status: 'active'
   intents: TaskIntent[]
   modes: AgentExecutionMode[]
   phases: SkillPhase[]
   strength: 'soft'
-  pattern: RegExp
+  triggers: SkillTrigger[]
+  negativeTriggers: RegExp[]
   synopsis: string
   resources: Partial<Record<SkillPhase, string>>
+  tokenBudget: number
+  priority: number
+  conflicts: string[]
+  composesWith: string[]
 }
 
-/** Skill 2.0：只承载可选择的创作方法，安全、版本和权限仍由代码硬约束。 */
+export type SkillRouteCandidate = {
+  skill: AgentSkill
+  score: number
+  reasonCodes: SkillReasonCode[]
+}
+
+export type SkillRouteDecision = {
+  routerVersion: '3.0.0'
+  phase: SkillPhase
+  candidates: SkillRouteCandidate[]
+  selected: AgentSkill[]
+  reasonCodes: SkillReasonCode[]
+  confidence: number
+  estimatedTokens: number
+  skippedReason?: 'FEATURE_DISABLED' | 'NON_CREATIVE_OPERATION' | 'NO_MATCH'
+}
+
+const MINOR_EDIT_PATTERN = /(?:只|仅)?(?:改|修改|修正|检查)?(?:一个|几个|一下)?(?:错别字|标点|空格|标题|序号|格式|排版)(?:即可|就行|不要动其他|不改内容)?/i
+const NON_CREATIVE_PATTERN = /(?:发布|下架|删除|导出|移动.{0,12}(?:章|卷)|(?:章|卷).{0,12}移动|创建.{0,8}(?:章|卷)|(?:章|卷).{0,8}创建|字数统计|查询字数|打开|关闭|折叠|排序)/i
+const noNegativeTriggers = [MINOR_EDIT_PATTERN, NON_CREATIVE_PATTERN]
+
+/**
+ * Agent 3.0 首批内置中文网文 Skill Pack。
+ * 元数据始终可见，resources 只在服务端路由命中后完整装载，避免把整套规范常驻上下文。
+ */
 export const skillCatalog: AgentSkill[] = [
   {
-    id: 'scene-craft.v2', name: '场景化叙事', version: '2.0.0', license: 'internal',
-    intents: ['write', 'revise'], modes: ['build'], phases: ['draft', 'revision'], strength: 'soft',
-    pattern: /(场景|氛围|描写|动作|沉浸|扩写|写|续写)/,
-    synopsis: '用人物目标、阻力和可感细节搭建场景；不强制固定开篇或结尾结构。',
+    id: 'cn-project-positioning.v3',
+    name: '中文网文项目定位',
+    description: '把题材想法转换为目标读者、核心承诺、差异点和明确禁区。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['plan'], modes: ['plan'], phases: ['plan'], strength: 'soft',
+    triggers: [{ pattern: /(新书|题材|定位|受众|卖点|创意|故事方向|写一本)/, reasonCode: 'PROJECT_POSITIONING', weight: 28 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '先明确读者为何追读和本书独有判断，再进入长篇规划。',
     resources: {
-      draft: '先确认人物此刻真正想得到什么，以及阻止他的具体事物。选择少量与视角人物有关的可感细节；允许留白，不为凑完整度解释所有情绪。段落节奏服务于当下动作，不要求每章固定钩子。',
-      revision: '只修订已指出的场景问题。优先删去解释性复述，让动作、物件和对话承担信息；保留作者原有节奏、怪癖和不规则句式。',
+      plan: '先形成项目定位：目标读者、核心阅读承诺、主角持续欲望、稳定冲突引擎、与同题材常见写法的差异，以及作者明确不要的表达。缺少关键信息时只询问会改变故事方向的问题；不要从一句题材描述直接展开几十章模板目录。',
     },
+    tokenBudget: 420, priority: 95, conflicts: [], composesWith: ['cn-long-outline.v3'],
   },
   {
-    id: 'character-voice.v2', name: '人物声口', version: '2.0.0', license: 'MIT-adapted',
-    attribution: '方法论参考 OpenFic 的角色与长篇状态组织方式，未复制源提示词。',
-    intents: ['write', 'revise', 'plan'], modes: ['plan', 'build'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
-    pattern: /(人物|角色|对话|声口|口吻|关系|争执|交锋|主角|配角)/,
-    synopsis: '从欲望、信息差、关系阶段和既有语言样本区分人物。',
+    id: 'cn-long-outline.v3',
+    name: '中文网文长篇规划',
+    description: '按卷级承诺—兑现、冲突升级和人物代价组织长篇，而不是机械章节表。',
+    version: '3.0.0', owner: 'chevoink', license: 'Apache-2.0-adapted',
+    attribution: '工作流思想参考 Novel Architect（Apache-2.0），实现与中文规则均为 Chevoink 重写。',
+    status: 'active', intents: ['plan'], modes: ['plan'], phases: ['plan'], strength: 'soft',
+    triggers: [{ pattern: /(大纲|长篇|分卷|卷纲|情节弧|规划|计划|主线|支线)/, reasonCode: 'LONG_OUTLINE', weight: 32 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '规划承诺、升级、选择、代价和兑现，章节数量由内容决定。',
     resources: {
-      draft: '先从记忆证据确认关系阶段和各自掌握的信息。对话围绕目的与回避展开；不同人物可在句长、称谓、停顿和关注点上自然分化，不靠口头禅标签化。',
-      critique: '只指出能由原文举证的声口趋同、信息越权、动机跳变；把事实硬伤和审美偏好分开。',
-      revision: '仅处理作者选中的问题，尽量保留原句骨架；通过目的、潜台词和反应差异修正，不给每句对白添加动作标签。',
+      plan: '用“读者承诺—阶段阻力—人物选择—实际代价—阶段兑现—遗留问题”组织每卷。先证明冲突引擎能够持续变化，再拆章节；不固定三幕、每卷章数、反转频率或爽点间隔。每个重要节点必须说明前因、状态变化和对后续的约束。',
     },
+    tokenBudget: 520, priority: 92, conflicts: [], composesWith: ['cn-project-positioning.v3', 'cn-scene-task.v3'],
   },
   {
-    id: 'continuity-evidence.v2', name: '证据化连续性', version: '2.0.0', license: 'MIT-adapted',
-    attribution: '方法论参考 TencentDB-Agent-Memory 的分层记忆与证据召回思想。',
-    intents: ['write', 'revise', 'review', 'structure'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
-    pattern: /(连续|一致|时间线|伏笔|设定|关系|中间|插章|扩展)/,
-    synopsis: '写前按任务召回证据，审阅时区分事实冲突与可接受留白。',
+    id: 'cn-scene-task.v3',
+    name: '场景任务构建',
+    description: '写前明确人物目标、具体阻力、选择、代价和场景终态。',
+    version: '3.0.0', owner: 'chevoink', license: 'Apache-2.0-adapted',
+    attribution: 'PREPARE→WRITE→REVIEW 状态门思想参考 Novel Architect（Apache-2.0），未复制其提示词。',
+    status: 'active', intents: ['write', 'plan'], modes: ['plan', 'build'], phases: ['scene', 'draft'], strength: 'soft',
+    triggers: [{ pattern: /(写|续写|补写|场景|这一章|下一章|正文|冲突|交锋|追逐)/, reasonCode: 'SCENE_CAUSALITY', weight: 24 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '先证明场景会改变故事状态，再生成正文。',
     resources: {
-      draft: '只携带当前场景必需的已确认事实、活跃关系、未收束事件和作者禁区。遇到 conflicted/inferred 记忆时回到来源核实，不自行选边。',
+      scene: '写正文前在内部形成最小场景任务包：视角人物此刻想得到什么；谁或什么具体阻止；人物采取什么行动；必须做出什么选择；付出什么代价；信息、关系、资源、位置或目标至少哪一项发生变化；如何承接上一场终态。任务包只服务当前场景，不套固定节拍。',
+      draft: '先在内部确认本章由哪些必要场景组成，每个场景都要有目标、阻力和状态变化；没有作用的场景合并或删除。正文不展示任务包，不把结构术语写进小说。',
+    },
+    tokenBudget: 460, priority: 100, conflicts: [], composesWith: ['cn-webfiction-draft.v3', 'cn-chapter-bridge.v3'],
+  },
+  {
+    id: 'cn-webfiction-draft.v3',
+    name: '中文网文自然正文',
+    description: '以事件推进和人物行动为主体，控制无功能描写、解释复述与炫技式修辞。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write'], modes: ['build'], phases: ['draft'], strength: 'soft',
+    triggers: [{ pattern: /(写|续写|补写|扩写|正文|章节|下一章|这一章)/, reasonCode: 'WRITE_CHAPTER', weight: 36 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '保证首次 Draft 就具体、连贯、有事件，不把修复全部推给改稿阶段。',
+    resources: {
+      draft: '以人物正在做的事和事件后果为正文骨架，描写只选择会影响判断、动作或情绪的细节。抽象情绪至少落到一个可观察反应、生活经验或关系后果，但不把每句都改成动作。避免无铺垫的华丽开篇、成串比喻、同义解释和段尾总结；允许直述、停顿、留白和不规则节奏。每个场景结束时确认发生了真实变化，但不强制反转、打脸或章末钩子。',
+    },
+    tokenBudget: 620, priority: 110, conflicts: [], composesWith: ['cn-scene-task.v3', 'cn-character-voice.v3', 'cn-emotion-grounding.v3'],
+  },
+  {
+    id: 'cn-character-voice.v3',
+    name: '人物声口与知识边界',
+    description: '从欲望、关系、知识边界、回避方式和既有语言样本区分人物。',
+    version: '3.0.0', owner: 'chevoink', license: 'MIT-adapted',
+    attribution: '角色状态组织方法参考 OpenFic 公开项目，未复制源提示词或作品文本。',
+    status: 'active', intents: ['write', 'revise', 'plan', 'review'], modes: ['plan', 'build', 'review'],
+    phases: ['plan', 'draft', 'critique', 'revision'], strength: 'soft',
+    triggers: [{ pattern: /(人物|角色|对话|声口|口吻|关系|争执|交锋|主角|配角|聊天)/, reasonCode: 'CHARACTER_VOICE', weight: 30 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '让人物因目的和经历不同而说不同的话，不靠口头禅标签化。',
+    resources: {
+      plan: '为关键人物记录：想得到什么、害怕失去什么、掌握与不知道的信息、面对不同关系时如何说话、习惯回避什么，以及声音如何随成长变化。不要用几个口头禅代替完整人物。',
+      draft: '写对话前核对关系阶段和各自知识边界。对白围绕目的、回避和误解展开；通过称谓、句长、关注点、沉默和回应方式自然分化人物，不给每句对白追加动作标签。',
+      critique: '只指出能由原文举证的声口趋同、信息越权和动机跳变；把事实硬伤与审美偏好分开，引用尽量短。',
+      revision: '仅修订选中的声口问题，保留原句骨架和人物已有习惯；优先调整目的、潜台词与反应差异。',
+    },
+    tokenBudget: 520, priority: 88, conflicts: [], composesWith: ['cn-emotion-grounding.v3', 'cn-webfiction-draft.v3'],
+  },
+  {
+    id: 'cn-emotion-grounding.v3',
+    name: '情绪落地',
+    description: '把情绪连接到欲望、触发、身体反应、选择和关系后果。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
+    triggers: [{ pattern: /(情感|情绪|感动|心动|痛苦|害怕|恐惧|愤怒|悲伤|压抑|暧昧|代入)/, reasonCode: 'EMOTION_GROUNDING', weight: 30 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '让情绪有原因、有身体和关系代价，不靠正确标签制造感动。',
+    resources: {
+      draft: '先确认情绪由哪件具体事件触发、人物试图压住或争取什么、身体和注意力如何变化、它迫使人物做了什么选择、关系因此留下什么后果。只写符合视角和人物习惯的证据；克制人物可以几乎不解释。',
+      critique: '寻找只有情绪标签却没有触发、欲望、行为或后果的段落；不要把克制、直述或留白误判为空洞。',
+      revision: '只补足缺失的因果链环节，优先使用本角色已有经历和当前场景物件；禁止统一替换成颤抖、攥拳、眼眶发热等模板动作。',
+    },
+    tokenBudget: 480, priority: 86, conflicts: [], composesWith: ['cn-character-voice.v3', 'cn-prose-specificity.v3'],
+  },
+  {
+    id: 'cn-prose-specificity.v3',
+    name: '中文语言具体化',
+    description: '基于文本证据处理抽象判断、空洞修辞、同构句式和解释性复述。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
+    triggers: [{ pattern: /(AI味|机械|僵硬|不自然|套话|润色|文风|语言|华丽|堆砌|虚浮)/i, reasonCode: 'STYLE_RISK_HIGH', weight: 38 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '删除通常优先于同义替换，不用另一套公式覆盖作者声音。',
+    resources: {
+      draft: '首次写作也要避免空泛判断、连续同构句、无铺垫稀有意象和解释性复述。先写清人物动作与后果，再决定是否需要修辞；一个有效细节胜过一串形容词，但不要机械执行“展示而非讲述”。',
+      critique: '标出真实出现的重复意象、同构句式、抽象情绪、副词依赖、孤立华丽词或总结式收尾，并附短证据；结合题材和人物语域判断，未出现的问题不凑清单。',
+      revision: '只改作者选中的证据点。删除通常优先于同义替换；把抽象判断换成与人物处境有关的动作、选择或物件，同时保留作者原有的直述、怪癖和节奏。',
+    },
+    tokenBudget: 520, priority: 96, conflicts: [], composesWith: ['cn-style-continuity.v3', 'cn-emotion-grounding.v3'],
+  },
+  {
+    id: 'cn-style-continuity.v3',
+    name: '文风连续性',
+    description: '检查叙事距离、句段节奏、修辞密度和语域是否无理由漂移。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
+    triggers: [{ pattern: /(文风|风格|割裂|不统一|前后|叙事距离|节奏|语域)/, reasonCode: 'STYLE_CONTINUITY', weight: 30 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '优先延续本书既有声音，允许有剧情依据的主动变调。',
+    resources: {
+      draft: '延续近期章节已形成的叙事距离、句段呼吸、对白密度和修辞强度。若因视角、时代、梦境或情绪高潮主动变调，要有清晰过渡；不要把平台通用风格压过作者声音。',
+      critique: '按段比较叙事距离、句长、词汇语域、修辞密度和对白习惯，只报告无剧情依据且读感突兀的漂移。',
+      revision: '以最小范围把异常段拉回相邻文本的声音，不整章洗稿，不消灭作者有意的不规则表达。',
+    },
+    tokenBudget: 430, priority: 84, conflicts: [], composesWith: ['cn-prose-specificity.v3'],
+  },
+  {
+    id: 'cn-chapter-bridge.v3',
+    name: '章节桥接',
+    description: '承接上一章终态中的动作、知识、情绪余波和未完成问题。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write', 'plan'], modes: ['plan', 'build'], phases: ['scene', 'draft'], strength: 'soft',
+    triggers: [{ pattern: /(续写|下一章|接着|承接|衔接|上一章|章间|继续写)/, reasonCode: 'CHAPTER_BRIDGE', weight: 34 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '新章从上一章真实后果出发，不用重复摘要或生硬转场。',
+    resources: {
+      scene: '写前提取上一章终态：未完成动作、人物所在位置、各自知道什么、情绪余波、关系变化、正在倒计时的风险，以及本章必须接住的问题。新章开场至少自然承接其中一项，但不复述上一章摘要。',
+      draft: '让上一章留下的动作或后果进入本章人物当前处境。允许时间跳跃，但必须给读者足够的定位证据；禁止用“时间飞逝”“话说回来”掩盖因果断层。',
+    },
+    tokenBudget: 440, priority: 94, conflicts: [], composesWith: ['cn-scene-task.v3', 'cn-continuity-audit.v3'],
+  },
+  {
+    id: 'cn-continuity-audit.v3',
+    name: '证据化连续性审阅',
+    description: '依据来源检查设定、时间线、人物知识、持有物和伏笔，不凭印象判错。',
+    version: '3.0.0', owner: 'chevoink', license: 'MIT-adapted',
+    attribution: '分层记忆与证据召回思想参考 TencentDB-Agent-Memory，规则与实现均为 Chevoink 重写。',
+    status: 'active', intents: ['write', 'revise', 'review', 'structure'], modes: ['build', 'review'],
+    phases: ['draft', 'critique', 'revision', 'commit'], strength: 'soft',
+    triggers: [{ pattern: /(连续|一致|时间线|伏笔|设定|关系|持有物|伤势|知识|前文|矛盾|冲突)/, reasonCode: 'CONTINUITY_AUDIT', weight: 32 }],
+    negativeTriggers: [MINOR_EDIT_PATTERN, /(?:发布|下架|导出|折叠|打开|关闭)/i],
+    synopsis: '事实结论必须可追溯，没有证据的疑点只标待核实。',
+    resources: {
+      draft: '只携带当前场景必需的已确认事实、关系、知识状态、未收束事件和作者禁区。遇到冲突或推断记忆时回到来源核实，不自行选边。',
       critique: '逐项给出位置、冲突双方和 sourceId/revision；没有证据的疑点标为待核实，不升级为硬伤。',
-      revision: '按选中的连续性问题最小改动，并在完成后重新检索来源与运行 structure_validate。',
+      revision: '按选中的连续性问题最小改动，不能为了修一处事实重写无关文风。',
+      commit: '写入后复核本章新增事实、关系、知识和伏笔状态，并保留来源 revision。',
     },
+    tokenBudget: 500, priority: 90, conflicts: [], composesWith: ['cn-chapter-bridge.v3'],
   },
   {
-    id: 'prose-specificity.v2', name: '语言具体化', version: '2.0.0', license: 'internal',
-    intents: ['revise'], modes: ['build'], phases: ['critique', 'revision'], strength: 'soft',
-    pattern: /(AI味|机械|僵硬|不自然|套话|润色|文风|语言)/i,
-    synopsis: '针对具体文本证据减少套话、同构句和解释性复述，不执行一键“去 AI”公式。',
+    id: 'cn-anti-repetition.v3',
+    name: '近期结构去重',
+    description: '识别近期章节重复的开场、意象、冲突解法、句式和结尾功能。',
+    version: '3.0.0', owner: 'chevoink', license: 'internal', status: 'active',
+    intents: ['write', 'revise', 'review'], modes: ['build', 'review'], phases: ['draft', 'critique', 'revision'], strength: 'soft',
+    triggers: [{ pattern: /(重复|雷同|套路|同样|又是|新鲜|变化|去重)/, reasonCode: 'REPETITION_RISK', weight: 30 }],
+    negativeTriggers: noNegativeTriggers,
+    synopsis: '避免近期章节同构，但不追求为了不同而不同。',
     resources: {
-      critique: '标出真实出现的重复意象、同构句式、抽象情绪、副词依赖或总结式收尾，并引用短句；未出现的问题不要凑清单。',
-      revision: '只改作者选中的证据点。删除通常优先于同义替换；把抽象判断换成与人物处境有关的动作或物件，但允许克制、直述和不完美的人类节奏。',
+      draft: '对照近期章节的开场动作、场景空间、冲突解法、核心意象、句式节奏和结尾功能。若连续重复，改变承载方式而不是只换同义词；仍以人物因果和本章任务为先。',
+      critique: '给出近期重复项及对应章节证据，区分有意母题复现和无意识模板复用。',
+      revision: '只替换造成同构读感的局部结构或意象，保留必要的主题回声和事实连续性。',
     },
-  },
-  {
-    id: 'story-shaping.v2', name: '故事塑形', version: '2.0.0', license: 'MIT-adapted',
-    attribution: '方法论参考 OpenFic 与公开小说创作 Agent 的情节状态设计，已重写并去除固定三幕/爆款公式。',
-    intents: ['plan', 'write'], modes: ['plan', 'build'], phases: ['draft', 'critique'], strength: 'soft',
-    pattern: /(规划|大纲|情节|冲突|悬念|开篇|结尾|转折|节奏|写|续写)/,
-    synopsis: '围绕读者承诺、因果推进和人物选择塑形，结构随题材与章节功能变化。',
-    resources: {
-      draft: '先说清这段内容兑现哪项读者期待、人物做了什么不可逆选择、信息如何变化。结构可以舒缓、断裂或留白；钩子、反转和冲突都不是每章必选项。',
-      critique: '检查因果缺口、重复功能和无代价推进；不按固定节拍表判分，也不因为没有章末悬念就判失败。',
-    },
+    tokenBudget: 430, priority: 78, conflicts: [], composesWith: ['cn-webfiction-draft.v3', 'cn-style-continuity.v3'],
   },
 ]
 
+const legacySkillAliases: Record<string, string> = {
+  'scene-craft.v2': 'cn-scene-task.v3',
+  'character-voice.v2': 'cn-character-voice.v3',
+  'continuity-evidence.v2': 'cn-continuity-audit.v3',
+  'prose-specificity.v2': 'cn-prose-specificity.v3',
+  'story-shaping.v2': 'cn-long-outline.v3',
+}
+
 function freedomGuidance(freedom: CreativeFreedom): string {
-  if (freedom === 'stable') return '创作自由度：稳定延续。软技巧低强度使用，优先贴合已有文风、人物轨迹和段落节奏。'
-  if (freedom === 'bold') return '创作自由度：大胆探索。允许提出 2–3 个明显不同的方向；涉及核心设定或不可逆剧情时先让作者选择。事实约束不因此放宽。'
-  return '创作自由度：平衡创作。守住人物与世界事实，同时允许在场景表达、节奏和意象上做有理由的新选择。'
+  if (freedom === 'stable') return '创作自由度：稳定延续。优先贴合已有文风、人物轨迹和段落节奏。'
+  if (freedom === 'bold') return '创作自由度：大胆探索。表达与场景可明显创新；核心设定和不可逆剧情仍服从作者与故事事实。'
+  return '创作自由度：平衡创作。守住人物与世界事实，同时允许有理由的场景、节奏和意象创新。'
+}
+
+export function inferSkillPhase(intent: TaskIntent): SkillPhase {
+  if (intent === 'plan') return 'plan'
+  if (intent === 'review') return 'critique'
+  if (intent === 'revise') return 'revision'
+  return 'draft'
+}
+
+function baseIntentScore(skill: AgentSkill, intent: TaskIntent): number {
+  if (!skill.intents.includes(intent)) return 0
+  if (skill.id === 'cn-webfiction-draft.v3' && intent === 'write') return 52
+  if (skill.id === 'cn-scene-task.v3' && intent === 'write') return 46
+  if (skill.id === 'cn-long-outline.v3' && intent === 'plan') return 46
+  if (skill.id === 'cn-project-positioning.v3' && intent === 'plan') return 36
+  if (skill.id === 'cn-prose-specificity.v3' && intent === 'revise') return 34
+  if (skill.id === 'cn-continuity-audit.v3' && intent === 'review') return 32
+  return 18
+}
+
+function uniqueReasonCodes(candidates: SkillRouteCandidate[]): SkillReasonCode[] {
+  return [...new Set(candidates.flatMap((candidate) => candidate.reasonCodes))]
+}
+
+function estimateLoadedTokens(skills: AgentSkill[], phase: SkillPhase): number {
+  const chars = skills.reduce((total, skill) => total + (skill.resources[phase]?.length ?? 0), 0)
+  return Math.ceil(chars / 2.2)
 }
 
 export function routeSkills(input: {
-  mode: AgentExecutionMode; prompt: string; intent: TaskIntent; phase?: SkillPhase; freedom: CreativeFreedom
-}): AgentSkill[] {
-  const phase = input.phase ?? (input.intent === 'review' ? 'critique' : input.intent === 'revise' ? 'revision' : 'draft')
-  return skillCatalog
-    .map((skill, index) => ({
-      skill,
-      score: (skill.intents.includes(input.intent) ? 4 : 0) + (skill.pattern.test(input.prompt) ? 3 : 0) + (skill.phases.includes(phase) ? 2 : 0) - index * 0.001,
-    }))
-    .filter(({ skill, score }) => score >= 6 && skill.modes.includes(input.mode) && skill.phases.includes(phase))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3)
-    .map(({ skill }) => skill)
+  mode: AgentExecutionMode
+  prompt: string
+  intent: TaskIntent
+  phase?: SkillPhase
+  freedom: CreativeFreedom
+}): SkillRouteDecision {
+  const phase = input.phase ?? inferSkillPhase(input.intent)
+  const normalizedPrompt = input.prompt.trim()
+  const skipMinorEdit = input.intent === 'revise' && MINOR_EDIT_PATTERN.test(normalizedPrompt)
+  const skipOperation = ['global_transform', 'structure'].includes(input.intent) && NON_CREATIVE_PATTERN.test(normalizedPrompt)
+
+  if (skipMinorEdit || skipOperation) {
+    return {
+      routerVersion: '3.0.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
+      estimatedTokens: 0, skippedReason: 'NON_CREATIVE_OPERATION',
+    }
+  }
+
+  const candidates = skillCatalog
+    .filter((skill) => skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
+      skill.phases.includes(phase) && !skill.negativeTriggers.some((pattern) => pattern.test(normalizedPrompt)))
+    .map((skill) => {
+      const matchedTriggers = skill.triggers.filter((trigger) => trigger.pattern.test(normalizedPrompt))
+      const reasonCodes = [...new Set(matchedTriggers.map((trigger) => trigger.reasonCode))]
+      const score = baseIntentScore(skill, input.intent) + matchedTriggers.reduce((total, trigger) => total + trigger.weight, 0) + skill.priority / 100
+      return { skill, score, reasonCodes }
+    })
+    .filter((candidate) => candidate.score >= 30)
+    .sort((left, right) => right.score - left.score || right.skill.priority - left.skill.priority)
+    .slice(0, 8)
+
+  if (candidates.length === 0) {
+    return {
+      routerVersion: '3.0.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
+      estimatedTokens: 0, skippedReason: 'NO_MATCH',
+    }
+  }
+
+  const explicitSignals = candidates.filter((candidate) => candidate.reasonCodes.length > 0).length
+  const maxLoaded = explicitSignals >= 2 || input.intent === 'write' || input.intent === 'plan' ? 3 : 2
+  const selectedCandidates: SkillRouteCandidate[] = []
+  for (const candidate of candidates) {
+    if (selectedCandidates.length >= maxLoaded) break
+    const conflicts = selectedCandidates.some((selected) => selected.skill.conflicts.includes(candidate.skill.id) || candidate.skill.conflicts.includes(selected.skill.id))
+    if (!conflicts) selectedCandidates.push(candidate)
+  }
+
+  const selected = selectedCandidates.map((candidate) => candidate.skill)
+  const topScore = selectedCandidates[0]?.score ?? 0
+  const secondScore = selectedCandidates[1]?.score ?? 0
+  const confidence = Math.min(0.99, Math.max(0.55, 0.62 + topScore / 220 + (topScore - secondScore) / 400))
+
+  return {
+    routerVersion: '3.0.0', phase, candidates, selected,
+    reasonCodes: uniqueReasonCodes(selectedCandidates),
+    confidence: Math.round(confidence * 100) / 100,
+    estimatedTokens: estimateLoadedTokens(selected, phase),
+  }
 }
 
 export function buildSkillManifestDigest(skills: AgentSkill[], freedom: CreativeFreedom): string {
   const listed = skills.length
-    ? skills.map((skill) => `- ${skill.id}（${skill.name}）：${skill.synopsis}；需要时调用 skill_load 加载当前阶段资源。`).join('\n')
-    : '- 本轮无需专用创作 Skill，直接遵从作者目标。'
-  return `${freedomGuidance(freedom)}\n本轮 Skill Router 候选（均为软技巧，可不用，不得覆盖作者要求与故事事实）：\n${listed}`
+    ? skills.map((skill) => `- ${skill.id}@${skill.version}（${skill.name}）：${skill.synopsis}`).join('\n')
+    : '- 本轮无需专用创作 Skill。'
+  return `${freedomGuidance(freedom)}\n本轮 Skill Router 候选：\n${listed}`
+}
+
+export function buildSkillExecutionDigest(decision: SkillRouteDecision, freedom: CreativeFreedom): string {
+  if (decision.selected.length === 0) {
+    return `${freedomGuidance(freedom)}\n本轮没有命中需要加载的创作 Skill；不得为了展示能力强行套用写作模板。`
+  }
+
+  const loaded = decision.selected.map((skill) => {
+    const resource = skill.resources[decision.phase]
+    return resource ? `[Skill ${skill.id}@${skill.version} / ${decision.phase} / soft]\n${resource}` : null
+  }).filter((item): item is string => Boolean(item)).join('\n\n')
+
+  return `${freedomGuidance(freedom)}
+以下 Skill 已由服务端确定性路由并完整加载。它们是本轮工作方法，不是可忽略的候选，也不是逐项照抄到正文的检查表：
+${loaded}
+共同边界：不得覆盖作者硬约束、故事事实、权限与版本校验；发生冲突时作者要求与有来源的故事证据优先。`
 }
 
 export function loadSkill(skillId: string, phase: SkillPhase, freedom: CreativeFreedom): string | null {
-  const skill = skillCatalog.find((item) => item.id === skillId)
+  const resolvedId = legacySkillAliases[skillId] ?? skillId
+  const skill = skillCatalog.find((item) => item.id === resolvedId)
   const resource = skill?.resources[phase]
   if (!skill || !resource) return null
-  return `[Skill ${skill.id}@${skill.version} / ${phase} / soft]\n${freedomGuidance(freedom)}\n${resource}\n边界：这是一组可选择的创作启发，不是检查表；不得覆盖用户硬约束、故事证据、权限和版本校验。`
+  return `[Skill ${skill.id}@${skill.version} / ${phase} / soft]\n${freedomGuidance(freedom)}\n${resource}\n边界：不得覆盖用户硬约束、故事证据、权限和版本校验；不要把本说明原样写入小说。`
 }

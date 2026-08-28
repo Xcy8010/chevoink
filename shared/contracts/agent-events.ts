@@ -139,6 +139,16 @@ export interface AgentArtifactRef {
  */
 export type AgentStreamEventBody =
   | { type: 'run.started'; agent: AgentRunAgentSummary; mode: AgentExecutionMode; title: string }
+  | {
+      type: 'skill.route'
+      phase: string
+      candidates: Array<{ id: string; name: string; version: string }>
+      selected: Array<{ id: string; name: string; version: string }>
+      reasonCodes: string[]
+      confidence: number
+      estimatedTokens: number
+      skippedReason?: string
+    }
   | { type: 'message.start'; messageId: string; role: 'assistant' }
   | { type: 'text.delta'; messageId: string; delta: string }
   | { type: 'reasoning.delta'; messageId: string; delta: string }

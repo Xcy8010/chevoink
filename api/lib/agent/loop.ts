@@ -613,7 +613,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       })
     }
 
-    const messages: ChatMessage[] = await assembleContext({
+    const assembledContext = await assembleContext({
       agent,
       mode: params.mode,
       sessionId: params.sessionId,
@@ -627,6 +627,60 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       attachments: params.attachments ?? [],
       taskSpec,
     })
+    const messages: ChatMessage[] = assembledContext.messages
+
+    if (assembledContext.skillRoute) {
+      const skillRoute = assembledContext.skillRoute
+      const candidates = skillRoute.candidates.map(({ skill, score, reasonCodes }) => ({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        score: Math.round(score * 100) / 100,
+        reasonCodes,
+      }))
+      const selected = skillRoute.selected.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+      }))
+      // P0 可观测：selected 即本轮已完整注入的 Skill，而不是“可能会加载”的候选。
+      await prisma.agentSkillRun.upsert({
+        where: { runId },
+        create: {
+          runId,
+          userId: params.userId,
+          novelId: params.novelId,
+          phase: skillRoute.phase,
+          routerVersion: skillRoute.routerVersion,
+          candidates,
+          selected,
+          loaded: selected,
+          reasonCodes: skillRoute.reasonCodes,
+          confidence: skillRoute.confidence,
+          estimatedTokens: skillRoute.estimatedTokens,
+        },
+        update: {
+          phase: skillRoute.phase,
+          routerVersion: skillRoute.routerVersion,
+          candidates,
+          selected,
+          loaded: selected,
+          reasonCodes: skillRoute.reasonCodes,
+          confidence: skillRoute.confidence,
+          estimatedTokens: skillRoute.estimatedTokens,
+        },
+      })
+      bus.emit({
+        type: 'skill.route',
+        phase: skillRoute.phase,
+        candidates: candidates.map(({ id, name, version }) => ({ id, name, version })),
+        selected,
+        reasonCodes: skillRoute.reasonCodes,
+        confidence: skillRoute.confidence,
+        estimatedTokens: skillRoute.estimatedTokens,
+        skippedReason: skillRoute.skippedReason,
+      })
+    }
 
     const featureFlags = resolveAgent2FeatureFlags(params.userId)
     const tools = getToolsForAgent(agent, params.mode, featureFlags)

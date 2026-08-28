@@ -842,12 +842,37 @@ model AgentRun {
   memoryEntries ProjectMemoryEntry[]
   messages      AgentMessage[]
   events        AgentRunEvent[]
+  skillRun      AgentSkillRun?
   contextCheckpoints ContextCheckpoint[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
   @@index([novelId, createdAt])
   @@map("agent_runs")
+}
+
+model AgentSkillRun {
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  runId           String   @unique @map("run_id") @db.VarChar(64)
+  userId          String   @map("user_id") @db.VarChar(64)
+  novelId         String   @map("novel_id") @db.VarChar(64)
+  phase           String   @db.VarChar(24)
+  routerVersion   String   @map("router_version") @db.VarChar(32)
+  candidates      Json
+  selected        Json
+  loaded          Json
+  reasonCodes     Json     @map("reason_codes")
+  confidence      Float
+  estimatedTokens Int      @default(0) @map("estimated_tokens")
+  qualitySignals  Json?    @map("quality_signals")
+  accepted        Boolean?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  run             AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([novelId, createdAt])
+  @@map("agent_skill_runs")
 }
 
 model AgentArtifact {

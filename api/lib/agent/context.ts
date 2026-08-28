@@ -6,7 +6,7 @@ import { prisma } from '../prisma.js'
 import type { AgentDefinition } from './agents.js'
 import { OPERATION_KNOWLEDGE } from './knowledge/operation.js'
 import { buildGeneralWritingDigest, buildGenreWritingDigest } from './knowledge/writing.js'
-import { buildSkillManifestDigest, routeSkills } from './skills/index.js'
+import { buildSkillExecutionDigest, routeSkills, type SkillRouteDecision } from './skills/index.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import {
   listActiveDirectives,
@@ -295,7 +295,12 @@ export type AssembleContextInput = {
   taskSpec: TaskSpec
 }
 
-export async function assembleContext(input: AssembleContextInput): Promise<ChatMessage[]> {
+export type AssembledAgentContext = {
+  messages: ChatMessage[]
+  skillRoute: SkillRouteDecision | null
+}
+
+export async function assembleContext(input: AssembleContextInput): Promise<AssembledAgentContext> {
   const checkpointState = await loadContextCheckpoint(input.sessionId)
   const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
@@ -314,15 +319,15 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     prisma.novel.findUnique({ where: { id: input.novelId }, select: { tagNames: true } }),
   ])
 
-  // Skill 命中：按模式+意图匹配流程模板（每次最多 1 个）；题材文风卡只在 build 模式（写作类任务）注入
-  const skills = isAgent2FeatureEnabled('skill2', input.userId)
+  // Skill OS 3.0：服务端确定性召回并完整加载本轮 Skill，模型不再自行决定“要不要加载”。
+  const skillRoute = isAgent2FeatureEnabled('skill2', input.userId)
     ? routeSkills({
         mode: input.mode,
         prompt: input.prompt,
         intent: input.taskSpec.intent,
         freedom: input.taskSpec.creativeFreedom,
       })
-    : []
+    : null
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null
 
   const systemPrompt = [
@@ -332,7 +337,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     OPERATION_KNOWLEDGE,
     buildGeneralWritingDigest(),
     genreDigest,
-    buildSkillManifestDigest(skills, input.taskSpec.creativeFreedom),
+    skillRoute
+      ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom)
+      : 'Skill OS 当前未对该账号启用；直接遵从作者目标，不得自行套用未知写作模板。',
     '历史对话中形如「[调用工具 xxx：yyy]」的行是系统对已发生工具调用的压缩标记，仅供你了解之前做过什么，不是回复文本的一部分。你自己的回复中严禁出现「[调用工具 …]」「[调用 tool]」这类文字：需要执行操作时直接发起真正的工具调用，需要向作者汇报进展时用自然语言描述。',
     ruleBundle,
     TAG_LIBRARY_DIGEST,
@@ -378,13 +385,16 @@ export async function assembleContext(input: AssembleContextInput): Promise<Chat
     )
   }
 
-  return [
-    { role: 'system', content: systemPrompt },
-    ...history,
-    // 待办快照紧跟在历史之后、用户指令之前：位置越靠近当前轮次权重越高，
-    // 避免被历史里旧任务的待办痕迹带偏（尤其是“继续”这类短指令）
-    ...(todoDigest ? [{ role: 'user' as const, content: todoDigest }] : []),
-    { role: 'user', content: renderTaskSpec(input.taskSpec) },
-    { role: 'user', content: intentSections.join('\n\n') },
-  ]
+  return {
+    skillRoute,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      // 待办快照紧跟在历史之后、用户指令之前：位置越靠近当前轮次权重越高，
+      // 避免被历史里旧任务的待办痕迹带偏（尤其是“继续”这类短指令）
+      ...(todoDigest ? [{ role: 'user' as const, content: todoDigest }] : []),
+      { role: 'user', content: renderTaskSpec(input.taskSpec) },
+      { role: 'user', content: intentSections.join('\n\n') },
+    ],
+  }
 }
