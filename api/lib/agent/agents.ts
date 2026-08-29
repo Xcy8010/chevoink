@@ -57,6 +57,9 @@ export function getToolsForAgent(
     if (!featureFlags.storyCompiler) {
       ;['story_charter_get', 'story_charter_save', 'reader_promise_save', 'reader_promise_update', 'story_compiler_prepare', 'scene_task_build', 'chapter_bridge_get', 'continuity_validate', 'chapter_bridge_commit'].forEach((name) => disabled.add(name))
     }
+    if (!featureFlags.humanityQuality) {
+      ;['quality_analyze', 'quality_report_get', 'quality_findings_select', 'quality_revision_apply', 'quality_finding_feedback', 'character_voice_get', 'character_voice_save', 'experience_anchor_get', 'experience_anchor_save'].forEach((name) => disabled.add(name))
+    }
     modeTools = modeTools.filter((tool) => !disabled.has(tool.name))
   }
 

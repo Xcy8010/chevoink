@@ -1,0 +1,123 @@
+import { randomInt, randomUUID } from 'node:crypto'
+
+import request from 'supertest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import app from '../../api/app.js'
+import {
+  analyzeDeterministicQuality,
+  applyQualityRepair,
+  getQualityReport,
+  persistHumanityQualityReport,
+  saveCharacterVoiceProfile,
+  saveExperienceAnchor,
+  selectQualityFindings,
+} from '../../api/lib/agent/humanity-quality.js'
+import { prisma } from '../../api/lib/prisma.js'
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+
+afterAll(async () => {
+  await prisma.$disconnect().catch(() => {})
+})
+
+describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => {
+  let userId = ''
+  let novelId = ''
+  let chapterId = ''
+  let runId = ''
+  let cookie = ''
+
+  beforeAll(async () => {
+    const unique = randomInt(0, 10_000_000).toString().padStart(7, '0')
+    const phone = `+861374${unique}`
+    const register = await request(app).post('/api/auth/register').send({ phone, nickname: `质量门测试${unique}`, password: 'Humanity-Gate-123!' })
+    expect(register.status).toBe(201)
+    const cookies = Array.isArray(register.headers['set-cookie']) ? register.headers['set-cookie'] : [register.headers['set-cookie']]
+    cookie = cookies.find((item: string) => item?.startsWith('chevoink_session=')) as string
+    userId = (await prisma.user.findUniqueOrThrow({ where: { phone }, select: { id: true } })).id
+    const novel = await request(app).post('/api/novels').set('Cookie', cookie).send({ title: '人类感质量门测试', summary: '验证证据化批评与局部修订。', tags: ['悬疑'] })
+    expect(novel.status).toBe(201)
+    novelId = novel.body.data.novel.id as string
+    const volumeId = (await prisma.volume.findFirstOrThrow({ where: { novelId }, select: { id: true } })).id
+    chapterId = randomUUID()
+    const content = '他感到无比悲伤。顾棠说：“别碰那把钥匙。”“看着我。”“现在走。”她闻到消毒水时会把拇指压进旧伤。'
+    await prisma.chapter.create({ data: { id: chapterId, novelId, authorId: userId, volumeId, orderIndex: 1, orderInVolume: 1, title: '第一章 钥匙', content, wordCount: content.length, revision: 1, status: 'draft', visibility: 'private' } })
+    const session = await prisma.agentSession.create({ data: { userId, novelId, title: 'P3 质量测试' } })
+    runId = (await prisma.agentRun.create({ data: { sessionId: session.id, userId, novelId, chapterId, mode: 'act', action: 'workspaceAgent', agentType: 'writingOrchestrator', status: 'running', engine: 'loop' } })).id
+  })
+
+  it('确认版 Voice DNA 与 Experience Anchor 必须绑定逐字章节证据', async () => {
+    const profile = await saveCharacterVoiceProfile(userId, novelId, {
+      characterName: '顾棠', vocabularyLevel: '短句、日常词，不主动解释', sentenceLength: { short: 3, long: 18 },
+      addressSystem: ['林舟'], pressureResponse: '先沉默，再用问题转移', avoidedTopics: ['钥匙来源'], attentionBias: ['出口', '手部动作'],
+      voiceSamples: [
+        { text: '“别碰那把钥匙。”', sourceChapterId: chapterId, sourceRevision: 1 },
+        { text: '“看着我。”', sourceChapterId: chapterId, sourceRevision: 1 },
+        { text: '“现在走。”', sourceChapterId: chapterId, sourceRevision: 1 },
+      ], forbiddenKnowledge: ['林舟父亲的最终去向'], evolutionNotes: '', confirmed: true,
+    })
+    expect(profile.status).toBe('confirmed')
+    const anchor = await saveExperienceAnchor(userId, novelId, {
+      characterName: '顾棠', title: '医院旧伤', triggerEvent: '闻到消毒水', concreteDetail: '她闻到消毒水时会把拇指压进旧伤。', sensoryCue: '消毒水',
+      habitualResponse: '拇指压住旧伤', emotionalMeaning: '用疼痛压住失控记忆', sourceType: 'chapter', sourceId: chapterId, sourceRevision: 1,
+    })
+    expect(anchor.sourceRevision).toBe(1)
+    await expect(saveCharacterVoiceProfile(userId, novelId, {
+      characterName: '林舟', vocabularyLevel: '克制', sentenceLength: { short: 3, long: 18 }, addressSystem: [], pressureResponse: '沉默', avoidedTopics: [], attentionBias: [],
+      voiceSamples: [
+        { text: '正文中不存在的台词', sourceChapterId: chapterId, sourceRevision: 1 },
+        { text: '另一个不存在的台词', sourceChapterId: chapterId, sourceRevision: 1 },
+        { text: '第三个不存在的台词', sourceChapterId: chapterId, sourceRevision: 1 },
+      ], forbiddenKnowledge: [], evolutionNotes: '', confirmed: true,
+    })).rejects.toMatchObject({ code: 'VOICE_SAMPLE_EVIDENCE_INVALID' })
+  })
+
+  it('丢弃无法逐字定位的 Critic 意见，并在局部修订后保留独立作者反馈', async () => {
+    const chapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
+    const deterministic = analyzeDeterministicQuality(chapter.content)
+    const first = await persistHumanityQualityReport({
+      userId, novelId, runId, chapterId, chapterRevision: chapter.revision, mode: 'balanced',
+      deterministicMetrics: deterministic.metrics, deterministicFindings: deterministic.findings,
+      criticFindings: [
+        { signal: 'emotion_grounding', severity: 'warning', quote: '他感到无比悲伤。', explanation: '情绪只有标签，没有选择或后果。', suggestion: '用一个与父亲有关的具体回避动作替换。', confidence: 0.91 },
+        { signal: 'orphaned_sophistication', severity: 'warning', quote: '正文里根本不存在的华丽句', explanation: '幻觉证据。', suggestion: '不应入库。', confidence: 0.99 },
+      ],
+    })
+    expect(first.findings).toHaveLength(1)
+    const findingId = first.findings[0].id
+    const feedback = await request(app).post(`/api/agent/quality-findings/${findingId}/feedback`).set('Cookie', cookie).send({ accepted: true, reason: '确实太抽象' })
+    expect(feedback.status).toBe(200)
+    const reportState = await request(app).get(`/api/agent/quality-reports/${first.id}`).set('Cookie', cookie)
+    expect(reportState.status).toBe(200)
+    expect(reportState.body.data.report.findings[0].authorFeedback).toBe('accepted')
+    expect(reportState.body.data.report).not.toHaveProperty('chapter')
+    await selectQualityFindings(userId, novelId, first.id, [findingId])
+    const repaired = await applyQualityRepair({ userId, novelId, reportId: first.id, replacements: [{ findingId, replacement: '林舟把钥匙塞回袖口，没再问父亲的事。' }] })
+    expect(repaired.updated.revision).toBe(2)
+    expect(repaired.after).toContain('没再问父亲的事')
+    const after = await getQualityReport(userId, novelId, first.id)
+    expect(after.findings[0]).toMatchObject({ disposition: 'repaired', authorFeedback: 'accepted' })
+  })
+
+  it('每次修订都重新绑定最新 revision，并在两轮后硬停止自动循环', async () => {
+    const secondChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
+    const second = await persistHumanityQualityReport({
+      userId, novelId, runId, chapterId, chapterRevision: secondChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
+      criticFindings: [{ signal: 'reader_pull', severity: 'warning', quote: '林舟把钥匙塞回袖口，没再问父亲的事。', explanation: '动作没有改变当下关系。', suggestion: '让动作落到当前场景选择。', confidence: 0.8 }],
+    })
+    expect(second.repairRound).toBe(1)
+    await selectQualityFindings(userId, novelId, second.id, [second.findings[0].id])
+    const twice = await applyQualityRepair({ userId, novelId, reportId: second.id, replacements: [{ findingId: second.findings[0].id, replacement: '林舟把钥匙塞回袖口，转身去关窗。' }] })
+    expect(twice.updated.revision).toBe(3)
+
+    const thirdChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
+    const third = await persistHumanityQualityReport({
+      userId, novelId, runId, chapterId, chapterRevision: thirdChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
+      criticFindings: [{ signal: 'reader_pull', severity: 'warning', quote: '转身去关窗。', explanation: '测试第三轮。', suggestion: '不应自动修。', confidence: 0.8 }],
+    })
+    expect(third.repairRound).toBe(2)
+    await selectQualityFindings(userId, novelId, third.id, [third.findings[0].id])
+    await expect(applyQualityRepair({ userId, novelId, reportId: third.id, replacements: [{ findingId: third.findings[0].id, replacement: '停下。' }] })).rejects.toMatchObject({ code: 'QUALITY_REPAIR_LIMIT' })
+  })
+})

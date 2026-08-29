@@ -36,7 +36,7 @@ import {
 } from '../lib/agent/session-messages.js'
 import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
-import { prisma } from '../lib/prisma.js'
+import { DataAccessError, prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
 import { getMemoryGraph, listMemoryReviewInbox, resolveMemoryReview, syncNovelMemoryProjection } from '../lib/agent/story-memory.js'
@@ -52,6 +52,7 @@ import {
   testNovelSkill,
   updateNovelSkill,
 } from '../lib/agent/skills/service.js'
+import { getQualityReport, recordQualityFindingFeedback } from '../lib/agent/humanity-quality.js'
 
 const router = Router()
 
@@ -129,6 +130,7 @@ const testSkillSchema = z.object({
   expectMatch: z.boolean(),
 })
 const publishSkillSchema = z.object({ version: z.string().trim().min(1).max(32) })
+const qualityFindingFeedbackSchema = z.object({ accepted: z.boolean(), reason: z.string().trim().max(500).optional() })
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -283,6 +285,38 @@ router.post('/memory/:memoryId/review', async (req: Request, res: Response): Pro
     const body = parseBody(resolveMemoryReviewSchema, req.body, '请明确接受或拒绝该记忆候选。')
     const memory = await resolveMemoryReview(userId, req.params.memoryId, body.accepted)
     res.status(200).json(buildSuccess(requestId, { memory }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/quality-findings/:findingId/feedback', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('humanityQuality', userId)
+    const body = parseBody(qualityFindingFeedbackSchema, req.body, '请明确接受或拒绝该质量建议。')
+    const finding = await recordQualityFindingFeedback({ userId, findingId: req.params.findingId, accepted: body.accepted, reason: body.reason })
+    res.status(200).json(buildSuccess(requestId, { finding }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/quality-reports/:reportId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('humanityQuality', userId)
+    const reportOwner = await prisma.chapterQualityReport.findFirst({ where: { id: req.params.reportId, userId }, select: { novelId: true } })
+    if (!reportOwner) throw new DataAccessError(404, 'QUALITY_REPORT_NOT_FOUND', '质量报告不存在或不属于当前用户。')
+    const report = await getQualityReport(userId, reportOwner.novelId, req.params.reportId)
+    res.status(200).json(buildSuccess(requestId, {
+      report: {
+        id: report.id, chapterId: report.chapterId, chapterRevision: report.chapterRevision, status: report.status, repairRound: report.repairRound,
+        findings: report.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition, authorFeedback: finding.authorFeedback })),
+      },
+    }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
@@ -478,6 +512,7 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       selection: body.selection ?? null,
       attachments: body.attachments ?? [],
       creativeFreedom: body.creativeFreedom ?? 'balanced',
+      qualityMode: body.qualityMode ?? 'balanced',
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {

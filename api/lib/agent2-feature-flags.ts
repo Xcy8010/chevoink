@@ -8,6 +8,7 @@ const flagLabels: Record<Agent2FeatureKey, string> = {
   memory2: '故事记忆 2.0',
   skill2: '写作 Skill 2.0',
   storyCompiler: 'Story Compiler 3.0',
+  humanityQuality: '人类感质量门 3.0',
   dualWorkspace: '双工作区',
 }
 
@@ -24,6 +25,7 @@ export function resolveAgent2FeatureFlags(userId?: string | null): Agent2Feature
     memory2: included && env.featureMemory2Enabled,
     skill2: included && env.featureSkill2Enabled,
     storyCompiler: included && env.featureStoryCompilerEnabled,
+    humanityQuality: included && env.featureHumanityQualityEnabled,
     dualWorkspace: included && env.featureDualWorkspaceEnabled,
     variant: included ? 'v2' : 'v1-compatible',
   }

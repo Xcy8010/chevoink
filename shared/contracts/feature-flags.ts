@@ -1,4 +1,4 @@
-export type Agent2FeatureKey = 'volume' | 'changeSet' | 'memory2' | 'skill2' | 'storyCompiler' | 'dualWorkspace'
+export type Agent2FeatureKey = 'volume' | 'changeSet' | 'memory2' | 'skill2' | 'storyCompiler' | 'humanityQuality' | 'dualWorkspace'
 
 export type Agent2FeatureFlags = Record<Agent2FeatureKey, boolean> & {
   /** v1-compatible 表示该用户未进入 2.0 灰度；旧客户端可安全忽略本字段。 */
@@ -11,6 +11,7 @@ export const DEFAULT_AGENT2_FEATURE_FLAGS: Agent2FeatureFlags = {
   memory2: true,
   skill2: true,
   storyCompiler: true,
+  humanityQuality: true,
   dualWorkspace: true,
   variant: 'v2',
 }

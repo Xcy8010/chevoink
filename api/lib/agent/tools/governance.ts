@@ -36,6 +36,9 @@ export const AGENT_TOOL_GOVERNANCE = {
   session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
   story_charter_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'active_promises_only'] },
   chapter_bridge_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'bridge_revision_reported'] },
+  quality_report_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'chapter_revision_reported'] },
+  character_voice_get: { category: 'read', risk: 'low', postconditions: ['confirmed_profiles_only', 'novel_scope_verified'] },
+  experience_anchor_get: { category: 'read', risk: 'low', postconditions: ['confirmed_anchors_only', 'retrieval_bounded'] },
   chapter_create: {
     category: 'structure',
     risk: 'medium',
@@ -105,6 +108,12 @@ export const AGENT_TOOL_GOVERNANCE = {
   scene_task_build: { category: 'workflow', risk: 'medium', postconditions: ['scene_count_bounded', 'compilation_stage_advanced'] },
   continuity_validate: { category: 'workflow', risk: 'medium', postconditions: ['chapter_revision_verified', 'evidence_findings_recorded'] },
   chapter_bridge_commit: { category: 'workflow', risk: 'medium', postconditions: ['continuity_errors_zero', 'chapter_revision_verified', 'story_state_committed'] },
+  quality_analyze: { category: 'workflow', risk: 'medium', postconditions: ['writer_context_isolated', 'deterministic_signals_preserved', 'exact_evidence_located', 'chapter_unchanged'] },
+  quality_findings_select: { category: 'workflow', risk: 'low', postconditions: ['finding_scope_verified', 'chapter_unchanged'] },
+  quality_revision_apply: { category: 'write', risk: 'medium', postconditions: ['selected_findings_only', 'evidence_hash_verified', 'chapter_revision_advanced', 'repair_round_bounded'] },
+  quality_finding_feedback: { category: 'workflow', risk: 'low', postconditions: ['author_feedback_only', 'finding_scope_verified'] },
+  character_voice_save: { category: 'workflow', risk: 'medium', postconditions: ['sample_evidence_verified', 'draft_unless_confirmed'] },
+  experience_anchor_save: { category: 'workflow', risk: 'medium', postconditions: ['source_revision_verified', 'novel_scope_verified'] },
   ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
 } as const satisfies Record<string, AgentToolGovernance>
 

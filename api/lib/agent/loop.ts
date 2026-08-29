@@ -699,6 +699,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       protectedChapterIds: protectsEarlierContent ? new Set(taskSpec.scope.chapterIds ?? []) : undefined,
       callId: '',
       mode: params.mode,
+      creativeFreedom: taskSpec.creativeFreedom,
       qualityMode: taskSpec.qualityMode,
       emit: (event) => bus.emit(event),
       signal: controller.signal,

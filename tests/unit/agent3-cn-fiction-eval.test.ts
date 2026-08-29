@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { CN_FICTION_EVAL_SCENARIOS, CN_FICTION_EVAL_VERSION } from '../agent-evals/cn-fiction-scenarios.js'
 import { evaluateSkillRouting, summarizeBlindReviews, type BlindReviewRecord } from '../agent-evals/cn-fiction-metrics.js'
 import { evaluateFiftyChapterBridge } from '../agent-evals/chapter-bridge-metrics.js'
+import { evaluateDeterministicHumanityGate } from '../agent-evals/humanity-quality-metrics.js'
 
 describe('Chevoink-CN-Fiction-Eval v1', () => {
   it('冻结六题材、九任务、十二质量信号与专门难例', () => {
@@ -48,5 +49,12 @@ describe('Chevoink-CN-Fiction-Eval v1', () => {
     expect(result).toMatchObject({ chapters: 50, transitions: 49, dimensionsPerTransition: 9 })
     expect(result.agent2Errors).toBeGreaterThan(0)
     expect(result.relativeErrorReduction).toBeGreaterThanOrEqual(0.5)
+  })
+
+  it('确定性质量门不误杀题材术语/故意华丽/口语/收束章，并能抓机械模式', () => {
+    const result = evaluateDeterministicHumanityGate()
+    expect(result.hardNegativeFalsePositiveRate).toBe(0)
+    expect(result.mechanicalPatternDetectionRate).toBeGreaterThanOrEqual(0.75)
+    expect(result.falsePositiveSamples).toEqual([])
   })
 })

@@ -156,6 +156,29 @@ export function resolveMemoryReviewItem(memoryId: string, accepted: boolean): Pr
   })
 }
 
+export function resolveQualityFindingFeedback(
+  findingId: string,
+  accepted: boolean,
+  reason?: string,
+): Promise<{ finding: { id: string; authorFeedback: 'accepted' | 'rejected' | null } }> {
+  return requestData<{ finding: { id: string; authorFeedback: 'accepted' | 'rejected' | null } }>(`/api/agent/quality-findings/${findingId}/feedback`, {
+    method: 'POST', body: JSON.stringify({ accepted, reason }),
+  })
+}
+
+export type QualityReportState = {
+  id: string
+  chapterId: string
+  chapterRevision: number
+  status: string
+  repairRound: number
+  findings: Array<{ id: string; disposition: 'pending' | 'selected' | 'repaired'; authorFeedback: 'accepted' | 'rejected' | null }>
+}
+
+export function fetchQualityReportState(reportId: string): Promise<{ report: QualityReportState }> {
+  return requestData<{ report: QualityReportState }>(`/api/agent/quality-reports/${reportId}`)
+}
+
 export function renameAgentSession(sessionId: string, title: string): Promise<{ session: AgentSession }> {
   return requestData<{ session: AgentSession }>(`/api/agent/sessions/${sessionId}`, {
     method: 'PATCH',

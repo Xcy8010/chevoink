@@ -76,6 +76,25 @@ export type AgentToolDisplayPayload =
       warningCount?: number
     }
   | {
+      kind: 'qualityReport'
+      reportId: EntityId
+      chapterId: EntityId
+      chapterRevision: number
+      status: 'analyzing' | 'needs_repair' | 'passed' | 'repaired' | 'stale' | 'failed'
+      repairRound: number
+      findings: Array<{
+        id: EntityId
+        signal: string
+        label: string
+        severity: 'advisory' | 'warning' | 'error'
+        evidence: string
+        explanation: string
+        suggestion: string
+        disposition: 'pending' | 'selected' | 'repaired'
+        authorFeedback?: 'accepted' | 'rejected' | null
+      }>
+    }
+  | {
       kind: 'changeSet'
       changeSetId: EntityId
       status: 'draft' | 'approved' | 'applying' | 'applied' | 'conflicted' | 'failed' | 'rolled_back'

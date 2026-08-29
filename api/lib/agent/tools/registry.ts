@@ -81,6 +81,17 @@ import {
   storyCharterSaveTool,
   storyCompilerPrepareTool,
 } from './story-compiler-tools.js'
+import {
+  characterVoiceGetTool,
+  characterVoiceSaveTool,
+  experienceAnchorGetTool,
+  experienceAnchorSaveTool,
+  qualityAnalyzeTool,
+  qualityFindingFeedbackTool,
+  qualityFindingsSelectTool,
+  qualityReportGetTool,
+  qualityRevisionApplyTool,
+} from './humanity-quality-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
@@ -112,6 +123,9 @@ export const allTools: AgentTool<any>[] = [
   sessionMessageReadTool,
   storyCharterGetTool,
   chapterBridgeGetTool,
+  qualityReportGetTool,
+  characterVoiceGetTool,
+  experienceAnchorGetTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
@@ -165,6 +179,12 @@ export const allTools: AgentTool<any>[] = [
   sceneTaskBuildTool,
   continuityValidateTool,
   chapterBridgeCommitTool,
+  qualityAnalyzeTool,
+  qualityFindingsSelectTool,
+  qualityRevisionApplyTool,
+  qualityFindingFeedbackTool,
+  characterVoiceSaveTool,
+  experienceAnchorSaveTool,
   // 交互
   askUserTool,
 ]

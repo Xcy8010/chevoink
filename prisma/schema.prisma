@@ -245,6 +245,43 @@ enum ReaderPromiseStatus {
   abandoned
 }
 
+enum ChapterQualityStatus {
+  analyzing
+  needs_repair
+  passed
+  repaired
+  stale
+  failed
+}
+
+enum QualityFindingSource {
+  deterministic
+  critic
+}
+
+enum QualityFindingSeverity {
+  advisory
+  warning
+  error
+}
+
+enum QualityFindingDisposition {
+  pending
+  selected
+  repaired
+}
+
+enum QualityFindingFeedback {
+  accepted
+  rejected
+}
+
+enum CreativeProfileStatus {
+  draft
+  confirmed
+  archived
+}
+
 enum SmsVerificationPurpose {
   login
   register
@@ -261,49 +298,49 @@ enum PrivacyLevel {
 }
 
 model User {
-  id                      String                @id @default(cuid()) @db.VarChar(64)
-  email                   String?               @unique @db.VarChar(255)
-  phone                   String?               @unique @db.VarChar(32)
-  passwordHash            String                @map("password_hash") @db.VarChar(255)
-  nickname                String                @db.VarChar(64)
-  avatarUrl               String?               @map("avatar_url")
-  profileCoverUrl         String?               @map("profile_cover_url")
+  id                      String                  @id @default(cuid()) @db.VarChar(64)
+  email                   String?                 @unique @db.VarChar(255)
+  phone                   String?                 @unique @db.VarChar(32)
+  passwordHash            String                  @map("password_hash") @db.VarChar(255)
+  nickname                String                  @db.VarChar(64)
+  avatarUrl               String?                 @map("avatar_url")
+  profileCoverUrl         String?                 @map("profile_cover_url")
   bio                     String?
-  role                    UserRole              @default(user)
+  role                    UserRole                @default(user)
   /**
    * 超级管理（唯一）：仅该账号可在后台设置用户身份（用户↔管理）
    */
-  isSuperAdmin            Boolean               @default(false) @map("is_super_admin")
-  isAuthor                Boolean               @default(false) @map("is_author")
-  followerCount           Int                   @default(0) @map("follower_count")
-  followingCount          Int                   @default(0) @map("following_count")
-  novelCount              Int                   @default(0) @map("novel_count")
-  postCount               Int                   @default(0) @map("post_count")
-  unreadMessageCount      Int                   @default(0) @map("unread_message_count")
-  unreadNotificationCount Int                   @default(0) @map("unread_notification_count")
+  isSuperAdmin            Boolean                 @default(false) @map("is_super_admin")
+  isAuthor                Boolean                 @default(false) @map("is_author")
+  followerCount           Int                     @default(0) @map("follower_count")
+  followingCount          Int                     @default(0) @map("following_count")
+  novelCount              Int                     @default(0) @map("novel_count")
+  postCount               Int                     @default(0) @map("post_count")
+  unreadMessageCount      Int                     @default(0) @map("unread_message_count")
+  unreadNotificationCount Int                     @default(0) @map("unread_notification_count")
   /**
    * 会话令牌版本：改密/登出/封禁时 +1，即刻吊销该用户全部 v2 会话令牌
    */
-  tokenVersion            Int                   @default(0) @map("token_version")
-  interactionsSeenAt      DateTime?             @map("interactions_seen_at")
-  followersSeenAt         DateTime?             @map("followers_seen_at")
-  lastActiveAt            DateTime?             @map("last_active_at")
+  tokenVersion            Int                     @default(0) @map("token_version")
+  interactionsSeenAt      DateTime?               @map("interactions_seen_at")
+  followersSeenAt         DateTime?               @map("followers_seen_at")
+  lastActiveAt            DateTime?               @map("last_active_at")
   /**
    * 封禁时间（NULL = 正常）：后台管理封禁后全站登录态失效
    */
-  bannedAt                DateTime?             @map("banned_at")
-  privacyFollowers        PrivacyLevel          @default(public) @map("privacy_followers")
-  privacyFollowing        PrivacyLevel          @default(public) @map("privacy_following")
-  privacyLikes            PrivacyLevel          @default(public) @map("privacy_likes")
-  privacyFavorites        PrivacyLevel          @default(public) @map("privacy_favorites")
-  privacyReplies          PrivacyLevel          @default(public) @map("privacy_replies")
-  createdAt               DateTime              @default(now()) @map("created_at")
-  updatedAt               DateTime              @updatedAt @map("updated_at")
+  bannedAt                DateTime?               @map("banned_at")
+  privacyFollowers        PrivacyLevel            @default(public) @map("privacy_followers")
+  privacyFollowing        PrivacyLevel            @default(public) @map("privacy_following")
+  privacyLikes            PrivacyLevel            @default(public) @map("privacy_likes")
+  privacyFavorites        PrivacyLevel            @default(public) @map("privacy_favorites")
+  privacyReplies          PrivacyLevel            @default(public) @map("privacy_replies")
+  createdAt               DateTime                @default(now()) @map("created_at")
+  updatedAt               DateTime                @updatedAt @map("updated_at")
   novels                  Novel[]
   chapters                Chapter[]
   comments                Comment[]
   posts                   Post[]
-  sharedInPosts           Post[]                @relation("PostSharedUser")
+  sharedInPosts           Post[]                  @relation("PostSharedUser")
   coverAssets             CoverAsset[]
   conversationMembers     ConversationMember[]
   messages                Message[]
@@ -325,8 +362,12 @@ model User {
   storyCompilations       StoryCompilation[]
   sceneTasks              SceneTask[]
   chapterBridges          ChapterBridge[]
-  following               UserFollow[]          @relation("UserFollowFollower")
-  followers               UserFollow[]          @relation("UserFollowFollowing")
+  characterVoiceProfiles  CharacterVoiceProfile[]
+  experienceAnchors       ExperienceAnchor[]
+  chapterQualityReports   ChapterQualityReport[]
+  qualityFindings         QualityFinding[]
+  following               UserFollow[]            @relation("UserFollowFollower")
+  followers               UserFollow[]            @relation("UserFollowFollowing")
 
   @@map("users")
 }
@@ -353,56 +394,60 @@ model SmsVerificationCode {
 }
 
 model Novel {
-  id                   String                @id @default(cuid()) @db.VarChar(64)
-  authorId             String                @map("author_id") @db.VarChar(64)
-  title                String                @db.VarChar(128)
-  displayTitle         String?               @map("display_title") @db.VarChar(128)
-  slug                 String                @unique @db.VarChar(160)
-  summary              String
-  categoryId           String?               @map("category_id") @db.VarChar(64)
-  categoryName         String?               @map("category_name") @db.VarChar(64)
-  tagNames             String[]              @default([]) @map("tag_names")
-  status               NovelStatus           @default(draft)
-  visibility           Visibility            @default(public)
-  coverAssetId         String?               @unique @map("cover_asset_id") @db.VarChar(64)
-  coverPrompt          String?               @map("cover_prompt")
-  wordCount            Int                   @default(0) @map("word_count")
-  chapterCount         Int                   @default(0) @map("chapter_count")
-  commentCount         Int                   @default(0) @map("comment_count")
-  favoriteCount        Int                   @default(0) @map("favorite_count")
-  likeCount            Int                   @default(0) @map("like_count")
-  viewCount            Int                   @default(0) @map("view_count")
-  lastChapterTitle     String?               @map("last_chapter_title") @db.VarChar(128)
-  lastPublishedAt      DateTime?             @map("last_published_at")
-  publishedAt          DateTime?             @map("published_at")
-  createdAt            DateTime              @default(now()) @map("created_at")
-  updatedAt            DateTime              @updatedAt @map("updated_at")
-  author               User                  @relation(fields: [authorId], references: [id])
-  coverAsset           CoverAsset?           @relation("NovelCover", fields: [coverAssetId], references: [id])
-  coverAssets          CoverAsset[]          @relation("CoverAssetCandidates")
-  chapters             Chapter[]
-  volumes              Volume[]
-  comments             Comment[]
-  favorites            NovelFavorite[]
-  posts                Post[]
-  aiUsageLogs          AiUsageLog[]
-  agentSessions        AgentSession[]
-  agentRuns            AgentRun[]
-  projectMemoryEntries ProjectMemoryEntry[]
-  readingProgress      ReadingProgress[]
-  novelReads           NovelRead[]
-  recommendationEvents RecommendationEvent[]
-  changeSets           ChangeSet[]
-  userDirectives       UserDirective[]
-  storyEntities        StoryEntity[]
-  storyEvents          StoryEvent[]
-  memoryExtractionJobs MemoryExtractionJob[]
-  foreshadowThreads    ForeshadowThread[]
-  storyCharter         StoryCharter?
-  readerPromises       ReaderPromise[]
-  storyCompilations    StoryCompilation[]
-  sceneTasks           SceneTask[]
-  chapterBridges       ChapterBridge[]
+  id                     String                  @id @default(cuid()) @db.VarChar(64)
+  authorId               String                  @map("author_id") @db.VarChar(64)
+  title                  String                  @db.VarChar(128)
+  displayTitle           String?                 @map("display_title") @db.VarChar(128)
+  slug                   String                  @unique @db.VarChar(160)
+  summary                String
+  categoryId             String?                 @map("category_id") @db.VarChar(64)
+  categoryName           String?                 @map("category_name") @db.VarChar(64)
+  tagNames               String[]                @default([]) @map("tag_names")
+  status                 NovelStatus             @default(draft)
+  visibility             Visibility              @default(public)
+  coverAssetId           String?                 @unique @map("cover_asset_id") @db.VarChar(64)
+  coverPrompt            String?                 @map("cover_prompt")
+  wordCount              Int                     @default(0) @map("word_count")
+  chapterCount           Int                     @default(0) @map("chapter_count")
+  commentCount           Int                     @default(0) @map("comment_count")
+  favoriteCount          Int                     @default(0) @map("favorite_count")
+  likeCount              Int                     @default(0) @map("like_count")
+  viewCount              Int                     @default(0) @map("view_count")
+  lastChapterTitle       String?                 @map("last_chapter_title") @db.VarChar(128)
+  lastPublishedAt        DateTime?               @map("last_published_at")
+  publishedAt            DateTime?               @map("published_at")
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+  author                 User                    @relation(fields: [authorId], references: [id])
+  coverAsset             CoverAsset?             @relation("NovelCover", fields: [coverAssetId], references: [id])
+  coverAssets            CoverAsset[]            @relation("CoverAssetCandidates")
+  chapters               Chapter[]
+  volumes                Volume[]
+  comments               Comment[]
+  favorites              NovelFavorite[]
+  posts                  Post[]
+  aiUsageLogs            AiUsageLog[]
+  agentSessions          AgentSession[]
+  agentRuns              AgentRun[]
+  projectMemoryEntries   ProjectMemoryEntry[]
+  readingProgress        ReadingProgress[]
+  novelReads             NovelRead[]
+  recommendationEvents   RecommendationEvent[]
+  changeSets             ChangeSet[]
+  userDirectives         UserDirective[]
+  storyEntities          StoryEntity[]
+  storyEvents            StoryEvent[]
+  memoryExtractionJobs   MemoryExtractionJob[]
+  foreshadowThreads      ForeshadowThread[]
+  storyCharter           StoryCharter?
+  readerPromises         ReaderPromise[]
+  storyCompilations      StoryCompilation[]
+  sceneTasks             SceneTask[]
+  chapterBridges         ChapterBridge[]
+  characterVoiceProfiles CharacterVoiceProfile[]
+  experienceAnchors      ExperienceAnchor[]
+  chapterQualityReports  ChapterQualityReport[]
+  qualityFindings        QualityFinding[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -413,31 +458,31 @@ model Novel {
 }
 
 model Chapter {
-  id                   String               @id @default(cuid()) @db.VarChar(64)
-  novelId              String               @map("novel_id") @db.VarChar(64)
-  authorId             String               @map("author_id") @db.VarChar(64)
-  title                String               @db.VarChar(128)
+  id                   String                 @id @default(cuid()) @db.VarChar(64)
+  novelId              String                 @map("novel_id") @db.VarChar(64)
+  authorId             String                 @map("author_id") @db.VarChar(64)
+  title                String                 @db.VarChar(128)
   summary              String?
   content              String
-  orderIndex           Int                  @map("order_index")
-  volumeId             String               @map("volume_id") @db.VarChar(64)
-  orderInVolume        Int                  @map("order_in_volume")
-  wordCount            Int                  @default(0) @map("word_count")
-  status               ChapterStatus        @default(draft)
-  visibility           Visibility           @default(public)
-  commentCount         Int                  @default(0) @map("comment_count")
-  revision             Int                  @default(1)
-  publishedTitle       String?              @map("published_title") @db.VarChar(128)
-  publishedSummary     String?              @map("published_summary")
-  publishedContent     String?              @map("published_content")
-  publishedWordCount   Int?                 @map("published_word_count")
-  publishedRevision    Int?                 @map("published_revision")
-  publishedAt          DateTime?            @map("published_at")
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
-  novel                Novel                @relation(fields: [novelId], references: [id])
-  volume               Volume               @relation(fields: [volumeId], references: [id], onDelete: Restrict)
-  author               User                 @relation(fields: [authorId], references: [id])
+  orderIndex           Int                    @map("order_index")
+  volumeId             String                 @map("volume_id") @db.VarChar(64)
+  orderInVolume        Int                    @map("order_in_volume")
+  wordCount            Int                    @default(0) @map("word_count")
+  status               ChapterStatus          @default(draft)
+  visibility           Visibility             @default(public)
+  commentCount         Int                    @default(0) @map("comment_count")
+  revision             Int                    @default(1)
+  publishedTitle       String?                @map("published_title") @db.VarChar(128)
+  publishedSummary     String?                @map("published_summary")
+  publishedContent     String?                @map("published_content")
+  publishedWordCount   Int?                   @map("published_word_count")
+  publishedRevision    Int?                   @map("published_revision")
+  publishedAt          DateTime?              @map("published_at")
+  createdAt            DateTime               @default(now()) @map("created_at")
+  updatedAt            DateTime               @updatedAt @map("updated_at")
+  novel                Novel                  @relation(fields: [novelId], references: [id])
+  volume               Volume                 @relation(fields: [volumeId], references: [id], onDelete: Restrict)
+  author               User                   @relation(fields: [authorId], references: [id])
   comments             Comment[]
   aiUsageLogs          AiUsageLog[]
   agentRuns            AgentRun[]
@@ -445,8 +490,9 @@ model Chapter {
   paragraphUnderlines  ParagraphUnderline[]
   storyCompilations    StoryCompilation[]
   sceneTasks           SceneTask[]
-  bridgesFrom          ChapterBridge[]      @relation("ChapterBridgeFrom")
-  bridgesTo            ChapterBridge[]      @relation("ChapterBridgeTo")
+  bridgesFrom          ChapterBridge[]        @relation("ChapterBridgeFrom")
+  bridgesTo            ChapterBridge[]        @relation("ChapterBridgeTo")
+  qualityReports       ChapterQualityReport[]
 
   @@unique([novelId, orderIndex])
   @@unique([volumeId, orderInVolume])
@@ -877,30 +923,30 @@ model AgentSession {
 }
 
 model AgentRun {
-  id                 String               @id @default(cuid()) @db.VarChar(64)
-  sessionId          String               @map("session_id") @db.VarChar(64)
-  userId             String               @map("user_id") @db.VarChar(64)
-  novelId            String               @map("novel_id") @db.VarChar(64)
-  chapterId          String?              @map("chapter_id") @db.VarChar(64)
+  id                 String                 @id @default(cuid()) @db.VarChar(64)
+  sessionId          String                 @map("session_id") @db.VarChar(64)
+  userId             String                 @map("user_id") @db.VarChar(64)
+  novelId            String                 @map("novel_id") @db.VarChar(64)
+  chapterId          String?                @map("chapter_id") @db.VarChar(64)
   mode               AgentRunMode
   action             AgentActionKind
-  agentType          AgentType            @map("agent_type")
-  status             AgentRunStatus       @default(queued)
-  inputSummary       String?              @map("input_summary")
-  outputSummary      String?              @map("output_summary")
-  errorMessage       String?              @map("error_message")
-  engine             String               @default("legacy") @db.VarChar(16)
-  currentTurn        Int                  @default(0) @map("current_turn")
+  agentType          AgentType              @map("agent_type")
+  status             AgentRunStatus         @default(queued)
+  inputSummary       String?                @map("input_summary")
+  outputSummary      String?                @map("output_summary")
+  errorMessage       String?                @map("error_message")
+  engine             String                 @default("legacy") @db.VarChar(16)
+  currentTurn        Int                    @default(0) @map("current_turn")
   usage              Json?
-  taskSpec           Json?                @map("task_spec")
-  startedAt          DateTime?            @map("started_at")
-  finishedAt         DateTime?            @map("finished_at")
-  createdAt          DateTime             @default(now()) @map("created_at")
-  updatedAt          DateTime             @updatedAt @map("updated_at")
-  session            AgentSession         @relation(fields: [sessionId], references: [id])
-  user               User                 @relation(fields: [userId], references: [id])
-  novel              Novel                @relation(fields: [novelId], references: [id])
-  chapter            Chapter?             @relation(fields: [chapterId], references: [id])
+  taskSpec           Json?                  @map("task_spec")
+  startedAt          DateTime?              @map("started_at")
+  finishedAt         DateTime?              @map("finished_at")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+  session            AgentSession           @relation(fields: [sessionId], references: [id])
+  user               User                   @relation(fields: [userId], references: [id])
+  novel              Novel                  @relation(fields: [novelId], references: [id])
+  chapter            Chapter?               @relation(fields: [chapterId], references: [id])
   artifacts          AgentArtifact[]
   memoryEntries      ProjectMemoryEntry[]
   messages           AgentMessage[]
@@ -908,6 +954,7 @@ model AgentRun {
   skillRun           AgentSkillRun?
   contextCheckpoints ContextCheckpoint[]
   storyCompilations  StoryCompilation[]
+  qualityReports     ChapterQualityReport[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
@@ -1366,6 +1413,7 @@ model StoryCompilation {
   chapter          Chapter?               @relation(fields: [chapterId], references: [id], onDelete: SetNull)
   sceneTasks       SceneTask[]
   bridge           ChapterBridge?
+  qualityReports   ChapterQualityReport[]
 
   @@index([userId, status, updatedAt])
   @@index([novelId, targetOrderIndex, status])
@@ -1438,6 +1486,118 @@ model ChapterBridge {
   @@index([novelId, targetOrderIndex, updatedAt])
   @@index([userId, updatedAt])
   @@map("chapter_bridges")
+}
+
+model CharacterVoiceProfile {
+  id                 String                @id @default(cuid()) @db.VarChar(64)
+  userId             String                @map("user_id") @db.VarChar(64)
+  novelId            String                @map("novel_id") @db.VarChar(64)
+  characterName      String                @map("character_name") @db.VarChar(128)
+  status             CreativeProfileStatus @default(draft)
+  vocabularyLevel    String                @map("vocabulary_level") @db.VarChar(240)
+  sentenceLength     Json                  @map("sentence_length")
+  addressSystem      Json                  @map("address_system")
+  pressureResponse   String                @map("pressure_response")
+  avoidedTopics      Json                  @map("avoided_topics")
+  attentionBias      Json                  @map("attention_bias")
+  voiceSamples       Json                  @map("voice_samples")
+  forbiddenKnowledge Json                  @map("forbidden_knowledge")
+  evolutionNotes     String                @default("") @map("evolution_notes")
+  revision           Int                   @default(1)
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel              Novel                 @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, characterName])
+  @@index([userId, status, updatedAt])
+  @@map("character_voice_profiles")
+}
+
+model ExperienceAnchor {
+  id               String            @id @default(cuid()) @db.VarChar(64)
+  userId           String            @map("user_id") @db.VarChar(64)
+  novelId          String            @map("novel_id") @db.VarChar(64)
+  characterName    String            @map("character_name") @db.VarChar(128)
+  title            String            @db.VarChar(160)
+  triggerEvent     String            @map("trigger_event")
+  concreteDetail   String            @map("concrete_detail")
+  sensoryCue       String            @default("") @map("sensory_cue")
+  habitualResponse String            @map("habitual_response")
+  emotionalMeaning String            @map("emotional_meaning")
+  sourceType       MemorySourceType  @map("source_type")
+  sourceId         String            @map("source_id") @db.VarChar(64)
+  sourceRevision   Int?              @map("source_revision")
+  status           StoryMemoryStatus @default(confirmed)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel            Novel             @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, characterName, title, sourceId])
+  @@index([userId, characterName, status])
+  @@index([novelId, characterName, updatedAt])
+  @@map("experience_anchors")
+}
+
+model ChapterQualityReport {
+  id                   String               @id @default(cuid()) @db.VarChar(64)
+  userId               String               @map("user_id") @db.VarChar(64)
+  novelId              String               @map("novel_id") @db.VarChar(64)
+  runId                String?              @map("run_id") @db.VarChar(64)
+  compilationId        String?              @map("compilation_id") @db.VarChar(64)
+  chapterId            String               @map("chapter_id") @db.VarChar(64)
+  chapterRevision      Int                  @map("chapter_revision")
+  mode                 StoryCompilerMode    @default(balanced)
+  status               ChapterQualityStatus @default(analyzing)
+  repairRound          Int                  @default(0) @map("repair_round")
+  deterministicMetrics Json                 @map("deterministic_metrics")
+  criticVersion        String               @default("humanity-critic.v1") @map("critic_version") @db.VarChar(64)
+  checkedAt            DateTime?            @map("checked_at")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel                Novel                @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  run                  AgentRun?            @relation(fields: [runId], references: [id], onDelete: SetNull)
+  compilation          StoryCompilation?    @relation(fields: [compilationId], references: [id], onDelete: SetNull)
+  chapter              Chapter              @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  findings             QualityFinding[]
+
+  @@index([userId, createdAt])
+  @@index([novelId, chapterId, chapterRevision])
+  @@index([compilationId, repairRound])
+  @@map("chapter_quality_reports")
+}
+
+model QualityFinding {
+  id              String                    @id @default(cuid()) @db.VarChar(64)
+  userId          String                    @map("user_id") @db.VarChar(64)
+  novelId         String                    @map("novel_id") @db.VarChar(64)
+  reportId        String                    @map("report_id") @db.VarChar(64)
+  signal          String                    @db.VarChar(48)
+  source          QualityFindingSource
+  severity        QualityFindingSeverity
+  startOffset     Int                       @map("start_offset")
+  endOffset       Int                       @map("end_offset")
+  evidenceExcerpt String                    @map("evidence_excerpt") @db.VarChar(360)
+  evidenceHash    String                    @map("evidence_hash") @db.VarChar(64)
+  explanation     String
+  suggestion      String
+  confidence      Float                     @default(0.7)
+  disposition     QualityFindingDisposition @default(pending)
+  authorFeedback  QualityFindingFeedback?   @map("author_feedback")
+  feedbackReason  String?                   @map("feedback_reason") @db.VarChar(500)
+  createdAt       DateTime                  @default(now()) @map("created_at")
+  updatedAt       DateTime                  @updatedAt @map("updated_at")
+  user            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel           Novel                     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  report          ChapterQualityReport      @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, source, signal, evidenceHash])
+  @@index([userId, disposition, updatedAt])
+  @@index([novelId, signal, disposition])
+  @@index([novelId, signal, authorFeedback])
+  @@map("quality_findings")
 }
 
 /**

@@ -65,7 +65,8 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 13. 字数用工具数据不手数：任何字数核对（是否达到作者要求、改动前后篇幅）一律引用工具返回的字数；改写片段用 chapter_edit_range 传 oldText 锚点定位，严禁在思考信道逐字计数算下标。
 14. 全书改动必须走变更集：改名、术语替换、跨章批量修改先 project_search / impact_analyze，再 bulk_replace_preview 或 entity_rename_preview；向作者展示 ChangeSet 后才 changeset_apply。禁止逐章读取、逐章整段覆盖，应用后用 project_search 和 structure_validate 验证。
 15. 会话原文按需检索：正常任务直接使用当前历史与压缩检查点，严禁每轮例行扫描会话。只有作者明确要求核对/引用早前原话（如“第一条提示词是什么”“你之前完整回复了什么”），或系统明确提示早前消息未进入当前窗口且当前任务依赖该细节时，才用 session_history_search 定位；需要完整内容再用 session_message_read 按消息读取。没有查到时如实说明，禁止根据摘要或记忆猜测原话。
-16. 完整章节走 Story Compiler：新增完整章节、较长续写或整章重写时，依次执行 story_compiler_prepare → scene_task_build → 章节写入 → continuity_validate →（只修有证据错误，必要时）→ chapter_bridge_commit。质量模式 balanced 只提交一个确定推进并做一次独立复核；premium 必须先比较 2–3 个推进候选、记录取舍，再做双视角独立复核。局部选区润色/纠错、改标题、改元数据不触发，禁止把简单任务复杂化；若工具开关未启用则沿用旧写作流程。`
+16. 完整章节走 Story Compiler：新增完整章节、较长续写或整章重写时，依次执行 story_compiler_prepare → scene_task_build → 章节写入 → continuity_validate → quality_analyze →（只选择有证据问题，quality_findings_select → quality_revision_apply → 重新 quality_analyze，最多两轮）→ chapter_bridge_commit。质量模式 balanced 只提交一个确定推进并做一次独立质量复核；premium 必须先比较 2–3 个推进候选、记录取舍，再做故事/风格双视角独立复核。审美 warning 供修订决策，不能当发布硬错误；只有 revision 过期或明确事实冲突能阻断。局部选区润色/纠错、改标题、改元数据不触发，禁止把简单任务复杂化；若工具开关未启用则沿用旧写作流程。
+17. 人物声音和情绪经历按需召回：写含主要人物对白前，只对实际登场人物调用 character_voice_get；写关键情绪场景时，只对相关人物调用 experience_anchor_get，最多使用 1–3 个锚点。没有确认数据时不得临时编造为事实，也不得用“攥拳、颤抖、眼眶发热”等模板动作补位。作者明确确认新的声口或经历后才用 character_voice_save / experience_anchor_save 沉淀。质量 finding 必须有逐字短证据；科幻术语、故意华丽、作者口语、断句、留白和无悬念收束都不能仅凭形式判错。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。

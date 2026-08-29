@@ -11,6 +11,7 @@ const original = {
   memory2: env.featureMemory2Enabled,
   skill2: env.featureSkill2Enabled,
   storyCompiler: env.featureStoryCompilerEnabled,
+  humanityQuality: env.featureHumanityQualityEnabled,
   dualWorkspace: env.featureDualWorkspaceEnabled,
 }
 
@@ -21,6 +22,7 @@ afterEach(() => {
   env.featureMemory2Enabled = original.memory2
   env.featureSkill2Enabled = original.skill2
   env.featureStoryCompilerEnabled = original.storyCompiler
+  env.featureHumanityQualityEnabled = original.humanityQuality
   env.featureDualWorkspaceEnabled = original.dualWorkspace
 })
 
@@ -30,7 +32,7 @@ describe('Agent 2.0 灰度与独立功能开关', () => {
     env.featureMemory2Enabled = false
     const flags = resolveAgent2FeatureFlags('author-1')
     expect(flags).toMatchObject({
-      variant: 'v2', volume: true, changeSet: true, memory2: false, skill2: true, storyCompiler: true, dualWorkspace: true,
+      variant: 'v2', volume: true, changeSet: true, memory2: false, skill2: true, storyCompiler: true, humanityQuality: true, dualWorkspace: true,
     })
   })
 
@@ -44,7 +46,7 @@ describe('Agent 2.0 灰度与独立功能开关', () => {
 
   it('关闭开关时对应工具不会暴露给模型', () => {
     const tools = getToolsForAgent(getAgentDefinition('orchestrator'), 'build', {
-      variant: 'v2', volume: false, changeSet: false, memory2: false, skill2: false, storyCompiler: false, dualWorkspace: true,
+      variant: 'v2', volume: false, changeSet: false, memory2: false, skill2: false, storyCompiler: false, humanityQuality: false, dualWorkspace: true,
     })
     const names = new Set(tools.map((tool) => tool.name))
     expect(names.has('volume_create')).toBe(false)
@@ -53,6 +55,7 @@ describe('Agent 2.0 灰度与独立功能开关', () => {
     expect(names.has('creative_critique')).toBe(false)
     expect(names.has('story_compiler_prepare')).toBe(false)
     expect(names.has('chapter_bridge_commit')).toBe(false)
+    expect(names.has('quality_analyze')).toBe(false)
     expect(names.has('chapter_write')).toBe(true)
   })
 })

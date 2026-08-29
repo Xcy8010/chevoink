@@ -9,6 +9,8 @@ import {
 } from '../../../../shared/contracts/index.js'
 import { generateTextCompletion } from '../../ai-service.js'
 import { prisma } from '../../prisma.js'
+import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
+import { getLatestQualityReport } from '../humanity-quality.js'
 import {
   commitChapterBridge,
   getStoryCharterBundle,
@@ -326,6 +328,21 @@ export const chapterBridgeCommitTool = defineTool({
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
+    if (isAgent2FeatureEnabled('humanityQuality', ctx.userId)) {
+      const compilation = await prisma.storyCompilation.findFirst({
+        where: { id: args.compilationId, userId: ctx.userId, novelId: ctx.novelId },
+        select: { chapterId: true, chapter: { select: { revision: true } } },
+      })
+      if (compilation?.chapterId && compilation.chapter) {
+        const report = await getLatestQualityReport(ctx.userId, ctx.novelId, compilation.chapterId)
+        if (!report || report.chapterRevision !== compilation.chapter.revision || ['analyzing', 'stale', 'failed'].includes(report.status)) {
+          return { output: '当前章节最新 revision 尚未完成人类感质量检查。请先调用 quality_analyze；若做过局部修订，必须重新检查，禁止沿用旧报告。', summary: '等待人类感质量检查' }
+        }
+        if (report.findings.some((finding) => finding.severity === 'error' && finding.disposition !== 'repaired')) {
+          return { output: '质量报告仍有明确错误未修复，禁止提交章节桥。请先处理 error finding 并重新检查。', summary: '质量错误阻止提交' }
+        }
+      }
+    }
     const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...args })
     return {
       output: `COMMIT 完成，章节 ${result.chapterId}@r${result.chapterRevision} 的 Chapter Bridge、Scene Task 终态与故事记忆已原子对齐。下一章将直接召回本次终态。`,
