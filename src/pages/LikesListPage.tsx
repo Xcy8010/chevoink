@@ -22,6 +22,7 @@ const KIND_META: Record<
   novelComment: { action: ' 点评了你的作品', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
   chapterComment: { action: ' 评论了你的章节', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
   commentReply: { action: ' 回复了你的评论', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
+  postComment: { action: ' 评论了你的帖子', icon: MessageCircle, iconClass: 'text-[var(--color-brand)]' },
 }
 
 /** 明细行的跳转目标：章节评论/回复直达阅读器并自动展开评论面板，帖子进帖子，作品进作品页 */

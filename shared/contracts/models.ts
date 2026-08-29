@@ -164,7 +164,7 @@ export interface ReceivedLikeItem {
 }
 
 /** 互动消息类型：赞/收藏/作品评论/章节评论 */
-export type InteractionKind = 'postLike' | 'commentLike' | 'novelFavorite' | 'novelComment' | 'chapterComment' | 'commentReply'
+export type InteractionKind = 'postLike' | 'commentLike' | 'novelFavorite' | 'novelComment' | 'chapterComment' | 'commentReply' | 'postComment'
 
 /** 互动消息条目：谁对你的内容做了什么 */
 export interface InteractionItem {

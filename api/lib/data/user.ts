@@ -605,6 +605,7 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
         OR: [
           { targetType: 'novel', novel: { authorId: userId } },
           { targetType: 'chapter', chapter: { authorId: userId } },
+          { targetType: 'post', post: { userId } },
         ],
       },
       include: {
@@ -632,6 +633,7 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
         NOT: [
           { targetType: 'novel', novel: { authorId: userId } },
           { targetType: 'chapter', chapter: { authorId: userId } },
+          { targetType: 'post', post: { userId } },
         ],
       },
       include: {
@@ -683,15 +685,20 @@ export async function listInteractionsData(userId: string): Promise<{ items: Int
       happenedAt: toIso(record.createdAt) ?? nowIso(),
     })),
     ...commentRecords.map((record) => {
+      const isPostComment = record.targetType === 'post'
       const isChapterComment = record.targetType === 'chapter'
       const novelMeta = isChapterComment ? record.chapter?.novel : record.novel
       return {
         id: `comment-${record.id}`,
         user: toUserSummary(record.author),
-        kind: (isChapterComment ? 'chapterComment' : 'novelComment') as InteractionItem['kind'],
+        kind: (isPostComment
+          ? 'postComment'
+          : isChapterComment
+            ? 'chapterComment'
+            : 'novelComment') as InteractionItem['kind'],
         excerpt: excerptContent(record.content),
         rating: record.rating ?? null,
-        postId: null as string | null,
+        postId: isPostComment ? record.postId ?? null : null,
         novelId: novelMeta?.id ?? record.novelId ?? record.chapter?.novelId ?? null,
         chapterId: isChapterComment ? record.chapter?.id ?? null : null,
         // 段评带上段落序号：前端直达正文对应段落并高亮
@@ -748,6 +755,7 @@ export async function getInteractionBadgesData(userId: string): Promise<Interact
           OR: [
             { targetType: 'novel', novel: { authorId: userId } },
             { targetType: 'chapter', chapter: { authorId: userId } },
+            { targetType: 'post', post: { userId } },
           ],
           ...interactionsAfter,
         },
@@ -760,6 +768,7 @@ export async function getInteractionBadgesData(userId: string): Promise<Interact
           NOT: [
             { targetType: 'novel', novel: { authorId: userId } },
             { targetType: 'chapter', chapter: { authorId: userId } },
+            { targetType: 'post', post: { userId } },
           ],
           ...interactionsAfter,
         },
