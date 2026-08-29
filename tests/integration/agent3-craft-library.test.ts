@@ -12,6 +12,7 @@ import {
 import { prisma } from '../../api/lib/prisma.js'
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const AUTHOR_SAMPLE_BASE = '林舟把报表推回桌心，没有解释自己为什么拒绝。他问：“如果到账晚三天，谁来签字？”会议室里没人接话。顾棠合上电脑，把违约条款翻到最后一页。'
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
@@ -37,11 +38,10 @@ describe.skipIf(!dbAvailable)('Agent 3.0 合法文笔库闭环（需 DB）', () 
     expect(novel.status).toBe(201)
     novelId = novel.body.data.novel.id as string
     const volumeId = (await prisma.volume.findFirstOrThrow({ where: { novelId }, select: { id: true } })).id
-    const base = '林舟把报表推回桌心，没有解释自己为什么拒绝。他问：“如果到账晚三天，谁来签字？”会议室里没人接话。顾棠合上电脑，把违约条款翻到最后一页。'
     chapterIds = [randomUUID(), randomUUID()]
     await prisma.chapter.createMany({ data: chapterIds.map((id, index) => ({
       id, novelId, authorId: userId, volumeId, orderIndex: index + 1, orderInVolume: index + 1,
-      title: `样章 ${index + 1}`, content: base.repeat(8), wordCount: base.length * 8, revision: 1,
+      title: `样章 ${index + 1}`, content: AUTHOR_SAMPLE_BASE.repeat(8), wordCount: AUTHOR_SAMPLE_BASE.length * 8, revision: 1,
       status: 'draft', visibility: 'private',
     })) })
     const session = await prisma.agentSession.create({ data: { userId, novelId, title: 'P4 文笔库测试' } })
@@ -74,7 +74,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 合法文笔库闭环（需 DB）', () 
     expect(result.cards.every((card) => card.rights.reversibleQuote === false)).toBe(true)
     const trace = await prisma.retrievalTrace.findUniqueOrThrow({ where: { id: result.traceId } })
     expect(trace).toMatchObject({ userId, novelId, runId })
-    expect(JSON.stringify(trace.selected)).not.toContain(base.slice(0, 30))
+    expect(JSON.stringify(trace.selected)).not.toContain(AUTHOR_SAMPLE_BASE.slice(0, 30))
   })
 
   it('作者明确选择样章后只建立本作品私有 Style DNA，读取接口不返回正文', async () => {
@@ -88,7 +88,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 合法文笔库闭环（需 DB）', () 
     const profileResponse = await request(app).get(`/api/agent/novels/${novelId}/style-profile`).set('Cookie', cookie)
     expect(profileResponse.status).toBe(200)
     expect(profileResponse.body.data.profile.stats.sampleChars).toBeGreaterThan(500)
-    expect(JSON.stringify(profileResponse.body)).not.toContain(base.slice(0, 30))
+    expect(JSON.stringify(profileResponse.body)).not.toContain(AUTHOR_SAMPLE_BASE.slice(0, 30))
   })
 
   it('公共来源必须先审批且具备原文存储权，才能受控导入并生成统计画像', async () => {
