@@ -7,13 +7,13 @@ const PROTOCOL_BLOCK_PATTERNS = [
 ]
 
 const PROTOCOL_TOKEN_PATTERNS = [
-  /<\s*\/?\s*(?:invoke|tool_call|tool-call|function_call|function-call|tool_calls|tool-calls)\b[^>]*>/gi,
+  /<\s*\/?\s*(?:invoke|tool_call|tool-call|function_call|function-call|tool_calls|tool-calls|parameter|parameters)\b[^>]*>/gi,
   /<\|[^>\n]*(?:tool|function|invoke)[^>\n]*\|>/gi,
   /^\s*\[\/?(?:tool[_ -]?calls?|function[_ -]?calls?|invoke)\]\s*$/gim,
 ]
 
 const PROTOCOL_INVOCATION_PATTERNS = [
-  /<\s*(?:invoke|tool_call|tool-call|function_call|function-call)\b[^>]*>/i,
+  /<\s*(?:invoke|tool_call|tool-call|function_call|function-call|parameter|parameters)\b[^>]*>/i,
   /<\|[^>\n]*(?:tool|function|invoke)[^>\n]*(?:begin|start|call)[^>\n]*\|>/i,
   /^\s*\[(?:tool[_ -]?calls?|function[_ -]?calls?|invoke)\]\s*$/im,
 ]

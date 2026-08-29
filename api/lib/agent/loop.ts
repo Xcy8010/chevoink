@@ -929,7 +929,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           messages.push({
             role: 'user',
             content:
-              '[系统/P0] 你刚才没有产生任何可执行的 function call，却返回了工具协议标记或伪调用文本；操作完全没有执行。立即使用 API 原生 function calling 重试，正文信道必须为空。禁止输出 <invoke>、</invoke>、<tool_call> 或任何工具参数文本。',
+              '[系统/P0] 你刚才没有产生任何可执行的 function call，却返回了工具协议标记或伪调用文本；操作完全没有执行。立即使用 API 原生 function calling 重试，正文信道必须为空。禁止输出 <invoke>、</invoke>、<tool_call>、<parameter>、</parameter> 或任何工具参数文本。',
           })
           continue
         }

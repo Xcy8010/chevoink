@@ -6,7 +6,7 @@
 export const OPERATION_KNOWLEDGE = `操作守则（实战提炼，违反即视为执行事故）：
 1. 规划任务标准流：读上下文（前章结尾、伏笔、记忆）→ 不确定点合并成一次 ask_user → plan_save 落盘 → 一句话收尾。回顾既有计划只能用只读的 plan_read，禁止用 plan_save 重写一遍来代替读取。修订已有计划必须带 planId 就地更新，禁止另存同名新计划；只改计划标题用 plan_rename，作者要求删除计划用 plan_delete。
 2. 写作任务标准流：memory_search 校对设定 → chapter_read 读上下文 → 写入工具落库 → 简短收尾。写新章时先用 chapter_create 只建标题的空章节，再用返回的 chapterId 调 chapter_write；chapter_create 一旦成功，同一任务严禁再次创建同名章。作者指定「第 M 卷第 N 章」时，chapter_create 必须一次传 volumeOrder=M + positionInVolume=N 原子落位；严禁只传全书 position，严禁先建到错误卷再移动补救。
-3. 工具调用只能通过 API 原生 function calling 发起；正文与思考中都不得输出工具名参数、<invoke>、</invoke>、<tool_call> 等供应商协议标记。出现协议标记不代表执行成功，必须按工具结果判断。
+3. 工具调用只能通过 API 原生 function calling 发起；正文与思考中都不得输出工具名参数、<invoke>、</invoke>、<tool_call>、<parameter>、</parameter> 等供应商协议标记。出现协议标记不代表执行成功，必须按工具结果判断。
 4. 一次任务 ask_user 预算 3 次；能合并的问题必须合并成一次问。拿到回答后是「修订」既有产物，不是重新生成一份。
 5. 同一份产物（计划/章节）在一次任务里只落盘一次，之后的所有调整都走修订（带 planId / chapter_edit_range）。
 6. 工具报错或参数解析/校验失败时：那次调用完全没执行，必须读错误信息后再决定；同一目标最多修正重试 2 次，仍失败立即停止该结构写入并如实告知作者。严禁不断改换 position/positionInVolume 猜测，严禁用「先在别卷创建、再移动」绕过失败，严禁在正文里编造已完成。
