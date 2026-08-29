@@ -88,9 +88,7 @@ import {
   experienceAnchorSaveTool,
   qualityAnalyzeTool,
   qualityFindingFeedbackTool,
-  qualityFindingsSelectTool,
   qualityReportGetTool,
-  qualityRevisionApplyTool,
 } from './humanity-quality-tools.js'
 import {
   craftSearchTool,
@@ -199,8 +197,6 @@ export const allTools: AgentTool<any>[] = [
   continuityValidateTool,
   chapterBridgeCommitTool,
   qualityAnalyzeTool,
-  qualityFindingsSelectTool,
-  qualityRevisionApplyTool,
   qualityFindingFeedbackTool,
   characterVoiceSaveTool,
   experienceAnchorSaveTool,

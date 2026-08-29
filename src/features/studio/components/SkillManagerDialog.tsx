@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { CheckCircle2, FlaskConical, LoaderCircle, ShieldAlert, Trash2, X } from 'lucide-react'
 
@@ -197,9 +198,10 @@ export default function SkillManagerDialog({
   })
 
   const title = skill ? skill.name : importMode ? '导入第三方技能' : '创建作品技能'
-  return (
+  if (typeof document === 'undefined') return null
+  return createPortal(
     <div className="fixed inset-0 z-[140] flex items-stretch justify-center bg-black/45 md:items-center md:p-6" role="dialog" aria-modal="true" aria-label={title}>
-      <section className="flex h-full w-full flex-col bg-[var(--surface-default)] md:h-[min(860px,92vh)] md:max-w-4xl md:rounded-[16px] md:border md:border-[var(--border-default)]">
+      <section className="flex h-full w-full flex-col bg-[var(--surface-default)] md:h-[min(820px,90vh)] md:w-[min(920px,calc(100vw-48px))] md:max-w-none md:rounded-[14px] md:border md:border-[var(--border-default)]">
         <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3 md:px-5">
           <div><h2 className="text-sm font-semibold">{title}</h2><p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">私有作品级技能 · 作者规则优先 · 可测试与回滚</p></div>
           <button type="button" onClick={onClose} className="ml-auto flex h-9 w-9 items-center justify-center rounded-[9px] hover:bg-[var(--surface-muted)]" aria-label="关闭"><X className="h-4 w-4" /></button>
@@ -219,15 +221,15 @@ export default function SkillManagerDialog({
             <div className="flex h-56 items-center justify-center gap-2 text-sm text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />载入技能详情…</div>
           ) : detail ? (
             <div className="space-y-5">
-              <div className="grid gap-4 md:grid-cols-[1fr_240px]">
-                <div className="rounded-[12px] border border-[var(--border-subtle)] p-4">
+              <div className="grid gap-4 border-b border-[var(--border-subtle)] pb-5 md:grid-cols-[1fr_240px]">
+                <div>
                   <p className="text-sm leading-6 text-[var(--text-secondary)]">{skill.description}</p>
                   <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-[var(--text-tertiary)]">
                     {skill.phases.map((phase) => <span key={phase} className="rounded-full bg-[var(--surface-muted)] px-2 py-1">{phases.find((item) => item.value === phase)?.label ?? phase}</span>)}
                     <span className="rounded-full bg-[var(--surface-muted)] px-2 py-1">{skill.license}</span>
                   </div>
                 </div>
-                <div className="rounded-[12px] border border-[var(--border-subtle)] p-4 text-xs">
+                <div className="text-xs md:border-l md:border-[var(--border-subtle)] md:pl-4">
                   <label className="text-[var(--text-secondary)]">查看版本<select value={selectedVersion} onChange={(event) => setSelectedVersion(event.target.value)} className={`${inputClass} mt-1`}>
                     {skill.versions.map((version) => <option key={version.version} value={version.version}>{version.version} · {version.status}</option>)}
                   </select></label>
@@ -235,15 +237,15 @@ export default function SkillManagerDialog({
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <section className="rounded-[12px] border border-[var(--border-subtle)] p-4">
+              <div className="grid gap-5 lg:grid-cols-2">
+                <section>
                   <h3 className="text-xs font-semibold">触发与不触发</h3>
                   <p className="mt-3 text-[10px] text-[var(--text-tertiary)]">触发</p><p className="mt-1 text-xs leading-6">{strings(detail.manifest.triggerPhrases).join('、') || '—'}</p>
                   <p className="mt-3 text-[10px] text-[var(--text-tertiary)]">明确不触发</p><p className="mt-1 text-xs leading-6">{strings(detail.manifest.negativeTriggerPhrases).join('、') || '—'}</p>
                   <p className="mt-3 text-[10px] text-[var(--text-tertiary)]">阶段说明</p>
                   {Object.entries(detail.instructions).map(([phase, content]) => <pre key={phase} className="mt-1 whitespace-pre-wrap rounded-[9px] bg-[var(--surface-muted)] p-3 font-sans text-xs leading-6">[{phase}] {content}</pre>)}
                 </section>
-                <section className="rounded-[12px] border border-[var(--border-subtle)] p-4">
+                <section className="border-t border-[var(--border-subtle)] pt-5 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
                   <div className="flex items-center gap-2"><h3 className="text-xs font-semibold">安全与许可证审计</h3>{auditPassed ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <ShieldAlert className="h-4 w-4 text-amber-500" />}</div>
                   <p className="mt-2 text-xs text-[var(--text-secondary)]">{auditPassed ? '该版本静态审计通过。' : '该版本尚未通过静态审计，不能发布。'}</p>
                   {detail.audits[0]?.findings.map((finding) => <p key={finding} className="mt-2 rounded-[8px] bg-amber-500/10 px-2 py-1.5 text-xs text-amber-600">{finding}</p>)}
@@ -269,7 +271,8 @@ export default function SkillManagerDialog({
           ) : <p className="py-16 text-center text-sm text-[var(--color-error)]">技能详情载入失败。</p>}
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

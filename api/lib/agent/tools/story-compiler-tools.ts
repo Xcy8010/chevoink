@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
 
 import {
   continuityFindingInputSchema,
@@ -263,6 +264,17 @@ export const continuityValidateTool = defineTool({
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
     const bridge = compilation.bridge
+    const cachedValidation = compilation.validation as { checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string }>; errorCount?: number; warningCount?: number } | null
+    if (!args.focus && cachedValidation?.checkedRevision === chapter.revision) {
+      const findings = cachedValidation.findings ?? []
+      const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
+      const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
+      return {
+        output: `当前 r${chapter.revision} 已通过连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；无需再次消耗 Critic。`,
+        summary: `复用连续性检查 · ${errorCount} 错误 ${warningCount} 警告`,
+        display: { kind: 'storyCompiler', compilationId: compilation.id, phase: errorCount > 0 ? 'repair' : 'check', title: '连续性检查', detail: `${errorCount} 错误 · ${warningCount} 警告 · 已复用`, items: findings.map((item) => `${item.severity === 'error' ? '错误' : '警告'}：${item.evidence}`), errorCount, warningCount },
+      }
+    }
     const criticInput = [
         `章节：${chapter.title}@r${chapter.revision}`,
         args.focus ? `额外关注：${args.focus}` : '',
@@ -279,12 +291,7 @@ export const continuityValidateTool = defineTool({
         `当前正文：\n${chapter.content.slice(-16000)}`,
       ].filter(Boolean).join('\n')
     const baseCriticPrompt = '你是与正文写作者上下文隔离的中文网文连续性编辑。只依据提供的桥接事实、场景任务和正文找可证实的问题，不续写、不润色、不评价审美。没有问题就返回空数组。严格只输出 JSON：{"findings":[{"signal":"knowledge|location_time|body|object|relationship|emotion|hook|structure","severity":"warning|error","evidence":"正文证据与冲突事实","suggestion":"不改变剧情目标的最小修法"}]}。error 只用于明确事实冲突，审美偏好不得标 error。'
-    const criticPrompts = compilation.mode === 'premium'
-      ? [
-          `${baseCriticPrompt}\n本次重点复核人物知识、关系与情绪余波。`,
-          `${baseCriticPrompt}\n本次重点复核时空、身体、物品、钩子和近期首尾结构重复。`,
-        ]
-      : [baseCriticPrompt]
+    const criticPrompts = [`${baseCriticPrompt}\n一次融合复核人物知识、关系、情绪余波、时空、身体、物品、钩子和近期首尾结构；不要为了覆盖类别而凑 finding。`]
     const criticResponses = await Promise.all(criticPrompts.map((systemPrompt, index) => generateTextCompletion(
       systemPrompt,
       criticInput,
@@ -314,42 +321,109 @@ export const chapterBridgeCommitTool = defineTool({
   name: 'chapter_bridge_commit',
   title: '提交章节终态',
   description:
-    'Story Compiler 的 COMMIT 步骤。仅在 continuity_validate 对当前最新 revision 报告 0 错误后调用；提交本章摘要、人物知识/身体/物品/关系/情绪终态、未完成动作、钩子与首尾结构，供下一章直接桥接，并同步故事记忆。禁止猜测正文没有发生的状态变化。',
+    'Story Compiler 的 COMMIT 步骤。仅在当前 revision 连续性检查与单次质量检查完成后调用。所有参数都可省略：服务端会从当前 run/chapter 的活跃编译、最后一个 Scene Task 和章节状态安全补全，模型不得为补参数重复读取正文。重复调用会幂等返回。',
   parameters: z.object({
-    compilationId: z.string().min(1),
-    chapterSummary: z.string().min(1).max(2000),
-    exitState: storyStateSchema,
-    lastUnfinishedAction: z.string().max(1000).default(''),
-    hookDecision: z.string().max(1000).default(''),
-    delayedHookReason: z.string().max(1000).default(''),
-    openingStructure: z.string().min(1).max(300),
-    endingStructure: z.string().min(1).max(300),
+    compilationId: z.string().min(1).optional(),
+    chapterSummary: z.string().min(1).max(2000).optional(),
+    exitState: storyStateSchema.optional(),
+    lastUnfinishedAction: z.string().max(1000).optional(),
+    hookDecision: z.string().max(1000).optional(),
+    delayedHookReason: z.string().max(1000).optional(),
+    openingStructure: z.string().min(1).max(300).optional(),
+    endingStructure: z.string().min(1).max(300).optional(),
   }),
+  coerceArgs(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const next = { ...(raw as Record<string, unknown>) }
+    if (!next.compilationId && typeof next.compilation_id === 'string') next.compilationId = next.compilation_id
+    for (const [key, value] of Object.entries(next)) if (value === null || value === '') delete next[key]
+    return next
+  },
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
+    const compilationScopes = [
+      ...(args.compilationId ? [{ id: args.compilationId }] : []),
+      { runId: ctx.runId },
+      ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : []),
+    ]
+    const candidates = await prisma.storyCompilation.findMany({
+      where: {
+        userId: ctx.userId,
+        novelId: ctx.novelId,
+        status: { in: ['active', 'completed'] },
+        OR: compilationScopes,
+      },
+      include: { chapter: true, bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } } },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+      take: 2,
+    })
+    let compilation: (typeof candidates)[number] | undefined = candidates.find((item) => item.status === 'active') ?? candidates[0]
+    if (!compilation && args.compilationId) {
+      compilation = await prisma.storyCompilation.findFirst({
+        where: { userId: ctx.userId, novelId: ctx.novelId, status: 'active', OR: [{ runId: ctx.runId }, ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : [])] },
+        include: { chapter: true, bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } } },
+        orderBy: { updatedAt: 'desc' },
+      }) ?? undefined
+    }
+    if (!compilation?.chapter || !compilation.bridge) return { output: '没有找到当前任务可提交的章节编译状态；请重新执行 story_compiler_prepare，而不是反复提交。', summary: '未找到章节编译状态' }
+    if (compilation.status === 'completed') {
+      return { output: `章节 ${compilation.chapter.id}@r${compilation.chapter.revision} 的终态已经提交，无需重复执行。`, summary: '章节终态已提交', display: { kind: 'storyCompiler', compilationId: compilation.id, phase: 'commit', title: '章节终态已提交', detail: `r${compilation.chapter.revision}`, items: [] } }
+    }
     if (isAgent2FeatureEnabled('humanityQuality', ctx.userId)) {
-      const compilation = await prisma.storyCompilation.findFirst({
-        where: { id: args.compilationId, userId: ctx.userId, novelId: ctx.novelId },
-        select: { chapterId: true, chapter: { select: { revision: true } } },
-      })
-      if (compilation?.chapterId && compilation.chapter) {
+      if (compilation.chapterId) {
         const report = await getLatestQualityReport(ctx.userId, ctx.novelId, compilation.chapterId)
         if (!report || report.chapterRevision !== compilation.chapter.revision || ['analyzing', 'stale', 'failed'].includes(report.status)) {
-          return { output: '当前章节最新 revision 尚未完成人类感质量检查。请先调用 quality_analyze；若做过局部修订，必须重新检查，禁止沿用旧报告。', summary: '等待人类感质量检查' }
+          return { output: '当前章节最新 revision 尚未完成单次人类感质量检查。只调用一次 quality_analyze；该工具会自动完成有证据的局部修订，禁止手动选择或反复检查。', summary: '等待单次质量检查' }
         }
         if (report.findings.some((finding) => finding.severity === 'error' && finding.disposition !== 'repaired')) {
           return { output: '质量报告仍有明确错误未修复，禁止提交章节桥。请先处理 error finding 并重新检查。', summary: '质量错误阻止提交' }
         }
+        const validation = compilation.validation as { checkedRevision?: number; errorCount?: number; [key: string]: unknown } | null
+        if (
+          report.compilationId === compilation.id
+          && report.status === 'repaired'
+          && validation?.checkedRevision === compilation.chapter.revision - 1
+          && (validation.errorCount ?? 0) === 0
+        ) {
+          await prisma.storyCompilation.update({
+            where: { id: compilation.id },
+            data: {
+              validation: {
+                ...validation,
+                checkedRevision: compilation.chapter.revision,
+                checkedAt: new Date().toISOString(),
+                advancedBy: 'bounded_quality_repair_commit_reconcile',
+              } as Prisma.InputJsonValue,
+            },
+          })
+        }
       }
     }
-    const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...args })
+    const firstTask = compilation.sceneTasks[0]
+    const lastTask = compilation.sceneTasks.at(-1)
+    const lastExit = storyStateSchema.parse(args.exitState ?? lastTask?.exitState ?? {
+      action: lastTask?.turn || '', location: compilation.bridge.location, storyTime: compilation.bridge.storyTime,
+      knowledge: asStrings(compilation.bridge.knowledgeState), emotion: asStrings(compilation.bridge.emotionAftermath), body: asStrings(compilation.bridge.bodyState),
+      objects: asStrings(compilation.bridge.objectState), relationships: asStrings(compilation.bridge.relationshipState), openLoops: asStrings(compilation.bridge.openLoops),
+    })
+    const terminal = {
+      compilationId: compilation.id,
+      chapterSummary: args.chapterSummary?.trim() || compilation.sceneTasks.map((task) => `${task.purpose}；${task.turn}`).join('；').slice(0, 2000) || `${compilation.chapter.title}正文已完成。`,
+      exitState: lastExit,
+      lastUnfinishedAction: args.lastUnfinishedAction ?? lastExit.openLoops[0] ?? '',
+      hookDecision: args.hookDecision ?? lastExit.openLoops[0] ?? '',
+      delayedHookReason: args.delayedHookReason ?? '',
+      openingStructure: args.openingStructure?.trim() || `从${firstTask ? storyStateSchema.parse(firstTask.entryState).action || firstTask.purpose : '前章终态'}进入`,
+      endingStructure: args.endingStructure?.trim() || `以${lastTask?.turn || lastExit.action || '当前状态变化'}收束`,
+    }
+    const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...terminal })
     return {
       output: `COMMIT 完成，章节 ${result.chapterId}@r${result.chapterRevision} 的 Chapter Bridge、Scene Task 终态与故事记忆已原子对齐。下一章将直接召回本次终态。`,
       summary: '提交章节桥与故事终态',
       display: {
         kind: 'storyCompiler', compilationId: result.compilationId, phase: 'commit', title: '章节终态已提交',
-        detail: `r${result.chapterRevision}`, items: [args.chapterSummary, args.lastUnfinishedAction ? `未完成动作：${args.lastUnfinishedAction}` : '未留未完成动作', `结尾结构：${args.endingStructure}`],
+        detail: `r${result.chapterRevision}`, items: [terminal.chapterSummary, terminal.lastUnfinishedAction ? `未完成动作：${terminal.lastUnfinishedAction}` : '未留未完成动作', `结尾结构：${terminal.endingStructure}`],
       },
     }
   },

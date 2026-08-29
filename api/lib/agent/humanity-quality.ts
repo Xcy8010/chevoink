@@ -18,8 +18,8 @@ import { DataAccessError, prisma } from '../prisma.js'
 import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
 import { assertCraftOutputSafe } from './craft-library.js'
 
-export const HUMANITY_CRITIC_VERSION = 'humanity-critic.v1'
-export const MAX_QUALITY_REPAIR_ROUNDS = 2
+export const HUMANITY_CRITIC_VERSION = 'humanity-critic.v2'
+export const MAX_QUALITY_REPAIR_ROUNDS = 1
 
 export type LocatedQualityFinding = {
   signal: HumanityQualitySignal
@@ -173,6 +173,23 @@ export function analyzeDeterministicQuality(content: string, recentChapterTexts:
     seen.set(normalized, priorCount + 1)
   }
 
+  // 「」在本站正文里只承担人物话语或逐字引文标记。模型偶尔把它当成
+  // “圈重点”符号包住转场、画面或叙述过程；这类长片段可确定性定位，交给
+  // 局部修订器只去掉误用符号，不改正文事实与句子骨架。
+  const cornerQuoteMatcher = /「([^」\n]{18,360})」/g
+  let cornerQuote: RegExpExecArray | null
+  while ((cornerQuote = cornerQuoteMatcher.exec(content))) {
+    const inner = cornerQuote[1]
+    const narrationCue = /[（）()]|(?:镜头|画面|转场|那段|过程|一路|拐进|挤着|穿过|进入|走到|来到|门内|屋里)/.test(inner)
+    if (!narrationCue) continue
+    findings.push(evidenceFinding({
+      signal: 'punctuation_misuse', source: 'deterministic', severity: 'warning', confidence: 0.9,
+      start: cornerQuote.index, end: cornerQuote.index + cornerQuote[0].length, content,
+      explanation: '这段包含转场、画面或动作过程，却被「」整体包裹；「」不能作为叙述段落的视觉强调符号。',
+      suggestion: '保留原叙述内容，只移除误用的「」；人物直接说出或逐字引用的内容不改。',
+    }))
+  }
+
   const deduplicated = findings.filter((finding, index, all) =>
     all.findIndex((item) => item.signal === finding.signal && item.start === finding.start && item.end === finding.end) === index)
   return {
@@ -273,7 +290,12 @@ export async function persistHumanityQualityReport(input: {
   if (chapter.revision !== input.chapterRevision) throw new DataAccessError(409, 'QUALITY_SOURCE_STALE', '章节在质量检查期间已被修改，请基于最新版本重新检查。')
 
   const prior = await prisma.chapterQualityReport.findFirst({
-    where: { userId: input.userId, novelId: input.novelId, chapterId: input.chapterId },
+    where: {
+      userId: input.userId,
+      novelId: input.novelId,
+      chapterId: input.chapterId,
+      ...(input.runId ? { runId: input.runId } : input.compilationId ? { compilationId: input.compilationId } : {}),
+    },
     orderBy: { createdAt: 'desc' }, select: { repairRound: true },
   })
   const findings = [...input.deterministicFindings, ...locateCriticFindings(chapter.content, input.criticFindings)]
@@ -342,7 +364,7 @@ export async function applyQualityRepair(input: {
   replacements: Array<{ findingId: string; replacement: string }>
 }) {
   const report = await getQualityReport(input.userId, input.novelId, input.reportId)
-  if (report.repairRound >= MAX_QUALITY_REPAIR_ROUNDS) throw new DataAccessError(409, 'QUALITY_REPAIR_LIMIT', '自动修订最多两轮；请交由作者审阅。')
+  if (report.repairRound >= MAX_QUALITY_REPAIR_ROUNDS) throw new DataAccessError(409, 'QUALITY_REPAIR_LIMIT', '单次质量检查只允许一次自动局部修订；请交由作者审阅。')
   if (report.chapter.revision !== report.chapterRevision) throw new DataAccessError(409, 'QUALITY_REPORT_STALE', '章节已变化，请重新检查后再修订。')
   const findingById = new Map(report.findings.map((finding) => [finding.id, finding]))
   const patches = input.replacements.map((replacement) => {
@@ -374,8 +396,25 @@ export async function applyQualityRepair(input: {
     })
     if (write.count !== 1) throw new DataAccessError(409, 'QUALITY_REPORT_STALE', '章节在修订期间已变化，请重新检查。')
     await tx.qualityFinding.updateMany({ where: { reportId: report.id, id: { in: patches.map((patch) => patch.finding.id) } }, data: { disposition: 'repaired' } })
-    await tx.chapterQualityReport.update({ where: { id: report.id }, data: { status: 'repaired', repairRound: { increment: 1 } } })
-    return tx.chapter.findUniqueOrThrow({ where: { id: report.chapter.id } })
+    const updatedChapter = await tx.chapter.findUniqueOrThrow({ where: { id: report.chapter.id } })
+    await tx.chapterQualityReport.update({
+      where: { id: report.id },
+      data: { status: 'repaired', chapterRevision: updatedChapter.revision, repairRound: { increment: 1 }, checkedAt: new Date() },
+    })
+    if (report.compilationId) {
+      const compilation = await tx.storyCompilation.findFirst({
+        where: { id: report.compilationId, userId: input.userId, novelId: input.novelId, status: 'active' },
+        select: { validation: true },
+      })
+      const validation = compilation?.validation as { checkedRevision?: number; errorCount?: number; [key: string]: unknown } | null
+      if (compilation && validation?.checkedRevision === report.chapterRevision && (validation.errorCount ?? 0) === 0) {
+        await tx.storyCompilation.update({
+          where: { id: report.compilationId },
+          data: { validation: { ...validation, checkedRevision: updatedChapter.revision, checkedAt: new Date().toISOString(), advancedBy: 'bounded_quality_repair' } as Prisma.InputJsonValue },
+        })
+      }
+    }
+    return updatedChapter
   })
   const { recordWritingSignal } = await import('./writing-experiments.js')
   await recordWritingSignal(input.userId, input.novelId, 'quality_revision_round')

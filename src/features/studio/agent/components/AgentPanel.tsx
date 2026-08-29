@@ -134,10 +134,7 @@ export function AgentPanel({
     const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
     return saved === 'stable' || saved === 'bold' ? saved : 'balanced'
   })
-  const [qualityMode, setQualityMode] = useState<StoryCompilerMode>(() => {
-    if (typeof window === 'undefined') return 'balanced'
-    return window.localStorage.getItem(`chevoink:quality-mode:${novelId}`) === 'premium' ? 'premium' : 'balanced'
-  })
+  const qualityMode: StoryCompilerMode = 'premium'
   /** 用户气泡附件图片的大图预览 */
   const [attachmentPreview, setAttachmentPreview] = useState<{ url: string; name: string } | null>(null)
 
@@ -177,9 +174,6 @@ export function AgentPanel({
     window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
   }, [creativeFreedom, novelId])
 
-  useEffect(() => {
-    window.localStorage.setItem(`chevoink:quality-mode:${novelId}`, qualityMode)
-  }, [novelId, qualityMode])
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
   const blockInfoById = useMemo(() => {
@@ -1064,7 +1058,6 @@ export function AgentPanel({
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
           qualityMode={qualityMode}
-          onQualityModeChange={setQualityMode}
           onStop={() => void handleStop()}
         />
       </div>

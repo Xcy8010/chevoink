@@ -91,6 +91,20 @@ describe.skipIf(!dbAvailable)('Agent 3.0 合法文笔库闭环（需 DB）', () 
     expect(JSON.stringify(profileResponse.body)).not.toContain(AUTHOR_SAMPLE_BASE.slice(0, 30))
   })
 
+  it('支持上传受限 TXT/Markdown 自有样章建立 Style DNA', async () => {
+    const content = '她没有解释，只把账本翻到缺失的那一页。桌边的人停止争吵，开始核对日期与签名。'.repeat(35)
+    const response = await request(app).post(`/api/agent/novels/${novelId}/style-profile`).set('Cookie', cookie).send({
+      title: '上传的克制叙事样章',
+      chapterIds: [],
+      uploadedFile: { name: 'private-sample.md', size: Buffer.byteLength(content), content },
+      consent: true,
+    })
+    expect(response.status).toBe(201)
+    expect(response.body.data.profile.stats.sampleCount).toBe(1)
+    const document = await prisma.corpusDocument.findUniqueOrThrow({ where: { id: response.body.data.profile.documentId } })
+    expect(document.metadata).toMatchObject({ uploadedFile: { name: 'private-sample.md', size: Buffer.byteLength(content) } })
+  })
+
   it('公共来源必须先审批且具备原文存储权，才能受控导入并生成统计画像', async () => {
     const source = await prisma.corpusSource.create({ data: {
       name: '受控导入测试来源', sourceClass: 'licensed', rightsHolder: '测试权利方', license: 'Test-Commercial',

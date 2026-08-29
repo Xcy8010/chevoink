@@ -34,6 +34,8 @@ describe('Agent 3.0 合法文笔库与 Style DNA', () => {
     }).success).toBe(true)
     expect(corpusSourceCreateSchema.safeParse({ name: '来源', sourceClass: 'licensed' }).success).toBe(false)
     expect(styleSampleRequestSchema.safeParse({ title: '我的样章', chapterIds: ['c1'], consent: false }).success).toBe(false)
+    expect(styleSampleRequestSchema.safeParse({ title: '上传样章', chapterIds: [], uploadedFile: { name: 'sample.md', size: 600, content: '人物行动推动场景变化。'.repeat(30) }, consent: true }).success).toBe(true)
+    expect(styleSampleRequestSchema.safeParse({ title: '超限样章', chapterIds: [], uploadedFile: { name: 'sample.md', size: 512 * 1024 + 1, content: '文本'.repeat(120) }, consent: true }).success).toBe(false)
     expect(craftSearchQuerySchema.parse({ genre: '都市', sceneType: '谈判' }).limit).toBe(4)
     expect(isWhitelistedPublicLicense('public_domain', 'CC0-1.0')).toBe(true)
     expect(isWhitelistedPublicLicense('permissive', 'CC-BY-4.0')).toBe(true)

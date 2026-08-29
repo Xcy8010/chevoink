@@ -26,7 +26,6 @@ import type {
   AgentToolDisplayPayload,
 } from '../../../../../shared/contracts/index.js'
 import { stripAgentProtocolArtifacts } from '../../../../../shared/agent-output.js'
-import { fetchQualityReportState, resolveQualityFindingFeedback } from '../agentApi'
 
 /**
  * 消息 Parts 渲染器（plan/13 §5.3 + plan/20 §3.3）：
@@ -213,40 +212,8 @@ function StoryCompilerCard({ display }: { display: Extract<AgentToolDisplayPaylo
 
 function QualityReportCard({ display }: { display: Extract<AgentToolDisplayPayload, { kind: 'qualityReport' }> }) {
   const [expanded, setExpanded] = useState(display.findings.length > 0)
-  const [feedbacks, setFeedbacks] = useState<Record<string, string>>(() =>
-    Object.fromEntries(display.findings.filter((finding) => finding.authorFeedback).map((finding) => [finding.id, finding.authorFeedback!])),
-  )
-  const [dispositions, setDispositions] = useState<Record<string, string>>(() =>
-    Object.fromEntries(display.findings.map((finding) => [finding.id, finding.disposition])),
-  )
-  const [pendingId, setPendingId] = useState<string | null>(null)
-  const [error, setError] = useState('')
-  const warnings = display.findings.filter((finding) => finding.severity === 'warning' || finding.severity === 'error').length
-
-  const submitFeedback = useCallback(async (findingId: string, accepted: boolean) => {
-    setPendingId(findingId)
-    setError('')
-    try {
-      const result = await resolveQualityFindingFeedback(findingId, accepted)
-      if (result.finding.authorFeedback) setFeedbacks((current) => ({ ...current, [findingId]: result.finding.authorFeedback! }))
-    } catch (feedbackError) {
-      setError(feedbackError instanceof Error ? feedbackError.message : '反馈保存失败，请稍后重试。')
-    } finally {
-      setPendingId(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    void fetchQualityReportState(display.reportId).then(({ report }) => {
-      if (!active) return
-      setDispositions(Object.fromEntries(report.findings.map((finding) => [finding.id, finding.disposition])))
-      setFeedbacks(Object.fromEntries(report.findings.filter((finding) => finding.authorFeedback).map((finding) => [finding.id, finding.authorFeedback!])))
-    }).catch(() => {
-      // 历史报告可能已随作品删除；保留事件内的只读快照即可。
-    })
-    return () => { active = false }
-  }, [display.reportId])
+  const repaired = display.findings.filter((finding) => finding.disposition === 'repaired').length
+  const warnings = display.findings.filter((finding) => (finding.severity === 'warning' || finding.severity === 'error') && finding.disposition !== 'repaired').length
 
   return (
     <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
@@ -257,7 +224,7 @@ function QualityReportCard({ display }: { display: Extract<AgentToolDisplayPaylo
           <span className="block truncate text-[11px] text-[var(--text-secondary)]">r{display.chapterRevision} · 第 {display.repairRound} 轮修订 · {display.findings.length} 条证据</span>
         </span>
         <span className={cn('shrink-0 text-[11px]', warnings > 0 ? 'text-amber-500' : 'text-emerald-600')}>
-          {warnings > 0 ? `${warnings} 条需关注` : '通过'}
+          {warnings > 0 ? `${warnings} 条需关注` : repaired > 0 ? `已自动修复 ${repaired} 处` : '通过'}
         </span>
         {expanded ? <ChevronUp className="h-3.5 w-3.5 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 text-[var(--text-secondary)]" />}
       </button>
@@ -265,28 +232,18 @@ function QualityReportCard({ display }: { display: Extract<AgentToolDisplayPaylo
         <div className="space-y-2 border-t border-[var(--border-subtle)] px-3 py-2">
           {display.findings.length === 0 ? <p className="text-[11px] text-[var(--text-secondary)]">没有发现可定位的问题。</p> : null}
           {display.findings.map((finding) => {
-            const feedback = feedbacks[finding.id] ?? finding.authorFeedback
-            const disposition = dispositions[finding.id] ?? finding.disposition
-            const settled = feedback === 'accepted' || feedback === 'rejected'
             return (
-              <div key={finding.id} className="rounded-[10px] border border-[var(--border-subtle)] px-2.5 py-2">
+              <div key={finding.id} className="border-b border-[var(--border-subtle)] py-2 last:border-b-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className={cn('text-[11px] font-medium', finding.severity === 'warning' || finding.severity === 'error' ? 'text-amber-600' : 'text-[var(--text-secondary)]')}>{finding.label}</span>
-                  {settled ? <span className="text-[10px] text-[var(--text-secondary)]">{feedback === 'accepted' ? '已接受' : '已拒绝'}</span> : null}
+                  <span className="text-[10px] text-[var(--text-secondary)]">{finding.disposition === 'repaired' ? '已自动修复' : '审美建议'}</span>
                 </div>
                 <blockquote className="mt-1 border-l-2 border-[var(--border-subtle)] pl-2 text-[11px] leading-5 text-[var(--text-primary)]">{finding.evidence}</blockquote>
                 <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">{finding.explanation}</p>
                 <p className="mt-1 text-[11px] leading-5 text-[var(--text-primary)]">最小修法：{finding.suggestion}</p>
-                {!settled && disposition !== 'repaired' ? (
-                  <div className="mt-2 flex items-center gap-2">
-                    <button type="button" disabled={pendingId === finding.id} onClick={() => void submitFeedback(finding.id, true)} className="inline-flex h-7 items-center gap-1 rounded-[8px] border border-[var(--border-subtle)] px-2 text-[11px] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"><Check className="h-3 w-3" />接受</button>
-                    <button type="button" disabled={pendingId === finding.id} onClick={() => void submitFeedback(finding.id, false)} className="inline-flex h-7 items-center gap-1 rounded-[8px] border border-[var(--border-subtle)] px-2 text-[11px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"><ShieldX className="h-3 w-3" />拒绝</button>
-                  </div>
-                ) : null}
               </div>
             )
           })}
-          {error ? <p className="text-[11px] text-rose-500">{error}</p> : null}
         </div>
       ) : null}
     </div>
@@ -896,9 +853,9 @@ const ReasoningPart = memo(function ReasoningPart({
     })
   }, [streaming])
 
-  const visibleText = part.text.trimEnd()
-  const lines = visibleText.split('\n')
-  const summary = streaming ? lines.at(-1) ?? '' : lines[0] ?? ''
+  const visibleText = part.text.trim()
+  const meaningfulLines = visibleText.split('\n').map((line) => line.trim()).filter(Boolean)
+  const summary = (streaming ? meaningfulLines.at(-1) : meaningfulLines[0]) ?? (streaming ? '正在分析…' : '已完成分析')
 
   return (
     <div className="relative overflow-hidden" data-reasoning-running={streaming || undefined}>

@@ -40,7 +40,7 @@ export async function ensureWritingExperiment(input: {
       kind: input.kind,
       subjectHash,
       arm: input.arm,
-      featureVersions: { research: 'dossier.v1', prototype: 'first-three.v1', quality: 'humanity-critic.v1' },
+      featureVersions: { research: 'dossier.v1', prototype: 'first-three.v1', quality: 'humanity-critic.v2-auto' },
       exposure: input.exposure as Prisma.InputJsonValue,
       outcomes: {} as Prisma.InputJsonValue,
       consentSnapshot: { productAnalyticsEnabled: true, rawTextStored: false, anonymized: true },

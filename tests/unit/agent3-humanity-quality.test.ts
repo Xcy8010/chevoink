@@ -10,11 +10,19 @@ import { allTools } from '../../api/lib/agent/tools/registry.js'
 import { AGENT_TOOL_GOVERNANCE } from '../../api/lib/agent/tools/governance.js'
 
 describe('Agent 3.0 人类感质量契约与确定性检查', () => {
-  it('冻结十二类信号并把作者反馈与修订生命周期分离', () => {
-    expect(humanityQualitySignalSchema.options).toHaveLength(12)
+  it('冻结十三类信号并把作者反馈与修订生命周期分离', () => {
+    expect(humanityQualitySignalSchema.options).toHaveLength(13)
+    expect(humanityQualitySignalSchema.options).toContain('punctuation_misuse')
     expect(qualityFindingDispositionSchema.parse('repaired')).toBe('repaired')
     expect(() => qualityFindingDispositionSchema.parse('accepted')).toThrow()
     expect(qualityFindingFeedbackSchema.parse('accepted')).toBe('accepted')
+  })
+
+  it('把包裹叙述过程的直角引号识别为符号误用，但不误伤人物短对白', () => {
+    const source = '「别动。」\n他翻开记录本，看见上面写着「军卡进山那段（牛斗里人挤着人，一路穿过哨卡，最后拐进一扇铁门）」。'
+    const findings = analyzeDeterministicQuality(source).findings.filter((finding) => finding.signal === 'punctuation_misuse')
+    expect(findings).toHaveLength(1)
+    expect(findings[0].evidence).toContain('军卡进山那段')
   })
 
   it('不会仅因科幻术语、一次华丽句、口语断句或无悬念收束误报', () => {
@@ -39,15 +47,17 @@ describe('Agent 3.0 人类感质量契约与确定性检查', () => {
     expect(result.findings.every((finding) => finding.end - finding.start <= 360 && source.slice(finding.start, finding.end) === finding.evidence)).toBe(true)
   })
 
-  it('P3 工具全部进入统一注册表和治理清单', () => {
+  it('只向主 Agent 暴露单次自动质量门，旧选择/修订工具保留治理但不再暴露', () => {
     const names = new Set(allTools.map((tool) => tool.name))
-    for (const name of ['quality_analyze', 'quality_report_get', 'quality_findings_select', 'quality_revision_apply', 'quality_finding_feedback', 'character_voice_get', 'character_voice_save', 'experience_anchor_get', 'experience_anchor_save']) {
+    for (const name of ['quality_analyze', 'quality_report_get', 'quality_finding_feedback', 'character_voice_get', 'character_voice_save', 'experience_anchor_get', 'experience_anchor_save']) {
       expect(names.has(name), `${name} 未注册`).toBe(true)
       expect(name in AGENT_TOOL_GOVERNANCE, `${name} 未登记治理`).toBe(true)
     }
+    expect(names.has('quality_findings_select')).toBe(false)
+    expect(names.has('quality_revision_apply')).toBe(false)
+    expect('quality_findings_select' in AGENT_TOOL_GOVERNANCE).toBe(false)
+    expect('quality_revision_apply' in AGENT_TOOL_GOVERNANCE).toBe(false)
     expect(allTools.find((tool) => tool.name === 'quality_report_get')?.readOnly).toBe(true)
-    expect(allTools.find((tool) => tool.name === 'quality_revision_apply')?.permission.plan).toBe('deny')
-    expect(allTools.find((tool) => tool.name === 'quality_revision_apply')?.permission.review).toBe('deny')
   })
 
   it('同作品反馈至少三次后只校准 Critic 置信度，不抹掉正文证据', () => {

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const storyCompilerModeSchema = z.enum(['balanced', 'premium'])
+export const storyCompilerModeSchema = z.enum(['balanced', 'premium']).default('premium')
 export const storyCompilationStageSchema = z.enum(['prepare', 'beat', 'write', 'check', 'repair', 'commit'])
 export const storyCompilationStatusSchema = z.enum(['active', 'completed', 'abandoned', 'failed'])
 export const sceneTaskStatusSchema = z.enum(['ready', 'writing', 'completed', 'abandoned'])

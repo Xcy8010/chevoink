@@ -95,7 +95,7 @@ export function buildTaskSpec(input: {
     ],
     ambiguity: input.prompt.trim().length <= 2 ? 'must_ask' : 'safe_to_assume',
     creativeFreedom: input.creativeFreedom ?? 'balanced',
-    qualityMode: input.qualityMode ?? 'balanced',
+    qualityMode: input.qualityMode ?? 'premium',
     createdAt: new Date().toISOString(),
   }
 }

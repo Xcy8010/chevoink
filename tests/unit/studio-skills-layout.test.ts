@@ -24,4 +24,16 @@ describe('Agent 3.0 技能区跨端入口', () => {
     expect(workspace).toContain("mobileView === 'skills'")
     expect(workspace).toContain("setMobileView('skills')")
   })
+
+  it('技能区使用无填充工具图标、固定视口弹窗和 Style DNA 文件弹窗', () => {
+    const panel = read('src/features/studio/components/SkillsPanel.tsx')
+    const manager = read('src/features/studio/components/SkillManagerDialog.tsx')
+    const styleDialog = read('src/features/studio/components/StyleDnaDialog.tsx')
+    expect(panel).toContain('<Wrench')
+    expect(panel).not.toContain('<Sparkles')
+    expect(manager).toContain('createPortal')
+    expect(manager).toContain('md:w-[min(920px,calc(100vw-48px))]')
+    expect(styleDialog).toContain('单文件最大 512 KB')
+    expect(styleDialog).toContain('STYLE_SAMPLE_UPLOAD_MAX_BYTES')
+  })
 })

@@ -66,7 +66,7 @@ export const taskSpecSchema = z.object({
   postconditions: z.array(postconditionSchema).default([]),
   ambiguity: z.enum(['none', 'safe_to_assume', 'must_ask']),
   creativeFreedom: z.enum(['stable', 'balanced', 'bold']).default('balanced'),
-  qualityMode: storyCompilerModeSchema.default('balanced'),
+  qualityMode: storyCompilerModeSchema.default('premium'),
   createdAt: z.string().datetime(),
 })
 

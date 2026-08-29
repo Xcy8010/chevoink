@@ -377,7 +377,13 @@ router.post('/novels/:novelId/style-profile', async (req: Request, res: Response
     const userId = requireSessionUserId(req)
     requireAgent2Feature('craftLibrary', userId)
     const body = parseBody(styleSampleRequestSchema, req.body, '请选择自己的样章并明确同意仅用于当前作品 Style DNA。')
-    const profile = await extractAuthorStyleProfile({ userId, novelId: req.params.novelId, title: body.title, chapterIds: body.chapterIds })
+    const profile = await extractAuthorStyleProfile({
+      userId,
+      novelId: req.params.novelId,
+      title: body.title,
+      chapterIds: body.chapterIds,
+      uploadedFile: body.uploadedFile,
+    })
     res.status(201).json(buildSuccess(requestId, { profile }))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -653,7 +659,7 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       selection: body.selection ?? null,
       attachments: body.attachments ?? [],
       creativeFreedom: body.creativeFreedom ?? 'balanced',
-      qualityMode: body.qualityMode ?? 'balanced',
+      qualityMode: body.qualityMode ?? 'premium',
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {

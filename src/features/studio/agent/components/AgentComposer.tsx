@@ -46,7 +46,6 @@ type AgentComposerProps = {
   creativeFreedom: CreativeFreedom
   onCreativeFreedomChange: (value: CreativeFreedom) => void
   qualityMode: StoryCompilerMode
-  onQualityModeChange: (value: StoryCompilerMode) => void
 }
 
 type ParsedComposerContent = {
@@ -152,7 +151,7 @@ function insertPlainText(root: HTMLDivElement, value: string): void {
   selection.addRange(range)
 }
 
-export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange, qualityMode, onQualityModeChange }: AgentComposerProps) {
+export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange, qualityMode }: AgentComposerProps) {
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
   const attachments = useAgentStore((state) => state.composerAttachments)
@@ -463,17 +462,6 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
             <option value="stable">稳定延续</option>
             <option value="balanced">平衡创作</option>
             <option value="bold">大胆探索</option>
-          </select>
-          <select
-            value={qualityMode}
-            onChange={(event) => onQualityModeChange(event.target.value as StoryCompilerMode)}
-            disabled={running || disabled}
-            aria-label="创作质量模式"
-            title="平衡模式单次连续性复核；精品模式双视角复核并允许内部候选竞争"
-            className="h-7 rounded-full border-0 bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] disabled:opacity-45"
-          >
-            <option value="balanced">平衡</option>
-            <option value="premium">精品</option>
           </select>
           <button
             type="button"

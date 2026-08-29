@@ -137,6 +137,7 @@ export async function extractAuthorStyleProfile(input: {
   novelId: string
   title: string
   chapterIds: string[]
+  uploadedFile?: { name: string; size: number; content: string }
 }): Promise<{ profileId: string; sourceId: string; documentId: string; stats: StyleStats }> {
   await assertOwnedNovel(input.userId, input.novelId)
   const dataControl = await prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId: input.userId, novelId: input.novelId } }, select: { privateStyleEnabled: true } })
@@ -148,13 +149,20 @@ export async function extractAuthorStyleProfile(input: {
     select: { id: true, title: true, content: true, revision: true },
   })
   if (chapters.length !== uniqueIds.length) throw new DataAccessError(404, 'STYLE_SAMPLE_CHAPTER_NOT_FOUND', '至少一个样章不存在或不属于当前作品。')
-  const samples = chapters.map((chapter) => chapter.content.trim()).filter(Boolean)
+  const uploadedSample = input.uploadedFile?.content.trim() ?? ''
+  const samples = [
+    ...chapters.map((chapter) => chapter.content.trim()).filter(Boolean),
+    ...(uploadedSample ? [uploadedSample] : []),
+  ]
   const totalChars = samples.reduce((sum, sample) => sum + normalizeText(sample).length, 0)
   if (totalChars < AUTHOR_SAMPLE_MIN_CHARS) {
     throw new DataAccessError(400, 'STYLE_SAMPLE_TOO_SHORT', `作者样章至少需要 ${AUTHOR_SAMPLE_MIN_CHARS} 个有效字符。`)
   }
   const stats = extractStyleStats(samples)
-  const contentHash = sha256(chapters.map((chapter) => `${chapter.id}:${chapter.revision}:${sha256(chapter.content)}`).join('|'))
+  const contentHash = sha256([
+    ...chapters.map((chapter) => `${chapter.id}:${chapter.revision}:${sha256(chapter.content)}`),
+    ...(input.uploadedFile ? [`upload:${input.uploadedFile.name}:${input.uploadedFile.size}:${sha256(uploadedSample)}`] : []),
+  ].join('|'))
   const passages = splitPassages(samples)
   const result = await prisma.$transaction(async (tx) => {
     const source = await tx.corpusSource.create({
@@ -172,7 +180,7 @@ export async function extractAuthorStyleProfile(input: {
         rawStorageAllowed: true,
         indexAllowed: true,
         rightsStatus: 'approved',
-        rightsEvidence: '作者在当前作品内主动选择章节并明确同意生成私有 Style DNA；不得跨作者或跨作品召回。',
+        rightsEvidence: '作者在当前作品内主动选择自有章节或上传自有 TXT/Markdown 样章，并明确同意生成私有 Style DNA；不得跨作者或跨作品召回。',
         auditNote: '作者自有内容，仅限本作品。',
         auditedAt: new Date(),
       },
@@ -188,7 +196,10 @@ export async function extractAuthorStyleProfile(input: {
         rawStorageAllowed: true,
         indexAllowed: true,
         status: 'indexed',
-        metadata: { chapters: chapters.map((chapter) => ({ id: chapter.id, revision: chapter.revision, title: chapter.title })) },
+        metadata: {
+          chapters: chapters.map((chapter) => ({ id: chapter.id, revision: chapter.revision, title: chapter.title })),
+          uploadedFile: input.uploadedFile ? { name: input.uploadedFile.name, size: input.uploadedFile.size } : null,
+        },
         passages: {
           create: passages.map((passage, ordinal) => ({
             userId: input.userId,

@@ -100,7 +100,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
     expect(after.findings[0]).toMatchObject({ disposition: 'repaired', authorFeedback: 'accepted' })
   })
 
-  it('每次修订都重新绑定最新 revision，并在两轮后硬停止自动循环', async () => {
+  it('局部修订绑定最新 revision，并阻止第二轮自动循环', async () => {
     const secondChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
     const second = await persistHumanityQualityReport({
       userId, novelId, runId, chapterId, chapterRevision: secondChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
@@ -108,16 +108,6 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
     })
     expect(second.repairRound).toBe(1)
     await selectQualityFindings(userId, novelId, second.id, [second.findings[0].id])
-    const twice = await applyQualityRepair({ userId, novelId, reportId: second.id, replacements: [{ findingId: second.findings[0].id, replacement: '林舟把钥匙塞回袖口，转身去关窗。' }] })
-    expect(twice.updated.revision).toBe(3)
-
-    const thirdChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
-    const third = await persistHumanityQualityReport({
-      userId, novelId, runId, chapterId, chapterRevision: thirdChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
-      criticFindings: [{ signal: 'reader_pull', severity: 'warning', quote: '转身去关窗。', explanation: '测试第三轮。', suggestion: '不应自动修。', confidence: 0.8 }],
-    })
-    expect(third.repairRound).toBe(2)
-    await selectQualityFindings(userId, novelId, third.id, [third.findings[0].id])
-    await expect(applyQualityRepair({ userId, novelId, reportId: third.id, replacements: [{ findingId: third.findings[0].id, replacement: '停下。' }] })).rejects.toMatchObject({ code: 'QUALITY_REPAIR_LIMIT' })
+    await expect(applyQualityRepair({ userId, novelId, reportId: second.id, replacements: [{ findingId: second.findings[0].id, replacement: '林舟把钥匙塞回袖口，转身去关窗。' }] })).rejects.toMatchObject({ code: 'QUALITY_REPAIR_LIMIT' })
   })
 })

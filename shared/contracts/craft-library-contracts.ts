@@ -46,10 +46,28 @@ export const styleStatsSchema = z.object({
 })
 export type StyleStats = z.infer<typeof styleStatsSchema>
 
+export const STYLE_SAMPLE_UPLOAD_MAX_BYTES = 512 * 1024
+export const STYLE_SAMPLE_UPLOAD_MAX_CHARS = 120_000
+
+export const styleSampleUploadSchema = z.object({
+  name: z.string().trim().min(1).max(255).refine((name) => /\.(?:txt|md|markdown)$/i.test(name), '仅支持 TXT、MD 或 Markdown 文件'),
+  size: z.number().int().positive().max(STYLE_SAMPLE_UPLOAD_MAX_BYTES),
+  content: z.string().trim().min(200).max(STYLE_SAMPLE_UPLOAD_MAX_CHARS),
+}).superRefine((file, refinement) => {
+  if (new TextEncoder().encode(file.content).byteLength > STYLE_SAMPLE_UPLOAD_MAX_BYTES) {
+    refinement.addIssue({ code: 'custom', path: ['content'], message: '上传文件不能超过 512 KB' })
+  }
+})
+
 export const styleSampleRequestSchema = z.object({
   title: z.string().trim().min(1).max(160),
-  chapterIds: z.array(z.string().min(1)).min(1).max(12),
+  chapterIds: z.array(z.string().min(1)).max(12).default([]),
+  uploadedFile: styleSampleUploadSchema.optional(),
   consent: z.literal(true),
+}).superRefine((value, refinement) => {
+  if (value.chapterIds.length === 0 && !value.uploadedFile) {
+    refinement.addIssue({ code: 'custom', path: ['chapterIds'], message: '请至少选择一个章节或上传一个样章文件' })
+  }
 })
 export type StyleSampleRequest = z.infer<typeof styleSampleRequestSchema>
 

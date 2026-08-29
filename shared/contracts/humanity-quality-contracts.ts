@@ -13,6 +13,7 @@ export const humanityQualitySignalSchema = z.enum([
   'causal_gap',
   'chapter_bridge',
   'reader_pull',
+  'punctuation_misuse',
 ])
 
 export const qualityFindingSeveritySchema = z.enum(['advisory', 'warning', 'error'])
