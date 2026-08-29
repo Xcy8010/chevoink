@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, History, MessageSquareText, User } from 'lucide-react'
@@ -46,6 +46,15 @@ type RenderPart = {
   summary?: string
   name?: string
   url?: string
+  display?: {
+    kind?: string
+    items?: Array<{ content?: string; status?: string }>
+    markdown?: string
+    summary?: string
+    detail?: string
+    before?: string
+    after?: string
+  }
 }
 
 /** AI 思考过程：默认折叠，点击标题栏展开正文，避免整段推理占满聊天卡片 */
@@ -70,6 +79,52 @@ function ReasoningCollapsible({ text }: { text: string }) {
   )
 }
 
+const TODO_STATUS_MARK: Record<string, string> = {
+  completed: '[x]',
+  in_progress: '[进行中]',
+  pending: '[ ]',
+}
+
+function renderToolDisplay(part: RenderPart): ReactNode {
+  const display = part.display
+  if (!display) return null
+  if (display.kind === 'todoList' && Array.isArray(display.items)) {
+    return (
+      <div className="space-y-1">
+        {display.items.map((item, index) => (
+          <p key={index} className="flex items-start gap-1.5 text-xs leading-5">
+            <span className="shrink-0 text-[var(--text-tertiary)]">{TODO_STATUS_MARK[item.status ?? 'pending'] ?? '[ ]'}</span>
+            <span className="text-[var(--text-primary)]">{item.content}</span>
+          </p>
+        ))}
+      </div>
+    )
+  }
+  const text = display.markdown ?? display.summary ?? display.detail
+  if (text) {
+    return <p className="whitespace-pre-wrap text-xs leading-5 text-[var(--text-secondary)]">{text}</p>
+  }
+  return <p className="whitespace-pre-wrap text-xs leading-5 text-[var(--text-secondary)]">{JSON.stringify(display, null, 2)}</p>
+}
+
+function ToolCallCollapsible({ part }: { part: RenderPart }) {
+  const [open, setOpen] = useState(false)
+  if (!part.display) return null
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>{open ? '收起详情' : '查看详情'}</span>
+      </button>
+      {open ? <div className="mt-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)]/40 px-2 py-1.5">{renderToolDisplay(part)}</div> : null}
+    </div>
+  )
+}
+
 function renderPart(part: RenderPart, index: number) {
   if (part.type === 'text' && part.text) {
     return (
@@ -89,6 +144,7 @@ function renderPart(part: RenderPart, index: number) {
         {part.status ? (
           <StatusPill tone={part.status === 'success' ? 'success' : part.status === 'failed' ? 'danger' : 'neutral'}>{part.status}</StatusPill>
         ) : null}
+        <ToolCallCollapsible part={part} />
       </div>
     )
   }

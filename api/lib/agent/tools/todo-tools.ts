@@ -31,16 +31,6 @@ const todoWriteParameters = z.object({
     .describe('完整的待办清单（全量替换，不是增量）。更新单项状态时也必须把其余项原样带上，否则会丢失'),
 })
 
-function parseTodoArtifact(content: string | null | undefined): AgentTodoItem[] {
-  if (!content) return []
-  try {
-    const parsed = JSON.parse(content) as AgentTodoItem[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
 /**
  * 待办进度状态机：一次只能真实完成一项，且必须先进入进行中。
  * 这是服务端纪律线，避免模型在收尾时一次性把整张清单全部打勾。
@@ -156,7 +146,10 @@ export const todoWriteTool = defineTool({
     const metadata = existing?.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
       ? existing.metadata as Record<string, unknown>
       : {}
-    const previous = metadata.todoRunId === ctx.runId ? parseTodoArtifact(existing?.content) : []
+    // 待办前态以「注入模型的同一真相源」为准（loadSessionTodoItems 优先取消息里最后一次成功
+    // 的 todo_write 清单），跨 run / 续跑也能拿到真实前态；避免 artifact 副本停在旧任务导致
+    // previous 退化为空，从而把本应已完成的旧项误判为本轮“一次完成多项”而被拒。
+    const previous = await loadSessionTodoItems(ctx.sessionId)
     const items = args.items as AgentTodoItem[]
     const progressionError = validateTodoProgression(previous, items)
     if (progressionError) throw new Error(progressionError)

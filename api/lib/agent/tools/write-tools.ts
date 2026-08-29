@@ -87,6 +87,31 @@ export const planSaveTool = defineTool({
 
     let obj = raw as Record<string, unknown>
 
+    // 模型偶发把参数包在 arguments/args/params 键里（把 function calling 内部结构当成参数），
+    // 或该键值为字符串化 JSON：优先解包一层，避免「参数校验失败」把整次写入作废
+    const unwrapWrapped = (record: unknown): Record<string, unknown> | null => {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) return null
+      const candidate = record as Record<string, unknown>
+      return candidate.title !== undefined || candidate.content !== undefined ? candidate : null
+    }
+    for (const wrapKey of ['arguments', 'args', 'params', 'parameter'] as const) {
+      const wrapped = obj[wrapKey]
+      const direct = unwrapWrapped(wrapped)
+      if (direct) {
+        obj = { ...direct, planId: obj.planId ?? direct.planId }
+        break
+      }
+      if (typeof wrapped === 'string' && wrapped.trim().startsWith('{')) {
+        try {
+          const parsed = unwrapWrapped(JSON.parse(wrapped))
+          if (parsed) {
+            obj = { ...parsed, planId: obj.planId ?? parsed.planId }
+            break
+          }
+        } catch { /* 非法 JSON 走下方正常校验 */ }
+      }
+    }
+
     // 模型偶发把参数嵌套一层（如 {"plan": {...}}）：根层缺 title/content 时展平
     if (obj.title === undefined && obj.content === undefined) {
       const nested = Object.values(obj).find(
