@@ -9,6 +9,7 @@ import { placeCreatedChapter, resolveChapterPlacement } from '../../data/volume.
 import { enqueueChapterMemoryExtraction } from '../story-memory.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { resolveAgentChapterVolumeId } from './chapter-placement.js'
+import { recordStoryCompilerWrite } from '../story-compiler.js'
 
 /**
  * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
@@ -118,6 +119,16 @@ async function writeChapterContent(
   if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
     await enqueueChapterMemoryExtraction({
       novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: updated.revision, before, after,
+    })
+  }
+  if (isAgent2FeatureEnabled('storyCompiler', ctx.userId)) {
+    await recordStoryCompilerWrite({
+      userId: ctx.userId,
+      novelId: ctx.novelId,
+      runId: ctx.runId,
+      chapterId: updated.id,
+      chapterOrderIndex: updated.orderIndex,
+      chapterRevision: updated.revision,
     })
   }
 
@@ -234,6 +245,16 @@ export const chapterCreateTool = defineTool({
     if (content && isAgent2FeatureEnabled('memory2', ctx.userId)) {
       await enqueueChapterMemoryExtraction({
         novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: content,
+      })
+    }
+    if (content && isAgent2FeatureEnabled('storyCompiler', ctx.userId)) {
+      await recordStoryCompilerWrite({
+        userId: ctx.userId,
+        novelId: ctx.novelId,
+        runId: ctx.runId,
+        chapterId: chapter.id,
+        chapterOrderIndex: chapter.orderIndex,
+        chapterRevision: chapter.revision,
       })
     }
 
@@ -377,6 +398,16 @@ export const chapterEditRangeTool = defineTool({
     if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
       await enqueueChapterMemoryExtraction({
         novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: updated.revision, before, after,
+      })
+    }
+    if (isAgent2FeatureEnabled('storyCompiler', ctx.userId)) {
+      await recordStoryCompilerWrite({
+        userId: ctx.userId,
+        novelId: ctx.novelId,
+        runId: ctx.runId,
+        chapterId: updated.id,
+        chapterOrderIndex: updated.orderIndex,
+        chapterRevision: updated.revision,
       })
     }
 

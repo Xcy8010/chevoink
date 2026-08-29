@@ -110,6 +110,7 @@ export async function startLoopRun(
     selection: input.selection ?? null,
     attachments: input.attachments ?? [],
     creativeFreedom: input.creativeFreedom ?? 'balanced',
+    qualityMode: input.qualityMode ?? 'balanced',
   })
 
   return {

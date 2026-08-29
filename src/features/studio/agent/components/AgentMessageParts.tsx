@@ -179,6 +179,37 @@ function PlanCard({ display }: { display: Extract<AgentToolDisplayPayload, { kin
   )
 }
 
+const storyCompilerPhaseLabel = {
+  charter: '创作宪章', prepare: '准备', beat: '场景', write: '写作', check: '检查', repair: '修补', commit: '提交',
+} as const
+
+function StoryCompilerCard({ display }: { display: Extract<AgentToolDisplayPayload, { kind: 'storyCompiler' }> }) {
+  const [expanded, setExpanded] = useState(display.errorCount !== undefined && display.errorCount > 0)
+  const hasProblems = (display.errorCount ?? 0) > 0 || (display.warningCount ?? 0) > 0
+  return (
+    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
+        <Brain className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-[var(--text-primary)]">{display.title}</span>
+          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{storyCompilerPhaseLabel[display.phase]} · {display.detail}</span>
+        </span>
+        {hasProblems ? (
+          <span className={cn('shrink-0 text-[11px]', (display.errorCount ?? 0) > 0 ? 'text-rose-500' : 'text-amber-500')}>
+            {(display.errorCount ?? 0) > 0 ? `${display.errorCount} 错误` : `${display.warningCount} 警告`}
+          </span>
+        ) : null}
+        {expanded ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
+      </button>
+      {expanded && display.items.length > 0 ? (
+        <ul className="space-y-1 border-t border-[var(--border-subtle)] px-3 py-2">
+          {display.items.map((item, index) => <li key={`${index}-${item}`} className="break-words text-[11px] leading-5 text-[var(--text-secondary)]">{item}</li>)}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 function CoverImagesCard({
   display,
 }: {
@@ -485,6 +516,8 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       return <DiffCard display={display} />
     case 'plan':
       return <PlanCard display={display} />
+    case 'storyCompiler':
+      return <StoryCompilerCard display={display} />
     case 'coverImages':
       return <CoverImagesCard display={display} />
     case 'webSearch':

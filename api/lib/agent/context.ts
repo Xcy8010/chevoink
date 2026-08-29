@@ -18,6 +18,7 @@ import {
 import { renderTaskSpec } from './task-spec.js'
 import { searchStoryMemory } from './story-memory.js'
 import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
+import { buildStoryCompilerDigest } from './story-compiler.js'
 
 /**
  * Context Manager（plan/13 §4.4 / §4.5）。
@@ -63,11 +64,12 @@ const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规
 12. 找类似作品走特征词而非拆书名：作者要找类似/同类/同风格作品时，先用 platform_novel_read 读参考作品的标签、分类与简介，提炼题材特征词（标签/分类/核心题材），用特征词调 platform_novel_search 搜同类候选并对比标签与简介判断相似度，严禁把参考作品书名逐字拆分穷举搜索；站内没有合适候选时用 web_search 搜站外类似作品推荐（如「《x》 类似作品 推荐」或题材词+小说推荐），摘要不足用 web_read 深读，推荐时注明来源。
 13. 字数用工具数据不手数：任何字数核对（是否达到作者要求、改动前后篇幅）一律引用工具返回的字数；改写片段用 chapter_edit_range 传 oldText 锚点定位，严禁在思考信道逐字计数算下标。
 14. 全书改动必须走变更集：改名、术语替换、跨章批量修改先 project_search / impact_analyze，再 bulk_replace_preview 或 entity_rename_preview；向作者展示 ChangeSet 后才 changeset_apply。禁止逐章读取、逐章整段覆盖，应用后用 project_search 和 structure_validate 验证。
-15. 会话原文按需检索：正常任务直接使用当前历史与压缩检查点，严禁每轮例行扫描会话。只有作者明确要求核对/引用早前原话（如“第一条提示词是什么”“你之前完整回复了什么”），或系统明确提示早前消息未进入当前窗口且当前任务依赖该细节时，才用 session_history_search 定位；需要完整内容再用 session_message_read 按消息读取。没有查到时如实说明，禁止根据摘要或记忆猜测原话。`
+15. 会话原文按需检索：正常任务直接使用当前历史与压缩检查点，严禁每轮例行扫描会话。只有作者明确要求核对/引用早前原话（如“第一条提示词是什么”“你之前完整回复了什么”），或系统明确提示早前消息未进入当前窗口且当前任务依赖该细节时，才用 session_history_search 定位；需要完整内容再用 session_message_read 按消息读取。没有查到时如实说明，禁止根据摘要或记忆猜测原话。
+16. 完整章节走 Story Compiler：新增完整章节、较长续写或整章重写时，依次执行 story_compiler_prepare → scene_task_build → 章节写入 → continuity_validate →（只修有证据错误，必要时）→ chapter_bridge_commit。质量模式 balanced 只提交一个确定推进并做一次独立复核；premium 必须先比较 2–3 个推进候选、记录取舍，再做双视角独立复核。局部选区润色/纠错、改标题、改元数据不触发，禁止把简单任务复杂化；若工具开关未启用则沿用旧写作流程。`
 
 const MODE_CONTRACTS: Record<AgentExecutionMode, string> = {
   plan: `当前模式：Plan（规划）。
-你只能使用只读工具做分析与规划。回顾既有计划用只读的 plan_read，禁止用 plan_save 重写一遍来代替读取。规划前若存在影响方向的关键不确定点，先用 ask_user 工具向作者提问（给出 2-4 个候选方向），拿到回答再规划；禁止在回复正文里罗列问题和选项让作者「回复数字选择」。产出规划文档时必须调用 plan_save 把完整计划写入「计划」文件夹；plan_save 落盘后本次规划任务即完成，正文只允许一句话交代已写入/已更新哪份计划，禁止复述计划内容。作者回答提问后是修订既有计划（plan_save 带 planId），不是重新生成一份。只改计划名字用 plan_rename，作者要求删除某份计划用 plan_delete，两者都禁止用 plan_save 另存新副本。如果后续还需要切换到 Build 执行写作，再调用 plan_exit 提交执行步骤等待用户确认。不要输出“我现在开始写”之类的执行承诺，也不要在正文里复述或讨论本模式的规则。`,
+你只能使用只读工具做分析与规划。回顾既有计划用只读的 plan_read，禁止用 plan_save 重写一遍来代替读取。作者从一句题材描述开始规划新书、长纲或前三章时，先用 story_charter_get 检查；缺少宪章则在澄清关键方向后用 story_charter_save 建立 Story Charter，并用 reader_promise_save 记录真正需要长期兑现的承诺，再生成计划，禁止从一句题材直接跳到模板化长纲。规划前若存在影响方向的关键不确定点，先用 ask_user 工具向作者提问（给出 2-4 个候选方向），拿到回答再规划；禁止在回复正文里罗列问题和选项让作者「回复数字选择」。产出规划文档时必须调用 plan_save 把完整计划写入「计划」文件夹；plan_save 落盘后本次规划任务即完成，正文只允许一句话交代已写入/已更新哪份计划，禁止复述计划内容。作者回答提问后是修订既有计划（plan_save 带 planId），不是重新生成一份。只改计划名字用 plan_rename，作者要求删除某份计划用 plan_delete，两者都禁止用 plan_save 另存新副本。如果后续还需要切换到 Build 执行写作，再调用 plan_exit 提交执行步骤等待用户确认。不要输出“我现在开始写”之类的执行承诺，也不要在正文里复述或讨论本模式的规则。`,
   build: `当前模式：Build（执行）。
 你可以调用全部授权工具完成任务。写入类操作会直接落库并生成 diff 供用户审阅；高危操作在确认作者意图明确后直接执行（意图不明先 ask_user）。执行完毕用不超过 2 句话的纯文本总结结果即可，不要罗列细节；例外：作者诉求本身是提问/检查/对比/分析/汇报类时，正文必须完整、结构化地输出答案或结果清单，不受 2 句话限制。`,
   review: `当前模式：Review（审阅）。
@@ -303,7 +305,8 @@ export type AssembledAgentContext = {
 
 export async function assembleContext(input: AssembleContextInput): Promise<AssembledAgentContext> {
   const checkpointState = await loadContextCheckpoint(input.sessionId)
-  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags] = await Promise.all([
+  const storyCompilerFeatureEnabled = isAgent2FeatureEnabled('storyCompiler', input.userId)
+  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags, storyCompilerDigest] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
     buildStoryMemoryDigest(input.userId, input.novelId, input.prompt),
     buildPlanFolderDigest(input.userId, input.novelId),
@@ -318,6 +321,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
         })
       : Promise.resolve(null),
     prisma.novel.findUnique({ where: { id: input.novelId }, select: { tagNames: true } }),
+    storyCompilerFeatureEnabled
+      ? buildStoryCompilerDigest(input.userId, input.novelId, input.chapterId)
+      : Promise.resolve(null),
   ])
 
   // Skill OS 3.0：服务端确定性召回并完整加载本轮 Skill，模型不再自行决定“要不要加载”。
@@ -353,6 +359,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     memoryDigest,
     planDigest,
     coverDigest,
+    storyCompilerDigest,
     checkpointState.checkpoint ? renderCheckpointDigest(checkpointState.checkpoint) : null,
     renderDirectiveDigest(directives),
     chapter

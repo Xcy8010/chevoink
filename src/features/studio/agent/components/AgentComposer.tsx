@@ -15,7 +15,7 @@ import {
   MAX_AGENT_IMAGE_COUNT,
   type AgentAttachmentMeta,
 } from '../../../../../shared/contracts/agent-attachments.js'
-import type { CreativeFreedom } from '../../../../../shared/contracts/index.js'
+import type { CreativeFreedom, StoryCompilerMode } from '../../../../../shared/contracts/index.js'
 import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agent-attachments'
 import { uploadAgentAttachment } from '../agentApi'
 import { useAgentStore, type ComposerReference } from '../agentStore'
@@ -41,10 +41,12 @@ type AgentComposerProps = {
   running: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
-  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom) => Promise<void> | void
+  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode) => Promise<void> | void
   onStop: () => void
   creativeFreedom: CreativeFreedom
   onCreativeFreedomChange: (value: CreativeFreedom) => void
+  qualityMode: StoryCompilerMode
+  onQualityModeChange: (value: StoryCompilerMode) => void
 }
 
 type ParsedComposerContent = {
@@ -150,7 +152,7 @@ function insertPlainText(root: HTMLDivElement, value: string): void {
   selection.addRange(range)
 }
 
-export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange }: AgentComposerProps) {
+export function AgentComposer({ running, disabled = false, onSend, onStop, creativeFreedom, onCreativeFreedomChange, qualityMode, onQualityModeChange }: AgentComposerProps) {
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
   const attachments = useAgentStore((state) => state.composerAttachments)
@@ -301,7 +303,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
     const pending = attachments
     setSending(true)
     try {
-      await onSend(effectivePrompt, pending, creativeFreedom)
+      await onSend(effectivePrompt, pending, creativeFreedom, qualityMode)
       setComposerContent('', [])
       setAttachments([])
       setAttachError(null)
@@ -461,6 +463,17 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
             <option value="stable">稳定延续</option>
             <option value="balanced">平衡创作</option>
             <option value="bold">大胆探索</option>
+          </select>
+          <select
+            value={qualityMode}
+            onChange={(event) => onQualityModeChange(event.target.value as StoryCompilerMode)}
+            disabled={running || disabled}
+            aria-label="创作质量模式"
+            title="平衡模式单次连续性复核；精品模式双视角复核并允许内部候选竞争"
+            className="h-7 rounded-full border-0 bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] disabled:opacity-45"
+          >
+            <option value="balanced">平衡</option>
+            <option value="premium">精品</option>
           </select>
           <button
             type="button"

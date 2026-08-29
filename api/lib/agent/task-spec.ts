@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { TaskIntent, TaskSpec, UserDirective } from '../../../shared/contracts/index.js'
 import type { CreativeFreedom } from '../../../shared/contracts/index.js'
+import type { StoryCompilerMode } from '../../../shared/contracts/index.js'
 
 type DirectiveCandidate = Pick<UserDirective, 'kind' | 'text'>
 
@@ -50,6 +51,7 @@ export function buildTaskSpec(input: {
   prompt: string
   selection?: { start?: number; end?: number } | null
   creativeFreedom?: CreativeFreedom
+  qualityMode?: StoryCompilerMode
 }): TaskSpec {
   const intent = classifyIntent(input.prompt)
   const requiresStructureValidation = intent === 'structure' || /(?:续写|写完|补完|完成|写到).{0,12}第?[一二两三四五六七八九十百千0-9]+卷|第?[一二两三四五六七八九十百千0-9]+卷.{0,12}(?:续写|写完|补完|完成)/.test(input.prompt)
@@ -93,11 +95,12 @@ export function buildTaskSpec(input: {
     ],
     ambiguity: input.prompt.trim().length <= 2 ? 'must_ask' : 'safe_to_assume',
     creativeFreedom: input.creativeFreedom ?? 'balanced',
+    qualityMode: input.qualityMode ?? 'balanced',
     createdAt: new Date().toISOString(),
   }
 }
 
 export function renderTaskSpec(spec: TaskSpec): string {
   const hard = spec.hardConstraints.map((item) => `- ${item.text}`).join('\n') || '- 无'
-  return `[系统] 本轮任务契约（taskSpecId=${spec.id}）：\n意图：${spec.intent}\n目标：${spec.goals.join('；')}\n硬约束：\n${hard}\n预期交付：${spec.expectedOutputs.map((item) => item.description).join('；')}\n完成前必须验证：${spec.postconditions.map((item) => item.description).join('；') || '按用户目标核验结果'}。`
+  return `[系统] 本轮任务契约（taskSpecId=${spec.id}）：\n意图：${spec.intent}\n目标：${spec.goals.join('；')}\n创作自由度：${spec.creativeFreedom}；质量模式：${spec.qualityMode}\n硬约束：\n${hard}\n预期交付：${spec.expectedOutputs.map((item) => item.description).join('；')}\n完成前必须验证：${spec.postconditions.map((item) => item.description).join('；') || '按用户目标核验结果'}。`
 }

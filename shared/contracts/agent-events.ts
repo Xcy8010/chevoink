@@ -66,6 +66,16 @@ export type AgentToolDisplayPayload =
     }
   | { kind: 'todoList'; items: AgentTodoItem[] }
   | {
+      kind: 'storyCompiler'
+      compilationId?: EntityId
+      phase: 'charter' | 'prepare' | 'beat' | 'write' | 'check' | 'repair' | 'commit'
+      title: string
+      detail: string
+      items: string[]
+      errorCount?: number
+      warningCount?: number
+    }
+  | {
       kind: 'changeSet'
       changeSetId: EntityId
       status: 'draft' | 'approved' | 'applying' | 'applied' | 'conflicted' | 'failed' | 'rolled_back'
@@ -260,6 +270,7 @@ export interface StartAgentLoopRunRequest {
   /** 本轮附带附件元数据（先经 POST /api/agent/attachments 落盘，run 只带元数据） */
   attachments?: AgentAttachmentMeta[]
   creativeFreedom?: CreativeFreedom
+  qualityMode?: import('./story-compiler-contracts.js').StoryCompilerMode
 }
 
 export type CreativeFreedom = 'stable' | 'balanced' | 'bold'

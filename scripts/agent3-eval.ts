@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 
 import { CN_FICTION_EVAL_SCENARIOS, CN_FICTION_EVAL_VERSION } from '../tests/agent-evals/cn-fiction-scenarios.js'
 import { evaluateSkillRouting } from '../tests/agent-evals/cn-fiction-metrics.js'
+import { evaluateFiftyChapterBridge } from '../tests/agent-evals/chapter-bridge-metrics.js'
 
 function readGitSha(): string {
   try {
@@ -23,6 +24,7 @@ const report = {
   skillCatalogVersion: '3.0.0',
   generatedAt: new Date().toISOString(),
   routing: evaluateSkillRouting(CN_FICTION_EVAL_SCENARIOS),
+  chapterBridge: evaluateFiftyChapterBridge(),
 }
 
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)

@@ -8,6 +8,7 @@ import type {
   AgentTodoItem,
   AgentTokenUsage,
   CreativeFreedom,
+  StoryCompilerMode,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import { chatWithTools, type ChatMessage, type ToolCallRequest } from '../ai-service.js'
@@ -56,6 +57,7 @@ export type ExecuteAgentRunParams = {
   attachments?: AgentAttachmentMeta[]
   agentType?: string
   creativeFreedom?: CreativeFreedom
+  qualityMode?: StoryCompilerMode
   /** 从 paused 恢复：历史含本 run 已持久化的消息，prompt 换成续跑指令 */
   resume?: boolean
 }
@@ -570,6 +572,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           prompt: params.prompt,
           selection: params.selection,
           creativeFreedom: params.creativeFreedom,
+          qualityMode: params.qualityMode,
         })
     let taskSpecChanged = !parsedTaskSpec.success
     const protectsEarlierContent = taskSpec.postconditions.some((item) => item.code === 'EARLIER_CONTENT_UNCHANGED')
@@ -696,6 +699,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       protectedChapterIds: protectsEarlierContent ? new Set(taskSpec.scope.chapterIds ?? []) : undefined,
       callId: '',
       mode: params.mode,
+      qualityMode: taskSpec.qualityMode,
       emit: (event) => bus.emit(event),
       signal: controller.signal,
     }

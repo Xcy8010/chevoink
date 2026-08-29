@@ -70,6 +70,17 @@ import {
   skillTestTool,
 } from './skill-tools.js'
 import { sessionHistorySearchTool, sessionMessageReadTool } from './session-history-tools.js'
+import {
+  chapterBridgeCommitTool,
+  chapterBridgeGetTool,
+  continuityValidateTool,
+  readerPromiseSaveTool,
+  readerPromiseUpdateTool,
+  sceneTaskBuildTool,
+  storyCharterGetTool,
+  storyCharterSaveTool,
+  storyCompilerPrepareTool,
+} from './story-compiler-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
@@ -99,6 +110,8 @@ export const allTools: AgentTool<any>[] = [
   skillRunExplainTool,
   sessionHistorySearchTool,
   sessionMessageReadTool,
+  storyCharterGetTool,
+  chapterBridgeGetTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
@@ -145,6 +158,13 @@ export const allTools: AgentTool<any>[] = [
   skillEnableTool,
   skillRollbackTool,
   skillPublishTool,
+  storyCharterSaveTool,
+  readerPromiseSaveTool,
+  readerPromiseUpdateTool,
+  storyCompilerPrepareTool,
+  sceneTaskBuildTool,
+  continuityValidateTool,
+  chapterBridgeCommitTool,
   // 交互
   askUserTool,
 ]

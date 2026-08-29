@@ -34,6 +34,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   skill_run_explain: { category: 'read', risk: 'low', postconditions: ['route_receipt_only'] },
   session_history_search: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
   session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
+  story_charter_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'active_promises_only'] },
+  chapter_bridge_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'bridge_revision_reported'] },
   chapter_create: {
     category: 'structure',
     risk: 'medium',
@@ -96,6 +98,13 @@ export const AGENT_TOOL_GOVERNANCE = {
   skill_enable: { category: 'workflow', risk: 'medium', postconditions: ['published_version_only', 'next_turn_effect'] },
   skill_rollback: { category: 'workflow', risk: 'medium', postconditions: ['published_version_only', 'history_preserved'] },
   skill_publish: { category: 'workflow', risk: 'medium', postconditions: ['explicit_confirmation', 'audit_passed', 'eval_passed'] },
+  story_charter_save: { category: 'workflow', risk: 'medium', postconditions: ['novel_scope_verified', 'charter_revision_advanced'] },
+  reader_promise_save: { category: 'workflow', risk: 'medium', postconditions: ['novel_scope_verified', 'promise_deduplicated'] },
+  reader_promise_update: { category: 'workflow', risk: 'medium', postconditions: ['novel_scope_verified', 'payoff_chapter_recorded'] },
+  story_compiler_prepare: { category: 'workflow', risk: 'medium', postconditions: ['prompt_hashed', 'source_revisions_recorded', 'bridge_prepared'] },
+  scene_task_build: { category: 'workflow', risk: 'medium', postconditions: ['scene_count_bounded', 'compilation_stage_advanced'] },
+  continuity_validate: { category: 'workflow', risk: 'medium', postconditions: ['chapter_revision_verified', 'evidence_findings_recorded'] },
+  chapter_bridge_commit: { category: 'workflow', risk: 'medium', postconditions: ['continuity_errors_zero', 'chapter_revision_verified', 'story_state_committed'] },
   ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
 } as const satisfies Record<string, AgentToolGovernance>
 

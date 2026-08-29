@@ -5,6 +5,7 @@ import type {
   AgentRollbackSnapshot,
   AgentToolDisplayPayload,
   AgentWorkspaceToolPermission,
+  StoryCompilerMode,
 } from '../../../../shared/contracts/index.js'
 import type { AgentStreamEventBody } from '../../../../shared/contracts/index.js'
 
@@ -20,6 +21,7 @@ export type ToolContext = {
   /** 当前工具调用的 callId：供 ask_user 等需要挂起等待前端回应的工具使用 */
   callId: string
   mode: AgentExecutionMode
+  qualityMode: StoryCompilerMode
   /** 工具内部可发进度事件（进入统一事件总线） */
   emit: (event: AgentStreamEventBody) => void
   signal: AbortSignal

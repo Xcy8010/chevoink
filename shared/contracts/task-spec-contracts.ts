@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { storyCompilerModeSchema } from './story-compiler-contracts.js'
 
 /** Agent 2.0 任务契约：把自然语言请求冻结为可验证、可恢复的运行时输入。 */
 export const taskIntentSchema = z.enum([
@@ -65,6 +66,7 @@ export const taskSpecSchema = z.object({
   postconditions: z.array(postconditionSchema).default([]),
   ambiguity: z.enum(['none', 'safe_to_assume', 'must_ask']),
   creativeFreedom: z.enum(['stable', 'balanced', 'bold']).default('balanced'),
+  qualityMode: storyCompilerModeSchema.default('balanced'),
   createdAt: z.string().datetime(),
 })
 

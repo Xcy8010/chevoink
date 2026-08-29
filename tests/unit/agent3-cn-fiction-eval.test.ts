@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { CN_FICTION_EVAL_SCENARIOS, CN_FICTION_EVAL_VERSION } from '../agent-evals/cn-fiction-scenarios.js'
 import { evaluateSkillRouting, summarizeBlindReviews, type BlindReviewRecord } from '../agent-evals/cn-fiction-metrics.js'
+import { evaluateFiftyChapterBridge } from '../agent-evals/chapter-bridge-metrics.js'
 
 describe('Chevoink-CN-Fiction-Eval v1', () => {
   it('冻结六题材、九任务、十二质量信号与专门难例', () => {
@@ -40,5 +41,12 @@ describe('Chevoink-CN-Fiction-Eval v1', () => {
     expect(summary).toMatchObject({ sampleCount: 1, reviewerCount: 1 })
     expect(summary.mechanicalMarkRate).toEqual({ agent2: 1, agent3: 0 })
     expect(summary.variantScores.agent3?.overall_preference).toBe(4)
+  })
+
+  it('50 章结构状态桥相对摘要投影的连续性遗漏下降至少 50%', () => {
+    const result = evaluateFiftyChapterBridge()
+    expect(result).toMatchObject({ chapters: 50, transitions: 49, dimensionsPerTransition: 9 })
+    expect(result.agent2Errors).toBeGreaterThan(0)
+    expect(result.relativeErrorReduction).toBeGreaterThanOrEqual(0.5)
   })
 })

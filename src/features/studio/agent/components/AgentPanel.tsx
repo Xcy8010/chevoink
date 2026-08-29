@@ -25,6 +25,7 @@ import type {
   AgentStreamEvent,
   CreativeFreedom,
   EntityId,
+  StoryCompilerMode,
 } from '../../../../../shared/contracts/index.js'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ImageLightbox from '../../components/ImageLightbox'
@@ -133,6 +134,10 @@ export function AgentPanel({
     const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
     return saved === 'stable' || saved === 'bold' ? saved : 'balanced'
   })
+  const [qualityMode, setQualityMode] = useState<StoryCompilerMode>(() => {
+    if (typeof window === 'undefined') return 'balanced'
+    return window.localStorage.getItem(`chevoink:quality-mode:${novelId}`) === 'premium' ? 'premium' : 'balanced'
+  })
   /** 用户气泡附件图片的大图预览 */
   const [attachmentPreview, setAttachmentPreview] = useState<{ url: string; name: string } | null>(null)
 
@@ -171,6 +176,10 @@ export function AgentPanel({
   useEffect(() => {
     window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
   }, [creativeFreedom, novelId])
+
+  useEffect(() => {
+    window.localStorage.setItem(`chevoink:quality-mode:${novelId}`, qualityMode)
+  }, [novelId, qualityMode])
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
   const blockInfoById = useMemo(() => {
@@ -370,7 +379,7 @@ export function AgentPanel({
   useKeyboardPushScroll(scrollRef)
 
   const handleSend = useCallback(
-    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom) => {
+    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode) => {
       setActionError(null)
       // 用户主动发言视为回到对话最新处，重新开启自动跟随
       pinnedToBottomRef.current = true
@@ -391,6 +400,7 @@ export function AgentPanel({
             selection: selection ?? null,
             attachments: attachments.length > 0 ? attachments : undefined,
             creativeFreedom: freedom,
+            qualityMode: selectedQualityMode,
           })
         let result: Awaited<ReturnType<typeof startAgentLoopRun>>
         try {
@@ -1050,9 +1060,11 @@ export function AgentPanel({
         <AgentComposer
           running={active}
           disabled={historyLoading}
-          onSend={(prompt, attachments, freedom) => void handleSend(prompt, attachments, freedom)}
+          onSend={(prompt, attachments, freedom, selectedQualityMode) => void handleSend(prompt, attachments, freedom, selectedQualityMode)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
+          qualityMode={qualityMode}
+          onQualityModeChange={setQualityMode}
           onStop={() => void handleStop()}
         />
       </div>

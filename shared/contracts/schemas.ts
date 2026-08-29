@@ -124,6 +124,7 @@ export const startAgentLoopRunSchema = z.object({
     .optional(),
   attachments: z.array(agentAttachmentMetaSchema).optional(),
   creativeFreedom: z.enum(['stable', 'balanced', 'bold']).optional(),
+  qualityMode: z.enum(['balanced', 'premium']).optional(),
 })
 
 /** POST /api/agent/runs/:runId/approvals（原校验：callId 真值 + approved 为布尔） */
