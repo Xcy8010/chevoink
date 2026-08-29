@@ -656,6 +656,8 @@ export default function AppShell({ title, description, children }: AppShellProps
                 !isAuthRoute && 'md:left-[64px]',
                 !isAuthRoute && sidebarExpanded && 'lg:left-[284px]',
                 isStudioRoute && 'hidden lg:hidden',
+                // 阅读区以正文为中心，电脑端也去掉壳层顶部导航栏，让阅读区顶到最上
+                isReaderRoute && 'hidden md:hidden',
                 // 手机端仅首页/发现/搜索显示顶部导航栏（studio 已有自己的隐藏规则，不叠加）
                 hideMobileHeader && !isStudioRoute && 'hidden md:block',
               )}
@@ -783,7 +785,7 @@ export default function AppShell({ title, description, children }: AppShellProps
                 'space-y-4 pb-[calc(88px+var(--safe-bottom))] pr-0.5 pt-[calc(var(--app-header-height)+12px)] md:space-y-6 md:pb-8',
                 // 手机端隐藏顶部导航栏的页面：内容顶上去，只留安全区间距（studio 保持原行为）
                 hideMobileHeader && !isStudioRoute && 'mobile:pt-[calc(var(--safe-top)+12px)]',
-                isReaderRoute && 'flex h-full min-h-0 flex-col space-y-4 pb-0 md:pb-0',
+                isReaderRoute && 'flex h-full min-h-0 flex-col space-y-4 pb-0 md:pb-0 md:pt-0',
                 // 创作区手机端由自己的底部导航接管，不再为全局底栏留白
                 isStudioRoute && 'flex h-full min-h-0 flex-col space-y-4 md:space-y-4 pb-0 md:pb-0',
                 isStudioRoute && '!space-y-0 !pt-0',

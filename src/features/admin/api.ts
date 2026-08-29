@@ -1,9 +1,18 @@
 import type {
+  AdminAgentEvalResults,
+  AdminAgentEvalSuiteRow,
+  AdminAgentSessionMessagesPayload,
+  AdminAgent3OperationsMetrics,
   AdminAuditLogRow,
+  AdminBriefUser,
   AdminCaptchaPayload,
   AdminChapterContentPayload,
   AdminCommentRow,
   AdminConversationRow,
+  AdminCorpusDocumentImportResult,
+  AdminCorpusSourceRow,
+  AdminCreateAgentEvalSampleRequest,
+  AdminCreationRecordsPayload,
   AdminDashboardPayload,
   AdminListPayload,
   AdminLoginRequest,
@@ -14,17 +23,13 @@ import type {
   AdminPostDetailPayload,
   AdminPostRow,
   AdminUserDetailPayload,
+  AdminUserFavoriteNovelRow,
+  AdminUserFollowRow,
   AdminUserRow,
-  AdminAgentEvalResults,
-  AdminAgentEvalSuiteRow,
-  AdminCreateAgentEvalSampleRequest,
   AgentBlindReviewAssignment,
   AgentBlindReviewSubmission,
-  AdminCorpusDocumentImportResult,
-  AdminCorpusSourceRow,
   CorpusDocumentImport,
   CorpusSourceCreate,
-  AdminAgent3OperationsMetrics,
 } from '../../../shared/contracts/index.js'
 import { requestJson } from '@/app/api-client'
 
@@ -194,6 +199,26 @@ export function listAdminUsers(input: {
 
 export function getAdminUserDetail(userId: string): Promise<AdminUserDetailPayload> {
   return requestJson<AdminUserDetailPayload>(`/api/admin/users/${userId}`)
+}
+
+export function listAdminUserFollowers(
+  userId: string,
+): Promise<{ user: AdminBriefUser; items: AdminUserFollowRow[]; total: number }> {
+  return requestJson(`/api/admin/users/${userId}/followers`)
+}
+
+export function listAdminUserFavoriteNovels(
+  userId: string,
+): Promise<{ user: AdminBriefUser; items: AdminUserFavoriteNovelRow[]; total: number }> {
+  return requestJson(`/api/admin/users/${userId}/favorites`)
+}
+
+export function getAdminCreationRecords(userId: string): Promise<AdminCreationRecordsPayload> {
+  return requestJson<AdminCreationRecordsPayload>(`/api/admin/users/${userId}/creation-records`)
+}
+
+export function getAdminAgentSessionMessages(sessionId: string): Promise<AdminAgentSessionMessagesPayload> {
+  return requestJson<AdminAgentSessionMessagesPayload>(`/api/admin/agent-sessions/${sessionId}/messages`)
 }
 
 export function banAdminUser(userId: string): Promise<{ ok: boolean }> {

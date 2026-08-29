@@ -1,5 +1,14 @@
 import { cn } from '@/lib/utils'
 
+/** 骨架需匹配最终布局：从地址栏解析当前作品，读取其工作区视角（work/ide），SSR 无 window 时按 work 处理 */
+function resolveStudioPerspective(): 'work' | 'ide' {
+  if (typeof window === 'undefined') return 'work'
+  const match = window.location.pathname.match(/\/studio\/novel\/([^/]+)/)
+  const novelId = match?.[1]
+  if (!novelId) return 'work'
+  return window.localStorage.getItem(`chevoink:perspective:${novelId}`) === 'ide' ? 'ide' : 'work'
+}
+
 type SkeletonProps = {
   className?: string
 }
@@ -222,6 +231,7 @@ const studioSkeletonMobileNav = ['exit', 'assistant', 'editor', 'chapters', 'mor
 const studioSkeletonInspectorTabs = ['work', 'context', 'changes', 'memory', 'skills'] as const
 
 export function StudioSkeleton() {
+  const perspective = resolveStudioPerspective()
   return (
     <div
       className="flex h-full min-h-[70vh] min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]"
@@ -305,13 +315,63 @@ export function StudioSkeleton() {
           </div>
         </div>
 
+        {perspective === 'ide' ? (
+          <div className="grid min-h-0 flex-1 overflow-hidden border-y border-[var(--border-subtle)]" data-studio-skeleton="ide">
+            <div className="flex min-h-0 overflow-hidden border-r border-[var(--border-subtle)]">
+              <nav className="flex w-[46px] shrink-0 flex-col items-center border-r border-[var(--border-subtle)] py-2" aria-label="IDE 工作区导航">
+                <Skeleton className="mb-3 h-8 w-8 rounded-[8px]" />
+                <div className="h-px w-5 bg-[var(--border-subtle)]" />
+                <div className="mt-2 flex flex-col gap-1">
+                  {studioSkeletonInspectorTabs.map((tab) => (
+                    <Skeleton key={tab} className="h-9 w-9 rounded-[8px]" />
+                  ))}
+                </div>
+              </nav>
+              <div className="min-w-0 flex-1 space-y-3 overflow-hidden p-3">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-9 w-full rounded-[10px]" />
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div key={index} className="flex items-center gap-2.5">
+                    <Skeleton className="h-3 w-3 rounded-[4px]" />
+                    <Skeleton className={cn('h-3', index === 3 ? 'w-3/5' : 'w-5/6')} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="min-h-0 overflow-hidden bg-[var(--surface-default)] p-4">
+              <div className="space-y-3">
+                <Skeleton className="h-6 w-40" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-11/12" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-10/12" />
+                <Skeleton className="h-4 w-full" />
+              </div>
+            </div>
+            <div className="min-h-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--surface-default)] p-3">
+              <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3">
+                <Skeleton className="h-5 w-5 rounded-full" />
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="ml-auto h-3 w-8" />
+              </div>
+              <div className="space-y-3 py-3">
+                <Skeleton className="h-3.5 w-4/5" />
+                <Skeleton className="h-3.5 w-3/5" />
+                <Skeleton className="ml-auto h-3.5 w-2/5" />
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className="flex w-[54px] shrink-0 flex-col items-center gap-4 border-r border-[var(--border-subtle)] py-4" data-studio-region="desktop-task-rail">
-            <Skeleton className="h-6 w-6 rounded-[6px]" />
-            <div className="h-px w-7 bg-[var(--border-subtle)]" />
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className={cn('h-1 w-4 rounded-full', index === 1 && 'w-6')} />
-            ))}
+          <aside className="flex w-[54px] shrink-0 flex-col items-center gap-1 border-r border-[var(--border-subtle)] py-2" data-studio-region="desktop-task-rail">
+            <Skeleton className="mb-1 h-9 w-9 rounded-[9px]" />
+            <Skeleton className="h-9 w-9 rounded-[9px]" />
+            <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
+            <div className="flex min-h-0 flex-1 flex-col items-center gap-[7px] overflow-hidden py-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <Skeleton key={index} className={cn('h-[2px] rounded-full', index === 1 ? 'w-4' : 'w-2.5')} />
+              ))}
+            </div>
           </aside>
 
           <main className="flex min-w-0 flex-1 justify-center overflow-hidden" data-studio-region="desktop-conversation">
@@ -357,14 +417,17 @@ export function StudioSkeleton() {
             </div>
           </main>
 
-          <aside className="flex w-[46px] shrink-0 flex-col items-center gap-5 border-l border-[var(--border-subtle)] py-4" data-studio-region="desktop-inspector-rail">
+          <aside className="flex w-[46px] shrink-0 flex-col items-center border-l border-[var(--border-subtle)] py-2" data-studio-region="desktop-inspector-rail">
+            <Skeleton className="h-8 w-8 rounded-[8px]" />
+            <div className="my-3 h-px w-5 shrink-0 bg-[var(--border-subtle)]" />
             {studioSkeletonInspectorTabs.map((tab) => (
               <span key={tab} className="contents" data-studio-inspector-tab={tab} data-studio-skeleton-skill-entry={tab === 'skills' || undefined}>
-                <Skeleton className="h-5 w-5 rounded-[6px]" />
+                <Skeleton className="mb-1 h-5 w-5 rounded-[6px]" />
               </span>
             ))}
           </aside>
         </div>
+        )}
       </div>
     </div>
   )

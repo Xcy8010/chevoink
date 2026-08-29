@@ -26,7 +26,7 @@ type SectionKey = 'plans' | 'catalog' | 'chapters' | 'info'
 const SECTION_OPTIONS: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: 'plans', label: '规划', hint: '计划文件夹内的全部创作计划' },
   { key: 'catalog', label: '目录', hint: '全部章节的目录清单' },
-  { key: 'chapters', label: '章节', hint: '各章正文，逐章存为 txt' },
+  { key: 'chapters', label: '章节', hint: '各章正文，按卷分文件夹逐章存为 txt' },
   { key: 'info', label: '作品信息以及发布建议', hint: '作品信息 + AI 生成的番茄小说发布建议与封面图片' },
 ]
 

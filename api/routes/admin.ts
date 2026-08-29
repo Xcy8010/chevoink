@@ -24,7 +24,9 @@ import {
   adminLoginByPhoneData,
   bindAdminPhoneData,
   findAdminByPhoneData,
+  getAdminAgentSessionMessagesData,
   getAdminConversationMessagesData,
+  getAdminCreationRecordsData,
   getAdminDashboardData,
   getAdminNovelDetailData,
   getAdminChapterContentData,
@@ -37,6 +39,8 @@ import {
   listAdminConversationsData,
   listAdminNovelsData,
   listAdminPostsData,
+  listAdminUserFavoriteNovelsData,
+  listAdminUserFollowersData,
   listAdminUsersData,
   recordAdminAuditLog,
   resetUserPasswordData,
@@ -537,6 +541,70 @@ router.post('/users/:userId/role', async (req: Request, res: Response): Promise<
       ip: getRequestIp(req),
     })
     res.status(200).json(buildSuccess(requestId, { ok: true }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/users/:userId/followers', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await listAdminUserFollowersData(req.params.userId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/users/:userId/favorites', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await listAdminUserFavoriteNovelsData(req.params.userId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/users/:userId/creation-records', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await getAdminCreationRecordsData(req.params.userId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/agent-sessions/:sessionId/messages', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const payload = await getAdminAgentSessionMessagesData(req.params.sessionId)
+    if (!payload) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '会话不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

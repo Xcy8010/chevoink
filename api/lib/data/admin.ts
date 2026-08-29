@@ -5,7 +5,14 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
-import type { Pagination } from '../../../shared/contracts/index.js'
+import type {
+  AdminAgentSessionMessagesPayload,
+  AdminBriefUser,
+  AdminCreationRecordsPayload,
+  AdminUserFavoriteNovelRow,
+  AdminUserFollowRow,
+  Pagination,
+} from '../../../shared/contracts/index.js'
 import { hashPassword, isLegacyPasswordHash, verifyPassword } from '../password.js'
 import { evictUserBanCache } from '../auth-session.js'
 import { prisma } from '../prisma.js'
@@ -537,6 +544,204 @@ export async function getAdminUserDetailData(userId: string): Promise<{
       bio: record.bio,
     },
     stats: { novels, posts, comments, favorites },
+  }
+}
+
+
+
+/** 管理端：查看某用户的粉丝列表（管理端不受隐私级别管控，忽略粉丝可见性） */
+export async function listAdminUserFollowersData(
+  userId: string,
+): Promise<{ user: AdminBriefUser; items: AdminUserFollowRow[]; total: number } | null> {
+  const target = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nickname: true, avatarUrl: true },
+  })
+  if (!target) {
+    return null
+  }
+
+  const records = await prisma.userFollow.findMany({
+    where: { followingId: userId },
+    include: { follower: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  })
+
+  const items: AdminUserFollowRow[] = records.map((record) => ({
+    id: record.follower.id,
+    nickname: record.follower.nickname,
+    avatarUrl: record.follower.avatarUrl,
+    followerCount: record.follower.followerCount,
+    isOnline: isUserOnline(record.follower.lastActiveAt),
+    followedAt: toIso(record.createdAt) ?? new Date().toISOString(),
+  }))
+
+  return {
+    user: { id: target.id, nickname: target.nickname, avatarUrl: target.avatarUrl },
+    items,
+    total: items.length,
+  }
+}
+
+
+
+/** 管理端：查看某用户收藏的作品列表 */
+export async function listAdminUserFavoriteNovelsData(
+  userId: string,
+): Promise<{ user: AdminBriefUser; items: AdminUserFavoriteNovelRow[]; total: number } | null> {
+  const target = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nickname: true, avatarUrl: true },
+  })
+  if (!target) {
+    return null
+  }
+
+  const records = await prisma.novelFavorite.findMany({
+    where: { userId },
+    include: {
+      novel: {
+        include: {
+          author: { select: { id: true, nickname: true, avatarUrl: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  })
+
+  const items: AdminUserFavoriteNovelRow[] = records.map((record) => ({
+    id: record.novel.id,
+    title: record.novel.title,
+    displayTitle: record.novel.displayTitle,
+    status: record.novel.status,
+    wordCount: record.novel.wordCount,
+    chapterCount: record.novel.chapterCount,
+    favoriteCount: record.novel.favoriteCount,
+    favoritedAt: toIso(record.createdAt) ?? new Date().toISOString(),
+    author: {
+      id: record.novel.author.id,
+      nickname: record.novel.author.nickname,
+      avatarUrl: record.novel.author.avatarUrl,
+    },
+  }))
+
+  return {
+    user: { id: target.id, nickname: target.nickname, avatarUrl: target.avatarUrl },
+    items,
+    total: items.length,
+  }
+}
+
+
+
+/** 管理端：某用户的创作记录（按作品分组，作品下挂 Agent 会话列表，不含具体消息） */
+export async function getAdminCreationRecordsData(userId: string): Promise<AdminCreationRecordsPayload | null> {
+  const target = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nickname: true, avatarUrl: true },
+  })
+  if (!target) {
+    return null
+  }
+
+  const novels = await prisma.novel.findMany({
+    where: { authorId: userId },
+    orderBy: { updatedAt: 'desc' },
+    include: {
+      agentSessions: {
+        orderBy: { updatedAt: 'desc' },
+        include: { _count: { select: { runs: true } } },
+      },
+    },
+  })
+
+  return {
+    user: { id: target.id, nickname: target.nickname, avatarUrl: target.avatarUrl },
+    novels: novels.map((novel) => ({
+      novelId: novel.id,
+      title: novel.title,
+      displayTitle: novel.displayTitle,
+      status: novel.status,
+      chapterCount: novel.chapterCount,
+      wordCount: novel.wordCount,
+      updatedAt: novel.updatedAt.toISOString(),
+      sessions: novel.agentSessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        runCount: session._count.runs,
+        lastRunAt: toIso(session.lastRunAt),
+        createdAt: session.createdAt.toISOString(),
+      })),
+    })),
+  }
+}
+
+
+
+/** 管理端：查看单个 Agent 会话的完整聊天记录（run + 消息） */
+export async function getAdminAgentSessionMessagesData(
+  sessionId: string,
+): Promise<AdminAgentSessionMessagesPayload | null> {
+  const record = await prisma.agentSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      id: true,
+      title: true,
+      createdAt: true,
+      novel: { select: { id: true, title: true, displayTitle: true } },
+      runs: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          mode: true,
+          action: true,
+          status: true,
+          inputSummary: true,
+          outputSummary: true,
+          errorMessage: true,
+          createdAt: true,
+          finishedAt: true,
+          messages: {
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, runId: true, role: true, parts: true, createdAt: true },
+          },
+        },
+      },
+    },
+  })
+  if (!record) {
+    return null
+  }
+
+  return {
+    session: {
+      id: record.id,
+      title: record.title,
+      novelTitle: record.novel.title,
+      displayTitle: record.novel.displayTitle,
+      createdAt: record.createdAt.toISOString(),
+    },
+    runs: record.runs.map((run) => ({
+      id: run.id,
+      mode: run.mode,
+      action: run.action,
+      status: run.status,
+      inputSummary: run.inputSummary,
+      outputSummary: run.outputSummary,
+      errorMessage: run.errorMessage,
+      createdAt: run.createdAt.toISOString(),
+      finishedAt: toIso(run.finishedAt),
+      messages: run.messages.map((message) => ({
+        id: message.id,
+        runId: message.runId,
+        role: (message.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+        parts: message.parts as unknown[],
+        createdAt: message.createdAt.toISOString(),
+      })),
+    })),
   }
 }
 

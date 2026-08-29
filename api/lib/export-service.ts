@@ -32,6 +32,45 @@ function sanitizePathComponent(input: string, fallback: string): string {
   return cleaned || fallback
 }
 
+/** 导出用章节记录：章 + 所属卷（标题/序号），用于按卷分组后生成目录与正文文件夹 */
+type ChapterExportRecord = {
+  id: string
+  title: string
+  content: string
+  wordCount: number
+  status: string
+  updatedAt: Date
+  volumeId: string
+  orderInVolume: number
+  volume: { id: string; title: string; orderIndex: number }
+}
+
+/** 按卷分组：保持章节在全局顺序中的出现次序，同卷章节连续聚合 */
+function groupChaptersByVolume(chapters: ChapterExportRecord[]): Array<{
+  volumeId: string
+  volumeTitle: string
+  volumeOrder: number
+  chapters: ChapterExportRecord[]
+}> {
+  const groups: Array<{ volumeId: string; volumeTitle: string; volumeOrder: number; chapters: ChapterExportRecord[] }> = []
+  const index = new Map<string, number>()
+  for (const chapter of chapters) {
+    let groupIndex = index.get(chapter.volumeId)
+    if (groupIndex === undefined) {
+      groupIndex = groups.length
+      index.set(chapter.volumeId, groupIndex)
+      groups.push({
+        volumeId: chapter.volumeId,
+        volumeTitle: chapter.volume.title,
+        volumeOrder: chapter.volume.orderIndex,
+        chapters: [],
+      })
+    }
+    groups[groupIndex].chapters.push(chapter)
+  }
+  return groups
+}
+
 function formatDateTime(value: Date): string {
   const pad = (num: number) => String(num).padStart(2, '0')
 
@@ -137,7 +176,17 @@ export async function buildNovelExportZip(
   const allChapters = await prisma.chapter.findMany({
     where: { novelId },
     orderBy: { orderIndex: 'asc' },
-    select: { id: true, title: true, content: true, wordCount: true, status: true, updatedAt: true },
+    select: {
+      id: true,
+      title: true,
+      content: true,
+      wordCount: true,
+      status: true,
+      updatedAt: true,
+      volumeId: true,
+      orderInVolume: true,
+      volume: { select: { id: true, title: true, orderIndex: true } },
+    },
   })
 
   const wantedIds = options.chapterIds?.length ? new Set(options.chapterIds) : null
@@ -169,9 +218,14 @@ export async function buildNovelExportZip(
   }
 
   if (includeCatalog) {
-    const lines = allChapters.map(
-      (chapter, index) => `第${index + 1}章 ${chapter.title}（${chapter.wordCount} 字 · ${chapter.status === 'published' ? '已发布' : '草稿'}）`,
-    )
+    const lines: string[] = []
+    for (const group of groupChaptersByVolume(allChapters)) {
+      lines.push(`《${group.volumeTitle}》`)
+      group.chapters.forEach((chapter, index) => {
+        lines.push(`第${index + 1}章 ${chapter.title}（${chapter.wordCount} 字 · ${chapter.status === 'published' ? '已发布' : '草稿'}）`)
+      })
+      lines.push('')
+    }
 
     entries.push({
       path: `${root}/目录/目录.txt`,
@@ -181,14 +235,17 @@ export async function buildNovelExportZip(
   }
 
   if (includeChapters && chapters.length > 0) {
-    chapters.forEach((chapter) => {
-      const order = String(allChapters.findIndex((item) => item.id === chapter.id) + 1).padStart(4, '0')
+    for (const group of groupChaptersByVolume(chapters)) {
+      const volumeFolder = sanitizePathComponent(group.volumeTitle, '未命名卷')
+      group.chapters.forEach((chapter) => {
+        const order = String(chapter.orderInVolume).padStart(4, '0')
 
-      entries.push({
-        path: `${root}/章节/第${order}章 ${sanitizePathComponent(chapter.title, '未命名章节')}.txt`,
-        data: text(`${chapter.title}\n\n${chapter.content}`),
+        entries.push({
+          path: `${root}/正文/${volumeFolder}/第${order}章 ${sanitizePathComponent(chapter.title, '未命名章节')}.txt`,
+          data: text(`${chapter.title}\n\n${chapter.content}`),
+        })
       })
-    })
+    }
 
     summaryParts.push(`${chapters.length} 个章节`)
   }

@@ -201,3 +201,88 @@ export type AdminCaptchaPayload = {
   imageBase64: string
   expiresInSeconds: number
 }
+
+/* ========================================================================== */
+/* 管理端：用户详情可下钻的关联内容（粉丝/收藏作品/创作记录）                     */
+/* ========================================================================== */
+
+/** 管理端查看某用户的粉丝列表条目 */
+export type AdminUserFollowRow = {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+  followerCount: number
+  isOnline: boolean
+  followedAt: string
+}
+
+/** 管理端查看某用户收藏的作品条目 */
+export type AdminUserFavoriteNovelRow = {
+  id: string
+  title: string
+  displayTitle: string | null
+  status: string
+  wordCount: number
+  chapterCount: number
+  favoriteCount: number
+  favoritedAt: string
+  author: AdminBriefUser
+}
+
+/** 管理端创作记录：单部作品下的一个 Agent 会话 */
+export type AdminCreationSessionRow = {
+  id: string
+  title: string
+  status: string
+  runCount: number
+  lastRunAt: string | null
+  createdAt: string
+}
+
+/** 管理端创作记录：单部作品 + 其下 Agent 会话列表 */
+export type AdminCreationRecordNovelRow = {
+  novelId: string
+  title: string
+  displayTitle: string | null
+  status: string
+  chapterCount: number
+  wordCount: number
+  updatedAt: string
+  sessions: AdminCreationSessionRow[]
+}
+
+export type AdminCreationRecordsPayload = {
+  user: AdminBriefUser
+  novels: AdminCreationRecordNovelRow[]
+}
+
+/** 管理端查看单个 Agent 会话的聊天记录：run 与消息 */
+export type AdminAgentRunRow = {
+  id: string
+  mode: string
+  action: string
+  status: string
+  inputSummary: string | null
+  outputSummary: string | null
+  errorMessage: string | null
+  createdAt: string
+  finishedAt: string | null
+  messages: Array<{
+    id: string
+    runId: string
+    role: 'user' | 'assistant'
+    parts: unknown[]
+    createdAt: string
+  }>
+}
+
+export type AdminAgentSessionMessagesPayload = {
+  session: {
+    id: string
+    title: string
+    novelTitle: string
+    displayTitle: string | null
+    createdAt: string
+  }
+  runs: AdminAgentRunRow[]
+}

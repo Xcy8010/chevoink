@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpenCheck, FileInput, ShieldCheck, Trash2 } from 'lucide-react'
 
@@ -131,7 +132,17 @@ export default function AdminCraftLibraryPage() {
     <AdminPageHeader
       title="合法文笔库"
       description="生产语料先登记权利、再独立审批、最后受控导入。Agent 仅召回抽象技法卡与统计画像，不返回第三方原文。"
-      extra={admin?.isSuperAdmin ? <Button variant="primary" onClick={() => setCreateOpen((open) => !open)}>{createOpen ? '收起登记' : '登记来源'}</Button> : null}
+      extra={
+        <div className="flex items-center gap-2">
+          <Link
+            to="/admin/creation-records"
+            className="inline-flex h-10 items-center rounded-[var(--radius-pill)] border border-[var(--border-strong)] px-4 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+          >
+            创作记录
+          </Link>
+          {admin?.isSuperAdmin ? <Button variant="primary" onClick={() => setCreateOpen((open) => !open)}>{createOpen ? '收起登记' : '登记来源'}</Button> : null}
+        </div>
+      }
     />
 
     <AdminCard className="mb-4">

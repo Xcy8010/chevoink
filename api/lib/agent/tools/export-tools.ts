@@ -9,7 +9,7 @@ export const novelExportTool = defineTool({
   name: 'novel_export',
   title: '一键导出',
   description:
-    '把当前作品一键导出为 zip 下载包：作品名 > 规划 / 目录 / 章节 / 作品信息以及发布建议 四个文件夹，章节逐章存为 txt，发布建议由 AI 按番茄小说官方词表生成。作者说"一键导出"时调用；支持按需裁剪：chapterIds 只导出指定章节，includePlans/includeCatalog/includeInfo/includeChapters 置 false 可排除对应部分（如作者说"不要导出规划"就把 includePlans 设为 false）。',
+    '把当前作品一键导出为 zip 下载包：作品名 > 规划 / 目录 / 正文（按卷分文件夹，卷下逐章存为 txt） / 作品信息以及发布建议 四个文件夹，发布建议由 AI 按番茄小说官方词表生成。作者说"一键导出"时调用；支持按需裁剪：chapterIds 只导出指定章节，includePlans/includeCatalog/includeInfo/includeChapters 置 false 可排除对应部分（如作者说"不要导出规划"就把 includePlans 设为 false）。',
   parameters: z.object({
     includePlans: z.boolean().optional().describe('是否包含「规划」文件夹，默认 true；作者明确不要规划时置 false'),
     includeCatalog: z.boolean().optional().describe('是否包含「目录」，默认 true'),

@@ -114,6 +114,12 @@ export default function AdminUserDetailPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    to={`/admin/users/${userId}/creation-records`}
+                    className="inline-flex h-9 items-center rounded-lg border border-[var(--border-strong)] px-3 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+                  >
+                    创作记录
+                  </Link>
                   {isSuperAdmin && user.id !== admin?.id ? (
                     <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
                       身份
@@ -158,7 +164,15 @@ export default function AdminUserDetailPage() {
                 ].map(([label, value]) => (
                   <div key={label}>
                     <dt className="text-xs text-[var(--text-secondary)]">{label}</dt>
-                    <dd className="mt-0.5">{value}</dd>
+                    {label === '粉丝数' ? (
+                      <dd className="mt-0.5">
+                        <Link to={`/admin/users/${userId}/followers`} className="hover:underline">
+                          {value}
+                        </Link>
+                      </dd>
+                    ) : (
+                      <dd className="mt-0.5">{value}</dd>
+                    )}
                   </div>
                 ))}
               </dl>
@@ -171,7 +185,7 @@ export default function AdminUserDetailPage() {
                   { label: '作品', value: detail.stats.novels, to: `/admin/novels?search=${encodeURIComponent(user.nickname)}` },
                   { label: '帖子', value: detail.stats.posts, to: `/admin/posts?search=${encodeURIComponent(user.nickname)}` },
                   { label: '评论', value: detail.stats.comments, to: `/admin/comments?search=${encodeURIComponent(user.nickname)}` },
-                  { label: '收藏作品', value: detail.stats.favorites, to: null },
+                  { label: '收藏作品', value: detail.stats.favorites, to: `/admin/users/${userId}/favorites` },
                 ].map((item) => (
                   <div key={item.label} className="rounded-lg bg-[var(--surface-muted)] p-3">
                     <p className="text-xs text-[var(--text-secondary)]">{item.label}</p>

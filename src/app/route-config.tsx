@@ -59,6 +59,9 @@ const AdminLoginPage = lazyPage(() => import('@/features/admin/pages/AdminLoginP
 const AdminDashboardPage = lazyPage(() => import('@/features/admin/pages/AdminDashboardPage'))
 const AdminUsersPage = lazyPage(() => import('@/features/admin/pages/AdminUsersPage'))
 const AdminUserDetailPage = lazyPage(() => import('@/features/admin/pages/AdminUserDetailPage'))
+const AdminUserFollowersPage = lazyPage(() => import('@/features/admin/pages/AdminUserFollowersPage'))
+const AdminUserFavoriteNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminUserFavoriteNovelsPage'))
+const AdminCreationRecordsPage = lazyPage(() => import('@/features/admin/pages/AdminCreationRecordsPage'))
 const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
 const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
 const AdminNovelPreviewPage = lazyPage(() => import('@/features/admin/pages/AdminNovelPreviewPage'))
@@ -295,6 +298,50 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminUserDetailPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/users/:userId/followers',
+    title: '用户粉丝',
+    description: '查看该用户的粉丝列表。',
+    element: (
+      <AdminLayout>
+        <AdminUserFollowersPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/users/:userId/favorites',
+    title: '用户收藏作品',
+    description: '查看该用户收藏的作品。',
+    element: (
+      <AdminLayout>
+        <AdminUserFavoriteNovelsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/users/:userId/creation-records',
+    title: '用户创作记录',
+    description: '查看该用户各作品与 Agent 的对话记录。',
+    element: (
+      <AdminLayout>
+        <AdminCreationRecordsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/creation-records',
+    title: '创作记录',
+    description: '检索用户并查看其各作品与 Agent 的对话记录。',
+    element: (
+      <AdminLayout>
+        <AdminCreationRecordsPage />
       </AdminLayout>
     ),
     useShell: false,

@@ -222,7 +222,7 @@ export default function CommunityPage() {
   if (isTablet) {
     return (
       <div className="grid grid-cols-[200px_minmax(0,1fr)] gap-5">
-        <aside className="sticky top-24 self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
+        <aside className="sticky top-[calc(var(--app-header-height)+8px)] self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
           <p className="px-3 pb-2 pt-2 text-xs font-medium text-[var(--text-tertiary)]">话题频道</p>
           <TopicChannelBar topics={topics} activeTopicId={activeTopicId} onChange={setActiveTopicId} variant="sidebar" />
         </aside>
@@ -241,11 +241,11 @@ export default function CommunityPage() {
   // 电脑端：左话题 + 中单列(640px) + 右推荐面板
   return (
     <div className="grid grid-cols-[200px_minmax(0,1fr)_300px] gap-6">
-      <aside className="sticky top-24 self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
+      <aside className="sticky top-[calc(var(--app-header-height)+8px)] self-start rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[var(--shadow-card)]">
         <p className="px-3 pb-2 pt-2 text-xs font-medium text-[var(--text-tertiary)]">话题频道</p>
         <TopicChannelBar topics={topics} activeTopicId={activeTopicId} onChange={setActiveTopicId} variant="sidebar" />
       </aside>
-
+      
       <div className="mx-auto w-full max-w-[640px] space-y-4">
         {composer}
         <div className="flex items-center justify-between">
@@ -255,7 +255,7 @@ export default function CommunityPage() {
         {postFeed()}
       </div>
 
-      <aside className="sticky top-24 space-y-4 self-start">
+      <aside className="sticky top-[calc(var(--app-header-height)+8px)] space-y-4 self-start">
         <section className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-4 shadow-[var(--shadow-card)]">
           <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
             <Flame className="h-4 w-4 text-[var(--color-brand)]" />
