@@ -256,6 +256,20 @@ export type AdminCreationRecordsPayload = {
   novels: AdminCreationRecordNovelRow[]
 }
 
+/** 管理端创作记录索引：有 Agent 会话记录的作者（含作品/会话统计，供免搜索列表展示） */
+export type AdminCreationRecordsIndexRow = {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+  novelCount: number
+  sessionCount: number
+  lastSessionAt: string | null
+}
+
+export type AdminCreationRecordsIndexPayload = {
+  items: AdminCreationRecordsIndexRow[]
+}
+
 /** 管理端查看单个 Agent 会话的聊天记录：run 与消息 */
 export type AdminAgentRunRow = {
   id: string

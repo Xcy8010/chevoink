@@ -246,27 +246,27 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
         </div>
       ) : null}
 
-      {/* 配图预览：缩略图网格 + 虚线添加格（限高滚动，避免多图撑高编辑器挡住底部发布栏） */}
+      {/* 配图预览：小缩略图行（位于输入框下方），避免大图撑高输入区、遮挡底部发布栏 */}
       {images.length > 0 || imageProcessing ? (
-        <div className="grid max-h-[190px] grid-cols-3 gap-2 overflow-y-auto px-4 pb-3 md:px-5">
+        <div className="flex flex-wrap gap-2 px-4 pb-3 md:px-5">
           {images.map((dataUrl, index) => (
             <div
               key={`${index}-${dataUrl.slice(-24)}`}
-              className="relative aspect-square overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
+              className="relative h-20 w-20 overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-subtle)]"
             >
               <img src={dataUrl} alt={`配图 ${index + 1}`} className="h-full w-full object-cover" />
               <button
                 type="button"
                 onClick={() => handleRemoveImage(index)}
                 aria-label={`移除第 ${index + 1} 张配图`}
-                className="press-feedback absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/55 text-white"
+                className="press-feedback absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3 w-3" />
               </button>
             </div>
           ))}
           {imageProcessing ? (
-            <div className="flex aspect-square items-center justify-center rounded-[var(--radius-md)] border border-dashed border-[var(--border-strong)] text-xs text-[var(--text-tertiary)]">
+            <div className="flex h-20 w-20 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-[var(--border-strong)] text-xs text-[var(--text-tertiary)]">
               处理中...
             </div>
           ) : null}

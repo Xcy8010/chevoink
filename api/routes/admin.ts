@@ -27,6 +27,7 @@ import {
   getAdminAgentSessionMessagesData,
   getAdminConversationMessagesData,
   getAdminCreationRecordsData,
+  getAdminCreationRecordsIndexData,
   getAdminDashboardData,
   getAdminNovelDetailData,
   getAdminChapterContentData,
@@ -572,6 +573,19 @@ router.get('/users/:userId/favorites', async (req: Request, res: Response): Prom
       res.status(404).json(buildError(requestId, 'NOT_FOUND', '用户不存在。'))
       return
     }
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/creation-records', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined
+    const payload = await getAdminCreationRecordsIndexData({ search })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

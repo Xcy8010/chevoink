@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, History, MessageSquareText, User } from 'lucide-react'
 
-import { getAdminAgentSessionMessages, getAdminCreationRecords, listAdminUsers } from '../api'
+import { getAdminAgentSessionMessages, getAdminCreationRecords, getAdminCreationRecordsIndex } from '../api'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
 import { AdminCard, AdminPageHeader, AdminPanelState, StatusPill } from '../AdminLayout'
@@ -159,10 +159,10 @@ export default function AdminCreationRecordsPage() {
     enabled: Boolean(userId),
   })
 
-  // 无 userId：默认列出全部创作者，无需先搜索；输入关键词时可即时过滤
+  // 无 userId：默认列出有 Agent 会话记录的创作者，无需先搜索；输入关键词时可即时过滤
   const searchQuery = useQuery({
-    queryKey: ['admin', 'users', 'search-for-records', search],
-    queryFn: () => listAdminUsers({ search: search || undefined, page: 1, pageSize: 20 }),
+    queryKey: ['admin', 'creation-records', 'index', search],
+    queryFn: () => getAdminCreationRecordsIndex(search || undefined),
     enabled: !userId,
   })
 
@@ -218,7 +218,7 @@ export default function AdminCreationRecordsPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{user.nickname}</p>
                     <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-                      {user.novelCount} 作品 · {user.followerCount} 粉丝
+                      {user.novelCount} 作品 · {user.sessionCount} 会话
                     </p>
                   </div>
                   <ChevronRight size={15} className="text-[var(--text-tertiary)]" />

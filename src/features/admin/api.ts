@@ -12,6 +12,7 @@ import type {
   AdminCorpusDocumentImportResult,
   AdminCorpusSourceRow,
   AdminCreateAgentEvalSampleRequest,
+  AdminCreationRecordsIndexPayload,
   AdminCreationRecordsPayload,
   AdminDashboardPayload,
   AdminListPayload,
@@ -215,6 +216,11 @@ export function listAdminUserFavoriteNovels(
 
 export function getAdminCreationRecords(userId: string): Promise<AdminCreationRecordsPayload> {
   return requestJson<AdminCreationRecordsPayload>(`/api/admin/users/${userId}/creation-records`)
+}
+
+/** 免搜索创作记录：仅列出有 Agent 会话记录的作者 */
+export function getAdminCreationRecordsIndex(search?: string): Promise<AdminCreationRecordsIndexPayload> {
+  return requestJson<AdminCreationRecordsIndexPayload>(`/api/admin/creation-records${buildQueryString({ search })}`)
 }
 
 export function getAdminAgentSessionMessages(sessionId: string): Promise<AdminAgentSessionMessagesPayload> {

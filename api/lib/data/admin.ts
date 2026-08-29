@@ -8,6 +8,7 @@ import type { Prisma } from '@prisma/client'
 import type {
   AdminAgentSessionMessagesPayload,
   AdminBriefUser,
+  AdminCreationRecordsIndexPayload,
   AdminCreationRecordsPayload,
   AdminUserFavoriteNovelRow,
   AdminUserFollowRow,
@@ -635,6 +636,47 @@ export async function listAdminUserFavoriteNovelsData(
 }
 
 
+
+/** 管理端创作记录索引：仅列出有 Agent 会话记录的作者，支持按昵称/手机号/邮箱过滤 */
+export async function getAdminCreationRecordsIndexData(input: {
+  search?: string
+}): Promise<AdminCreationRecordsIndexPayload> {
+  const where: Prisma.UserWhereInput = { agentSessions: { some: {} } }
+  if (input.search?.trim()) {
+    const keyword = input.search.trim()
+    where.OR = [
+      { nickname: { contains: keyword, mode: 'insensitive' } },
+      { phone: { contains: keyword } },
+      { email: { contains: keyword, mode: 'insensitive' } },
+    ]
+  }
+
+  const users = await prisma.user.findMany({
+    where,
+    select: {
+      id: true,
+      nickname: true,
+      avatarUrl: true,
+      novelCount: true,
+      agentSessions: { select: { updatedAt: true } },
+    },
+  })
+
+  const items = users.map((user) => {
+    const sorted = user.agentSessions.map((session) => session.updatedAt).sort((a, b) => b.getTime() - a.getTime())
+    return {
+      id: user.id,
+      nickname: user.nickname,
+      avatarUrl: user.avatarUrl,
+      novelCount: user.novelCount,
+      sessionCount: user.agentSessions.length,
+      lastSessionAt: sorted.length > 0 ? sorted[0].toISOString() : null,
+    }
+  })
+  items.sort((a, b) => (b.lastSessionAt ?? '').localeCompare(a.lastSessionAt ?? ''))
+
+  return { items }
+}
 
 /** 管理端：某用户的创作记录（按作品分组，作品下挂 Agent 会话列表，不含具体消息） */
 export async function getAdminCreationRecordsData(userId: string): Promise<AdminCreationRecordsPayload | null> {
