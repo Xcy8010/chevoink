@@ -105,11 +105,11 @@ function DiffCard({
   const addedChars = display.after.length - display.before.length
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center justify-between gap-2 py-1.5 text-left"
       >
         <span className="min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">
           {display.chapterTitle}
@@ -119,11 +119,14 @@ function DiffCard({
             {addedChars >= 0 ? `+${addedChars}` : addedChars} 字
           </span>
           {display.appliedDirectly ? <span>已写入</span> : null}
-          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          <span className="relative inline-flex h-4 w-4 items-center justify-center">
+            <FileText className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} />
+            <ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} />
+          </span>
         </span>
       </button>
       {expanded ? (
-        <div className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-2 pl-5">
           {diffLines ? (
             <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6">
               {diffLines.map((line, index) =>
@@ -155,7 +158,7 @@ function DiffCard({
 
 function PlanCard({ display }: { display: Extract<AgentToolDisplayPayload, { kind: 'plan' }> }) {
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
+    <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
       <p className="text-[11px] font-medium tracking-[0.08em] text-[var(--text-secondary)]">方案</p>
       {display.summary ? (
         <p className="mt-1 text-xs leading-6 text-[var(--text-primary)]">{display.summary}</p>
@@ -297,11 +300,11 @@ function WebSearchCard({
   const unavailable = display.provider === 'unavailable'
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
       >
         <Search className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
@@ -309,14 +312,10 @@ function WebSearchCard({
           「{display.query}」
           {!unavailable && display.results.length > 0 ? ` · ${display.results.length} 个结果` : ''}
         </span>
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        )}
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><Search className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
       </button>
       {expanded && display.results.length > 0 ? (
-        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] px-1 py-1">
+        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-1 pl-5">
           {display.results.map((result, index) => (
             <li key={result.url || index}>
               <a
@@ -349,25 +348,21 @@ function PlatformNovelSearchCard({
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
       >
         <Library className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
           已搜索作品 「{display.query}」
           {display.results.length > 0 ? ` · ${display.results.length} 个结果` : ''}
         </span>
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        )}
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><Library className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
       </button>
       {expanded && display.results.length > 0 ? (
-        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] px-1 py-1">
+        <ul className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-1 pl-5">
           {display.results.map((result, index) => (
             <li
               key={result.id || index}
@@ -399,24 +394,20 @@ function PlatformNovelCard({
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
       >
         <BookOpenText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
           已查看作品 《{display.title}》 · {display.authorName} · {display.chapterCount} 章
         </span>
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        )}
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><BookOpenText className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
       </button>
       {expanded ? (
-        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
           <p className="text-[11px] text-[var(--text-secondary)]">
             {display.published ? '已上架' : display.isOwn ? '我的·未公开' : '已下架'}
             {display.chapterTitle ? ` · 本章：《${display.chapterTitle}》` : ''}
@@ -447,24 +438,20 @@ function ViewedImageCard({
   const [previewImage, setPreviewImage] = useState<{ id: string; url: string } | null>(null)
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
       >
         <Eye className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
           已查看图片 · {display.images.length} 张
         </span>
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        )}
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><Eye className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
       </button>
       {expanded ? (
-        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
           <div className="flex flex-wrap gap-2">
             {display.images.map((image) => (
               <button
@@ -513,7 +500,7 @@ function MarkdownCard({
 
   if (!collapsible) {
     return (
-      <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
+      <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
         <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6 text-[var(--text-primary)]">
           {display.markdown}
         </pre>
@@ -522,24 +509,20 @@ function MarkdownCard({
   }
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
+    <div className="border-t border-[var(--border-subtle)]">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
       >
         <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
           内容 · {display.markdown.length} 字
         </span>
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        )}
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><FileText className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
       </button>
       {expanded ? (
-        <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
           <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs leading-6 text-[var(--text-primary)]">
             {display.markdown}
           </pre>
@@ -603,7 +586,7 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       )
     case 'exportReady':
       return (
-        <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2.5">
+        <div className="border-t border-[var(--border-subtle)] py-2.5 pl-5">
           <div className="flex items-center gap-2">
             <FolderDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
             <div className="min-w-0 flex-1">
@@ -625,7 +608,7 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
       )
     case 'question':
       return (
-        <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2">
+        <div className="border-t border-[var(--border-subtle)] py-2 pl-5">
           <p className="break-words text-xs leading-6 text-[var(--text-primary)]">{display.question}</p>
           <p className="mt-1 break-words text-[11px] leading-5 text-[var(--text-secondary)]">
             {display.unanswered ? '未回答，Agent 已按默认方案继续' : `你的回答：${display.answer ?? ''}`}
@@ -705,6 +688,8 @@ const ToolCallCard = memo(function ToolCallCard({
     || (part.display.items.length > 0 || (part.display.errorCount ?? 0) > 0 || (part.display.warningCount ?? 0) > 0)
   // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
   const collapsible = part.toolName === 'web_read' && !!part.display
+  const expandable = !workflowDisplay && Boolean(argsPreview)
+  const rowExpandable = expandable || collapsible
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   const webSearchQuery =
@@ -728,45 +713,36 @@ const ToolCallCard = memo(function ToolCallCard({
   const headerContent = <>
     {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
     <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">{part.title || part.toolName}</span>
-    {running ? <span className="shrink-0 animate-pulse text-[10px] font-medium text-[var(--text-secondary)]">{runningLabel}</span> : null}
+    {running ? <span className="agent-tool-running-label shrink-0 text-[10px] font-medium text-[var(--text-secondary)]">{runningLabel}</span> : null}
     {durationLabel ? <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">{durationLabel}</span> : null}
     {writeTool && !running ? <span className={cn(
       'shrink-0 text-[10px] font-medium',
       part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
     )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
     <span className="shrink-0">{toolStatusIcon[part.status]}</span>
-    {collapsible ? expanded ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : null}
+    {rowExpandable ? <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', expanded && 'rotate-180')} /> : null}
   </>
 
   return (
     <div
       className={cn(
-        'relative overflow-hidden transition-colors',
-        workflowDisplay
-          ? 'border-b border-[var(--border-subtle)] bg-transparent'
-          : 'rounded-[10px] border bg-[var(--surface-muted)]/28',
-        !workflowDisplay && running
-          ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]/55'
-          : !workflowDisplay && writeTool && part.status === 'success'
-            ? 'border-[color:var(--border-strong)] bg-[var(--surface-muted)]/42'
-            : !workflowDisplay ? 'border-[var(--border-subtle)]' : '',
+        'relative overflow-hidden border-b border-[var(--border-subtle)] bg-transparent transition-colors',
+        running && 'agent-tool-running',
       )}
     >
-      {/* IDE 式执行中呼吸动画：整卡蒙层脉冲，比单独的 spinner 更醒目 */}
       {running ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 animate-pulse bg-[var(--surface-muted)]/80"
-        />
+        <span aria-hidden className="agent-tool-progress pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[var(--text-secondary)]/55" />
       ) : null}
       {workflowDisplay
         ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
-        : <button type="button" onClick={() => setExpanded((value) => !value)} className="relative flex w-full items-center gap-2 px-3 py-2 text-left">{headerContent}</button>}
+        : rowExpandable
+          ? <button type="button" onClick={() => setExpanded((value) => !value)} className="group relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</button>
+          : <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>}
       {part.summary ? (
         <p
           className={cn(
             'pb-2 text-[11px] leading-5',
-            workflowDisplay ? 'px-[22px]' : 'px-3',
+            'pl-[22px]',
             part.status === 'failed' || part.status === 'denied'
               ? 'text-rose-500'
               : 'text-[var(--text-secondary)]',
@@ -776,12 +752,12 @@ const ToolCallCard = memo(function ToolCallCard({
         </p>
       ) : null}
       {expanded && argsPreview ? (
-        <pre className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] leading-5 text-[var(--text-secondary)]">
+        <pre className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)] py-2 pl-[22px] text-[10px] leading-5 text-[var(--text-secondary)]">
           {argsPreview}
         </pre>
       ) : null}
       {part.display && workflowDisplayHasBody && (!collapsible || expanded) ? (
-        <div className={cn(workflowDisplay ? 'pb-2' : 'px-3 pb-3 pt-1')}>
+        <div className={cn(workflowDisplay ? 'pb-2' : 'pb-3 pt-1 pl-[22px]')}>
           <ToolDisplayRenderer display={part.display} />
         </div>
       ) : null}

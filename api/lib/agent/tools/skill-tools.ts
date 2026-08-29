@@ -11,6 +11,7 @@ import {
   testNovelSkill,
   updateNovelSkill,
 } from '../skills/service.js'
+import { acceptSkillShareInvite, listSkillShareInvites } from '../skills/sharing.js'
 import { defineTool } from './types.js'
 
 const FREEDOM = z.enum(['stable', 'balanced', 'bold']).default('balanced')
@@ -141,6 +142,34 @@ export const skillRunExplainTool = defineTool({
     return run
       ? { output: `阶段=${run.phase}；已选=${run.selected.map((item) => `${item.id}@${item.version}`).join('、') || '无'}；原因=${run.reasonCodes.join('、') || '无明确触发'}；置信度=${run.confidence}；估算 token=${run.estimatedTokens}。`, summary: '解释技能路由' }
       : { output: '当前作品暂无可解释的技能路由记录。', summary: '暂无技能路由记录' }
+  },
+})
+
+export const skillSharedInvitesTool = defineTool({
+  name: 'skill_shared_invites', title: '查看共享技能邀请',
+  description: '仅在作者询问可安装的共享技能、或明确要求安装共享技能时使用。只列出当前账号仍待处理的邀请，不读取或导入任意外部源码。',
+  parameters: z.object({}),
+  permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
+  async execute(ctx) {
+    const invites = await listSkillShareInvites(ctx.userId)
+    const pending = invites.received.filter((invite) => invite.status === 'pending')
+    return {
+      output: pending.length
+        ? pending.map((invite) => `inviteId=${invite.id}｜${invite.skillName}@${invite.version}｜来自 ${invite.counterpart.nickname} 的《${invite.sourceNovel.title}》｜${invite.message || '无附言'}｜到期 ${invite.expiresAt}`).join('\n')
+        : '当前没有待处理的共享技能邀请。',
+      summary: `共享技能邀请 · ${pending.length} 项待处理`,
+    }
+  },
+})
+
+export const skillInstallSharedTool = defineTool({
+  name: 'skill_install_shared', title: '安装共享作品技能',
+  description: '仅当作者明确指定接受某一已列出的共享技能邀请时使用。安装会使该技能从下一轮开始参与当前作品的自动路由，必须逐次确认；禁止用它安装任意 GitHub 或外部源码。',
+  parameters: z.object({ inviteId: z.string().min(1) }),
+  permission: { plan: 'ask', build: 'ask', review: 'ask' }, readOnly: false, alwaysConfirm: true,
+  async execute(ctx, args) {
+    await acceptSkillShareInvite(ctx.userId, args.inviteId, ctx.novelId)
+    return { output: '共享作品技能已安装并启用，将从下一轮任务开始由服务端按需路由。', summary: '安装共享作品技能' }
   },
 })
 

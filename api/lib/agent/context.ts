@@ -357,6 +357,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     skillRoute
       ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom)
       : 'Skill OS 当前未对该账号启用；直接遵从作者目标，不得自行套用未知写作模板。',
+    '技能操作：作者明确要求“创建/新增一个技能”，且该偏好会在后续任务反复复用时，先调用 skill_create_draft 生成私有、关闭的草稿；再只在创建或修改后运行一条应命中和一条不应命中的 skill_test。测试完成后说明结果，只有作者本轮明确要求发布时才调用 skill_publish。普通单轮要求不得保存成技能。作者明确要求安装共享技能时，先用 skill_shared_invites 列出待处理邀请，再只对作者指定的 inviteId 调用 skill_install_shared；不得自动导入 GitHub 或任意外部源码，第三方来源必须由作者在技能区提供许可证、归属和固定版本。',
     '历史对话中形如「[调用工具 xxx：yyy]」的行是系统对已发生工具调用的压缩标记，仅供你了解之前做过什么，不是回复文本的一部分。你自己的回复中严禁出现「[调用工具 …]」「[调用 tool]」这类文字：需要执行操作时直接发起真正的工具调用，需要向作者汇报进展时用自然语言描述。',
     ruleBundle,
     TAG_LIBRARY_DIGEST,

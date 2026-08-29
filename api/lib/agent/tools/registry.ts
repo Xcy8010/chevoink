@@ -63,10 +63,12 @@ import {
   skillCatalogTool,
   skillCreateDraftTool,
   skillEnableTool,
+  skillInstallSharedTool,
   skillLoadTool,
   skillPublishTool,
   skillRollbackTool,
   skillRunExplainTool,
+  skillSharedInvitesTool,
   skillTestTool,
 } from './skill-tools.js'
 import { sessionHistorySearchTool, sessionMessageReadTool } from './session-history-tools.js'
@@ -130,6 +132,7 @@ export const allTools: AgentTool<any>[] = [
   skillCatalogTool,
   skillLoadTool,
   skillRunExplainTool,
+  skillSharedInvitesTool,
   sessionHistorySearchTool,
   sessionMessageReadTool,
   storyCharterGetTool,
@@ -187,6 +190,7 @@ export const allTools: AgentTool<any>[] = [
   skillCreateDraftTool,
   skillTestTool,
   skillEnableTool,
+  skillInstallSharedTool,
   skillRollbackTool,
   skillPublishTool,
   storyCharterSaveTool,

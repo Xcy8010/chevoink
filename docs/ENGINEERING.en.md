@@ -127,6 +127,14 @@ The frontend message-part model `AgentMessagePart` (text / reasoning / tool-call
 
 The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/description/parameter schemas are verbatim-stable (the schema is the model-visible contract; changing it equals changing behavior).
 
+### 1.5.1 Work Skills and shared installation
+
+- **Cross-device entry points**: the Work inspector, collapsed Work rail, IDE navigation, and mobile “More” all use the same work-skills panel. The Studio skeleton reserves the Skills position so navigation does not jump after load.
+- **Creation path**: an author can press “New” in the panel or explicitly ask in chat, “create a … skill for me.” The Agent saves only reusable long-term preferences through `skill_create_draft` as a private, disabled draft; one positive and one negative deterministic test run after creation or editing, and `skill_publish` always requires explicit confirmation in the current turn.
+- **Installation path**: the Agent can inspect pending account-bound shared invitations with `skill_shared_invites`, then install a specifically named invitation into the current work through `skill_install_shared`. Since installation changes future automatic routing, it is always confirmed per operation.
+- **Third-party boundary**: the Agent never auto-imports arbitrary GitHub or external source. UI import requires an allow-listed licence, attribution, and an immutable `owner/repo@commit` source, followed by static audit, positive/negative tests, and the publication gate.
+- **Runtime**: the server deterministically routes enabled skills from task phase, intent, and positive/negative triggers; the model does not rescan the catalogue every turn. Tool history uses single-layer disclosure rows; active tools show only a thin progress line, a text sheen, and a rotating status mark instead of a full-card flash.
+
 ### 1.6 Data Model Overview (prisma/schema.prisma)
 
 29 tables, organized by domain:

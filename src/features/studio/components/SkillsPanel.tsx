@@ -120,11 +120,11 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
         <Wrench className="h-4 w-4 text-[var(--text-secondary)]" />
         <h2 className="text-sm font-semibold text-[var(--text-primary)]">技能</h2>
         <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{payload.enabledCount}/{payload.totalCount} 已启用</span>
-        <button type="button" onClick={() => setDialog('create')} className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="创建技能" title="创建技能"><Plus className="h-4 w-4" /></button>
-        <button type="button" onClick={() => setDialog('import')} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="导入第三方技能" title="导入第三方技能"><Import className="h-4 w-4" /></button>
+        <button type="button" onClick={() => setDialog('create')} className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-[8px] px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="新建作品技能" title="新建作品技能"><Plus className="h-4 w-4" /><span>新建</span></button>
+        <button type="button" onClick={() => setDialog('import')} className="inline-flex h-8 items-center gap-1.5 rounded-[8px] px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="导入第三方技能" title="导入第三方技能"><Import className="h-4 w-4" /><span>导入</span></button>
         <button type="button" onClick={() => void skillsQuery.refetch()} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="刷新技能" title="刷新技能"><RefreshCw className={cn('h-3.5 w-3.5', skillsQuery.isFetching && 'animate-spin')} /></button>
       </div>
-      <p className="mt-1.5 text-[11px] leading-5 text-[var(--text-secondary)]">Agent 会按任务自动召回已启用技能；关闭后从下一轮开始生效。</p>
+      <p className="mt-1.5 text-[11px] leading-5 text-[var(--text-secondary)]">Agent 会按任务自动召回已启用技能；关闭后从下一轮开始生效。也可以在对话里说“为我创建一个……技能”，由 Agent 生成草稿、测试，发布前再由你确认。</p>
     </header>
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
       <article className="mb-4 border-b border-[var(--border-subtle)] px-1 pb-4">

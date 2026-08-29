@@ -218,6 +218,9 @@ function StudioMessageLines({ compact = false }: { compact?: boolean }) {
 }
 
 /** 创作区骨架屏：按真实 Work 工作区分别适配桌面端与手机端 */
+const studioSkeletonMobileNav = ['exit', 'assistant', 'editor', 'chapters', 'more'] as const
+const studioSkeletonInspectorTabs = ['work', 'context', 'changes', 'memory', 'skills'] as const
+
 export function StudioSkeleton() {
   return (
     <div
@@ -277,8 +280,8 @@ export function StudioSkeleton() {
           className="studio-bottom-nav flex shrink-0 items-stretch justify-around gap-1 border-t border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 pb-[max(var(--safe-bottom),4px)] pt-1"
           data-studio-region="mobile-bottom-nav"
         >
-          {Array.from({ length: 5 }).map((_, index) => (
-            <div key={index} className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-1" data-studio-nav-item>
+          {studioSkeletonMobileNav.map((item) => (
+            <div key={item} className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-1" data-studio-nav-item data-studio-nav-key={item}>
               <Skeleton className="h-5 w-5 rounded-[6px]" />
               <Skeleton className="h-2.5 w-8" />
             </div>
@@ -355,8 +358,10 @@ export function StudioSkeleton() {
           </main>
 
           <aside className="flex w-[46px] shrink-0 flex-col items-center gap-5 border-l border-[var(--border-subtle)] py-4" data-studio-region="desktop-inspector-rail">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <Skeleton key={index} className="h-5 w-5 rounded-[6px]" />
+            {studioSkeletonInspectorTabs.map((tab) => (
+              <span key={tab} className="contents" data-studio-inspector-tab={tab} data-studio-skeleton-skill-entry={tab === 'skills' || undefined}>
+                <Skeleton className="h-5 w-5 rounded-[6px]" />
+              </span>
             ))}
           </aside>
         </div>

@@ -52,7 +52,7 @@ export function getToolsForAgent(
       ;['memory_review_list', 'memory_relation_save', 'memory_event_save'].forEach((name) => disabled.add(name))
     }
     if (!featureFlags.skill2) {
-      ;['skill_catalog', 'skill_load', 'skill_run_explain', 'skill_create_draft', 'skill_test', 'skill_enable', 'skill_rollback', 'skill_publish', 'creative_critique', 'creative_revision_draft'].forEach((name) => disabled.add(name))
+      ;['skill_catalog', 'skill_load', 'skill_run_explain', 'skill_shared_invites', 'skill_create_draft', 'skill_test', 'skill_enable', 'skill_install_shared', 'skill_rollback', 'skill_publish', 'creative_critique', 'creative_revision_draft'].forEach((name) => disabled.add(name))
     }
     if (!featureFlags.storyCompiler) {
       ;['story_charter_get', 'story_charter_save', 'reader_promise_save', 'reader_promise_update', 'story_compiler_prepare', 'scene_task_build', 'chapter_bridge_get', 'continuity_validate', 'chapter_bridge_commit'].forEach((name) => disabled.add(name))

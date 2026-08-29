@@ -272,15 +272,10 @@ function ChangesSection({
                 key={activity.callId}
                 className={cn(
                   'relative flex items-center gap-2 px-3 py-1.5 text-xs',
-                  running && 'overflow-hidden',
+                  running && 'overflow-hidden agent-tool-running',
                 )}
               >
-                {running ? (
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 animate-pulse bg-[var(--surface-muted)]/70"
-                  />
-                ) : null}
+                {running ? <span aria-hidden className="agent-tool-progress pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[var(--text-secondary)]/55" /> : null}
                 <FileText className="relative h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
                 <span className="relative min-w-0 flex-1 truncate text-[var(--text-primary)]">
                   {activity.label}

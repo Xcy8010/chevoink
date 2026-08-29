@@ -33,6 +33,9 @@ describe('Agent 3.0 技能区跨端入口', () => {
     expect(panel).not.toContain('<Sparkles')
     expect(manager).toContain('createPortal')
     expect(manager).toContain('md:w-[min(920px,calc(100vw-48px))]')
+    expect(manager).toContain('灰色文字都是示例提示，不会写入技能')
+    expect(manager).toContain('例如：紧张追逐场景（示例）')
+    expect(panel).toContain('由 Agent 生成草稿、测试，发布前再由你确认')
     expect(styleDialog).toContain('单文件最大 512 KB')
     expect(styleDialog).toContain('STYLE_SAMPLE_UPLOAD_MAX_BYTES')
   })
@@ -47,10 +50,12 @@ describe('Agent 3.0 技能区跨端入口', () => {
     expect(`${perspective}${inspector}${ideRail}`).not.toContain('Sparkles')
   })
 
-  it('工作流工具采用单层 disclosure 行，不再用圆角卡套圆角卡', () => {
+  it('所有工具历史采用单层 disclosure 行，运行态只用细进度线', () => {
     const parts = read('src/features/studio/agent/components/AgentMessageParts.tsx')
-    expect(parts).toContain("'border-b border-[var(--border-subtle)] bg-transparent'")
+    expect(parts).toContain('border-b border-[var(--border-subtle)] bg-transparent')
     expect(parts).toContain("if (!hasProblems && display.items.length === 0) return null")
     expect(parts).toContain('group-hover:opacity-0')
+    expect(parts).toContain('agent-tool-progress')
+    expect(parts).not.toContain("'rounded-[10px] border bg-[var(--surface-muted)]/28'")
   })
 })

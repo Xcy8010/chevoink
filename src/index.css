@@ -512,6 +512,27 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Agent 工具执行态：保留 Harness 式紧凑流程行，只让一像素进度线和状态文字轻微移动，
+   不再用整块卡片闪烁抢占正文阅读。 */
+@keyframes agent-tool-progress {
+  from { transform: translateX(-72%); }
+  to { transform: translateX(220%); }
+}
+
+.agent-tool-running-label {
+  background: linear-gradient(90deg, var(--text-secondary) 25%, var(--text-primary) 50%, var(--text-secondary) 75%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.agent-tool-progress {
+  width: 38%;
+  animation: agent-tool-progress 1.45s cubic-bezier(0.36, 0, 0.64, 1) infinite;
+}
+
 /* Agent 消息流轻量虚拟化：视口外的历史消息跳过渲染与布局，长会话不再拖垮主线程 */
 .agent-msg-cv {
   content-visibility: auto;
@@ -662,6 +683,8 @@ html[data-studio-resizing='true'] .studio-resizable-grid {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .agent-tool-running-label,
+  .agent-tool-progress { animation: none; }
   .studio-perspective-enter { animation: none; }
   .studio-resizable-panel,
   .studio-resizable-grid { transition: none; }

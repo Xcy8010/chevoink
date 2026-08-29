@@ -14,6 +14,7 @@ describe('StudioSkeleton responsive layout', () => {
     expect(markup).toContain('data-studio-region="mobile-composer"')
     expect(markup).toContain('data-studio-region="mobile-bottom-nav"')
     expect(markup.match(/data-studio-nav-item="true"/g)).toHaveLength(5)
+    expect(markup).toContain('data-studio-nav-key="more"')
     expect(markup).toContain('pb-[max(var(--safe-bottom),4px)]')
   })
 
@@ -25,5 +26,7 @@ describe('StudioSkeleton responsive layout', () => {
     expect(markup).toContain('data-studio-region="desktop-activity"')
     expect(markup).toContain('data-studio-region="desktop-composer"')
     expect(markup).toContain('data-studio-region="desktop-inspector-rail"')
+    expect(markup).toContain('data-studio-inspector-tab="skills"')
+    expect(markup).toContain('data-studio-skeleton-skill-entry="true"')
   })
 })
