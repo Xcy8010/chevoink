@@ -1956,7 +1956,7 @@ export default function StudioWorkspace() {
   function promptConfirmPendingChapterReview(actionLabel: string) {
     setWorkspaceDialog({
       title: '请先确认当前正文改动',
-      description: `当前章节还有待确认的正文变更，请先选择“保留”或“撤销”，再继续${actionLabel}。`,
+      description: `当前章节还有待确认的正文变更，请先选择“接受”或“拒绝”，再继续${actionLabel}。`,
       confirmLabel: '我知道了',
       cancelLabel: '关闭',
       onConfirm: () => undefined,
