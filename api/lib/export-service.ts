@@ -32,6 +32,15 @@ function sanitizePathComponent(input: string, fallback: string): string {
   return cleaned || fallback
 }
 
+/** 卷目录名统一为「第n卷·卷名」：卷名已带「第n卷」前缀时只保留其后部分，避免重复；空则回退「第n卷」 */
+function buildVolumeFolderName(volumeTitle: string, orderIndex: number): string {
+  const fallback = `第${orderIndex}卷`
+  const trimmed = volumeTitle.trim()
+  if (!trimmed) return fallback
+  const withoutPrefix = trimmed.replace(/^第\s*[0-9零一二三四五六七八九十百两]+\s*卷\s*/u, '')
+  return withoutPrefix ? `${fallback}·${withoutPrefix}` : fallback
+}
+
 /** 导出用章节记录：章 + 所属卷（标题/序号），用于按卷分组后生成目录与正文文件夹 */
 type ChapterExportRecord = {
   id: string
@@ -236,7 +245,7 @@ export async function buildNovelExportZip(
 
   if (includeChapters && chapters.length > 0) {
     for (const group of groupChaptersByVolume(chapters)) {
-      const volumeFolder = sanitizePathComponent(group.volumeTitle, '未命名卷')
+      const volumeFolder = sanitizePathComponent(buildVolumeFolderName(group.volumeTitle, group.volumeOrder), '未命名卷')
       group.chapters.forEach((chapter) => {
         const order = String(chapter.orderInVolume).padStart(4, '0')
 
