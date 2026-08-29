@@ -111,6 +111,7 @@ export const env = {
   featureSkill2Enabled: parseBoolean(process.env.FEATURE_SKILL2_ENABLED, true),
   featureStoryCompilerEnabled: parseBoolean(process.env.FEATURE_STORY_COMPILER_ENABLED, true),
   featureHumanityQualityEnabled: parseBoolean(process.env.FEATURE_HUMANITY_QUALITY_ENABLED, true),
+  featureCraftLibraryEnabled: parseBoolean(process.env.FEATURE_CRAFT_LIBRARY_ENABLED, true),
   featureDualWorkspaceEnabled: parseBoolean(process.env.FEATURE_DUAL_WORKSPACE_ENABLED, true),
   agent2RolloutUserIds: parseCsv(process.env.AGENT2_ROLLOUT_USER_IDS),
   agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),

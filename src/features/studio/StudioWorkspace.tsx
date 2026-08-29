@@ -4037,7 +4037,7 @@ export default function StudioWorkspace() {
 
             {mobileView === 'skills' ? (
               <div className="min-h-0 flex-1 overflow-hidden border-t border-[var(--border-subtle)]">
-                <SkillsPanel novelId={currentNovel.id} />
+                <SkillsPanel novelId={currentNovel.id} chapters={chapters} />
               </div>
             ) : null}
 
@@ -4266,7 +4266,7 @@ export default function StudioWorkspace() {
                   activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                   taskCount={agentTaskSidebarItems.length}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
-                  skillsPanel={<SkillsPanel novelId={currentNovel.id} />}
+                  skillsPanel={<SkillsPanel novelId={currentNovel.id} chapters={chapters} />}
                   contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
@@ -4365,7 +4365,7 @@ export default function StudioWorkspace() {
                     projectNotes={projectNotes}
                     activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                     taskCount={agentTaskSidebarItems.length}
-                    skillsPanel={<SkillsPanel novelId={currentNovel.id} />}
+                    skillsPanel={<SkillsPanel novelId={currentNovel.id} chapters={chapters} />}
                     contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
                   />}
                 />

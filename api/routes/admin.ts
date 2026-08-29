@@ -63,8 +63,18 @@ import {
 import {
   AGENT_EVAL_DIMENSIONS,
   AGENT_EVAL_MECHANICAL_REASONS,
+  corpusSourceCreateSchema,
+  corpusDocumentImportSchema,
+  corpusSourceVerifySchema,
   type AgentBlindReviewSubmission,
 } from '../../shared/contracts/index.js'
+import {
+  createCorpusSource,
+  importCorpusDocument,
+  listCorpusSources,
+  revokeCorpusSource,
+  verifyCorpusSource,
+} from '../lib/agent/craft-library.js'
 
 const router = Router()
 
@@ -134,6 +144,7 @@ const agentEvalReviewSchema = z.object({
   preferredLabel: z.string().trim().min(1).max(8),
   notes: z.string().trim().max(2_000).optional(),
 })
+const corpusSourceRevokeSchema = z.object({ reason: z.string().trim().min(1).max(500) })
 
 function requireSuperAdmin(admin: { isSuperAdmin: boolean }): void {
   if (!admin.isSuperAdmin) {
@@ -965,6 +976,86 @@ router.get('/evals/suites/:suiteId/results', async (req: Request, res: Response)
     const admin = await requireAdmin(req)
     requireSuperAdmin(admin)
     res.status(200).json(buildSuccess(requestId, await getAgentEvalResults(req.params.suiteId)))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+/* ---------------- Agent 3.0 合法文笔库 ---------------- */
+
+router.get('/craft/sources', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    await requireAdmin(req)
+    res.status(200).json(buildSuccess(requestId, { sources: await listCorpusSources() }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/craft/sources', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(corpusSourceCreateSchema, req.body, '请完整填写来源、权利范围和证据。')
+    const source = await createCorpusSource(admin.id, body)
+    await recordAdminAuditLog({
+      adminId: admin.id, action: 'craft.source_create', targetType: 'corpus_source', targetId: source.id,
+      detail: { sourceClass: source.sourceClass, rightsStatus: source.rightsStatus }, ip: getRequestIp(req),
+    })
+    res.status(201).json(buildSuccess(requestId, { source }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/craft/sources/:sourceId/documents', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(corpusDocumentImportSchema, req.body, '请填写合法来源文档的标题和正文。')
+    const document = await importCorpusDocument({ adminId: admin.id, sourceId: req.params.sourceId, document: body })
+    await recordAdminAuditLog({
+      adminId: admin.id, action: 'craft.document_import', targetType: 'corpus_document', targetId: document.documentId,
+      detail: { sourceId: req.params.sourceId, passageCount: document.passageCount, contentHash: document.contentHash }, ip: getRequestIp(req),
+    })
+    res.status(201).json(buildSuccess(requestId, { document }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/craft/sources/:sourceId/verify', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(corpusSourceVerifySchema, req.body, '请给出审批结论和审计说明。')
+    const source = await verifyCorpusSource({ adminId: admin.id, sourceId: req.params.sourceId, ...body })
+    await recordAdminAuditLog({
+      adminId: admin.id, action: 'craft.source_verify', targetType: 'corpus_source', targetId: source.id,
+      detail: { decision: body.decision }, ip: getRequestIp(req),
+    })
+    res.status(200).json(buildSuccess(requestId, { source }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/craft/sources/:sourceId/revoke', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(corpusSourceRevokeSchema, req.body, '请填写撤权原因。')
+    const receipt = await revokeCorpusSource({ actorUserId: admin.id, sourceId: req.params.sourceId, admin: true, reason: body.reason })
+    await recordAdminAuditLog({
+      adminId: admin.id, action: 'craft.source_revoke', targetType: 'corpus_source', targetId: req.params.sourceId,
+      detail: { receiptHash: receipt.receiptHash }, ip: getRequestIp(req),
+    })
+    res.status(200).json(buildSuccess(requestId, { receipt }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

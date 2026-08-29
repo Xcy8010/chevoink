@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, History, Import, LoaderCircle, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
+import { Check, Fingerprint, History, Import, LoaderCircle, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast-context'
-import type { AgentSkillListItem } from '../../../../shared/contracts/index.js'
-import { getNovelSkills, updateNovelSkill } from '../api'
+import type { AgentSkillListItem, StudioPayload } from '../../../../shared/contracts/index.js'
+import { extractAuthorStyleProfileApi, getAuthorStyleProfileApi, getNovelSkills, revokeAuthorStyleSourceApi, updateNovelSkill } from '../api'
 import SkillManagerDialog from './SkillManagerDialog'
 
 const phaseNames: Record<string, string> = {
@@ -17,20 +17,50 @@ function lastUsedLabel(value: string | null): string {
   return `最近调用 ${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(value))}`
 }
 
-export default function SkillsPanel({ novelId, className }: { novelId: string; className?: string }) {
+export default function SkillsPanel({ novelId, chapters, className }: { novelId: string; chapters: StudioPayload['chapters']; className?: string }) {
   const queryClient = useQueryClient()
   const toast = useToast()
   const [dialog, setDialog] = useState<'create' | 'import' | AgentSkillListItem | null>(null)
+  const [styleSetupOpen, setStyleSetupOpen] = useState(false)
+  const [styleTitle, setStyleTitle] = useState('我的写作样章')
+  const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
+  const [styleConsent, setStyleConsent] = useState(false)
+  const [confirmRevoke, setConfirmRevoke] = useState(false)
   const queryKey = ['studio', novelId, 'skills'] as const
   const skillsQuery = useQuery({
     queryKey,
     queryFn: () => getNovelSkills(novelId),
     staleTime: 30_000,
   })
+  const styleQuery = useQuery({
+    queryKey: ['studio', novelId, 'style-profile'],
+    queryFn: () => getAuthorStyleProfileApi(novelId),
+    staleTime: 30_000,
+  })
   const updateMutation = useMutation({
     mutationFn: ({ skillId, enabled }: { skillId: string; enabled: boolean }) => updateNovelSkill(novelId, skillId, { enabled }),
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
     onError: (error) => toast.error(error instanceof Error ? error.message : '技能状态更新失败。'),
+  })
+  const extractStyleMutation = useMutation({
+    mutationFn: () => extractAuthorStyleProfileApi(novelId, { title: styleTitle.trim(), chapterIds: selectedChapterIds, consent: true }),
+    onSuccess: async () => {
+      await styleQuery.refetch()
+      setStyleSetupOpen(false)
+      setSelectedChapterIds([])
+      setStyleConsent(false)
+      toast.success('作者 Style DNA 已更新，仅限当前作品使用。')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Style DNA 提取失败。'),
+  })
+  const revokeStyleMutation = useMutation({
+    mutationFn: (sourceId: string) => revokeAuthorStyleSourceApi(novelId, sourceId, '作者在技能区主动撤回私有样章授权。'),
+    onSuccess: async () => {
+      await styleQuery.refetch()
+      setConfirmRevoke(false)
+      toast.success('私有样章、Style DNA 与派生索引已删除。')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Style DNA 撤回失败。'),
   })
 
   if (skillsQuery.isLoading) {
@@ -55,6 +85,42 @@ export default function SkillsPanel({ novelId, className }: { novelId: string; c
       <p className="mt-1.5 text-[11px] leading-5 text-[var(--text-secondary)]">Agent 会按任务自动召回已启用技能；关闭后从下一轮开始生效。</p>
     </header>
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
+      <article className="mb-3 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/35 p-3">
+        <div className="flex items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-sky-500/10 text-sky-500"><Fingerprint className="h-4 w-4" /></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><h3 className="text-xs font-medium text-[var(--text-primary)]">作者 Style DNA</h3><span className="rounded-[5px] bg-[var(--surface-muted)] px-1.5 py-0.5 text-[9px] text-[var(--text-tertiary)]">仅本作品</span></div>
+            {styleQuery.isLoading ? <p className="mt-1 text-[11px] text-[var(--text-secondary)]">正在读取风格画像…</p> : styleQuery.data ? <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">{styleQuery.data.name} · {styleQuery.data.sampleCount} 章 / {styleQuery.data.sampleChars.toLocaleString()} 字符。Agent 只使用统计画像，不向其他作者召回样章。</p> : <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">选择自己拥有的章节建立私有统计画像，让作者风格优先于平台通用技法卡。</p>}
+          </div>
+          <button type="button" onClick={() => setStyleSetupOpen((open) => !open)} className="shrink-0 text-[10px] text-[var(--text-secondary)] underline underline-offset-4">{styleQuery.data ? '更新' : '建立'}</button>
+        </div>
+        {styleQuery.data ? <div className="mt-2.5 grid grid-cols-2 gap-2 text-[9px] text-[var(--text-tertiary)] sm:grid-cols-4">
+          <span>对白 {Math.round(styleQuery.data.stats.dialogueRatio * 100)}%</span>
+          <span>句中位 {styleQuery.data.stats.medianSentenceChars} 字</span>
+          <span>段中位 {styleQuery.data.stats.medianParagraphChars} 字</span>
+          <span>修辞密度 {Math.round(styleQuery.data.stats.imageryDensity * 100)}%</span>
+        </div> : null}
+        {styleSetupOpen ? <div className="mt-3 border-t border-[var(--border-subtle)] pt-3">
+          <input value={styleTitle} onChange={(event) => setStyleTitle(event.target.value)} maxLength={160} className="h-9 w-full rounded-[8px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-xs outline-none focus:border-[var(--border-strong)]" aria-label="Style DNA 名称" />
+          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-[8px] border border-[var(--border-subtle)] p-2">
+            {chapters.length === 0 ? <p className="py-3 text-center text-[10px] text-[var(--text-tertiary)]">当前作品还没有可选章节。</p> : chapters.map((chapter) => {
+              const checked = selectedChapterIds.includes(chapter.id)
+              return <label key={chapter.id} className="flex cursor-pointer items-center gap-2 rounded-[6px] px-2 py-1.5 text-[10px] hover:bg-[var(--surface-muted)]">
+                <input type="checkbox" checked={checked} disabled={!checked && selectedChapterIds.length >= 12} onChange={() => setSelectedChapterIds((ids) => checked ? ids.filter((id) => id !== chapter.id) : [...ids, chapter.id])} />
+                <span className="min-w-0 truncate">第 {chapter.orderIndex} 章 · {chapter.title}</span>
+              </label>
+            })}
+          </div>
+          <label className="mt-2 flex items-start gap-2 text-[10px] leading-4 text-[var(--text-secondary)]"><input className="mt-0.5" type="checkbox" checked={styleConsent} onChange={(event) => setStyleConsent(event.target.checked)} /><span>我确认这些章节由我拥有，并同意仅在当前作品内生成 Style DNA；不会进入公共文笔库或跨作者召回。</span></label>
+          <div className="mt-3 flex items-center gap-2">
+            <button type="button" disabled={!styleTitle.trim() || selectedChapterIds.length === 0 || !styleConsent || extractStyleMutation.isPending} onClick={() => extractStyleMutation.mutate()} className="inline-flex h-8 items-center rounded-[8px] bg-[var(--surface-contrast)] px-3 text-[10px] text-[var(--text-contrast)] disabled:opacity-40">{extractStyleMutation.isPending ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : null}生成私有画像</button>
+            <button type="button" onClick={() => setStyleSetupOpen(false)} className="h-8 px-2 text-[10px] text-[var(--text-secondary)]">取消</button>
+          </div>
+        </div> : null}
+        {styleQuery.data && !styleSetupOpen ? <div className="mt-2.5 border-t border-[var(--border-subtle)] pt-2.5">
+          {confirmRevoke ? <div className="flex flex-wrap items-center gap-2 text-[10px]"><span className="text-[var(--text-secondary)]">将删除私有原文、画像和派生索引，确认撤回？</span><button type="button" disabled={revokeStyleMutation.isPending} onClick={() => { const sourceId = styleQuery.data?.sourceId; if (sourceId) revokeStyleMutation.mutate(sourceId) }} className="text-red-500">确认删除</button><button type="button" onClick={() => setConfirmRevoke(false)} className="text-[var(--text-secondary)]">取消</button></div> : <button type="button" onClick={() => setConfirmRevoke(true)} className="inline-flex items-center gap-1 text-[9px] text-[var(--text-tertiary)] hover:text-red-500"><Trash2 className="h-3 w-3" />撤回样章授权并删除画像</button>}
+        </div> : null}
+      </article>
       <div className="space-y-2">
         {payload.items.map((skill) => {
           const pending = updateMutation.isPending && updateMutation.variables?.skillId === skill.id

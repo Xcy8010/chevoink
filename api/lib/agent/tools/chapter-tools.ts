@@ -10,6 +10,7 @@ import { enqueueChapterMemoryExtraction } from '../story-memory.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { resolveAgentChapterVolumeId } from './chapter-placement.js'
 import { recordStoryCompilerWrite } from '../story-compiler.js'
+import { assertCraftOutputSafe } from '../craft-library.js'
 
 /**
  * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
@@ -91,6 +92,7 @@ async function writeChapterContent(
   chapterId: string,
   buildNextContent: (current: string) => string,
   actionLabel: string,
+  leakageCandidate: string,
 ): Promise<ToolResult> {
   const chapter = await findOwnedChapter(ctx, chapterId)
 
@@ -106,6 +108,12 @@ async function writeChapterContent(
 
   const before = chapter.content
   const after = buildNextContent(before)
+
+  if (isAgent2FeatureEnabled('craftLibrary', ctx.userId) && leakageCandidate.trim().length >= 80) {
+    await assertCraftOutputSafe({
+      userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: chapter.id, content: leakageCandidate,
+    })
+  }
 
   const updated = await updateOwnedChapterAtRevision(ctx, chapter, {
     content: after,
@@ -181,6 +189,9 @@ export const chapterCreateTool = defineTool({
   readOnly: false,
   async execute(ctx, args) {
     const content = args.content ?? ''
+    if (isAgent2FeatureEnabled('craftLibrary', ctx.userId) && content.trim().length >= 80) {
+      await assertCraftOutputSafe({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, content })
+    }
     const alreadyCreatedId = getCreatedChapter(ctx.runId, args.title)
     if (alreadyCreatedId) {
       const existing = await findOwnedChapter(ctx, alreadyCreatedId)
@@ -296,7 +307,7 @@ export const chapterWriteTool = defineTool({
     if (!chapterId) {
       return { output: MISSING_CHAPTER_HINT }
     }
-    return writeChapterContent(ctx, chapterId, () => args.content, '覆盖写入')
+    return writeChapterContent(ctx, chapterId, () => args.content, '覆盖写入', args.content)
   },
 })
 
@@ -320,6 +331,7 @@ export const chapterAppendTool = defineTool({
       chapterId,
       (current) => (current.trim() ? `${current.replace(/\s+$/, '')}\n\n${args.content}` : args.content),
       '追加',
+      args.content,
     )
   },
 })
@@ -385,6 +397,12 @@ export const chapterEditRangeTool = defineTool({
     }
 
     const after = before.slice(0, start) + args.newText + before.slice(end)
+
+    if (isAgent2FeatureEnabled('craftLibrary', ctx.userId) && args.newText.trim().length >= 80) {
+      await assertCraftOutputSafe({
+        userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: chapter.id, content: args.newText,
+      })
+    }
 
     const updated = await updateOwnedChapterAtRevision(ctx, chapter, {
       content: after,

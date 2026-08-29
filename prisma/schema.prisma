@@ -282,6 +282,46 @@ enum CreativeProfileStatus {
   archived
 }
 
+enum CorpusSourceClass {
+  internal
+  public_domain
+  permissive
+  licensed
+  author_private
+  platform_opt_in
+}
+
+enum CorpusRightsStatus {
+  pending
+  approved
+  rejected
+  expired
+  revoked
+}
+
+enum CorpusScope {
+  platform
+  user
+  novel
+}
+
+enum CorpusDocumentStatus {
+  pending
+  indexed
+  blocked
+  revoked
+}
+
+enum StyleProfileKind {
+  author
+  corpus
+}
+
+enum LeakageDecision {
+  passed
+  blocked
+}
+
 enum SmsVerificationPurpose {
   login
   register
@@ -366,6 +406,15 @@ model User {
   experienceAnchors       ExperienceAnchor[]
   chapterQualityReports   ChapterQualityReport[]
   qualityFindings         QualityFinding[]
+  ownedCorpusSources      CorpusSource[]          @relation("CorpusSourceOwner")
+  auditedCorpusSources    CorpusSource[]          @relation("CorpusSourceAuditor")
+  corpusDocuments         CorpusDocument[]
+  corpusPassages          CorpusPassage[]
+  techniqueCards          TechniqueCard[]
+  styleProfiles           StyleProfile[]
+  retrievalTraces         RetrievalTrace[]
+  leakageChecks           LeakageCheck[]
+  corpusDeletionReceipts  CorpusDeletionReceipt[]
   following               UserFollow[]            @relation("UserFollowFollower")
   followers               UserFollow[]            @relation("UserFollowFollowing")
 
@@ -448,6 +497,14 @@ model Novel {
   experienceAnchors      ExperienceAnchor[]
   chapterQualityReports  ChapterQualityReport[]
   qualityFindings        QualityFinding[]
+  corpusSources          CorpusSource[]
+  corpusDocuments        CorpusDocument[]
+  corpusPassages         CorpusPassage[]
+  techniqueCards         TechniqueCard[]
+  styleProfiles          StyleProfile[]
+  retrievalTraces        RetrievalTrace[]
+  leakageChecks          LeakageCheck[]
+  corpusDeletionReceipts CorpusDeletionReceipt[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -955,6 +1012,8 @@ model AgentRun {
   contextCheckpoints ContextCheckpoint[]
   storyCompilations  StoryCompilation[]
   qualityReports     ChapterQualityReport[]
+  retrievalTraces    RetrievalTrace[]
+  leakageChecks      LeakageCheck[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
@@ -1598,6 +1657,217 @@ model QualityFinding {
   @@index([novelId, signal, disposition])
   @@index([novelId, signal, authorFeedback])
   @@map("quality_findings")
+}
+
+model CorpusSource {
+  id                String                  @id @default(cuid()) @db.VarChar(64)
+  userId            String?                 @map("user_id") @db.VarChar(64)
+  novelId           String?                 @map("novel_id") @db.VarChar(64)
+  scope             CorpusScope             @default(platform)
+  name              String                  @db.VarChar(160)
+  sourceClass       CorpusSourceClass       @map("source_class")
+  rightsHolder      String                  @map("rights_holder") @db.VarChar(240)
+  sourceUrl         String?                 @map("source_url") @db.VarChar(1000)
+  license           String                  @db.VarChar(120)
+  commercialUse     Boolean                 @default(false) @map("commercial_use")
+  redistribution    Boolean                 @default(false)
+  modification      Boolean                 @default(false)
+  rawStorageAllowed Boolean                 @default(false) @map("raw_storage_allowed")
+  indexAllowed      Boolean                 @default(false) @map("index_allowed")
+  rightsStatus      CorpusRightsStatus      @default(pending) @map("rights_status")
+  rightsEvidence    String                  @map("rights_evidence")
+  auditNote         String?                 @map("audit_note")
+  auditedByUserId   String?                 @map("audited_by_user_id") @db.VarChar(64)
+  auditedAt         DateTime?               @map("audited_at")
+  expiresAt         DateTime?               @map("expires_at")
+  revokedAt         DateTime?               @map("revoked_at")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+  user              User?                   @relation("CorpusSourceOwner", fields: [userId], references: [id], onDelete: Cascade)
+  novel             Novel?                  @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  auditedBy         User?                   @relation("CorpusSourceAuditor", fields: [auditedByUserId], references: [id], onDelete: SetNull)
+  documents         CorpusDocument[]
+  techniqueCards    TechniqueCard[]
+  styleProfiles     StyleProfile[]
+  deletionReceipts  CorpusDeletionReceipt[]
+
+  @@index([rightsStatus, sourceClass, updatedAt])
+  @@index([userId, novelId, rightsStatus])
+  @@index([expiresAt])
+  @@map("corpus_sources")
+}
+
+model CorpusDocument {
+  id                String               @id @default(cuid()) @db.VarChar(64)
+  userId            String?              @map("user_id") @db.VarChar(64)
+  novelId           String?              @map("novel_id") @db.VarChar(64)
+  sourceId          String               @map("source_id") @db.VarChar(64)
+  title             String               @db.VarChar(240)
+  authorName        String?              @map("author_name") @db.VarChar(160)
+  contentHash       String               @map("content_hash") @db.VarChar(64)
+  rawStorageAllowed Boolean              @default(false) @map("raw_storage_allowed")
+  indexAllowed      Boolean              @default(false) @map("index_allowed")
+  status            CorpusDocumentStatus @default(pending)
+  metadata          Json                 @default("{}")
+  revokedAt         DateTime?            @map("revoked_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+  user              User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel             Novel?               @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  source            CorpusSource         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  passages          CorpusPassage[]
+  techniqueCards    TechniqueCard[]
+  styleProfiles     StyleProfile[]
+
+  @@unique([sourceId, contentHash])
+  @@index([userId, novelId, status])
+  @@index([sourceId, status])
+  @@map("corpus_documents")
+}
+
+model CorpusPassage {
+  id          String         @id @default(cuid()) @db.VarChar(64)
+  userId      String?        @map("user_id") @db.VarChar(64)
+  novelId     String?        @map("novel_id") @db.VarChar(64)
+  documentId  String         @map("document_id") @db.VarChar(64)
+  ordinal     Int
+  content     String
+  contentHash String         @map("content_hash") @db.VarChar(64)
+  charCount   Int            @map("char_count")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  user        User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel       Novel?         @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  document    CorpusDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  leakageHits LeakageCheck[]
+
+  @@unique([documentId, ordinal])
+  @@index([userId, novelId, createdAt])
+  @@index([contentHash])
+  @@map("corpus_passages")
+}
+
+model TechniqueCard {
+  id                String          @id @default(cuid()) @db.VarChar(64)
+  userId            String?         @map("user_id") @db.VarChar(64)
+  novelId           String?         @map("novel_id") @db.VarChar(64)
+  sourceId          String          @map("source_id") @db.VarChar(64)
+  documentId        String?         @map("document_id") @db.VarChar(64)
+  cardKey           String          @unique @map("card_key") @db.VarChar(160)
+  title             String          @db.VarChar(160)
+  genre             String          @db.VarChar(64)
+  subgenre          String          @default("") @db.VarChar(64)
+  sceneType         String          @map("scene_type") @db.VarChar(96)
+  readerEffect      String          @map("reader_effect") @db.VarChar(240)
+  relationshipStage String          @default("") @map("relationship_stage") @db.VarChar(96)
+  pointOfView       String          @default("") @map("point_of_view") @db.VarChar(48)
+  narrativeDistance String          @default("") @map("narrative_distance") @db.VarChar(48)
+  pace              String          @default("") @db.VarChar(48)
+  defectTargets     String[]        @default([]) @map("defect_targets")
+  techniques        Json
+  styleStats        Json            @map("style_stats")
+  avoid             Json
+  searchableText    String          @map("searchable_text")
+  abstractionHash   String          @map("abstraction_hash") @db.VarChar(64)
+  active            Boolean         @default(false)
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  user              User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel             Novel?          @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  source            CorpusSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  document          CorpusDocument? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([active, genre, sceneType])
+  @@index([userId, novelId, active])
+  @@index([sourceId, active])
+  @@map("technique_cards")
+}
+
+model StyleProfile {
+  id          String           @id @default(cuid()) @db.VarChar(64)
+  userId      String?          @map("user_id") @db.VarChar(64)
+  novelId     String?          @map("novel_id") @db.VarChar(64)
+  sourceId    String?          @map("source_id") @db.VarChar(64)
+  documentId  String?          @map("document_id") @db.VarChar(64)
+  kind        StyleProfileKind
+  name        String           @db.VarChar(160)
+  stats       Json
+  sampleCount Int              @map("sample_count")
+  sampleChars Int              @map("sample_chars")
+  contentHash String           @map("content_hash") @db.VarChar(64)
+  confirmed   Boolean          @default(false)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel       Novel?           @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  source      CorpusSource?    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  document    CorpusDocument?  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([userId, novelId, confirmed, updatedAt])
+  @@index([sourceId, kind])
+  @@map("style_profiles")
+}
+
+model RetrievalTrace {
+  id           String   @id @default(cuid()) @db.VarChar(64)
+  userId       String   @map("user_id") @db.VarChar(64)
+  novelId      String   @map("novel_id") @db.VarChar(64)
+  runId        String   @map("run_id") @db.VarChar(64)
+  query        Json
+  candidateIds Json     @map("candidate_ids")
+  selected     Json
+  profileId    String?  @map("profile_id") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel        Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  run          AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([userId, novelId, createdAt])
+  @@index([runId, createdAt])
+  @@map("retrieval_traces")
+}
+
+model LeakageCheck {
+  id                     String          @id @default(cuid()) @db.VarChar(64)
+  userId                 String          @map("user_id") @db.VarChar(64)
+  novelId                String          @map("novel_id") @db.VarChar(64)
+  runId                  String?         @map("run_id") @db.VarChar(64)
+  chapterId              String?         @map("chapter_id") @db.VarChar(64)
+  outputHash             String          @map("output_hash") @db.VarChar(64)
+  matchedPassageId       String?         @map("matched_passage_id") @db.VarChar(64)
+  ngramOverlap           Float           @map("ngram_overlap")
+  longestCommonSubstring Int             @map("longest_common_substring")
+  semanticSimilarity     Float           @map("semantic_similarity")
+  decision               LeakageDecision
+  action                 String          @db.VarChar(120)
+  evidenceHash           String?         @map("evidence_hash") @db.VarChar(64)
+  createdAt              DateTime        @default(now()) @map("created_at")
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel                  Novel           @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  run                    AgentRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+  matchedPassage         CorpusPassage?  @relation(fields: [matchedPassageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, novelId, createdAt])
+  @@index([runId, decision])
+  @@index([matchedPassageId])
+  @@map("leakage_checks")
+}
+
+model CorpusDeletionReceipt {
+  id            String       @id @default(cuid()) @db.VarChar(64)
+  userId        String?      @map("user_id") @db.VarChar(64)
+  novelId       String?      @map("novel_id") @db.VarChar(64)
+  sourceId      String       @map("source_id") @db.VarChar(64)
+  deletedCounts Json         @map("deleted_counts")
+  reason        String       @db.VarChar(500)
+  receiptHash   String       @unique @map("receipt_hash") @db.VarChar(64)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  user          User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  novel         Novel?       @relation(fields: [novelId], references: [id], onDelete: SetNull)
+  source        CorpusSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, novelId, createdAt])
+  @@index([sourceId, createdAt])
+  @@map("corpus_deletion_receipts")
 }
 
 /**

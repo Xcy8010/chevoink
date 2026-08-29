@@ -211,7 +211,7 @@ export const qualityRevisionApplyTool = defineTool({
     const parsed = repairEnvelopeSchema.parse(parseJsonObject(response))
     const returned = new Set(parsed.patches.map((patch) => patch.findingId))
     if (returned.size !== selected.length || selected.some((finding) => !returned.has(finding.id))) throw new Error('修订模型没有逐项返回全部选中 finding，已阻止部分写入。')
-    const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, reportId: report.id, replacements: parsed.patches })
+    const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, reportId: report.id, replacements: parsed.patches })
     await recalcNovelStats(ctx.novelId)
     recordChapterBaseline(ctx.runId, result.updated.id, result.updated.revision)
     if (isAgent2FeatureEnabled('memory2', ctx.userId)) {

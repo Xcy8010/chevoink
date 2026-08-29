@@ -20,6 +20,10 @@ import type {
   AdminCreateAgentEvalSampleRequest,
   AgentBlindReviewAssignment,
   AgentBlindReviewSubmission,
+  AdminCorpusDocumentImportResult,
+  AdminCorpusSourceRow,
+  CorpusDocumentImport,
+  CorpusSourceCreate,
 } from '../../../shared/contracts/index.js'
 import { requestJson } from '@/app/api-client'
 
@@ -141,6 +145,34 @@ export function submitAdminBlindReview(
 
 export function getAdminAgentEvalResults(suiteId: string): Promise<AdminAgentEvalResults> {
   return requestJson(`/api/admin/evals/suites/${suiteId}/results`)
+}
+
+/* ---------------- Agent 3.0 合法文笔库 ---------------- */
+
+export function listAdminCorpusSources(): Promise<{ sources: AdminCorpusSourceRow[] }> {
+  return requestJson('/api/admin/craft/sources')
+}
+
+export function createAdminCorpusSource(payload: CorpusSourceCreate): Promise<{ source: AdminCorpusSourceRow }> {
+  return requestJson('/api/admin/craft/sources', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function verifyAdminCorpusSource(
+  sourceId: string,
+  payload: { decision: 'approved' | 'rejected'; auditNote: string },
+): Promise<{ source: AdminCorpusSourceRow }> {
+  return requestJson(`/api/admin/craft/sources/${sourceId}/verify`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+export function importAdminCorpusDocument(
+  sourceId: string,
+  payload: CorpusDocumentImport,
+): Promise<{ document: AdminCorpusDocumentImportResult }> {
+  return requestJson(`/api/admin/craft/sources/${sourceId}/documents`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function revokeAdminCorpusSource(sourceId: string, reason: string): Promise<{ receipt: { receiptHash: string } }> {
+  return requestJson(`/api/admin/craft/sources/${sourceId}/revoke`, { method: 'POST', body: JSON.stringify({ reason }) })
 }
 
 /* ---------------- 用户管理 ---------------- */

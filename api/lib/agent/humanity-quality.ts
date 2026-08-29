@@ -15,6 +15,8 @@ import type {
   HumanityQualitySignal,
 } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
+import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
+import { assertCraftOutputSafe } from './craft-library.js'
 
 export const HUMANITY_CRITIC_VERSION = 'humanity-critic.v1'
 export const MAX_QUALITY_REPAIR_ROUNDS = 2
@@ -334,6 +336,7 @@ export async function selectQualityFindings(userId: string, novelId: string, rep
 export async function applyQualityRepair(input: {
   userId: string
   novelId: string
+  runId?: string | null
   reportId: string
   replacements: Array<{ findingId: string; replacement: string }>
 }) {
@@ -356,6 +359,12 @@ export async function applyQualityRepair(input: {
   let after = report.chapter.content
   for (const patch of patches) {
     after = `${after.slice(0, patch.finding.startOffset)}${patch.replacement}${after.slice(patch.finding.endOffset)}`
+  }
+  const leakageCandidate = patches.map((patch) => patch.replacement).join('\n')
+  if (isAgent2FeatureEnabled('craftLibrary', input.userId) && leakageCandidate.trim().length >= 80) {
+    await assertCraftOutputSafe({
+      userId: input.userId, novelId: input.novelId, runId: input.runId, chapterId: report.chapterId, content: leakageCandidate,
+    })
   }
   const updated = await prisma.$transaction(async (tx) => {
     const write = await tx.chapter.updateMany({

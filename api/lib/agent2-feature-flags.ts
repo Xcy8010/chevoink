@@ -9,6 +9,7 @@ const flagLabels: Record<Agent2FeatureKey, string> = {
   skill2: '写作 Skill 2.0',
   storyCompiler: 'Story Compiler 3.0',
   humanityQuality: '人类感质量门 3.0',
+  craftLibrary: '合法文笔库与 Style DNA 3.0',
   dualWorkspace: '双工作区',
 }
 
@@ -26,6 +27,7 @@ export function resolveAgent2FeatureFlags(userId?: string | null): Agent2Feature
     skill2: included && env.featureSkill2Enabled,
     storyCompiler: included && env.featureStoryCompilerEnabled,
     humanityQuality: included && env.featureHumanityQualityEnabled,
+    craftLibrary: included && env.featureCraftLibraryEnabled,
     dualWorkspace: included && env.featureDualWorkspaceEnabled,
     variant: included ? 'v2' : 'v1-compatible',
   }

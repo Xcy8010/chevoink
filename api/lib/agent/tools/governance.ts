@@ -39,6 +39,10 @@ export const AGENT_TOOL_GOVERNANCE = {
   quality_report_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'chapter_revision_reported'] },
   character_voice_get: { category: 'read', risk: 'low', postconditions: ['confirmed_profiles_only', 'novel_scope_verified'] },
   experience_anchor_get: { category: 'read', risk: 'low', postconditions: ['confirmed_anchors_only', 'retrieval_bounded'] },
+  craft_search: { category: 'read', risk: 'low', postconditions: ['approved_sources_only', 'abstract_cards_only', 'retrieval_trace_created'] },
+  style_profile_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'statistics_only'] },
+  retrieval_trace_read: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'trace_scope_verified'] },
+  style_leakage_check: { category: 'workflow', risk: 'low', postconditions: ['approved_sources_only', 'no_raw_output_logged', 'decision_persisted'] },
   chapter_create: {
     category: 'structure',
     risk: 'medium',
@@ -114,6 +118,7 @@ export const AGENT_TOOL_GOVERNANCE = {
   quality_finding_feedback: { category: 'workflow', risk: 'low', postconditions: ['author_feedback_only', 'finding_scope_verified'] },
   character_voice_save: { category: 'workflow', risk: 'medium', postconditions: ['sample_evidence_verified', 'draft_unless_confirmed'] },
   experience_anchor_save: { category: 'workflow', risk: 'medium', postconditions: ['source_revision_verified', 'novel_scope_verified'] },
+  style_profile_extract: { category: 'write', risk: 'high', postconditions: ['explicit_author_confirmation', 'novel_scope_verified', 'private_scope_only', 'withdrawal_source_created'] },
   ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
 } as const satisfies Record<string, AgentToolGovernance>
 

@@ -50,6 +50,8 @@ import type {
   UpdateAgentSessionResponse,
   UpdateNovelRequest,
   UpdateNovelSkillRequest,
+  AuthorStyleProfileView,
+  StyleSampleRequest,
 } from '../../../shared/contracts/index.js'
 
 type RequestDataOptions = RequestInit & {
@@ -248,6 +250,25 @@ export async function syncNovelMemoryGraph(novelId: string): Promise<MemoryGraph
 
 export function getNovelSkills(novelId: string): Promise<NovelSkillsPayload> {
   return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills`)
+}
+
+export async function getAuthorStyleProfileApi(novelId: string): Promise<AuthorStyleProfileView | null> {
+  const data = await requestData<{ profile: AuthorStyleProfileView | null }>(`/api/agent/novels/${novelId}/style-profile`)
+  return data.profile
+}
+
+export async function extractAuthorStyleProfileApi(novelId: string, input: StyleSampleRequest): Promise<{ profileId: string; sourceId: string; documentId: string; stats: AuthorStyleProfileView['stats'] }> {
+  const data = await requestData<{ profile: { profileId: string; sourceId: string; documentId: string; stats: AuthorStyleProfileView['stats'] } }>(`/api/agent/novels/${novelId}/style-profile`, {
+    method: 'POST', body: JSON.stringify(input),
+  })
+  return data.profile
+}
+
+export async function revokeAuthorStyleSourceApi(novelId: string, sourceId: string, reason: string): Promise<{ receiptHash: string }> {
+  const data = await requestData<{ receipt: { receiptHash: string } }>(`/api/agent/novels/${novelId}/corpus-sources/${sourceId}`, {
+    method: 'DELETE', body: JSON.stringify({ reason }),
+  })
+  return data.receipt
 }
 
 export function updateNovelSkill(

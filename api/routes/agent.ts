@@ -53,6 +53,13 @@ import {
   updateNovelSkill,
 } from '../lib/agent/skills/service.js'
 import { getQualityReport, recordQualityFindingFeedback } from '../lib/agent/humanity-quality.js'
+import {
+  extractAuthorStyleProfile,
+  getAuthorStyleProfile,
+  readRetrievalTrace,
+  revokeCorpusSource,
+} from '../lib/agent/craft-library.js'
+import { styleSampleRequestSchema } from '../../shared/contracts/index.js'
 
 const router = Router()
 
@@ -131,6 +138,7 @@ const testSkillSchema = z.object({
 })
 const publishSkillSchema = z.object({ version: z.string().trim().min(1).max(32) })
 const qualityFindingFeedbackSchema = z.object({ accepted: z.boolean(), reason: z.string().trim().max(500).optional() })
+const revokePrivateStyleSourceSchema = z.object({ reason: z.string().trim().min(1).max(500) })
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -317,6 +325,58 @@ router.get('/quality-reports/:reportId', async (req: Request, res: Response): Pr
         findings: report.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition, authorFeedback: finding.authorFeedback })),
       },
     }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/style-profile', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('craftLibrary', userId)
+    const profile = await getAuthorStyleProfile(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { profile }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/style-profile', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('craftLibrary', userId)
+    const body = parseBody(styleSampleRequestSchema, req.body, '请选择自己的样章并明确同意仅用于当前作品 Style DNA。')
+    const profile = await extractAuthorStyleProfile({ userId, novelId: req.params.novelId, title: body.title, chapterIds: body.chapterIds })
+    res.status(201).json(buildSuccess(requestId, { profile }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/retrieval-traces/:traceId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('craftLibrary', userId)
+    const trace = await readRetrievalTrace(userId, req.params.novelId, req.params.traceId)
+    res.status(200).json(buildSuccess(requestId, { trace }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.delete('/novels/:novelId/corpus-sources/:sourceId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('craftLibrary', userId)
+    const body = parseBody(revokePrivateStyleSourceSchema, req.body, '请填写撤回原因。')
+    const receipt = await revokeCorpusSource({
+      actorUserId: userId, sourceId: req.params.sourceId, novelId: req.params.novelId, admin: false, reason: body.reason,
+    })
+    res.status(200).json(buildSuccess(requestId, { receipt }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

@@ -5,6 +5,7 @@ import { CN_FICTION_EVAL_SCENARIOS, CN_FICTION_EVAL_VERSION } from '../tests/age
 import { evaluateSkillRouting } from '../tests/agent-evals/cn-fiction-metrics.js'
 import { evaluateFiftyChapterBridge } from '../tests/agent-evals/chapter-bridge-metrics.js'
 import { evaluateDeterministicHumanityGate } from '../tests/agent-evals/humanity-quality-metrics.js'
+import { evaluateCraftLibraryBaseline } from '../tests/agent-evals/craft-library-metrics.js'
 
 function readGitSha(): string {
   try {
@@ -27,6 +28,7 @@ const report = {
   routing: evaluateSkillRouting(CN_FICTION_EVAL_SCENARIOS),
   chapterBridge: evaluateFiftyChapterBridge(),
   humanityQuality: evaluateDeterministicHumanityGate(),
+  craftLibrary: evaluateCraftLibraryBaseline(),
 }
 
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)

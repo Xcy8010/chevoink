@@ -60,6 +60,9 @@ export function getToolsForAgent(
     if (!featureFlags.humanityQuality) {
       ;['quality_analyze', 'quality_report_get', 'quality_findings_select', 'quality_revision_apply', 'quality_finding_feedback', 'character_voice_get', 'character_voice_save', 'experience_anchor_get', 'experience_anchor_save'].forEach((name) => disabled.add(name))
     }
+    if (!featureFlags.craftLibrary) {
+      ;['craft_search', 'style_profile_get', 'style_profile_extract', 'retrieval_trace_read', 'style_leakage_check'].forEach((name) => disabled.add(name))
+    }
     modeTools = modeTools.filter((tool) => !disabled.has(tool.name))
   }
 

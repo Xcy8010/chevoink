@@ -67,6 +67,7 @@ const AdminPostDetailPage = lazyPage(() => import('@/features/admin/pages/AdminP
 const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCommentsPage'))
 const AdminMessagesPage = lazyPage(() => import('@/features/admin/pages/AdminMessagesPage'))
 const AdminAgentEvalsPage = lazyPage(() => import('@/features/admin/pages/AdminAgentEvalsPage'))
+const AdminCraftLibraryPage = lazyPage(() => import('@/features/admin/pages/AdminCraftLibraryPage'))
 const AdminLogsPage = lazyPage(() => import('@/features/admin/pages/AdminLogsPage'))
 const AdminSettingsPage = lazyPage(() => import('@/features/admin/pages/AdminSettingsPage'))
 
@@ -382,6 +383,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminAgentEvalsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/craft',
+    title: 'Agent 3.0 合法文笔库',
+    description: '管理语料权利台账、审批、受控导入与可追溯撤权。',
+    element: (
+      <AdminLayout>
+        <AdminCraftLibraryPage />
       </AdminLayout>
     ),
     useShell: false,

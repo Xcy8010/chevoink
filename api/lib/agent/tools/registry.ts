@@ -92,6 +92,13 @@ import {
   qualityReportGetTool,
   qualityRevisionApplyTool,
 } from './humanity-quality-tools.js'
+import {
+  craftSearchTool,
+  retrievalTraceReadTool,
+  styleLeakageCheckTool,
+  styleProfileExtractTool,
+  styleProfileGetTool,
+} from './craft-library-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
@@ -126,6 +133,10 @@ export const allTools: AgentTool<any>[] = [
   qualityReportGetTool,
   characterVoiceGetTool,
   experienceAnchorGetTool,
+  craftSearchTool,
+  styleProfileGetTool,
+  retrievalTraceReadTool,
+  styleLeakageCheckTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
@@ -185,6 +196,7 @@ export const allTools: AgentTool<any>[] = [
   qualityFindingFeedbackTool,
   characterVoiceSaveTool,
   experienceAnchorSaveTool,
+  styleProfileExtractTool,
   // 交互
   askUserTool,
 ]
