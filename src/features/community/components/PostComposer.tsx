@@ -165,7 +165,7 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 高亮镜像结构：镜像层垫底渲染彩色正文（#话题 品牌蓝），textarea 叠在上层、
           文字透明只留光标，滚动时同步镜像层位移，两端指标一致保证逐行对齐 */}
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-40 flex-1">
         <div
           ref={highlightLayerRef}
           aria-hidden
@@ -396,7 +396,7 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
       {/* 平板/电脑端：居中模态（BottomSheet 自动降级） */}
       {!isMobile ? (
         <BottomSheet open={open} onClose={handleClose} title="发讨论" maxHeight="80dvh">
-          <div className="flex min-h-[320px] flex-col">{editor}</div>
+          <div className="flex h-full min-h-[320px] flex-col">{editor}</div>
         </BottomSheet>
       ) : null}
     </>
