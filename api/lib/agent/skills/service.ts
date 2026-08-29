@@ -139,7 +139,7 @@ export async function listNovelSkills(userId: string, novelId: string): Promise<
 
   const [definitions, installations, runs] = await Promise.all([
     prisma.agentSkillDefinition.findMany({
-      where: { OR: [{ source: BUILTIN_SOURCE, status: 'active' }, { ownerUserId: userId }] },
+      where: { OR: [{ source: BUILTIN_SOURCE, status: 'active' }, { ownerUserId: userId }, { installations: { some: { userId, scope: NOVEL_SCOPE, scopeId: novelId } } }] },
       include: {
         versions: { orderBy: { createdAt: 'desc' } },
         audits: { orderBy: { createdAt: 'desc' }, take: 1 },
@@ -244,7 +244,7 @@ export async function getNovelSkillDetail(
   if (!item) throw new DataAccessError(404, 'SKILL_NOT_FOUND', '技能不存在或无权访问。')
   const versionName = requestedVersion ?? item.activeVersion
   const definition = await prisma.agentSkillDefinition.findFirst({
-    where: { id: skillId, OR: [{ source: BUILTIN_SOURCE }, { ownerUserId: userId }] },
+    where: { id: skillId, OR: [{ source: BUILTIN_SOURCE }, { ownerUserId: userId }, { installations: { some: { userId, scope: NOVEL_SCOPE, scopeId: novelId } } }] },
     include: {
       versions: { where: { version: versionName }, take: 1 },
       audits: { where: { version: versionName }, orderBy: { createdAt: 'desc' }, take: 10 },
@@ -288,7 +288,7 @@ export async function updateNovelSkill(
   await assertOwnedNovel(userId, novelId)
   await ensureNovelInstallations(userId, novelId)
   const definition = await prisma.agentSkillDefinition.findFirst({
-    where: { id: skillId, status: 'active', OR: [{ source: BUILTIN_SOURCE }, { ownerUserId: userId }] },
+    where: { id: skillId, status: 'active', OR: [{ source: BUILTIN_SOURCE }, { ownerUserId: userId }, { installations: { some: { userId, scope: NOVEL_SCOPE, scopeId: novelId } } }] },
     select: { id: true, defaultVersion: true },
   })
   if (!definition) throw new DataAccessError(404, 'SKILL_NOT_FOUND', '技能不存在或无权访问。')
@@ -610,7 +610,6 @@ export async function resolveEnabledRuntimeSkills(userId: string, novelId: strin
   const runtime: AgentSkill[] = skillCatalog.filter((skill) => installationBySkill.get(skill.id)?.enabled !== false)
   for (const installation of installations) {
     if (!installation.enabled || installation.skill.source === BUILTIN_SOURCE || installation.skill.status !== 'active') continue
-    if (installation.skill.ownerUserId !== userId) continue
     const versionName = installation.lockedVersion ?? installation.skill.defaultVersion
     const version = installation.skill.versions.find((item) => item.version === versionName && item.status === 'active')
     if (!version) continue

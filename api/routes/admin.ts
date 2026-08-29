@@ -75,6 +75,7 @@ import {
   revokeCorpusSource,
   verifyCorpusSource,
 } from '../lib/agent/craft-library.js'
+import { getAgent3OperationsMetrics } from '../lib/agent/writing-experiments.js'
 
 const router = Router()
 
@@ -864,6 +865,17 @@ router.get('/conversations/:conversationId/messages', async (req: Request, res: 
 })
 
 /* ---------------- Agent 3.0 专家盲评 ---------------- */
+
+router.get('/agent3/operations', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    res.status(200).json(buildSuccess(requestId, await getAgent3OperationsMetrics()))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
 
 router.get('/evals/suites', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()

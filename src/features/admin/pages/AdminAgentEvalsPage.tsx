@@ -23,6 +23,7 @@ import {
   addAdminAgentEvalSample,
   createAdminAgentEvalSuite,
   getAdminAgentEvalResults,
+  getAdminAgent3OperationsMetrics,
   getNextAdminBlindReview,
   listAdminAgentEvalSuites,
   submitAdminBlindReview,
@@ -90,6 +91,7 @@ export default function AdminAgentEvalsPage() {
   const [reviewNonce, setReviewNonce] = useState(0)
 
   const suitesQuery = useQuery({ queryKey: ['admin', 'evals', 'suites'], queryFn: listAdminAgentEvalSuites })
+  const operationsQuery = useQuery({ queryKey: ['admin', 'agent3', 'operations'], queryFn: getAdminAgent3OperationsMetrics, enabled: Boolean(admin?.isSuperAdmin) })
   const suites = suitesQuery.data?.suites ?? EMPTY_SUITES
   const selectedSuite = suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0]
 
@@ -152,6 +154,16 @@ export default function AdminAgentEvalsPage() {
       />
 
       {admin?.isSuperAdmin ? <SuiteCreator /> : null}
+
+      {admin?.isSuperAdmin && operationsQuery.data ? <AdminCard>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-semibold">Agent 3.0 近 30 天运行门禁</h2><p className="mt-1 text-xs text-[var(--text-secondary)]">只汇总匿名计数、耗时和预算，不读取小说正文。</p></div><StatusPill tone={operationsQuery.data.research.queryBudgetViolations === 0 ? 'success' : 'danger'}>{operationsQuery.data.research.queryBudgetViolations === 0 ? '研究预算正常' : '存在预算越界'}</StatusPill></div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="研究构建 / 复用" value={`${operationsQuery.data.research.builds} / ${operationsQuery.data.research.reuses}`} detail={`复用率 ${Math.round(operationsQuery.data.research.reuseRate * 100)}%`} />
+          <Metric label="单档案搜索" value={operationsQuery.data.research.averageSearchesPerBuild.toFixed(1)} detail={`平均 ${Math.round(operationsQuery.data.research.averageInputTokensPerBuild)} input tokens`} />
+          <Metric label="前三章试制" value={`${operationsQuery.data.prototypes.completed}/${operationsQuery.data.prototypes.total}`} detail={`完成率 ${Math.round(operationsQuery.data.prototypes.completionRate * 100)}%`} />
+          <Metric label="隐私与邀请" value={`${operationsQuery.data.privacy.analyticsOptOut} 项目退出`} detail={`${operationsQuery.data.sharing.accepted} 次邀请已接受`} />
+        </div>
+      </AdminCard> : null}
 
       <AdminCard>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -291,6 +303,10 @@ export default function AdminAgentEvalsPage() {
       {admin?.isSuperAdmin && selectedSuite ? <ResultsPanel query={resultsQuery} /> : null}
     </div>
   )
+}
+
+function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)]/40 p-3"><p className="text-xs text-[var(--text-secondary)]">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums">{value}</p><p className="mt-1 text-[11px] text-[var(--text-tertiary)]">{detail}</p></div>
 }
 
 function SuiteCreator() {

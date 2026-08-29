@@ -98,6 +98,8 @@ export async function startLoopRun(
     },
   })
 
+  void import('./writing-experiments.js').then(({ recordSevenDayContinuation }) => recordSevenDayContinuation(userId, session.novelId)).catch(() => {})
+
   // 异步执行循环，路由立即返回，前端连 stream 拿事件
   void executeAgentRun({
     runId: run.id,

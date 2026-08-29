@@ -76,6 +76,22 @@ export type AgentToolDisplayPayload =
       warningCount?: number
     }
   | {
+      kind: 'researchDossier'
+      dossierId: EntityId
+      title: string
+      detail: string
+      reused: boolean
+      sourceCount: number
+      items: string[]
+    }
+  | {
+      kind: 'firstThreePrototype'
+      prototypeId: EntityId
+      title: string
+      detail: string
+      items: string[]
+    }
+  | {
       kind: 'qualityReport'
       reportId: EntityId
       chapterId: EntityId

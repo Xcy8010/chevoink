@@ -24,6 +24,7 @@ import type {
   AdminCorpusSourceRow,
   CorpusDocumentImport,
   CorpusSourceCreate,
+  AdminAgent3OperationsMetrics,
 } from '../../../shared/contracts/index.js'
 import { requestJson } from '@/app/api-client'
 
@@ -145,6 +146,10 @@ export function submitAdminBlindReview(
 
 export function getAdminAgentEvalResults(suiteId: string): Promise<AdminAgentEvalResults> {
   return requestJson(`/api/admin/evals/suites/${suiteId}/results`)
+}
+
+export function getAdminAgent3OperationsMetrics(): Promise<AdminAgent3OperationsMetrics> {
+  return requestJson('/api/admin/agent3/operations')
 }
 
 /* ---------------- Agent 3.0 合法文笔库 ---------------- */

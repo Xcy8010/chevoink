@@ -122,3 +122,24 @@ export type AgentSkillDetail = {
   audits: AgentSkillAuditSummary[]
   recentEvals: AgentSkillEvalSummary[]
 }
+
+export type SkillShareInviteStatusValue = 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked'
+
+export type SkillShareInviteView = {
+  id: string
+  direction: 'sent' | 'received'
+  status: SkillShareInviteStatusValue
+  skillId: string
+  skillName: string
+  version: string
+  message: string
+  counterpart: { id: string; nickname: string }
+  sourceNovel: { id: string; title: string }
+  expiresAt: string
+  createdAt: string
+}
+
+export type SkillSharePayload = {
+  sent: SkillShareInviteView[]
+  received: SkillShareInviteView[]
+}

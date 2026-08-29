@@ -10,6 +10,9 @@ const flagLabels: Record<Agent2FeatureKey, string> = {
   storyCompiler: 'Story Compiler 3.0',
   humanityQuality: '人类感质量门 3.0',
   craftLibrary: '合法文笔库与 Style DNA 3.0',
+  researchDossier: '创作研究台 3.0',
+  feedbackFlywheel: '创作反馈飞轮 3.0',
+  skillSharing: '技能邀请共享 3.0',
   dualWorkspace: '双工作区',
 }
 
@@ -28,6 +31,9 @@ export function resolveAgent2FeatureFlags(userId?: string | null): Agent2Feature
     storyCompiler: included && env.featureStoryCompilerEnabled,
     humanityQuality: included && env.featureHumanityQualityEnabled,
     craftLibrary: included && env.featureCraftLibraryEnabled,
+    researchDossier: included && env.featureResearchDossierEnabled,
+    feedbackFlywheel: included && env.featureFeedbackFlywheelEnabled,
+    skillSharing: included && env.featureSkillSharingEnabled,
     dualWorkspace: included && env.featureDualWorkspaceEnabled,
     variant: included ? 'v2' : 'v1-compatible',
   }

@@ -200,7 +200,7 @@ export async function getOwnedQualityChapter(userId: string, novelId: string, ch
 
 export async function buildHumanityQualityContext(userId: string, novelId: string, chapterId: string) {
   const chapter = await getOwnedQualityChapter(userId, novelId, chapterId)
-  const [charter, compilation, profiles, anchors, recentChapters, feedback] = await Promise.all([
+  const [charter, compilation, profiles, anchors, recentChapters, feedback, dataControl] = await Promise.all([
     prisma.storyCharter.findUnique({ where: { novelId } }),
     prisma.storyCompilation.findFirst({
       where: { userId, novelId, chapterId, status: 'active' },
@@ -216,6 +216,7 @@ export async function buildHumanityQualityContext(userId: string, novelId: strin
     prisma.qualityFinding.groupBy({
       by: ['signal', 'authorFeedback'], where: { userId, novelId, authorFeedback: { not: null } }, _count: { _all: true },
     }),
+    prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { qualityTelemetryEnabled: true } }),
   ])
 
   const mentionedProfiles = profiles.filter((profile) => chapter.content.includes(profile.characterName)).slice(0, 6)
@@ -229,7 +230,7 @@ export async function buildHumanityQualityContext(userId: string, novelId: strin
     })
     .slice(0, 3)
 
-  return { chapter, charter, compilation, profiles: mentionedProfiles, anchors: relevantAnchors, recentChapters, feedback }
+  return { chapter, charter, compilation, profiles: mentionedProfiles, anchors: relevantAnchors, recentChapters, feedback: dataControl?.qualityTelemetryEnabled === false ? [] : feedback }
 }
 
 function locateCriticFindings(content: string, findings: CriticQualityFinding[]): LocatedQualityFinding[] {
@@ -376,6 +377,8 @@ export async function applyQualityRepair(input: {
     await tx.chapterQualityReport.update({ where: { id: report.id }, data: { status: 'repaired', repairRound: { increment: 1 } } })
     return tx.chapter.findUniqueOrThrow({ where: { id: report.chapter.id } })
   })
+  const { recordWritingSignal } = await import('./writing-experiments.js')
+  await recordWritingSignal(input.userId, input.novelId, 'quality_revision_round')
   return { report, updated, before: report.chapter.content, after, repairedFindingIds: patches.map((patch) => patch.finding.id) }
 }
 
@@ -387,10 +390,13 @@ export async function recordQualityFindingFeedback(input: {
 }) {
   const finding = await prisma.qualityFinding.findFirst({ where: { id: input.findingId, userId: input.userId } })
   if (!finding) throw new DataAccessError(404, 'QUALITY_FINDING_NOT_FOUND', '质量问题不存在或不属于当前用户。')
-  return prisma.qualityFinding.update({
+  const updated = await prisma.qualityFinding.update({
     where: { id: finding.id },
     data: { authorFeedback: input.accepted ? 'accepted' : 'rejected', feedbackReason: input.reason?.trim() || null },
   })
+  const { recordWritingSignal } = await import('./writing-experiments.js')
+  await recordWritingSignal(input.userId, finding.novelId, input.accepted ? 'quality_feedback_accepted' : 'quality_feedback_rejected')
+  return updated
 }
 
 export async function saveCharacterVoiceProfile(userId: string, novelId: string, input: CharacterVoiceProfileInput) {

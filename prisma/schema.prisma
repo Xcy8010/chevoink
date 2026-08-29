@@ -338,85 +338,91 @@ enum PrivacyLevel {
 }
 
 model User {
-  id                      String                  @id @default(cuid()) @db.VarChar(64)
-  email                   String?                 @unique @db.VarChar(255)
-  phone                   String?                 @unique @db.VarChar(32)
-  passwordHash            String                  @map("password_hash") @db.VarChar(255)
-  nickname                String                  @db.VarChar(64)
-  avatarUrl               String?                 @map("avatar_url")
-  profileCoverUrl         String?                 @map("profile_cover_url")
-  bio                     String?
-  role                    UserRole                @default(user)
+  id                        String                  @id @default(cuid()) @db.VarChar(64)
+  email                     String?                 @unique @db.VarChar(255)
+  phone                     String?                 @unique @db.VarChar(32)
+  passwordHash              String                  @map("password_hash") @db.VarChar(255)
+  nickname                  String                  @db.VarChar(64)
+  avatarUrl                 String?                 @map("avatar_url")
+  profileCoverUrl           String?                 @map("profile_cover_url")
+  bio                       String?
+  role                      UserRole                @default(user)
   /**
    * 超级管理（唯一）：仅该账号可在后台设置用户身份（用户↔管理）
    */
-  isSuperAdmin            Boolean                 @default(false) @map("is_super_admin")
-  isAuthor                Boolean                 @default(false) @map("is_author")
-  followerCount           Int                     @default(0) @map("follower_count")
-  followingCount          Int                     @default(0) @map("following_count")
-  novelCount              Int                     @default(0) @map("novel_count")
-  postCount               Int                     @default(0) @map("post_count")
-  unreadMessageCount      Int                     @default(0) @map("unread_message_count")
-  unreadNotificationCount Int                     @default(0) @map("unread_notification_count")
+  isSuperAdmin              Boolean                 @default(false) @map("is_super_admin")
+  isAuthor                  Boolean                 @default(false) @map("is_author")
+  followerCount             Int                     @default(0) @map("follower_count")
+  followingCount            Int                     @default(0) @map("following_count")
+  novelCount                Int                     @default(0) @map("novel_count")
+  postCount                 Int                     @default(0) @map("post_count")
+  unreadMessageCount        Int                     @default(0) @map("unread_message_count")
+  unreadNotificationCount   Int                     @default(0) @map("unread_notification_count")
   /**
    * 会话令牌版本：改密/登出/封禁时 +1，即刻吊销该用户全部 v2 会话令牌
    */
-  tokenVersion            Int                     @default(0) @map("token_version")
-  interactionsSeenAt      DateTime?               @map("interactions_seen_at")
-  followersSeenAt         DateTime?               @map("followers_seen_at")
-  lastActiveAt            DateTime?               @map("last_active_at")
+  tokenVersion              Int                     @default(0) @map("token_version")
+  interactionsSeenAt        DateTime?               @map("interactions_seen_at")
+  followersSeenAt           DateTime?               @map("followers_seen_at")
+  lastActiveAt              DateTime?               @map("last_active_at")
   /**
    * 封禁时间（NULL = 正常）：后台管理封禁后全站登录态失效
    */
-  bannedAt                DateTime?               @map("banned_at")
-  privacyFollowers        PrivacyLevel            @default(public) @map("privacy_followers")
-  privacyFollowing        PrivacyLevel            @default(public) @map("privacy_following")
-  privacyLikes            PrivacyLevel            @default(public) @map("privacy_likes")
-  privacyFavorites        PrivacyLevel            @default(public) @map("privacy_favorites")
-  privacyReplies          PrivacyLevel            @default(public) @map("privacy_replies")
-  createdAt               DateTime                @default(now()) @map("created_at")
-  updatedAt               DateTime                @updatedAt @map("updated_at")
-  novels                  Novel[]
-  chapters                Chapter[]
-  comments                Comment[]
-  posts                   Post[]
-  sharedInPosts           Post[]                  @relation("PostSharedUser")
-  coverAssets             CoverAsset[]
-  conversationMembers     ConversationMember[]
-  messages                Message[]
-  aiUsageLogs             AiUsageLog[]
-  agentSessions           AgentSession[]
-  agentRuns               AgentRun[]
-  smsVerificationCodes    SmsVerificationCode[]
-  postLikes               PostLike[]
-  postBookmarks           PostBookmark[]
-  commentLikes            CommentLike[]
-  novelFavorites          NovelFavorite[]
-  readingProgress         ReadingProgress[]
-  novelReads              NovelRead[]
-  paragraphUnderlines     ParagraphUnderline[]
-  changeSets              ChangeSet[]
-  userDirectives          UserDirective[]
-  storyCharters           StoryCharter[]
-  readerPromises          ReaderPromise[]
-  storyCompilations       StoryCompilation[]
-  sceneTasks              SceneTask[]
-  chapterBridges          ChapterBridge[]
-  characterVoiceProfiles  CharacterVoiceProfile[]
-  experienceAnchors       ExperienceAnchor[]
-  chapterQualityReports   ChapterQualityReport[]
-  qualityFindings         QualityFinding[]
-  ownedCorpusSources      CorpusSource[]          @relation("CorpusSourceOwner")
-  auditedCorpusSources    CorpusSource[]          @relation("CorpusSourceAuditor")
-  corpusDocuments         CorpusDocument[]
-  corpusPassages          CorpusPassage[]
-  techniqueCards          TechniqueCard[]
-  styleProfiles           StyleProfile[]
-  retrievalTraces         RetrievalTrace[]
-  leakageChecks           LeakageCheck[]
-  corpusDeletionReceipts  CorpusDeletionReceipt[]
-  following               UserFollow[]            @relation("UserFollowFollower")
-  followers               UserFollow[]            @relation("UserFollowFollowing")
+  bannedAt                  DateTime?               @map("banned_at")
+  privacyFollowers          PrivacyLevel            @default(public) @map("privacy_followers")
+  privacyFollowing          PrivacyLevel            @default(public) @map("privacy_following")
+  privacyLikes              PrivacyLevel            @default(public) @map("privacy_likes")
+  privacyFavorites          PrivacyLevel            @default(public) @map("privacy_favorites")
+  privacyReplies            PrivacyLevel            @default(public) @map("privacy_replies")
+  createdAt                 DateTime                @default(now()) @map("created_at")
+  updatedAt                 DateTime                @updatedAt @map("updated_at")
+  novels                    Novel[]
+  chapters                  Chapter[]
+  comments                  Comment[]
+  posts                     Post[]
+  sharedInPosts             Post[]                  @relation("PostSharedUser")
+  coverAssets               CoverAsset[]
+  conversationMembers       ConversationMember[]
+  messages                  Message[]
+  aiUsageLogs               AiUsageLog[]
+  agentSessions             AgentSession[]
+  agentRuns                 AgentRun[]
+  smsVerificationCodes      SmsVerificationCode[]
+  postLikes                 PostLike[]
+  postBookmarks             PostBookmark[]
+  commentLikes              CommentLike[]
+  novelFavorites            NovelFavorite[]
+  readingProgress           ReadingProgress[]
+  novelReads                NovelRead[]
+  paragraphUnderlines       ParagraphUnderline[]
+  changeSets                ChangeSet[]
+  userDirectives            UserDirective[]
+  storyCharters             StoryCharter[]
+  readerPromises            ReaderPromise[]
+  storyCompilations         StoryCompilation[]
+  sceneTasks                SceneTask[]
+  chapterBridges            ChapterBridge[]
+  characterVoiceProfiles    CharacterVoiceProfile[]
+  experienceAnchors         ExperienceAnchor[]
+  chapterQualityReports     ChapterQualityReport[]
+  qualityFindings           QualityFinding[]
+  ownedCorpusSources        CorpusSource[]          @relation("CorpusSourceOwner")
+  auditedCorpusSources      CorpusSource[]          @relation("CorpusSourceAuditor")
+  corpusDocuments           CorpusDocument[]
+  corpusPassages            CorpusPassage[]
+  techniqueCards            TechniqueCard[]
+  styleProfiles             StyleProfile[]
+  retrievalTraces           RetrievalTrace[]
+  leakageChecks             LeakageCheck[]
+  corpusDeletionReceipts    CorpusDeletionReceipt[]
+  researchDossiers          ResearchDossier[]
+  firstThreePrototypes      FirstThreePrototype[]
+  writingExperiments        WritingExperiment[]
+  agentDataControls         AgentDataControl[]
+  sentSkillShareInvites     SkillShareInvite[]      @relation("SkillShareInviteSender")
+  receivedSkillShareInvites SkillShareInvite[]      @relation("SkillShareInviteRecipient")
+  following                 UserFollow[]            @relation("UserFollowFollower")
+  followers                 UserFollow[]            @relation("UserFollowFollowing")
 
   @@map("users")
 }
@@ -505,6 +511,11 @@ model Novel {
   retrievalTraces        RetrievalTrace[]
   leakageChecks          LeakageCheck[]
   corpusDeletionReceipts CorpusDeletionReceipt[]
+  researchDossiers       ResearchDossier[]
+  firstThreePrototypes   FirstThreePrototype[]
+  writingExperiments     WritingExperiment[]
+  agentDataControls      AgentDataControl[]
+  skillShareInvites      SkillShareInvite[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -1061,6 +1072,7 @@ model AgentSkillDefinition {
   installations  AgentSkillInstallation[]
   audits         AgentSkillAudit[]
   evals          AgentSkillEval[]
+  shareInvites   SkillShareInvite[]
 
   @@index([ownerUserId, status])
   @@index([source, status])
@@ -1428,6 +1440,189 @@ model StoryCharter {
 
   @@index([userId, updatedAt])
   @@map("story_charters")
+}
+
+enum ResearchDossierStatus {
+  draft
+  ready
+  stale
+  failed
+}
+
+enum ResearchTriggerReason {
+  new_book
+  new_genre
+  new_arc
+  factual_risk
+  author_request
+  quality_stagnation
+}
+
+enum FirstThreePrototypeStatus {
+  planning
+  ready
+  writing
+  quality_review
+  completed
+  abandoned
+}
+
+model ResearchDossier {
+  id                   String                @id @default(cuid()) @db.VarChar(64)
+  userId               String                @map("user_id") @db.VarChar(64)
+  novelId              String                @map("novel_id") @db.VarChar(64)
+  runId                String?               @map("run_id") @db.VarChar(64)
+  version              Int
+  status               ResearchDossierStatus @default(draft)
+  triggerReason        ResearchTriggerReason @map("trigger_reason")
+  triggerSignals       Json                  @map("trigger_signals")
+  topic                String                @db.VarChar(240)
+  genre                String                @db.VarChar(96)
+  targetAudience       String                @map("target_audience") @db.VarChar(500)
+  targetPlatform       String                @default("") @map("target_platform") @db.VarChar(160)
+  readerPromise        String                @map("reader_promise")
+  abandonmentRisks     Json                  @map("abandonment_risks")
+  marketPatterns       Json                  @map("market_patterns")
+  differentiation      Json
+  factCards            Json                  @map("fact_cards")
+  languageRisks        Json                  @map("language_risks")
+  recommendations      Json
+  rejectedIdeas        Json                  @map("rejected_ideas")
+  queryPlan            Json                  @map("query_plan")
+  sources              Json
+  sourceHash           String                @map("source_hash") @db.VarChar(64)
+  cacheKey             String                @map("cache_key") @db.VarChar(64)
+  searchCount          Int                   @default(0) @map("search_count")
+  estimatedInputTokens Int                   @default(0) @map("estimated_input_tokens")
+  buildDurationMs      Int                   @default(0) @map("build_duration_ms")
+  reusedCount          Int                   @default(0) @map("reused_count")
+  expiresAt            DateTime              @map("expires_at")
+  confirmedAt          DateTime?             @map("confirmed_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel                Novel                 @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  prototypes           FirstThreePrototype[]
+
+  @@unique([novelId, version])
+  @@index([userId, status, updatedAt])
+  @@index([novelId, expiresAt, status])
+  @@index([cacheKey])
+  @@map("research_dossiers")
+}
+
+model FirstThreePrototype {
+  id                String                    @id @default(cuid()) @db.VarChar(64)
+  userId            String                    @map("user_id") @db.VarChar(64)
+  novelId           String                    @map("novel_id") @db.VarChar(64)
+  dossierId         String?                   @map("dossier_id") @db.VarChar(64)
+  version           Int
+  status            FirstThreePrototypeStatus @default(planning)
+  genreRisks        Json                      @map("genre_risks")
+  directions        Json
+  selectedDirection Json?                     @map("selected_direction")
+  volumeSpine       Json                      @map("volume_spine")
+  chapterBlueprints Json                      @map("chapter_blueprints")
+  completedChapters Int                       @default(0) @map("completed_chapters")
+  passedChapters    Int                       @default(0) @map("passed_chapters")
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+  user              User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel             Novel                     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  dossier           ResearchDossier?          @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+
+  @@unique([novelId, version])
+  @@index([userId, status, updatedAt])
+  @@index([novelId, status])
+  @@map("first_three_prototypes")
+}
+
+enum WritingExperimentKind {
+  first_three_direction
+  quality_revision
+  craft_retrieval
+}
+
+enum WritingExperimentStatus {
+  active
+  completed
+  withdrawn
+}
+
+model WritingExperiment {
+  id              String                  @id @default(cuid()) @db.VarChar(64)
+  userId          String                  @map("user_id") @db.VarChar(64)
+  novelId         String                  @map("novel_id") @db.VarChar(64)
+  kind            WritingExperimentKind
+  status          WritingExperimentStatus @default(active)
+  subjectHash     String                  @map("subject_hash") @db.VarChar(64)
+  arm             String                  @db.VarChar(64)
+  featureVersions Json                    @map("feature_versions")
+  exposure        Json
+  outcomes        Json
+  consentSnapshot Json                    @map("consent_snapshot")
+  startedAt       DateTime                @default(now()) @map("started_at")
+  completedAt     DateTime?               @map("completed_at")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel           Novel                   @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, updatedAt])
+  @@index([novelId, kind, status])
+  @@index([subjectHash])
+  @@map("writing_experiments")
+}
+
+model AgentDataControl {
+  id                      String   @id @default(cuid()) @db.VarChar(64)
+  userId                  String   @map("user_id") @db.VarChar(64)
+  novelId                 String   @map("novel_id") @db.VarChar(64)
+  qualityTelemetryEnabled Boolean  @default(true) @map("quality_telemetry_enabled")
+  productAnalyticsEnabled Boolean  @default(true) @map("product_analytics_enabled")
+  privateStyleEnabled     Boolean  @default(true) @map("private_style_enabled")
+  publicCorpusOptIn       Boolean  @default(false) @map("public_corpus_opt_in")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel                   Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, novelId])
+  @@index([novelId, updatedAt])
+  @@map("agent_data_controls")
+}
+
+enum SkillShareInviteStatus {
+  pending
+  accepted
+  declined
+  expired
+  revoked
+}
+
+model SkillShareInvite {
+  id              String                 @id @default(cuid()) @db.VarChar(64)
+  userId          String                 @map("user_id") @db.VarChar(64)
+  novelId         String                 @map("novel_id") @db.VarChar(64)
+  recipientUserId String                 @map("recipient_user_id") @db.VarChar(64)
+  skillId         String                 @map("skill_id") @db.VarChar(160)
+  version         String                 @db.VarChar(32)
+  status          SkillShareInviteStatus @default(pending)
+  tokenHash       String                 @unique @map("token_hash") @db.VarChar(64)
+  message         String                 @default("") @db.VarChar(500)
+  expiresAt       DateTime               @map("expires_at")
+  acceptedAt      DateTime?              @map("accepted_at")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+  user            User                   @relation("SkillShareInviteSender", fields: [userId], references: [id], onDelete: Cascade)
+  recipient       User                   @relation("SkillShareInviteRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  novel           Novel                  @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  skill           AgentSkillDefinition   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([userId, novelId, status])
+  @@index([recipientUserId, status, expiresAt])
+  @@index([skillId, version])
+  @@map("skill_share_invites")
 }
 
 model ReaderPromise {

@@ -139,6 +139,8 @@ export async function extractAuthorStyleProfile(input: {
   chapterIds: string[]
 }): Promise<{ profileId: string; sourceId: string; documentId: string; stats: StyleStats }> {
   await assertOwnedNovel(input.userId, input.novelId)
+  const dataControl = await prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId: input.userId, novelId: input.novelId } }, select: { privateStyleEnabled: true } })
+  if (dataControl?.privateStyleEnabled === false) throw new DataAccessError(409, 'PRIVATE_STYLE_DISABLED', '当前作品已关闭 Style DNA 使用，请先在技能区的数据设置中开启。')
   const uniqueIds = [...new Set(input.chapterIds)]
   const chapters = await prisma.chapter.findMany({
     where: { id: { in: uniqueIds }, novelId: input.novelId, authorId: input.userId },
@@ -223,8 +225,12 @@ export async function extractAuthorStyleProfile(input: {
   return { profileId: result.profile.id, sourceId: result.source.id, documentId: result.document.id, stats }
 }
 
-export async function getAuthorStyleProfile(userId: string, novelId: string) {
+export async function getAuthorStyleProfile(userId: string, novelId: string, respectDataControl = false) {
   await assertOwnedNovel(userId, novelId)
+  if (respectDataControl) {
+    const dataControl = await prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { privateStyleEnabled: true } })
+    if (dataControl?.privateStyleEnabled === false) return null
+  }
   return prisma.styleProfile.findFirst({
     where: { userId, novelId, kind: 'author', confirmed: true },
     orderBy: { updatedAt: 'desc' },
@@ -329,7 +335,7 @@ export async function searchCraftLibrary(input: {
   await assertOwnedNovel(input.userId, input.novelId)
   const [cards, profile] = await Promise.all([
     loadSearchCards(input.userId, input.novelId),
-    getAuthorStyleProfile(input.userId, input.novelId),
+    getAuthorStyleProfile(input.userId, input.novelId, true),
   ])
   const queryText = [input.query.genre, input.query.subgenre, input.query.sceneType, input.query.relationshipStage, input.query.pointOfView, input.query.narrativeDistance, input.query.pace, input.query.readerPromise, ...input.query.defectTargets].filter(Boolean).join(' ')
   const queryTokens = tokenize(queryText)

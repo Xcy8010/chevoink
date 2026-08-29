@@ -43,6 +43,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   style_profile_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'statistics_only'] },
   retrieval_trace_read: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'trace_scope_verified'] },
   style_leakage_check: { category: 'workflow', risk: 'low', postconditions: ['approved_sources_only', 'no_raw_output_logged', 'decision_persisted'] },
+  research_dossier_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'cache_reuse_recorded', 'no_web_research'] },
+  first_three_prototype_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'latest_version_only'] },
   chapter_create: {
     category: 'structure',
     risk: 'medium',
@@ -119,6 +121,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   character_voice_save: { category: 'workflow', risk: 'medium', postconditions: ['sample_evidence_verified', 'draft_unless_confirmed'] },
   experience_anchor_save: { category: 'workflow', risk: 'medium', postconditions: ['source_revision_verified', 'novel_scope_verified'] },
   style_profile_extract: { category: 'write', risk: 'high', postconditions: ['explicit_author_confirmation', 'novel_scope_verified', 'private_scope_only', 'withdrawal_source_created'] },
+  research_dossier_build: { category: 'workflow', risk: 'medium', postconditions: ['trigger_reason_verified', 'query_budget_enforced', 'external_content_marked_untrusted', 'sources_persisted', 'ttl_persisted'] },
+  first_three_prototype_build: { category: 'workflow', risk: 'medium', postconditions: ['story_charter_verified', 'research_dossier_verified', 'three_chapters_exact', 'no_chapter_content_written'] },
   ask_user: { category: 'workflow', risk: 'low', postconditions: ['run_waits_for_answer'] },
 } as const satisfies Record<string, AgentToolGovernance>
 

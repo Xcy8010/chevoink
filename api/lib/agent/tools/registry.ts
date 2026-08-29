@@ -99,6 +99,12 @@ import {
   styleProfileExtractTool,
   styleProfileGetTool,
 } from './craft-library-tools.js'
+import {
+  firstThreePrototypeBuildTool,
+  firstThreePrototypeGetTool,
+  researchDossierBuildTool,
+  researchDossierGetTool,
+} from './research-dossier-tools.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 注册表需要擦除各工具的 Args 泛型 */
 export const allTools: AgentTool<any>[] = [
@@ -137,6 +143,8 @@ export const allTools: AgentTool<any>[] = [
   styleProfileGetTool,
   retrievalTraceReadTool,
   styleLeakageCheckTool,
+  researchDossierGetTool,
+  firstThreePrototypeGetTool,
   // 写
   chapterCreateTool,
   chapterWriteTool,
@@ -197,6 +205,8 @@ export const allTools: AgentTool<any>[] = [
   characterVoiceSaveTool,
   experienceAnchorSaveTool,
   styleProfileExtractTool,
+  researchDossierBuildTool,
+  firstThreePrototypeBuildTool,
   // 交互
   askUserTool,
 ]

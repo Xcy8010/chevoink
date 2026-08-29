@@ -63,6 +63,9 @@ export function getToolsForAgent(
     if (!featureFlags.craftLibrary) {
       ;['craft_search', 'style_profile_get', 'style_profile_extract', 'retrieval_trace_read', 'style_leakage_check'].forEach((name) => disabled.add(name))
     }
+    if (!featureFlags.researchDossier) {
+      ;['research_dossier_get', 'research_dossier_build', 'first_three_prototype_get', 'first_three_prototype_build'].forEach((name) => disabled.add(name))
+    }
     modeTools = modeTools.filter((tool) => !disabled.has(tool.name))
   }
 

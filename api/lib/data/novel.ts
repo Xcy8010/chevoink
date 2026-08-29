@@ -261,10 +261,20 @@ export async function publishNovelData(
     return novel
   })
 
-  return {
-    novel: toNovel(updated, userId),
-    publishedChapterIds: chapterIds,
+  const { recordWritingSignal } = await import('../agent/writing-experiments.js')
+  await recordWritingSignal(userId, novelId, 'chapter_published', chapterIds.length)
+  const firstThreePublished = await prisma.chapter.count({ where: { novelId, orderIndex: { lte: 3 }, status: 'published', publishedContent: { not: null } } })
+  if (firstThreePublished >= 3) {
+    const passed = await prisma.chapterQualityReport.groupBy({
+      by: ['chapterId'],
+      where: { userId, novelId, status: { in: ['passed', 'repaired'] }, chapter: { orderIndex: { lte: 3 } } },
+    })
+    const prototype = await prisma.firstThreePrototype.findFirst({ where: { userId, novelId, status: { notIn: ['completed', 'abandoned'] } }, orderBy: { version: 'desc' } })
+    if (prototype) await prisma.firstThreePrototype.update({ where: { id: prototype.id }, data: { status: 'completed', completedChapters: 3, passedChapters: Math.min(3, passed.length) } })
+    await recordWritingSignal(userId, novelId, 'first_three_published')
   }
+
+  return { novel: toNovel(updated, userId), publishedChapterIds: chapterIds }
 }
 
 

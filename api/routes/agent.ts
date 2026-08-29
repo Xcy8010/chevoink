@@ -60,6 +60,10 @@ import {
   revokeCorpusSource,
 } from '../lib/agent/craft-library.js'
 import { styleSampleRequestSchema } from '../../shared/contracts/index.js'
+import { agentDataControlPatchSchema } from '../../shared/contracts/index.js'
+import { acceptSkillShareInviteSchema, createSkillShareInviteSchema } from '../../shared/contracts/index.js'
+import { getResearchWorkbench, updateAgentDataControl } from '../lib/agent/research-dossier.js'
+import { acceptSkillShareInvite, createSkillShareInvite, declineSkillShareInvite, listSkillShareInvites } from '../lib/agent/skills/sharing.js'
 
 const router = Router()
 
@@ -342,6 +346,31 @@ router.get('/novels/:novelId/style-profile', async (req: Request, res: Response)
   }
 })
 
+router.get('/novels/:novelId/research-workbench', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('researchDossier', userId)
+    const workbench = await getResearchWorkbench(userId, req.params.novelId)
+    res.status(200).json(buildSuccess(requestId, { workbench }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/novels/:novelId/agent-data-control', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('feedbackFlywheel', userId)
+    const patch = parseBody(agentDataControlPatchSchema, req.body, '请提供有效的数据使用设置。')
+    const dataControl = await updateAgentDataControl(userId, req.params.novelId, patch)
+    res.status(200).json(buildSuccess(requestId, { dataControl }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.post('/novels/:novelId/style-profile', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
   try {
@@ -480,6 +509,58 @@ router.post('/novels/:novelId/skills/:skillId/publish', async (req: Request, res
     const body = parseBody(publishSkillSchema, req.body, '请选择要发布的技能版本。')
     const payload = await publishNovelSkillVersion(userId, req.params.novelId, req.params.skillId, body.version)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/novels/:novelId/skills/:skillId/share-invites', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skillSharing', userId)
+    const body = parseBody(createSkillShareInviteSchema, req.body, '请提供接收账号和要共享的技能版本。')
+    const invite = await createSkillShareInvite({ userId, novelId: req.params.novelId, skillId: req.params.skillId, ...body })
+    res.status(201).json(buildSuccess(requestId, { invite }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/skill-share-invites', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skillSharing', userId)
+    const payload = await listSkillShareInvites(userId)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/skill-share-invites/:inviteId/accept', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skillSharing', userId)
+    const body = parseBody(acceptSkillShareInviteSchema, req.body, '请选择安装技能的目标作品。')
+    await acceptSkillShareInvite(userId, req.params.inviteId, body.destinationNovelId)
+    const [skills, invites] = await Promise.all([listNovelSkills(userId, body.destinationNovelId), listSkillShareInvites(userId)])
+    res.status(200).json(buildSuccess(requestId, { skills, invites }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/skill-share-invites/:inviteId/decline', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('skillSharing', userId)
+    await declineSkillShareInvite(userId, req.params.inviteId)
+    const invites = await listSkillShareInvites(userId)
+    res.status(200).json(buildSuccess(requestId, invites))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

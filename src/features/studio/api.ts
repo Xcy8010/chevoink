@@ -52,6 +52,11 @@ import type {
   UpdateNovelSkillRequest,
   AuthorStyleProfileView,
   StyleSampleRequest,
+  ResearchWorkbenchPayload,
+  AgentDataControlPatch,
+  AgentDataControlView,
+  SkillShareInviteView,
+  SkillSharePayload,
 } from '../../../shared/contracts/index.js'
 
 type RequestDataOptions = RequestInit & {
@@ -252,6 +257,18 @@ export function getNovelSkills(novelId: string): Promise<NovelSkillsPayload> {
   return requestData<NovelSkillsPayload>(`/api/agent/novels/${novelId}/skills`)
 }
 
+export async function getResearchWorkbenchApi(novelId: string): Promise<ResearchWorkbenchPayload> {
+  const data = await requestData<{ workbench: ResearchWorkbenchPayload }>(`/api/agent/novels/${novelId}/research-workbench`)
+  return data.workbench
+}
+
+export async function updateAgentDataControlApi(novelId: string, patch: AgentDataControlPatch): Promise<AgentDataControlView> {
+  const data = await requestData<{ dataControl: AgentDataControlView }>(`/api/agent/novels/${novelId}/agent-data-control`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  })
+  return data.dataControl
+}
+
 export async function getAuthorStyleProfileApi(novelId: string): Promise<AuthorStyleProfileView | null> {
   const data = await requestData<{ profile: AuthorStyleProfileView | null }>(`/api/agent/novels/${novelId}/style-profile`)
   return data.profile
@@ -280,6 +297,27 @@ export function updateNovelSkill(
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
+}
+
+export async function createSkillShareInviteApi(novelId: string, skillId: string, input: { recipientAccount: string; version?: string; message?: string }): Promise<SkillShareInviteView> {
+  const data = await requestData<{ invite: SkillShareInviteView }>(`/api/agent/novels/${novelId}/skills/${encodeURIComponent(skillId)}/share-invites`, {
+    method: 'POST', body: JSON.stringify(input),
+  })
+  return data.invite
+}
+
+export function listSkillShareInvitesApi(): Promise<SkillSharePayload> {
+  return requestData<SkillSharePayload>('/api/agent/skill-share-invites')
+}
+
+export function acceptSkillShareInviteApi(inviteId: string, destinationNovelId: string): Promise<{ skills: NovelSkillsPayload; invites: SkillSharePayload }> {
+  return requestData<{ skills: NovelSkillsPayload; invites: SkillSharePayload }>(`/api/agent/skill-share-invites/${inviteId}/accept`, {
+    method: 'POST', body: JSON.stringify({ destinationNovelId }),
+  })
+}
+
+export function declineSkillShareInviteApi(inviteId: string): Promise<SkillSharePayload> {
+  return requestData<SkillSharePayload>(`/api/agent/skill-share-invites/${inviteId}/decline`, { method: 'POST' })
 }
 
 export function createNovelSkill(novelId: string, payload: CreateNovelSkillRequest): Promise<NovelSkillsPayload> {
