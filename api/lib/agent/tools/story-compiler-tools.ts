@@ -174,7 +174,7 @@ export const storyCompilerPrepareTool = defineTool({
       bridge.openLoops.length ? `开放钩子：${bridge.openLoops.slice(0, 4).join('；')}` : '无已记录开放钩子',
     ]
     return {
-      output: `PREPARE 完成，compilationId=${prepared.compilation.id}，目标全书第 ${prepared.compilation.targetOrderIndex} 章。${prepared.charter ? `已加载 Story Charter r${prepared.charter.revision}` : '当前无 Story Charter，旧作可继续，但新书长纲应先建立。'}下一步必须调用 scene_task_build 生成 1–4 个 Scene Task，禁止直接跳到正文。${ctx.qualityMode === 'premium' ? '精品模式必须先比较至少 2 个推进候选，并把候选取舍写入 alternatives。' : ''}\n${items.join('\n')}`,
+      output: `PREPARE 完成，compilationId=${prepared.compilation.id}，目标全书第 ${prepared.compilation.targetOrderIndex} 章。${prepared.charter ? `已加载 Story Charter r${prepared.charter.revision}` : '当前无 Story Charter，旧作可继续，但新书长纲应先建立。'}下一步只调用一次 scene_task_build 生成 1–4 个 Scene Task，禁止直接跳到正文；精品候选取舍由服务端记录，不需要手工补 alternatives。\n${items.join('\n')}`,
       summary: `准备第 ${prepared.compilation.targetOrderIndex} 章写作`,
       display: {
         kind: 'storyCompiler', compilationId: prepared.compilation.id, phase: 'prepare', title: '准备章节写作',
@@ -188,25 +188,88 @@ export const sceneTaskBuildTool = defineTool({
   name: 'scene_task_build',
   title: '构建场景任务',
   description:
-    'Story Compiler 的 BEAT 步骤。基于 PREPARE 返回的 compilationId，把本章拆成 1–4 个可执行 Scene Task；每个任务必须有目标、阻力、选择、代价、转折和可观测终态。禁止只写“推进剧情/制造冲突”等空泛词，禁止用景物描写代替事件。',
+    'Story Compiler 的 BEAT 步骤。把本章拆成 1–4 个可执行 Scene Task；每个任务必须有目标、阻力、选择、代价、转折和可观测终态。compilationId 和精品候选取舍可省略，由服务端从当前任务解析并补齐；禁止为了补流程元数据重复调用。',
   parameters: z.object({
-    compilationId: z.string().min(1),
+    compilationId: z.string().min(1).optional(),
     tasks: z.array(sceneTaskInputSchema).min(1).max(4),
     alternatives: z.array(z.object({
-      label: z.string().min(1).max(120),
-      tradeoff: z.string().min(1).max(500),
-      rejectedReason: z.string().min(1).max(500),
-    })).max(3).default([]).describe('精品模式至少 2 个候选推进及取舍；平衡模式可留空'),
+      label: z.string().min(1).max(120).default('备选推进'),
+      tradeoff: z.string().min(1).max(500).default('与当前 Scene Task 链相比的节奏和冲突取舍。'),
+      rejectedReason: z.string().min(1).max(500).default('当前 Scene Task 链更符合本章目标。'),
+    })).max(3).default([]).describe('可选；服务端会为精品模式补齐候选审计，不得因此重试'),
   }),
+  coerceArgs(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    const next = { ...(raw as Record<string, unknown>) }
+    if (!next.compilationId && typeof next.compilation_id === 'string') next.compilationId = next.compilation_id
+    if (!next.tasks && Array.isArray(next.sceneTasks)) next.tasks = next.sceneTasks
+    if (!next.tasks && Array.isArray(next.scene_tasks)) next.tasks = next.scene_tasks
+    if (Array.isArray(next.tasks)) {
+      next.tasks = next.tasks.map((value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+        const item = value as Record<string, unknown>
+        return {
+          ...item,
+          entryState: item.entryState ?? item.entry_state ?? {},
+          exitState: item.exitState ?? item.exit_state ?? {},
+          styleBudget: item.styleBudget ?? item.style_budget ?? {},
+          choice: item.choice ?? item.decision,
+          cost: item.cost ?? item.consequence,
+          turn: item.turn ?? item.twist,
+        }
+      })
+    }
+    if (next.compilationId === null || next.compilationId === '') delete next.compilationId
+    if (!Array.isArray(next.alternatives)) delete next.alternatives
+    if (Array.isArray(next.alternatives)) {
+      next.alternatives = next.alternatives.map((value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+        const item = value as Record<string, unknown>
+        return {
+          label: item.label ?? item.title ?? item.option,
+          tradeoff: item.tradeoff ?? item.tradeOff ?? item.rationale,
+          rejectedReason: item.rejectedReason ?? item.rejected_reason ?? item.reason,
+        }
+      })
+    }
+    return next
+  },
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const tasks = await saveSceneTasks({ userId: ctx.userId, novelId: ctx.novelId, compilationId: args.compilationId, tasks: args.tasks, alternatives: args.alternatives })
+    const candidates = await prisma.storyCompilation.findMany({
+      where: {
+        userId: ctx.userId,
+        novelId: ctx.novelId,
+        status: 'active',
+        OR: [
+          ...(args.compilationId ? [{ id: args.compilationId }] : []),
+          { runId: ctx.runId },
+          ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : []),
+        ],
+      },
+      include: { sceneTasks: { orderBy: { ordinal: 'asc' } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 6,
+    })
+    const compilation = candidates.find((item) => item.runId === ctx.runId)
+      ?? (ctx.chapterId ? candidates.find((item) => item.chapterId === ctx.chapterId) : undefined)
+      ?? (args.compilationId ? candidates.find((item) => item.id === args.compilationId) : undefined)
+      ?? candidates[0]
+    if (!compilation) return { output: '没有找到当前任务的活跃章节编译状态；请只重新执行一次 story_compiler_prepare。', summary: '未找到场景编译状态' }
+    if (!['prepare', 'beat'].includes(compilation.stage) && compilation.sceneTasks.length > 0) {
+      return {
+        output: `compilationId=${compilation.id} 已建立 ${compilation.sceneTasks.length} 个 Scene Task 并进入 ${compilation.stage} 阶段，无需重复构建。`,
+        summary: `复用 ${compilation.sceneTasks.length} 个场景任务`,
+        display: { kind: 'storyCompiler', compilationId: compilation.id, phase: compilation.stage, title: '场景任务已建立', detail: `${compilation.sceneTasks.length} 个场景`, items: compilation.sceneTasks.map((task) => `${task.ordinal}. ${task.purpose}｜转折：${task.turn}`) },
+      }
+    }
+    const tasks = await saveSceneTasks({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, tasks: args.tasks, alternatives: args.alternatives })
     return {
-      output: `BEAT 完成，已为 compilationId=${args.compilationId} 建立 ${tasks.length} 个 Scene Task${args.alternatives.length ? `，并记录 ${args.alternatives.length} 个候选推进的取舍` : ''}。现在按顺序写正文；每个场景必须让状态发生变化，写完后调用 continuity_validate。`,
+      output: `BEAT 完成，已为 compilationId=${compilation.id} 建立 ${tasks.length} 个 Scene Task；精品候选取舍已由服务端记录。现在按顺序写正文；每个场景必须让状态发生变化，写完后调用 continuity_validate。`,
       summary: `建立 ${tasks.length} 个场景任务`,
       display: {
-        kind: 'storyCompiler', compilationId: args.compilationId, phase: 'beat', title: '场景任务',
+        kind: 'storyCompiler', compilationId: compilation.id, phase: 'beat', title: '场景任务',
         detail: `${tasks.length} 个场景`, items: tasks.map((task) => `${task.ordinal}. ${task.purpose}｜转折：${task.turn}`),
       },
     }

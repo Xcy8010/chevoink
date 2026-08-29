@@ -186,23 +186,23 @@ const storyCompilerPhaseLabel = {
 function StoryCompilerCard({ display }: { display: Extract<AgentToolDisplayPayload, { kind: 'storyCompiler' }> }) {
   const [expanded, setExpanded] = useState(display.errorCount !== undefined && display.errorCount > 0)
   const hasProblems = (display.errorCount ?? 0) > 0 || (display.warningCount ?? 0) > 0
+  if (!hasProblems && display.items.length === 0) return null
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
-      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
-        <Brain className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-[var(--text-primary)]">{display.title}</span>
-          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{storyCompilerPhaseLabel[display.phase]} · {display.detail}</span>
+    <div className="border-t border-[var(--border-subtle)]">
+      <button type="button" onClick={() => setExpanded((value) => !value)} className="group flex min-h-7 w-full items-center gap-1.5 py-1.5 text-left">
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]">
+          <Brain className={cn('h-3.5 w-3.5 transition-opacity', display.items.length > 0 && !expanded && 'group-hover:opacity-0')} />
+          {display.items.length > 0 ? <ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /> : null}
         </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-secondary)]">{storyCompilerPhaseLabel[display.phase]} · {display.detail}</span>
         {hasProblems ? (
           <span className={cn('shrink-0 text-[11px]', (display.errorCount ?? 0) > 0 ? 'text-rose-500' : 'text-amber-500')}>
             {(display.errorCount ?? 0) > 0 ? `${display.errorCount} 错误` : `${display.warningCount} 警告`}
           </span>
         ) : null}
-        {expanded ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
       </button>
       {expanded && display.items.length > 0 ? (
-        <ul className="space-y-1 border-t border-[var(--border-subtle)] px-3 py-2">
+        <ul className="space-y-1 pb-1.5 pl-[22px]">
           {display.items.map((item, index) => <li key={`${index}-${item}`} className="break-words text-[11px] leading-5 text-[var(--text-secondary)]">{item}</li>)}
         </ul>
       ) : null}
@@ -216,20 +216,19 @@ function QualityReportCard({ display }: { display: Extract<AgentToolDisplayPaylo
   const warnings = display.findings.filter((finding) => (finding.severity === 'warning' || finding.severity === 'error') && finding.disposition !== 'repaired').length
 
   return (
-    <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)]">
-      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
-        <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-[var(--text-primary)]">人类感质量报告</span>
-          <span className="block truncate text-[11px] text-[var(--text-secondary)]">r{display.chapterRevision} · 第 {display.repairRound} 轮修订 · {display.findings.length} 条证据</span>
+    <div className="border-t border-[var(--border-subtle)]">
+      <button type="button" onClick={() => setExpanded((value) => !value)} className="group flex min-h-7 w-full items-center gap-1.5 py-1.5 text-left">
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]">
+          <Wrench className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} />
+          <ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} />
         </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-secondary)]">质量报告 · r{display.chapterRevision} · {display.findings.length} 条证据</span>
         <span className={cn('shrink-0 text-[11px]', warnings > 0 ? 'text-amber-500' : 'text-emerald-600')}>
           {warnings > 0 ? `${warnings} 条需关注` : repaired > 0 ? `已自动修复 ${repaired} 处` : '通过'}
         </span>
-        {expanded ? <ChevronUp className="h-3.5 w-3.5 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 text-[var(--text-secondary)]" />}
       </button>
       {expanded ? (
-        <div className="space-y-2 border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="pl-[22px]">
           {display.findings.length === 0 ? <p className="text-[11px] text-[var(--text-secondary)]">没有发现可定位的问题。</p> : null}
           {display.findings.map((finding) => {
             return (
@@ -701,6 +700,9 @@ const ToolCallCard = memo(function ToolCallCard({
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
   const writeTool = WRITE_TOOL_NAMES.has(part.toolName)
+  const workflowDisplay = part.display?.kind === 'storyCompiler' || part.display?.kind === 'qualityReport'
+  const workflowDisplayHasBody = part.display?.kind !== 'storyCompiler'
+    || (part.display.items.length > 0 || (part.display.errorCount ?? 0) > 0 || (part.display.warningCount ?? 0) > 0)
   // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
   const collapsible = part.toolName === 'web_read' && !!part.display
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
@@ -723,16 +725,31 @@ const ToolCallCard = memo(function ToolCallCard({
               ? `已生成 ${part.progressChars} 字 · 执行中…`
               : '执行中…'
             : ''
+  const headerContent = <>
+    {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
+    <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">{part.title || part.toolName}</span>
+    {running ? <span className="shrink-0 animate-pulse text-[10px] font-medium text-[var(--text-secondary)]">{runningLabel}</span> : null}
+    {durationLabel ? <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">{durationLabel}</span> : null}
+    {writeTool && !running ? <span className={cn(
+      'shrink-0 text-[10px] font-medium',
+      part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
+    )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
+    <span className="shrink-0">{toolStatusIcon[part.status]}</span>
+    {collapsible ? expanded ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /> : null}
+  </>
 
   return (
     <div
       className={cn(
-        'relative overflow-hidden rounded-[10px] border bg-[var(--surface-muted)]/28 transition-colors',
-        running
+        'relative overflow-hidden transition-colors',
+        workflowDisplay
+          ? 'border-b border-[var(--border-subtle)] bg-transparent'
+          : 'rounded-[10px] border bg-[var(--surface-muted)]/28',
+        !workflowDisplay && running
           ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]/55'
-          : writeTool && part.status === 'success'
+          : !workflowDisplay && writeTool && part.status === 'success'
             ? 'border-[color:var(--border-strong)] bg-[var(--surface-muted)]/42'
-            : 'border-[var(--border-subtle)]',
+            : !workflowDisplay ? 'border-[var(--border-subtle)]' : '',
       )}
     >
       {/* IDE 式执行中呼吸动画：整卡蒙层脉冲，比单独的 spinner 更醒目 */}
@@ -742,42 +759,14 @@ const ToolCallCard = memo(function ToolCallCard({
           className="pointer-events-none absolute inset-0 animate-pulse bg-[var(--surface-muted)]/80"
         />
       ) : null}
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="relative flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">
-          {part.title || part.toolName}
-        </span>
-        {running ? (
-          <span className="shrink-0 animate-pulse text-[10px] font-medium text-[var(--text-secondary)]">
-            {runningLabel}
-          </span>
-        ) : null}
-        {durationLabel ? (
-          <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">
-            {durationLabel}
-          </span>
-        ) : null}
-        {writeTool && !running ? <span className={cn(
-          'shrink-0 text-[10px] font-medium',
-          part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
-        )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
-        <span className="shrink-0">{toolStatusIcon[part.status]}</span>
-        {collapsible ? (
-          expanded ? (
-            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-          )
-        ) : null}
-      </button>
+      {workflowDisplay
+        ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
+        : <button type="button" onClick={() => setExpanded((value) => !value)} className="relative flex w-full items-center gap-2 px-3 py-2 text-left">{headerContent}</button>}
       {part.summary ? (
         <p
           className={cn(
-            'px-3 pb-2 text-[11px] leading-5',
+            'pb-2 text-[11px] leading-5',
+            workflowDisplay ? 'px-[22px]' : 'px-3',
             part.status === 'failed' || part.status === 'denied'
               ? 'text-rose-500'
               : 'text-[var(--text-secondary)]',
@@ -791,8 +780,8 @@ const ToolCallCard = memo(function ToolCallCard({
           {argsPreview}
         </pre>
       ) : null}
-      {part.display && (!collapsible || expanded) ? (
-        <div className="px-3 pb-3 pt-1">
+      {part.display && workflowDisplayHasBody && (!collapsible || expanded) ? (
+        <div className={cn(workflowDisplay ? 'pb-2' : 'px-3 pb-3 pt-1')}>
           <ToolDisplayRenderer display={part.display} />
         </div>
       ) : null}

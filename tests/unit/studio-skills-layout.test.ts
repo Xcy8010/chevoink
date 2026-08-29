@@ -36,4 +36,21 @@ describe('Agent 3.0 技能区跨端入口', () => {
     expect(styleDialog).toContain('单文件最大 512 KB')
     expect(styleDialog).toContain('STYLE_SAMPLE_UPLOAD_MAX_BYTES')
   })
+
+  it('Work 折叠轨和 Work/IDE 导航统一使用工具图标并保留技能入口', () => {
+    const perspective = read('src/features/studio/components/WorkPerspective.tsx')
+    const inspector = read('src/features/studio/components/WorkInspector.tsx')
+    const ideRail = read('src/features/studio/components/IdeNavigationRail.tsx')
+    expect(perspective).toContain("{ key: 'skills' as const, label: '技能', icon: Wrench }")
+    expect(inspector).toContain("{ key: 'skills' as const, label: '技能', icon: Wrench }")
+    expect(ideRail).toContain("{ key: 'skills' as const, label: '技能', icon: Wrench }")
+    expect(`${perspective}${inspector}${ideRail}`).not.toContain('Sparkles')
+  })
+
+  it('工作流工具采用单层 disclosure 行，不再用圆角卡套圆角卡', () => {
+    const parts = read('src/features/studio/agent/components/AgentMessageParts.tsx')
+    expect(parts).toContain("'border-b border-[var(--border-subtle)] bg-transparent'")
+    expect(parts).toContain("if (!hasProblems && display.items.length === 0) return null")
+    expect(parts).toContain('group-hover:opacity-0')
+  })
 })

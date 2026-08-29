@@ -6,7 +6,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
-  Sparkles,
+  Wrench,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -25,7 +25,7 @@ const navigationItems = [
   { key: 'memory' as const, label: '记忆', icon: BrainCircuit },
   { key: 'context' as const, label: '上下文', icon: ScrollText },
   { key: 'changes' as const, label: '变更', icon: GitCompareArrows },
-  { key: 'skills' as const, label: '技能', icon: Sparkles },
+  { key: 'skills' as const, label: '技能', icon: Wrench },
 ]
 
 /** IDE 左侧活动栏：折叠时仍保留全部一级入口，展开后在右侧显示对应面板。 */

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { BookCopy, BrainCircuit, ChevronLeft, ChevronRight, GitCompareArrows, ListTodo, PanelLeftClose, PanelRightClose, ScrollText } from 'lucide-react'
+import { BookCopy, BrainCircuit, ChevronLeft, ChevronRight, GitCompareArrows, ListTodo, PanelLeftClose, PanelRightClose, ScrollText, Wrench } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { ResizablePanel } from '../panel-widths'
@@ -31,6 +31,7 @@ const inspectorRailItems = [
   { key: 'context' as const, label: '上下文', icon: ScrollText },
   { key: 'changes' as const, label: '变更', icon: GitCompareArrows },
   { key: 'memory' as const, label: '记忆', icon: BrainCircuit },
+  { key: 'skills' as const, label: '技能', icon: Wrench },
 ]
 
 const PANEL_MOTION_MS = 220

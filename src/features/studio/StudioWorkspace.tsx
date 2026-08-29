@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Sparkles, Trash2, Upload } from 'lucide-react'
+import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -4135,7 +4135,7 @@ export default function StudioWorkspace() {
                     ? [{ key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') }]
                     : []),
                   { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
-                  { key: 'skills', label: '作品技能', icon: Sparkles, action: () => setMobileView('skills') },
+                  { key: 'skills', label: '作品技能', icon: Wrench, action: () => setMobileView('skills') },
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
                   { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },

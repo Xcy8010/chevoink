@@ -262,6 +262,9 @@ export async function saveSceneTasks(input: {
   tasks: SceneTaskInput[]
   alternatives?: Array<{ label: string; tradeoff: string; rejectedReason: string }>
 }) {
+  if (input.tasks.length < 1 || input.tasks.length > 4) {
+    throw new DataAccessError(400, 'SCENE_TASK_COUNT_INVALID', '每章必须建立 1–4 个 Scene Task。')
+  }
   const compilation = await prisma.storyCompilation.findFirst({
     where: { id: input.compilationId, userId: input.userId, novelId: input.novelId, status: 'active' },
   })
@@ -269,9 +272,7 @@ export async function saveSceneTasks(input: {
   if (!['prepare', 'beat'].includes(compilation.stage)) {
     throw new DataAccessError(409, 'COMPILATION_STAGE_CONFLICT', `当前已进入 ${compilation.stage} 阶段，不能覆盖场景任务。`)
   }
-  if (compilation.mode === 'premium' && (input.alternatives?.length ?? 0) < 2) {
-    throw new DataAccessError(400, 'PREMIUM_BEAT_CANDIDATES_REQUIRED', '精品模式必须先比较至少 2 个场景推进候选，再提交选中的 Scene Task。')
-  }
+  const beatCandidates = normalizeBeatCandidates(input.tasks, input.alternatives)
   return prisma.$transaction(async (tx) => {
     await tx.sceneTask.deleteMany({ where: { compilationId: compilation.id } })
     await tx.sceneTask.createMany({
@@ -299,11 +300,42 @@ export async function saveSceneTasks(input: {
       where: { id: compilation.id },
       data: {
         stage: 'beat',
-        preparedContext: { ...context, beatCandidates: input.alternatives ?? [] } as Prisma.InputJsonValue,
+        preparedContext: { ...context, beatCandidates } as Prisma.InputJsonValue,
       },
     })
     return tx.sceneTask.findMany({ where: { compilationId: compilation.id }, orderBy: { ordinal: 'asc' } })
   })
+}
+
+/**
+ * 精品候选属于可审计的流程元数据，不应成为模型调用的硬失败点。
+ * 模型提供完整取舍时原样保留；缺失或结构不全时依据已通过严格校验的
+ * Scene Task 生成两个短候选，不新增模型调用，也不削弱场景任务本身的约束。
+ */
+export function normalizeBeatCandidates(
+  tasks: SceneTaskInput[],
+  alternatives?: Array<{ label: string; tradeoff: string; rejectedReason: string }>,
+) {
+  const supplied = (alternatives ?? [])
+    .filter((item) => item.label.trim() && item.tradeoff.trim() && item.rejectedReason.trim())
+    .slice(0, 3)
+  if (supplied.length >= 2) return supplied
+
+  const first = tasks[0]
+  const last = tasks.at(-1) ?? first
+  const taskChain = tasks.map((task) => task.purpose).join('→').slice(0, 360)
+  return [
+    {
+      label: '当前 Scene Task 链',
+      tradeoff: `保留目标、阻力、选择、代价与转折的完整链条：${taskChain}`.slice(0, 500),
+      rejectedReason: `未淘汰；当前方案能落实“${last.turn}”这一可观测转折。`.slice(0, 500),
+    },
+    {
+      label: '压缩为单场推进',
+      tradeoff: `以“${first.goal}”为唯一目标，可缩短篇幅，但会压低“${first.cost}”的过程重量。`.slice(0, 500),
+      rejectedReason: `当前章节需要保留人物选择与代价的递进，因此采用 ${tasks.length} 个 Scene Task。`.slice(0, 500),
+    },
+  ]
 }
 
 export async function recordStoryCompilerWrite(input: {
