@@ -192,7 +192,7 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
           onScroll={handleEditorScroll}
           placeholder={share ? '说说你的推荐理由，让更多人看到它。' : '把你的观察、追更感受或写作心得发出来。'}
           // 绝对定位铺满容器，与镜像层同尺寸同内边距，逐行对齐
-          className="absolute inset-0 h-full w-full resize-none bg-transparent px-4 py-4 text-[15px] leading-7 text-transparent caret-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] md:px-5"
+          className="absolute inset-0 h-full w-full resize-none border-0 bg-transparent whitespace-pre-wrap break-words px-4 py-4 text-[15px] leading-7 text-transparent caret-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] md:px-5"
         />
       </div>
 
