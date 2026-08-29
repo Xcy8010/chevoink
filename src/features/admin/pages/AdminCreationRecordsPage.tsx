@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, History, MessageSquareText, User, Users } from 'lucide-react'
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, History, MessageSquareText, User } from 'lucide-react'
 
 import { getAdminAgentSessionMessages, getAdminCreationRecords, listAdminUsers } from '../api'
 import Button from '@/components/ui/Button'
@@ -48,6 +48,28 @@ type RenderPart = {
   url?: string
 }
 
+/** AI 思考过程：默认折叠，点击标题栏展开正文，避免整段推理占满聊天卡片 */
+function ReasoningCollapsible({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)]/40">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>AI 思考过程</span>
+      </button>
+      {open ? (
+        <p className="whitespace-pre-wrap px-2.5 pb-2 text-xs italic leading-5 text-[var(--text-tertiary)]">
+          {text}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function renderPart(part: RenderPart, index: number) {
   if (part.type === 'text' && part.text) {
     return (
@@ -57,11 +79,7 @@ function renderPart(part: RenderPart, index: number) {
     )
   }
   if (part.type === 'reasoning' && part.text) {
-    return (
-      <p key={index} className="text-xs italic leading-5 text-[var(--text-tertiary)]">
-        {part.text}
-      </p>
-    )
+    return <ReasoningCollapsible key={index} text={part.text} />
   }
   if (part.type === 'tool-call') {
     return (
@@ -141,10 +159,11 @@ export default function AdminCreationRecordsPage() {
     enabled: Boolean(userId),
   })
 
+  // 无 userId：默认列出全部创作者，无需先搜索；输入关键词时可即时过滤
   const searchQuery = useQuery({
     queryKey: ['admin', 'users', 'search-for-records', search],
     queryFn: () => listAdminUsers({ search: search || undefined, page: 1, pageSize: 20 }),
-    enabled: !userId && Boolean(search),
+    enabled: !userId,
   })
 
   const messagesQuery = useQuery({
@@ -161,11 +180,11 @@ export default function AdminCreationRecordsPage() {
     [payload],
   )
 
-  // 无 userId：进入创作者检索落地页（合法文笔库的「创作记录」入口）
+  // 无 userId：直接列出全部创作者（免搜索），点击进入对应创作记录详情
   if (!userId) {
     return (
       <div>
-        <AdminPageHeader title="创作记录" description="检索用户后查看其各作品与 Agent 的对话记录" />
+        <AdminPageHeader title="创作记录" description="无需搜索即可查看已有创作记录的创作者，点击进入其创作记录" />
         <form
           className="mb-4 flex max-w-md gap-2"
           onSubmit={(event) => {
@@ -173,50 +192,41 @@ export default function AdminCreationRecordsPage() {
             setSearch(keyword.trim())
           }}
         >
-          <TextInput value={keyword} placeholder="昵称 / 手机号 / 邮箱" onChange={(event) => setKeyword(event.target.value)} />
+          <TextInput value={keyword} placeholder="昵称 / 手机号 / 邮箱（留空显示全部）" onChange={(event) => setKeyword(event.target.value)} />
           <Button type="submit" variant="primary">
             搜索
           </Button>
         </form>
 
-        {search ? (
-          <AdminPanelState state={searchQuery.isLoading ? 'loading' : searchQuery.isError ? 'error' : searchQuery.data && searchQuery.data.items.length === 0 ? 'empty' : 'ready'}>
-            <AdminCard>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {searchQuery.data?.items.map((user) => (
-                  <button
-                    key={user.id}
-                    type="button"
-                    onClick={() => navigate(`/admin/users/${user.id}/creation-records`)}
-                    className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] p-3 text-left transition-colors hover:bg-[var(--surface-muted)]"
-                  >
-                    {user.avatarUrl ? (
-                      <img src={user.avatarUrl} alt={user.nickname} className="h-11 w-11 shrink-0 rounded-full object-cover" />
-                    ) : (
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-base font-semibold">
-                        {user.nickname.slice(0, 1)}
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{user.nickname}</p>
-                      <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-                        {user.novelCount} 作品 · {user.followerCount} 粉丝
-                      </p>
-                    </div>
-                    <ChevronRight size={15} className="text-[var(--text-tertiary)]" />
-                  </button>
-                ))}
-              </div>
-            </AdminCard>
-          </AdminPanelState>
-        ) : (
+        <AdminPanelState state={searchQuery.isLoading ? 'loading' : searchQuery.isError ? 'error' : searchQuery.data && searchQuery.data.items.length === 0 ? 'empty' : 'ready'}>
           <AdminCard>
-            <div className="py-10 text-center">
-              <Users className="mx-auto h-8 w-8 text-[var(--text-tertiary)]" />
-              <p className="mt-3 text-sm text-[var(--text-secondary)]">输入昵称、手机号或邮箱检索用户，点击进入其创作记录。</p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {searchQuery.data?.items.map((user) => (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => navigate(`/admin/users/${user.id}/creation-records`)}
+                  className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] p-3 text-left transition-colors hover:bg-[var(--surface-muted)]"
+                >
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt={user.nickname} className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-base font-semibold">
+                      {user.nickname.slice(0, 1)}
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{user.nickname}</p>
+                    <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                      {user.novelCount} 作品 · {user.followerCount} 粉丝
+                    </p>
+                  </div>
+                  <ChevronRight size={15} className="text-[var(--text-tertiary)]" />
+                </button>
+              ))}
             </div>
           </AdminCard>
-        )}
+        </AdminPanelState>
       </div>
     )
   }

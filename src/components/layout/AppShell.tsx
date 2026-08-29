@@ -601,8 +601,8 @@ export default function AppShell({ title, description, children }: AppShellProps
                             <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
                               {sessionUser.nickname}
                             </span>
-                            <span className="block truncate text-xs text-[var(--text-secondary)]">
-                              {sessionUser.isAuthor ? '继续管理作品与资料' : '继续管理书架与资料'}
+                            <span className="block truncate text-[11px] leading-4 text-[var(--text-tertiary)]">
+                              {sessionUser.bio?.trim() ? sessionUser.bio : '-'}
                             </span>
                           </span>
                         </div>
@@ -659,7 +659,7 @@ export default function AppShell({ title, description, children }: AppShellProps
                 // 阅读区以正文为中心，电脑端也去掉壳层顶部导航栏，让阅读区顶到最上
                 isReaderRoute && 'hidden md:hidden',
                 // 手机端仅首页/发现/搜索显示顶部导航栏（studio 已有自己的隐藏规则，不叠加）
-                hideMobileHeader && !isStudioRoute && 'hidden md:block',
+                hideMobileHeader && !isStudioRoute && !isReaderRoute && 'hidden md:block',
               )}
             >
           <div className="mx-auto max-w-[var(--shell-max-width)]">

@@ -272,8 +272,87 @@ function parseToolArgsTolerant(raw: string): unknown {
     return repaired
   }
 
+  // 单引号字符串修复：模型常见用单引号包字符串（JSON 不认单引号），逐字符把不在双引号内的
+  // 单引号当成字符串定界符换成双引号；双引号内内容原样保留，避免误伤；“撇号”位于双引号内会被
+  // 正常跳过。这条只是候选之一，parse 失败时继续尝试其它候选，不会破坏原 JSON。
+  const repairSingleQuoteStrings = (input: string): string => {
+    let out = ''
+    let inDouble = false
+    let inSingle = false
+    let i = 0
+    while (i < input.length) {
+      const char = input[i]
+      if (inDouble) {
+        out += char
+        if (char === '\\') {
+          out += input[i + 1] ?? ''
+          i += 2
+          continue
+        }
+        if (char === '"') inDouble = false
+        i += 1
+        continue
+      }
+      if (inSingle) {
+        if (char === '\\') {
+          out += '\\\\'
+          i += 1
+          continue
+        }
+        if (char === "'") {
+          out += '"'
+          inSingle = false
+          i += 1
+          continue
+        }
+        if (char === '"') {
+          out += '\\"'
+          i += 1
+          continue
+        }
+        if (char === '\n') {
+          out += '\\n'
+          i += 1
+          continue
+        }
+        if (char === '\r') {
+          out += '\\r'
+          i += 1
+          continue
+        }
+        if (char === '\t') {
+          out += '\\t'
+          i += 1
+          continue
+        }
+        out += char
+        i += 1
+        continue
+      }
+      if (char === '"') {
+        inDouble = true
+        out += char
+        i += 1
+        continue
+      }
+      if (char === "'") {
+        inSingle = true
+        out += '"'
+        i += 1
+        continue
+      }
+      out += char
+      i += 1
+    }
+    return out
+  }
+
   for (const candidate of [...attempts]) {
     attempts.push(repairTruncated(candidate))
+  }
+
+  for (const candidate of [...attempts]) {
+    attempts.push(repairSingleQuoteStrings(candidate))
   }
 
   for (const candidate of attempts) {

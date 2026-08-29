@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ExternalLink, Eye } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Eye, History } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'
@@ -146,6 +146,13 @@ export default function AdminNovelDetailPage() {
                     <ExternalLink size={14} />
                     前台预览
                   </a>
+                  <Link
+                    to={`/admin/users/${novel.author.id}/creation-records`}
+                    className="inline-flex h-9 items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border-strong)] px-3 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"
+                  >
+                    <History size={14} />
+                    查看创作记录
+                  </Link>
                   {takenDown ? (
                     <Button onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>
                       恢复上架

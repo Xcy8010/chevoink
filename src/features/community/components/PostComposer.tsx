@@ -246,9 +246,9 @@ export default function PostComposer({ onSubmit, isSubmitting, initialShare }: P
         </div>
       ) : null}
 
-      {/* 配图预览：缩略图网格 + 虚线添加格 */}
+      {/* 配图预览：缩略图网格 + 虚线添加格（限高滚动，避免多图撑高编辑器挡住底部发布栏） */}
       {images.length > 0 || imageProcessing ? (
-        <div className="grid grid-cols-3 gap-2 px-4 pb-3 md:px-5">
+        <div className="grid max-h-[190px] grid-cols-3 gap-2 overflow-y-auto px-4 pb-3 md:px-5">
           {images.map((dataUrl, index) => (
             <div
               key={`${index}-${dataUrl.slice(-24)}`}

@@ -316,7 +316,11 @@ export function StudioSkeleton() {
         </div>
 
         {perspective === 'ide' ? (
-          <div className="grid min-h-0 flex-1 overflow-hidden border-y border-[var(--border-subtle)]" data-studio-skeleton="ide">
+          <div
+            className="grid min-h-0 flex-1 overflow-hidden border-y border-[var(--border-subtle)] bg-[var(--surface-default)]"
+            data-studio-skeleton="ide"
+            style={{ gridTemplateColumns: 'minmax(0, 280px) minmax(0, 1fr) minmax(0, 320px)' }}
+          >
             <div className="flex min-h-0 overflow-hidden border-r border-[var(--border-subtle)]">
               <nav className="flex w-[46px] shrink-0 flex-col items-center border-r border-[var(--border-subtle)] py-2" aria-label="IDE 工作区导航">
                 <Skeleton className="mb-3 h-8 w-8 rounded-[8px]" />

@@ -193,7 +193,7 @@ export default function ReaderDesktop({ state }: ReaderDesktopProps) {
 
   return (
     <div
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden border-b border-[var(--border-subtle)]"
       style={{ background: tone.background, color: tone.text }}
     >
       <ReaderProgressBar percent={state.progressPercent} />

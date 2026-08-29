@@ -29,12 +29,48 @@ const askUserParameters = z.object({
     .describe('给作者的候选方向（2-4 个），必须把你最推荐的方案排在第一位（界面会给首项标记「推荐」，选项文本里不要自己写“推荐”字样）。界面还会额外提供自定义输入框，无需专门加“其他”选项'),
 })
 
+/** 校验前兜底修复：Agent 构造 options 时最常见的小毛病在此收口，避免一次提问因选项格式被打成「参数校验失败」。
+ * 逐项修复：options 缺失/为空时补默认选项；元素是字符串时升级为 {label}；detail 为 null 时剔除；
+ * 数量超 4 个截断、不足 2 个补齐；label 超 60 字截断；顶层 null 剔除。只改形态，不改语义。 */
+function coerceAskUserArgs(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { question: '', options: [] }
+  }
+  const record = raw as Record<string, unknown>
+  const question =
+    typeof record.question === 'string' ? record.question.trim().slice(0, 500) : String(record.question ?? '').slice(0, 500)
+  let options = Array.isArray(record.options) ? record.options : []
+  if (options.length === 0) {
+    options = [{ label: '是的，按此继续' }, { label: '我有补充' }]
+  }
+  const normalized = options
+    .slice(0, 4)
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { label: item.trim().slice(0, 60) }
+      }
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>
+        const label = typeof obj.label === 'string' ? obj.label.trim().slice(0, 60) : String(obj.label ?? '').trim().slice(0, 60)
+        const detail = obj.detail === null ? undefined : typeof obj.detail === 'string' ? obj.detail.trim().slice(0, 200) : undefined
+        return { label, ...(detail ? { detail } : {}) }
+      }
+      return null
+    })
+    .filter((item): item is { label: string; detail?: string } => item !== null && item.label.length > 0)
+  while (normalized.length < 2) {
+    normalized.push({ label: `继续方案 ${normalized.length + 1}` })
+  }
+  return { question, options: normalized }
+}
+
 export const askUserTool = defineTool({
   name: 'ask_user',
   title: '向作者提问',
   description:
     '当任务的关键意图不明确（如剧情走向、篇幅、风格、人物取舍）时，用本工具向作者提问并等待回答，再基于回答继续执行。提供 2-4 个候选选项帮助作者快速决策，作者也可以自行输入答案。一次任务最多提问 3 次，尽量把相关的不确定点合并成一次提问；拿到回答后应修订既有产物（如 plan_save 带 planId）而不是重新生成。禁止把问题和选项写在回复正文里让作者"回复数字选择"——那样任务已经结束，作者的回答无法接上。',
   parameters: askUserParameters,
+  coerceArgs: coerceAskUserArgs,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
   async execute(ctx, args) {
