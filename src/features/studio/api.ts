@@ -35,6 +35,8 @@ import type {
   SplitChapterRequest,
   MergeChaptersRequest,
   MemoryGraph,
+  MemoryGraphJob,
+  MemoryGraphJobStatus,
   NovelSkillsPayload,
   AgentSkillTestResult,
   AgentSkillDetail,
@@ -246,14 +248,18 @@ export async function getNovelMemoryGraph(novelId: string): Promise<MemoryGraph>
   return data.graph
 }
 
-export async function syncNovelMemoryGraph(novelId: string, force = false): Promise<MemoryGraph> {
-  const data = await requestData<{ graph: MemoryGraph }>(`/api/agent/novels/${novelId}/memory-graph/sync`, {
+export async function syncNovelMemoryGraph(novelId: string, force = false): Promise<{ jobId: string; status: MemoryGraphJobStatus }> {
+  // 手动刷新改为异步任务：立即返回 jobId，前端轮询 getMemoryGraphJob 直到完成，避免同步等待 AI 重建到超时。
+  const data = await requestData<{ jobId: string; status: MemoryGraphJobStatus }>(`/api/agent/novels/${novelId}/memory-graph/sync`, {
     method: 'POST',
     body: JSON.stringify({ force }),
-    // AI 需从正文（最长 120 章 × 2600 字）重建全网关系，耗时可远超默认 30s，放宽到 120s 避免误报超时。
-    timeoutMs: 120_000,
   })
-  return data.graph
+  return data
+}
+
+export async function getMemoryGraphJob(novelId: string, jobId: string): Promise<MemoryGraphJob> {
+  const data = await requestData<{ job: MemoryGraphJob }>(`/api/agent/novels/${novelId}/memory-graph/sync/${jobId}`)
+  return data.job
 }
 
 export function getNovelSkills(novelId: string): Promise<NovelSkillsPayload> {

@@ -74,3 +74,16 @@ export const memoryGraphSchema = z.object({
 export type MemoryGraphNode = z.infer<typeof memoryGraphNodeSchema>
 export type MemoryGraphEdge = z.infer<typeof memoryGraphEdgeSchema>
 export type MemoryGraph = z.infer<typeof memoryGraphSchema>
+
+export const memoryGraphJobStatusSchema = z.enum(['pending', 'running', 'completed', 'failed'])
+export type MemoryGraphJobStatus = z.infer<typeof memoryGraphJobStatusSchema>
+
+export const memoryGraphJobSchema = z.object({
+  jobId: z.string().min(1),
+  novelId: z.string().min(1),
+  status: memoryGraphJobStatusSchema,
+  totalChunks: z.number().int().min(0),
+  doneChunks: z.number().int().min(0),
+  error: z.string().nullable().optional(),
+})
+export type MemoryGraphJob = z.infer<typeof memoryGraphJobSchema>

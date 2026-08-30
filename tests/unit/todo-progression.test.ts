@@ -18,20 +18,20 @@ describe('agent todo progression discipline', () => {
     ])).toBeNull()
   })
 
-  it('rejects bulk completion at the end of a task', () => {
+  it('allows completing multiple items in one write', () => {
     expect(validateTodoProgression(pendingList, [
       { content: '完成第一章', status: 'completed' },
       { content: '完成第二章', status: 'completed' },
       { content: '校验卷章结构', status: 'completed' },
-    ])).toContain('只能完成一项')
+    ])).toBeNull()
   })
 
-  it('rejects skipping pending directly to completed', () => {
+  it('allows completing a pending item directly', () => {
     expect(validateTodoProgression(pendingList, [
       { content: '完成第一章', status: 'in_progress' },
       { content: '完成第二章', status: 'completed' },
       { content: '校验卷章结构', status: 'pending' },
-    ])).toContain('不能从未开始直接跳到已完成')
+    ])).toBeNull()
   })
 
   it('keeps completed work immutable', () => {

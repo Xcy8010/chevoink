@@ -37,16 +37,9 @@ const todoWriteParameters = z.object({
  */
 export function validateTodoProgression(previous: AgentTodoItem[], next: AgentTodoItem[]): string | null {
   const previousByContent = new Map(previous.map((item) => [item.content, item.status]))
-  const newlyCompleted = next.filter(
-    (item) => item.status === 'completed' && previousByContent.get(item.content) !== 'completed',
-  )
 
-  if (newlyCompleted.length > 1) {
-    return '一次 todo_write 只能完成一项待办。请在每项工作真实完成后立即单独更新，再继续下一项。'
-  }
-  if (newlyCompleted.some((item) => previousByContent.get(item.content) !== 'in_progress')) {
-    return '待办不能从未开始直接跳到已完成。请先把当前项标记为 in_progress，完成后再单独标记 completed。'
-  }
+  // 允许一次完成多项待办（pending/进行中 → completed 皆可），避免模型因“一次只能完成一项”
+  // 频繁被拒后反复试错重试。仅保留「已完成项不可回退」这一无害纪律线。
   for (const item of next) {
     if (previousByContent.get(item.content) === 'completed' && item.status !== 'completed') {
       return `已完成的待办“${item.content}”不能回退状态；如需返工，请新增一条明确的返工待办。`
@@ -132,7 +125,7 @@ export const todoWriteTool = defineTool({
   name: 'todo_write',
   title: '更新待办清单',
   description:
-    '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再严格逐项执行：开工前只把当前一项标为 in_progress；该项真实交付后立即单独标为 completed，再把下一项标为 in_progress。严禁在任务末尾批量完成多项，服务端会拒绝；严禁 pending 直接跳 completed。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者“要不要继续”。每次调用都要传入完整清单（全量替换）。',
+    '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再逐步执行：开工前只把当前一项标为 in_progress；某项真实交付后即可标记为 completed（可一次把多项已交付项一起标记完成，服务端已放开该限制；pending 项完成后也可直接标记 completed）。已完成项不要回退。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者“要不要继续”。每次调用都要传入完整清单（全量替换）。',
   parameters: todoWriteParameters,
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw

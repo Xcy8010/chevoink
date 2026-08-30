@@ -39,7 +39,7 @@ import { parseBody } from '../lib/parse-body.js'
 import { DataAccessError, prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
-import { getMemoryGraph, listMemoryReviewInbox, resolveMemoryReview, syncNovelMemoryProjection } from '../lib/agent/story-memory.js'
+import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, resolveMemoryReview, startMemoryGraphJob } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 import {
   createNovelSkillDraft,
@@ -282,9 +282,21 @@ router.post('/novels/:novelId/memory-graph/sync', async (req: Request, res: Resp
     const userId = requireSessionUserId(req)
     requireAgent2Feature('memory2', userId)
     const force = Boolean(req.body && typeof req.body === 'object' && !Array.isArray(req.body) && (req.body as { force?: unknown }).force === true)
-    const projection = await syncNovelMemoryProjection(userId, req.params.novelId, { force })
-    const graph = await getMemoryGraph(userId, req.params.novelId)
-    res.status(200).json(buildSuccess(requestId, { graph, projection }))
+    // 手动刷新改为异步任务：立即返回 jobId，前端轮询进度，绝不因 AI 重建整书关系网而同步等待到超时。
+    const { jobId, status } = await startMemoryGraphJob(userId, req.params.novelId, force)
+    res.status(200).json(buildSuccess(requestId, { jobId, status }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/memory-graph/sync/:jobId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    requireAgent2Feature('memory2', userId)
+    const job = await getMemoryGraphJob(userId, req.params.novelId, req.params.jobId)
+    res.status(200).json(buildSuccess(requestId, { job }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

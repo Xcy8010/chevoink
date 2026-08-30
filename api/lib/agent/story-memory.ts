@@ -305,9 +305,12 @@ export async function processMemoryExtractionJob(jobId: string): Promise<void> {
   }
 }
 
-const memoryProjectionInFlight = new Map<string, Promise<Awaited<ReturnType<typeof syncNovelMemoryProjectionOnce>>>>()
 const MEMORY_GRAPH_REFRESH_COOLDOWN_MS = 10 * 60 * 1000
 const AI_GRAPH_DESCRIPTION_PREFIX = '[AI关系网] '
+const AI_GRAPH_CHUNK_CHARS = 16_000
+const AI_GRAPH_MAX_CHUNK_CONCURRENCY = 3
+const AI_GRAPH_CHAPTER_WINDOW_CHARS = 12_000
+const AI_GRAPH_MAX_CHAPTERS = 400
 
 const aiGraphEnvelopeSchema = z.object({
   entities: z.array(z.object({
@@ -344,63 +347,58 @@ function isUsefulEntityName(type: string, value: string) {
 }
 
 /**
- * 用低推理模型从正文建立“整部小说关系网”。只在图谱为空时自动执行；手动刷新受服务端冷却限制。
- * 关系网覆盖人物、地点、组织、物件、事件与概念，模型同时负责别名归一，避免规则抽取把代词/残句当人物。
+ * 各块之间的局部关系网合并去重，并把别名/规范名统一索引到同一实体。
  */
-async function syncNovelMemoryProjectionOnce(userId: string, novelId: string, force = false) {
-  const novel = await prisma.novel.findFirst({
-    where: { id: novelId, authorId: userId },
-    select: { id: true, title: true, summary: true, categoryName: true, tagNames: true },
-  })
-  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新关系网。')
+type MergedGraphEntity = { name: string; type: string; aliases: Set<string>; description: string }
+type MergedGraphRelation = { from: string; to: string; type: string; state: string; confidence: number }
+type MergedGraph = { entities: MergedGraphEntity[]; relations: MergedGraphRelation[] }
 
-  // 2.0 规则投影曾把“林舟知道”截成“林舟知”等伪人名。先清理有明确旧标记的节点：
-  // 若仍有人工/工具确认实体就直接复用；若因此变成空图，才进入一次 AI 重建。
-  await prisma.storyEntity.deleteMany({
-    where: { novelId, status: 'inferred', description: { startsWith: '从正文中自动识别' } },
-  })
-  const existingEntityCount = await prisma.storyEntity.count({ where: { novelId } })
-  if (!force && existingEntityCount > 0) {
-    return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: await prisma.entityRelation.count({ where: { fromEntity: { novelId } } }), reused: true }
-  }
-  if (force) {
-    const latest = await prisma.aiUsageLog.findFirst({
-      where: { userId, novelId, action: 'agentMemoryGraphBuild' },
-      orderBy: { createdAt: 'desc' }, select: { createdAt: true },
-    })
-    if (latest && Date.now() - latest.createdAt.getTime() < MEMORY_GRAPH_REFRESH_COOLDOWN_MS) {
-      const waitSeconds = Math.ceil((MEMORY_GRAPH_REFRESH_COOLDOWN_MS - (Date.now() - latest.createdAt.getTime())) / 1000)
-      throw new DataAccessError(429, 'MEMORY_GRAPH_RATE_LIMITED', `关系网刚刚更新过，请 ${Math.ceil(waitSeconds / 60)} 分钟后再试。`)
+function mergeGraphEnvelopes(envelopes: Array<z.infer<typeof aiGraphEnvelopeSchema>>): MergedGraph {
+  const entityByKey = new Map<string, MergedGraphEntity>()
+  const aliasToKey = new Map<string, string>()
+  const relations = new Map<string, MergedGraphRelation>()
+  const indexAlias = (key: string, names: string[]) => {
+    for (const name of names) {
+      const aliasKey = normalizedEntityKey(name)
+      if (aliasKey && !aliasToKey.has(aliasKey)) aliasToKey.set(aliasKey, key)
     }
   }
+  for (const envelope of envelopes) {
+    for (const entity of envelope.entities) {
+      if (!isUsefulEntityName(entity.type, entity.name)) continue
+      const key = normalizedEntityKey(entity.name)
+      const existing = entityByKey.get(key)
+      if (existing) {
+        for (const alias of [...new Set([entity.name, ...entity.aliases.map((item) => item.trim())])].filter(Boolean)) existing.aliases.add(alias)
+        indexAlias(key, [entity.name, ...existing.aliases])
+        if (!existing.description && entity.description) existing.description = entity.description
+      } else {
+        const record: MergedGraphEntity = { name: entity.name, type: entity.type, aliases: new Set([entity.name, ...entity.aliases.map((item) => item.trim())].filter(Boolean)), description: entity.description }
+        entityByKey.set(key, record)
+        indexAlias(key, [...record.aliases])
+      }
+    }
+  }
+  for (const envelope of envelopes) {
+    for (const relation of envelope.relations) {
+      const fromKey = aliasToKey.get(normalizedEntityKey(relation.from))
+      const toKey = aliasToKey.get(normalizedEntityKey(relation.to))
+      if (!fromKey || !toKey || fromKey === toKey) continue
+      const rk = `${fromKey}|${toKey}|${relation.type.trim()}`
+      if (!relations.has(rk)) relations.set(rk, { from: entityByKey.get(fromKey)!.name, to: entityByKey.get(toKey)!.name, type: relation.type.trim(), state: relation.state, confidence: relation.confidence })
+    }
+  }
+  return { entities: [...entityByKey.values()], relations: [...relations.values()] }
+}
 
-  const chapters = await prisma.chapter.findMany({
-    where: { novelId, content: { not: '' } }, orderBy: { orderIndex: 'asc' },
-    select: { id: true, title: true, content: true, revision: true, orderIndex: true }, take: 120,
-  })
-  if (chapters.length === 0) return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: 0, reused: true }
-
-  const chapterContext = chapters.map((chapter) =>
-    `【第${chapter.orderIndex}章 ${chapter.title}】\n${chapter.content.slice(0, 2600)}`,
-  ).join('\n\n')
-  const response = await generateTextCompletion(
-    `你是中文长篇小说的关系网编辑。请从正文建立全书级知识关系网，不只抽人物。实体类型只能是 character/location/organization/item/event/concept。\n严格规则：\n1. 合并同一实体的全名、简称、称谓和错别字到 aliases，禁止把“他/她/那人/众人/主角”等代词或泛称建成实体；禁止把残句、动作和形容词当名字。\n2. 关系必须有正文依据，使用具体中文关系词（亲属、同盟、敌对、隶属、位于、持有、参与、导致、知晓、追求等），不要用“同章出现”。\n3. description/state 只写已发生或明确设定，不推测后续剧情。\n4. 控制密度：保留影响主线、人物行动、世界规则和伏笔的实体，最多 60 个实体、140 条关系。\n只输出 JSON：{"entities":[{"type":"character|location|organization|item|event|concept","name":"规范名","aliases":["别名"],"description":"简洁事实"}],"relations":[{"from":"规范名或别名","to":"规范名或别名","type":"关系","state":"当前状态/依据","confidence":0.0}]}`,
-    `作品：${novel.title}\n简介：${novel.summary || '无'}\n分类：${novel.categoryName || '未设置'}\n标签：${novel.tagNames.join('、') || '无'}\n\n${chapterContext}`,
-    { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low' },
-  )
-  const parsed = aiGraphEnvelopeSchema.parse(parseJsonObject(response))
-  const selectedEntities = parsed.entities.filter((entity) => isUsefulEntityName(entity.type, entity.name))
-  const sourceId = `ai-graph:${createHash('sha256').update(chapters.map((chapter) => `${chapter.id}:${chapter.revision}`).join('|')).digest('hex').slice(0, 24)}`
-
-  const stale = await prisma.storyEntity.findMany({
-    where: { novelId, status: 'inferred', description: { startsWith: AI_GRAPH_DESCRIPTION_PREFIX } },
-    select: { id: true },
-  })
+/** 合并后的图按“替换旧 AI 图”语义写库：清旧 AI 实体/关系，再 upsert 实体、别名与关系。 */
+async function persistMemoryGraph(novelId: string, merged: MergedGraph, sourceId: string) {
+  const stale = await prisma.storyEntity.findMany({ where: { novelId, status: 'inferred', description: { startsWith: AI_GRAPH_DESCRIPTION_PREFIX } }, select: { id: true } })
   if (stale.length > 0) await prisma.storyEntity.deleteMany({ where: { id: { in: stale.map((item) => item.id) } } })
   await prisma.entityRelation.deleteMany({ where: { fromEntity: { novelId }, sourceId: { startsWith: 'ai-graph:' } } })
 
   const entityByKey = new Map<string, { id: string; canonicalName: string }>()
-  for (const item of selectedEntities) {
+  for (const item of merged.entities) {
     const canonicalName = item.name.trim()
     const entity = await prisma.storyEntity.upsert({
       where: { novelId_entityType_canonicalName: { novelId, entityType: item.type, canonicalName } },
@@ -409,46 +407,188 @@ async function syncNovelMemoryProjectionOnce(userId: string, novelId: string, fo
       select: { id: true, canonicalName: true },
     })
     entityByKey.set(normalizedEntityKey(canonicalName), entity)
-    for (const alias of [...new Set([canonicalName, ...item.aliases.map((value) => value.trim())])].filter(Boolean)) {
+    for (const alias of [...item.aliases].filter(Boolean)) {
       entityByKey.set(normalizedEntityKey(alias), entity)
       await prisma.entityAlias.upsert({ where: { entityId_alias: { entityId: entity.id, alias } }, create: { entityId: entity.id, alias, sourceId }, update: { sourceId } })
     }
   }
 
   let relationCount = 0
-  for (const relation of parsed.relations) {
+  for (const relation of merged.relations) {
     const from = entityByKey.get(normalizedEntityKey(relation.from))
     const to = entityByKey.get(normalizedEntityKey(relation.to))
     if (!from || !to || from.id === to.id) continue
     const relationType = relation.type.trim()
-    const existing = await prisma.entityRelation.findFirst({
-      where: { fromEntityId: from.id, toEntityId: to.id, relationType, validFrom: null },
-      select: { id: true },
-    })
+    const existing = await prisma.entityRelation.findFirst({ where: { fromEntityId: from.id, toEntityId: to.id, relationType, validFrom: null }, select: { id: true } })
     if (existing) {
-      await prisma.entityRelation.update({
-        where: { id: existing.id },
-        data: { state: relation.state.trim(), confidence: relation.confidence, sourceId },
-      })
+      await prisma.entityRelation.update({ where: { id: existing.id }, data: { state: relation.state.trim(), confidence: relation.confidence, sourceId } })
     } else {
-      await prisma.entityRelation.create({
-        data: { fromEntityId: from.id, toEntityId: to.id, relationType, state: relation.state.trim(), confidence: relation.confidence, sourceId },
-      })
+      await prisma.entityRelation.create({ data: { fromEntityId: from.id, toEntityId: to.id, relationType, state: relation.state.trim(), confidence: relation.confidence, sourceId } })
     }
     relationCount += 1
   }
-  return { chapterCount: chapters.length, jobCount: 0, entityCount: new Set([...entityByKey.values()].map((item) => item.id)).size, relationCount, reused: false }
+  return relationCount
+}
+
+/** 按字符预算把全书正文切块，让每块单次 AI 上下文可控，才能覆盖整个作品且不至于超时。 */
+function chunkChapters(chapters: { id: string; title: string; content: string; revision: number; orderIndex: number }[]) {
+  const chunks: { context: string }[] = []
+  let current: string[] = []
+  let currentChars = 0
+  for (const chapter of chapters) {
+    const text = `【第${chapter.orderIndex}章 ${chapter.title}】\n${chapter.content.slice(0, AI_GRAPH_CHAPTER_WINDOW_CHARS)}`
+    if (current.length > 0 && currentChars + text.length > AI_GRAPH_CHUNK_CHARS) {
+      chunks.push({ context: current.join('\n\n') })
+      current = []
+      currentChars = 0
+    }
+    current.push(text)
+    currentChars += text.length
+  }
+  if (current.length > 0) chunks.push({ context: current.join('\n\n') })
+  return chunks
+}
+
+function graphChunkPrompt(chunkContext: string, novelContext: string) {
+  return {
+    system: '你是中文长篇小说的关系网编辑。请从正文建立知识关系网，不只抽人物。实体类型只能是 character/location/organization/item/event/concept。\n严格规则：\n1. 合并同一实体的全名、简称、称谓和错别字到 aliases，禁止把“他/她/那人/众人/主角”等代词或泛称建成实体；禁止把残句、动作和形容词当名字。\n2. 关系必须有正文依据，使用具体中文关系词（亲属、同盟、敌对、隶属、位于、持有、参与、导致、知晓、追求等），不要用“同章出现”。\n3. description/state 只写已发生或明确设定，不推测后续剧情。\n4. 控制密度：只保留影响主线、人物行动、世界规则和伏笔的实体，本块最多 30 个实体、60 条关系。\n只输出 JSON：{"entities":[{"type":"character|location|organization|item|event|concept","name":"规范名","aliases":["别名"],"description":"简洁事实"}],"relations":[{"from":"规范名或别名","to":"规范名或别名","type":"关系","state":"当前状态/依据","confidence":0.0}]}',
+    user: `${novelContext}\n\n${chunkContext}`,
+  }
+}
+
+async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length)
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++
+      results[index] = await tasks[index]()
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()))
+  return results
+}
+
+/**
+ * 分块并发地从全部正文重建整部小说关系网：
+ * - 覆盖整个作品（章节不设旧 120 上限、每章窗口放宽到 AI_GRAPH_CHAPTER_WINDOW_CHARS）
+ * - 按字符预算切块 + 并发，单次 AI 上下文小，总耗时明显低于旧的单次超大 prompt
+ * - onProgress 用于异步任务回写进度
+ */
+async function buildMemoryGraphOnce(
+  userId: string,
+  novelId: string,
+  force: boolean,
+  onProgress?: (done: number, total: number) => void,
+) {
+  const novel = await prisma.novel.findFirst({
+    where: { id: novelId, authorId: userId },
+    select: { id: true, title: true, summary: true, categoryName: true, tagNames: true },
+  })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新关系网。')
+
+  // 清理旧规则投影伪实体，避免“林舟知道”被截成“林舟知”等残名残留图上；
+  // 若仍有人工/工具确认实体就直接复用；若因此变成空图，才进入一次 AI 重建。
+  await prisma.storyEntity.deleteMany({ where: { novelId, status: 'inferred', description: { startsWith: '从正文中自动识别' } } })
+  const existingEntityCount = await prisma.storyEntity.count({ where: { novelId } })
+  if (!force && existingEntityCount > 0) {
+    return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: await prisma.entityRelation.count({ where: { fromEntity: { novelId } } }), reused: true }
+  }
+  if (force) {
+    const latest = await prisma.aiUsageLog.findFirst({ where: { userId, novelId, action: 'agentMemoryGraphBuild' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+    if (latest && Date.now() - latest.createdAt.getTime() < MEMORY_GRAPH_REFRESH_COOLDOWN_MS) {
+      const waitSeconds = Math.ceil((MEMORY_GRAPH_REFRESH_COOLDOWN_MS - (Date.now() - latest.createdAt.getTime())) / 1000)
+      throw new DataAccessError(429, 'MEMORY_GRAPH_RATE_LIMITED', `关系网刚刚更新过，请 ${Math.ceil(waitSeconds / 60)} 分钟后再试。`)
+    }
+  }
+
+  const chapters = await prisma.chapter.findMany({
+    where: { novelId, content: { not: '' } }, orderBy: { orderIndex: 'asc' },
+    select: { id: true, title: true, content: true, revision: true, orderIndex: true }, take: AI_GRAPH_MAX_CHAPTERS,
+  })
+  if (chapters.length === 0) return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: 0, reused: true }
+
+  const novelContext = `作品：${novel.title}\n简介：${novel.summary || '无'}\n分类：${novel.categoryName || '未设置'}\n标签：${novel.tagNames.join('、') || '无'}`
+  const sourceId = `ai-graph:${createHash('sha256').update(chapters.map((chapter) => `${chapter.id}:${chapter.revision}`).join('|')).digest('hex').slice(0, 24)}`
+  const chunks = chunkChapters(chapters)
+  const total = chunks.length
+  let done = 0
+  onProgress?.(done, total)
+  const envelopes = await runWithConcurrency(
+    chunks.map((chunk) => async () => {
+      try {
+        const { system, user } = graphChunkPrompt(chunk.context, novelContext)
+        const raw = await generateTextCompletion(
+          system,
+          user,
+          { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low' },
+        )
+        return aiGraphEnvelopeSchema.parse(parseJsonObject(raw))
+      } catch (error) {
+        void error
+        return null
+      } finally {
+        done += 1
+        onProgress?.(done, total)
+      }
+    }),
+    AI_GRAPH_MAX_CHUNK_CONCURRENCY,
+  )
+  const valid = envelopes.filter((envelope): envelope is z.infer<typeof aiGraphEnvelopeSchema> => envelope !== null)
+  if (valid.length === 0) throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '关系网抽取未识别到有效内容，请稍后重试。')
+
+  const merged = mergeGraphEnvelopes(valid)
+  const relationCount = await persistMemoryGraph(novelId, merged, sourceId)
+  return { chapterCount: chapters.length, jobCount: 0, entityCount: merged.entities.length, relationCount, reused: false }
+}
+
+/**
+ * 手动刷新用的异步任务：启动后立即返回 jobId，前端轮询进度，绝不会让前端等 AI 重建到超时。
+ */
+type GraphJob = { id: string; novelId: string; status: 'running' | 'completed' | 'failed'; totalChunks: number; doneChunks: number; error?: string }
+const memoryGraphJobs = new Map<string, GraphJob>()
+
+export async function startMemoryGraphJob(userId: string, novelId: string, force: boolean): Promise<{ jobId: string; status: GraphJob['status'] }> {
+  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权刷新关系网。')
+  for (const job of memoryGraphJobs.values()) {
+    if (job.novelId === novelId && job.status === 'running') return { jobId: job.id, status: job.status }
+  }
+  const job: GraphJob = { id: `${novelId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, novelId, status: 'running', totalChunks: 0, doneChunks: 0 }
+  memoryGraphJobs.set(job.id, job)
+  void runMemoryGraphJob(job.id, userId, novelId, force)
+    .then(() => { const state = memoryGraphJobs.get(job.id); if (state) { state.status = 'completed'; state.doneChunks = state.totalChunks } })
+    .catch((error) => { const state = memoryGraphJobs.get(job.id); if (state) { state.status = 'failed'; state.error = error instanceof Error ? error.message.slice(0, 1000) : String(error) } })
+  return { jobId: job.id, status: job.status }
+}
+
+async function runMemoryGraphJob(jobId: string, userId: string, novelId: string, force: boolean) {
+  await buildMemoryGraphOnce(userId, novelId, force, (done, total) => {
+    const state = memoryGraphJobs.get(jobId)
+    if (state) { state.totalChunks = total; state.doneChunks = done }
+  })
+}
+
+export async function getMemoryGraphJob(userId: string, novelId: string, jobId: string) {
+  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权查看关系网任务。')
+  const job = memoryGraphJobs.get(jobId)
+  if (!job || job.novelId !== novelId) {
+    return { jobId, novelId, status: 'failed' as const, totalChunks: 0, doneChunks: 0, error: '任务不存在或已过期，请重新刷新。' }
+  }
+  return { jobId: job.id, novelId, status: job.status, totalChunks: job.totalChunks, doneChunks: job.doneChunks, error: job.error ?? null }
 }
 
 /** 同一作品的桌面/手机隐藏视图可能同时请求同步；服务端合并为一条事务链，避免重复重建关系。 */
+const memoryGraphBuildInFlight = new Map<string, Promise<Awaited<ReturnType<typeof buildMemoryGraphOnce>>>>()
 export function syncNovelMemoryProjection(userId: string, novelId: string, options: { force?: boolean } = {}) {
   const key = `${userId}:${novelId}:${options.force ? 'force' : 'auto'}`
-  const running = memoryProjectionInFlight.get(key)
+  const running = memoryGraphBuildInFlight.get(key)
   if (running) return running
-  const task = syncNovelMemoryProjectionOnce(userId, novelId, options.force === true)
-  memoryProjectionInFlight.set(key, task)
+  const task = buildMemoryGraphOnce(userId, novelId, options.force === true)
+  memoryGraphBuildInFlight.set(key, task)
   const release = () => {
-    if (memoryProjectionInFlight.get(key) === task) memoryProjectionInFlight.delete(key)
+    if (memoryGraphBuildInFlight.get(key) === task) memoryGraphBuildInFlight.delete(key)
   }
   void task.then(release, release)
   return task
