@@ -14,7 +14,7 @@ import {
   takeDownAdminNovel,
 } from '../api'
 import { AdminCard, AdminConfirmDialog, AdminPanelState, StatusPill } from '../AdminLayout'
-import { formatDateTime, isNovelTakenDown, NOVEL_STATUS_LABELS } from '../admin-shared'
+import { formatDateTime, formatTokens, isNovelTakenDown, NOVEL_STATUS_LABELS } from '../admin-shared'
 
 export default function AdminNovelDetailPage() {
   const { novelId = '' } = useParams()
@@ -170,12 +170,13 @@ export default function AdminNovelDetailPage() {
                 </div>
               </div>
 
-              <dl className="mt-5 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              <dl className="mt-5 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
                 {[
                   ['评论数', String(novel.commentCount)],
                   ['收藏数', String(novel.favoriteCount)],
                   ['首次发布', formatDateTime(novel.publishedAt)],
                   ['最近更新', formatDateTime(novel.updatedAt)],
+                  ['总 Token', formatTokens(detail.usage.totalTokens)],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <dt className="text-xs text-[var(--text-secondary)]">{label}</dt>

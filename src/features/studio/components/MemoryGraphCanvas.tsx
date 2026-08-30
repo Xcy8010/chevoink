@@ -21,6 +21,7 @@ const NODE_COLORS: Record<string, string> = {
   organization: '#a78bfa',
   item: '#f59e0b',
   event: '#fb7185',
+  concept: '#22d3ee',
 }
 
 function nodeColor(type: string): string {

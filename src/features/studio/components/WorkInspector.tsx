@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { BookCopy, BrainCircuit, ChevronDown, ChevronRight, FileText, FolderTree, GitCompareArrows, ScrollText, Wrench } from 'lucide-react'
+import { BookCopy, ChevronDown, ChevronRight, FileText, FolderTree, GitCompareArrows, Network, ScrollText, Wrench } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { StudioPayload } from '../../../../shared/contracts/index.js'
@@ -98,7 +98,7 @@ function ChangesTree({ activities, pendingReviewCount }: { activities: Workspace
 }
 
 export default function WorkInspector({ tab, onTabChange, workTree, pendingReviewCount, activities = [], memoryGraph, skillsPanel, contextPanel, compactNavigation = false, showNavigation = true }: Props) {
-  const tabs = [{ key: 'work' as const, label: '作品', icon: BookCopy }, { key: 'context' as const, label: '上下文', icon: ScrollText }, { key: 'changes' as const, label: '变更', icon: GitCompareArrows }, { key: 'memory' as const, label: '记忆', icon: BrainCircuit }, { key: 'skills' as const, label: '技能', icon: Wrench }]
+  const tabs = [{ key: 'work' as const, label: '作品', icon: BookCopy }, { key: 'context' as const, label: '上下文', icon: ScrollText }, { key: 'changes' as const, label: '变更', icon: GitCompareArrows }, { key: 'memory' as const, label: '关系网', icon: Network }, { key: 'skills' as const, label: '技能', icon: Wrench }]
   return <div className="flex h-full min-h-0 flex-col">
     {showNavigation ? <div className="flex h-11 shrink-0 items-end border-b border-[var(--border-subtle)] pl-10 pr-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" title={label} aria-label={label} onClick={() => onTabChange(key)} className={cn('flex h-10 min-w-0 flex-1 items-center justify-center gap-1 border-b-2 px-1 text-[10px] transition', tab === key ? 'border-[var(--text-primary)] text-[var(--text-primary)]' : 'border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5 shrink-0" /><span className={cn(compactNavigation && 'sr-only')}>{label}</span></button>)}</div> : null}
     <div className="min-h-0 flex-1 overflow-hidden">

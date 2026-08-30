@@ -7,7 +7,7 @@ import { useToast } from '@/components/ui/toast-context'
 import { ApiClientError } from '@/app/api-client'
 import { banAdminUser, getAdminUserDetail, resetAdminUserPassword, setAdminUserRole, unbanAdminUser } from '../api'
 import { AdminCard, AdminConfirmDialog, AdminPanelState, StatusPill } from '../AdminLayout'
-import { formatDateTime, useAdminSession } from '../admin-shared'
+import { formatDateTime, formatTokens, useAdminSession } from '../admin-shared'
 import { useState } from 'react'
 
 const ROLE_LABELS: Record<string, string> = {
@@ -180,12 +180,15 @@ export default function AdminUserDetailPage() {
 
             <AdminCard>
               <h2 className="mb-3 text-sm font-semibold">内容统计</h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
                 {[
                   { label: '作品', value: detail.stats.novels, to: `/admin/novels?search=${encodeURIComponent(user.nickname)}` },
                   { label: '帖子', value: detail.stats.posts, to: `/admin/posts?search=${encodeURIComponent(user.nickname)}` },
                   { label: '评论', value: detail.stats.comments, to: `/admin/comments?search=${encodeURIComponent(user.nickname)}` },
                   { label: '收藏作品', value: detail.stats.favorites, to: `/admin/users/${userId}/favorites` },
+                  { label: '总 Token', value: formatTokens(detail.stats.totalTokens), to: '/admin/tokens' },
+                  { label: '联网搜索', value: detail.stats.webSearchCalls },
+                  { label: '生图调用', value: detail.stats.imageCalls },
                 ].map((item) => (
                   <div key={item.label} className="rounded-lg bg-[var(--surface-muted)] p-3">
                     <p className="text-xs text-[var(--text-secondary)]">{item.label}</p>

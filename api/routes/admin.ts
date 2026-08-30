@@ -29,6 +29,7 @@ import {
   getAdminCreationRecordsData,
   getAdminCreationRecordsIndexData,
   getAdminDashboardData,
+  getAdminTokenManagementData,
   getAdminNovelDetailData,
   getAdminChapterContentData,
   getAdminPostDetailData,
@@ -941,6 +942,16 @@ router.get('/conversations/:conversationId/messages', async (req: Request, res: 
       return
     }
     res.status(200).json(buildSuccess(requestId, { messages: payload }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/token-usage', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    await requireAdmin(req)
+    res.status(200).json(buildSuccess(requestId, await getAdminTokenManagementData()))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

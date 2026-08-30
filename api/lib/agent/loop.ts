@@ -7,6 +7,7 @@ import type {
   AgentAttachmentMeta,
   AgentTodoItem,
   AgentTokenUsage,
+  AgentToolDraft,
   CreativeFreedom,
   StoryCompilerMode,
 } from '../../../shared/contracts/index.js'
@@ -364,6 +365,49 @@ function parseToolArgsTolerant(raw: string): unknown {
   }
 
   throw new Error('参数无法解析为 JSON')
+}
+
+/** 从尚未闭合的工具 JSON 中读取已生成的字符串字段，用于编辑器实时预览。 */
+function readStreamingJsonString(raw: string, key: string): string | undefined {
+  const marker = new RegExp(`"${key}"\\s*:\\s*"`, 'g')
+  let match: RegExpExecArray | null = null
+  let latest: RegExpExecArray | null = null
+  while ((match = marker.exec(raw))) latest = match
+  if (!latest) return undefined
+  let value = ''
+  for (let index = latest.index + latest[0].length; index < raw.length; index += 1) {
+    const char = raw[index]
+    if (char === '"') return value
+    if (char !== '\\') { value += char; continue }
+    const escaped = raw[++index]
+    if (escaped === undefined) break
+    if (escaped === 'n') value += '\n'
+    else if (escaped === 'r') value += '\r'
+    else if (escaped === 't') value += '\t'
+    else if (escaped === 'b') value += '\b'
+    else if (escaped === 'f') value += '\f'
+    else if (escaped === 'u') {
+      const code = raw.slice(index + 1, index + 5)
+      if (/^[0-9a-f]{4}$/i.test(code)) { value += String.fromCharCode(Number.parseInt(code, 16)); index += 4 }
+      else break
+    } else value += escaped
+  }
+  return value
+}
+
+function extractStreamingToolDraft(toolName: string, raw: string): AgentToolDraft | undefined {
+  const chapterContentKey = toolName === 'chapter_edit_range' ? 'newText' : 'content'
+  if (['chapter_create', 'chapter_write', 'chapter_append', 'chapter_edit_range'].includes(toolName)) {
+    const content = readStreamingJsonString(raw, chapterContentKey)
+    if (content === undefined) return undefined
+    return { kind: 'chapter', toolName, targetId: readStreamingJsonString(raw, 'chapterId'), title: readStreamingJsonString(raw, 'title'), content }
+  }
+  if (toolName === 'plan_save') {
+    const content = readStreamingJsonString(raw, 'content')
+    if (content === undefined) return undefined
+    return { kind: 'plan', toolName, targetId: readStreamingJsonString(raw, 'planId'), title: readStreamingJsonString(raw, 'title'), content }
+  }
+  return undefined
 }
 
 async function handleToolCall(
@@ -830,6 +874,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       // 就先播报 tool.call（args 为 null），前端按 callId upsert，执行完毕的正式事件就地更新同一张卡片
       const announcedToolNames = new Map<string, string>()
       const toolArgsProgress = new Map<string, { chars: number; lastEmitted: number }>()
+      const streamingToolArgs = new Map<string, string>()
 
       const result = await chatWithTools({
         messages,
@@ -838,9 +883,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
-            // 正文要等本轮结束后确认它不是工具协议残片/中间执行旁白再展示。
-            // reasoning 与工具参数进度仍实时推送，不影响用户感知执行进度。
-            return
+            // 最终答复与 reasoning 使用同一实时通道逐 token 展示；本轮若随后出现工具调用，
+            // text.final 会把已播出的执行旁白原位归入 reasoning，不留下重复正文。
+            bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })
           } else if (chunk.type === 'reasoning-delta') {
             bus.emit({ type: 'reasoning.delta', messageId, delta: chunk.delta })
           } else if (chunk.type === 'tool-call-start') {
@@ -861,9 +906,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
               const progress = toolArgsProgress.get(chunk.id) ?? { chars: 0, lastEmitted: 0 }
               progress.chars += chunk.delta.length
               toolArgsProgress.set(chunk.id, progress)
-              if (progress.chars - progress.lastEmitted >= TOOL_ARGS_PROGRESS_STEP) {
+              const rawArgs = `${streamingToolArgs.get(chunk.id) ?? ''}${chunk.delta}`
+              streamingToolArgs.set(chunk.id, rawArgs)
+              const toolName = announcedToolNames.get(chunk.id) ?? ''
+              const draft = extractStreamingToolDraft(toolName, rawArgs)
+              if (draft || progress.chars - progress.lastEmitted >= TOOL_ARGS_PROGRESS_STEP) {
                 progress.lastEmitted = progress.chars
-                bus.emit({ type: 'tool.delta', messageId, callId: chunk.id, argsChars: progress.chars })
+                bus.emitTransient({ type: 'tool.delta', messageId, callId: chunk.id, argsChars: progress.chars, ...(draft ? { draft } : {}) })
               }
             }
           }
@@ -893,13 +942,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       // 只要本轮真实产生工具调用，同行文本就是执行旁白而非最终答复，一律改道思考区。
       const demoteNarration = result.toolCalls.length > 0 && Boolean(cleanContent)
 
-      if (cleanContent) {
-        bus.emit({
-          type: demoteNarration ? 'reasoning.delta' : 'text.delta',
-          messageId,
-          delta: demoteNarration ? `\n${cleanContent}` : cleanContent,
-        })
-      }
+      if (result.content) bus.emit({ type: 'text.final', messageId, text: cleanContent, asReasoning: demoteNarration })
 
       const parts: AgentMessagePart[] = []
       if (result.reasoning || (demoteNarration && cleanContent)) {

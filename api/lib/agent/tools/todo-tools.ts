@@ -134,6 +134,45 @@ export const todoWriteTool = defineTool({
   description:
     '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再严格逐项执行：开工前只把当前一项标为 in_progress；该项真实交付后立即单独标为 completed，再把下一项标为 in_progress。严禁在任务末尾批量完成多项，服务端会拒绝；严禁 pending 直接跳 completed。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者“要不要继续”。每次调用都要传入完整清单（全量替换）。',
   parameters: todoWriteParameters,
+  coerceArgs(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    let source = raw as Record<string, unknown>
+    for (const key of ['arguments', 'args', 'params', 'parameters'] as const) {
+      const wrapped = source[key]
+      if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
+        const candidate = wrapped as Record<string, unknown>
+        if ([candidate.items, candidate.todos, candidate.tasks, candidate.todoList].some(Array.isArray)) {
+          source = candidate
+          break
+        }
+      }
+    }
+    const rawItems = source.items ?? source.todos ?? source.tasks ?? source.todoList
+    if (!Array.isArray(rawItems)) return source
+    let inProgressSeen = false
+    const items = rawItems
+      .map((value) => {
+        if (typeof value === 'string') return { content: value.trim().slice(0, 100), status: 'pending' as const }
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+        const item = value as Record<string, unknown>
+        const contentValue = item.content ?? item.title ?? item.task ?? item.text
+        if (typeof contentValue !== 'string' || !contentValue.trim()) return null
+        const rawStatus = String(item.status ?? item.state ?? 'pending').toLowerCase()
+        let status: AgentTodoItem['status'] = ['completed', 'done', 'complete', 'finished'].includes(rawStatus)
+          ? 'completed'
+          : ['in_progress', 'in-progress', 'doing', 'active', 'running'].includes(rawStatus)
+            ? 'in_progress'
+            : 'pending'
+        if (status === 'in_progress') {
+          if (inProgressSeen) status = 'pending'
+          inProgressSeen = true
+        }
+        return { content: contentValue.trim().slice(0, 100), status }
+      })
+      .filter((item): item is AgentTodoItem => item !== null)
+      .slice(0, 20)
+    return { items }
+  },
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
   async execute(ctx, args) {
@@ -150,9 +189,30 @@ export const todoWriteTool = defineTool({
     // 的 todo_write 清单），跨 run / 续跑也能拿到真实前态；避免 artifact 副本停在旧任务导致
     // previous 退化为空，从而把本应已完成的旧项误判为本轮“一次完成多项”而被拒。
     const previous = await loadSessionTodoItems(ctx.sessionId)
-    const items = args.items as AgentTodoItem[]
+    let items = args.items as AgentTodoItem[]
     const progressionError = validateTodoProgression(previous, items)
-    if (progressionError) throw new Error(progressionError)
+    // 模型偶发把多项一次打勾或 pending 直接打勾：不再把整次调用打成失败。
+    // 服务端收敛到一个合法原子进度，其余项保持前态，下一轮继续更新即可。
+    if (progressionError && previous.length > 0) {
+      const previousByContent = new Map(previous.map((item) => [item.content, item.status]))
+      let completionAccepted = false
+      items = items.map((item) => {
+        const before = previousByContent.get(item.content)
+        if (before === 'completed') return { ...item, status: 'completed' }
+        if (item.status === 'completed') {
+          if (!completionAccepted && before === 'in_progress') {
+            completionAccepted = true
+            return item
+          }
+          return { ...item, status: before ?? 'pending' }
+        }
+        return item
+      })
+      let activeSeen = false
+      items = items.map((item) => item.status === 'in_progress'
+        ? activeSeen ? { ...item, status: 'pending' } : (activeSeen = true, item)
+        : item)
+    }
 
     const completed = items.filter((item) => item.status === 'completed').length
     const content = JSON.stringify(items)

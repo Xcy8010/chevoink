@@ -41,6 +41,36 @@ export const memorySaveTool = defineTool({
     importance: z.number().int().min(1).max(100).describe('重要性 1-100：核心主角/主线设定 80+，一般设定 50-70'),
     sourceChapterId: z.string().optional().describe('来源章节 ID（章节摘要必填）'),
   }),
+  coerceArgs(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    let source = raw as Record<string, unknown>
+    for (const key of ['arguments', 'args', 'params', 'parameters', 'memory'] as const) {
+      const wrapped = source[key]
+      if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
+        const candidate = wrapped as Record<string, unknown>
+        if ([candidate.content, candidate.text, candidate.body, candidate.summary, candidate.title, candidate.name, candidate.subject].some((value) => value !== undefined)) {
+          source = { ...candidate, sourceChapterId: source.sourceChapterId ?? candidate.sourceChapterId }
+          break
+        }
+      }
+    }
+    const result: Record<string, unknown> = { ...source }
+    result.memoryType = result.memoryType ?? result.type ?? result.memory_type
+    result.title = result.title ?? result.name ?? result.subject
+    result.content = result.content ?? result.text ?? result.body ?? result.summary
+    result.importance = result.importance ?? result.priority ?? result.weight ?? 70
+    result.sourceChapterId = result.sourceChapterId ?? result.chapterId ?? result.source_chapter_id
+    if (Array.isArray(result.content)) result.content = result.content.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
+    else if (result.content && typeof result.content === 'object') result.content = JSON.stringify(result.content)
+    else if (typeof result.content === 'number' || typeof result.content === 'boolean') result.content = String(result.content)
+    if (typeof result.title === 'number') result.title = String(result.title)
+    if (typeof result.title === 'string') result.title = result.title.trim().slice(0, 120)
+    if (typeof result.content === 'string') result.content = result.content.trim().slice(0, 4000)
+    const importance = Number(result.importance)
+    result.importance = Number.isFinite(importance) ? Math.min(100, Math.max(1, Math.round(importance))) : 70
+    if (typeof result.sourceChapterId !== 'string' || !result.sourceChapterId.trim()) delete result.sourceChapterId
+    return result
+  },
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: false,
   async execute(ctx, args) {

@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, BrainCircuit, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
+import { BookOpen, BookOpenText, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -127,6 +127,9 @@ export default function StudioWorkspace() {
   const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const agentTodos = useAgentStore((state) => state.todos)
   const agentTodosVersion = useAgentStore((state) => state.todosVersion)
+  const liveToolDrafts = useAgentStore((state) => state.liveToolDrafts)
+  const toolNavigationRequest = useAgentStore((state) => state.toolNavigationRequest)
+  const clearToolNavigationRequest = useAgentStore((state) => state.clearToolNavigationRequest)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
@@ -878,6 +881,16 @@ export default function StudioWorkspace() {
     if (!useAgentStore.getState().autoFollow) {
       return
     }
+    // Work 追踪不仅切章节：右侧作品树和正文查看器被折叠时也要恢复完整追踪布局。
+    // 即使目标就是当前章，也必须先把被收起的面板重新打开。
+    if (workspacePerspective === 'work') {
+      setWorkInspectorTab('work')
+      setWorkRightOpen(true)
+      setWorkViewer('chapter')
+    } else {
+      setIdeTreeOpen(true)
+      setIdeSidebarTab('work')
+    }
     if (chapterId === selectedChapterId || chapterDirty) {
       return
     }
@@ -1062,6 +1075,11 @@ export default function StudioWorkspace() {
 
   const handleAgentStreamEvent = useCallback(
     (event: AgentStreamEvent) => {
+      if (event.type === 'tool.delta' && event.draft?.kind === 'chapter') {
+        const targetId = event.draft.targetId
+          ?? (event.draft.toolName === 'chapter_create' ? null : selectedChapterIdStateRef.current)
+        if (targetId) agentFollowChapterRef.current(targetId)
+      }
       if (event.type === 'tool.result' && event.ok && event.toolName.startsWith('memory_')) {
         void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId, 'memory-graph'] })
       }
@@ -1394,6 +1412,61 @@ export default function StudioWorkspace() {
 
     return null
   }, [catalogDocument, catalogPreview, savedPlanFiles, selectedTreeItemId])
+
+  const activeLiveToolDraft = useMemo(() => Object.values(liveToolDrafts).at(-1) ?? null, [liveToolDrafts])
+  const liveChapterTargetId = activeLiveToolDraft?.kind === 'chapter'
+    ? activeLiveToolDraft.targetId ?? (activeLiveToolDraft.toolName === 'chapter_create' ? null : selectedChapterId)
+    : null
+  const livePlanTarget = activeLiveToolDraft?.kind === 'plan'
+    ? savedPlanFiles.find((plan) => plan.id === activeLiveToolDraft.targetId || plan.backendArtifactId === activeLiveToolDraft.targetId) ?? null
+    : null
+  const chapterStreamingPreview = liveChapterTargetId && liveChapterTargetId === selectedChapterId ? activeLiveToolDraft?.content : undefined
+  const documentStreamingPreview = livePlanTarget && activeWorkspaceDocument?.kind === 'plan' && livePlanTarget.id === activeWorkspaceDocument.id
+    ? activeLiveToolDraft?.content
+    : undefined
+  const selectChapterFromToolRef = useRef(handleSelectChapter)
+  const selectPlanFromToolRef = useRef(handleSelectPlanFromTree)
+  selectChapterFromToolRef.current = handleSelectChapter
+  selectPlanFromToolRef.current = handleSelectPlanFromTree
+
+  useEffect(() => {
+    if (!toolNavigationRequest) return
+    const args = toolNavigationRequest.args && typeof toolNavigationRequest.args === 'object'
+      ? toolNavigationRequest.args as Record<string, unknown>
+      : {}
+    const display = toolNavigationRequest.display
+    const chapterId = display?.kind === 'chapterDiff' || display?.kind === 'chapterRef'
+      ? display.chapterId
+      : typeof args.chapterId === 'string' ? args.chapterId : null
+    if (chapterId) {
+      selectChapterFromToolRef.current(chapterId)
+      if (workspacePerspective === 'work') {
+        setWorkInspectorTab('work')
+        setWorkRightOpen(true)
+        setWorkViewer('chapter')
+      } else {
+        setIdeTreeOpen(true)
+        setIdeSidebarTab('work')
+      }
+    } else if (display?.kind === 'planFile' || display?.kind === 'planDiff' || toolNavigationRequest.toolName.startsWith('plan_')) {
+      const artifactId = display?.kind === 'planFile' || display?.kind === 'planDiff'
+        ? display.artifactId
+        : typeof args.planId === 'string' ? args.planId : null
+      const target = savedPlanFiles.find((plan) => plan.id === artifactId || plan.backendArtifactId === artifactId)
+      if (target) {
+        selectPlanFromToolRef.current(target.id)
+        if (workspacePerspective === 'work') {
+          setWorkInspectorTab('work')
+          setWorkRightOpen(true)
+          setWorkViewer('document')
+        } else {
+          setIdeTreeOpen(true)
+          setIdeSidebarTab('work')
+        }
+      }
+    }
+    clearToolNavigationRequest()
+  }, [clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective])
 
   // 当前计划文档命中审查态时，正文区呈现绿(新增)/红(删除) diff（与章节审查一致，fix1）
   const activePlanPendingReview = useMemo(() => {
@@ -3896,7 +3969,7 @@ export default function StudioWorkspace() {
                   返回
                 </button>
                 <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '作品记忆' : mobileView === 'context' ? '会话上下文' : mobileView === 'skills' ? '作品技能' : '作品设置'}
+                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '小说关系网' : mobileView === 'context' ? '会话上下文' : mobileView === 'skills' ? '作品技能' : '作品设置'}
                 </p>
               </>
             ) : (
@@ -3980,6 +4053,8 @@ export default function StudioWorkspace() {
                   pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
                   onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
                   pendingPlanReview={activePlanPendingReview}
+                  streamingContent={activeWorkspaceDocument ? documentStreamingPreview : chapterStreamingPreview}
+                  writeLocked={activeWorkspaceDocument ? documentStreamingPreview !== undefined : chapterStreamingPreview !== undefined}
                   pendingPlanReviewBusy={pendingPlanReviewBusy}
                   onKeepPendingPlanReview={handleKeepPendingPlanReview}
                   onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
@@ -4132,7 +4207,7 @@ export default function StudioWorkspace() {
                   { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
                   { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
                   ...(featureFlags.memory2
-                    ? [{ key: 'memory', label: '作品记忆', icon: BrainCircuit, action: () => setMobileView('memory') }]
+                    ? [{ key: 'memory', label: '关系网', icon: Network, action: () => setMobileView('memory') }]
                     : []),
                   { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
                   { key: 'skills', label: '作品技能', icon: Wrench, action: () => setMobileView('skills') },
@@ -4280,6 +4355,8 @@ export default function StudioWorkspace() {
                   onCreateVolume={handleRequestCreateVolume} onCreateChapter={handleRequestCreateChapter}
                   onClose={() => setWorkViewer(null)}
                   onBlur={handleEditorBlurFlush}
+                  streamingContent={workViewer === 'chapter' ? chapterStreamingPreview : documentStreamingPreview}
+                  writeLocked={workViewer === 'chapter' ? chapterStreamingPreview !== undefined : documentStreamingPreview !== undefined}
                 /> : undefined}
                 leftOpen={workLeftOpen}
                 rightOpen={workRightOpen}
@@ -4436,6 +4513,8 @@ export default function StudioWorkspace() {
                   pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
                   onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
                   pendingPlanReview={activePlanPendingReview}
+                  streamingContent={activeWorkspaceDocument ? documentStreamingPreview : chapterStreamingPreview}
+                  writeLocked={activeWorkspaceDocument ? documentStreamingPreview !== undefined : chapterStreamingPreview !== undefined}
                   pendingPlanReviewBusy={pendingPlanReviewBusy}
                   onKeepPendingPlanReview={handleKeepPendingPlanReview}
                   onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}

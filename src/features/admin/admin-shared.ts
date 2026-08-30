@@ -35,6 +35,13 @@ export function formatDateTime(value: string | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+export function formatTokens(value: number): string {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+  return value.toLocaleString('zh-CN')
+}
+
 /* ---------------- 操作动作文案 ---------------- */
 
 const ACTION_LABELS: Record<string, string> = {

@@ -14,6 +14,15 @@ export interface AgentTokenUsage {
   totalTokens: number
 }
 
+/** 模型仍在生成写工具参数时的只读正文预览；只存在事件流，不提前落库。 */
+export interface AgentToolDraft {
+  kind: 'chapter' | 'plan'
+  toolName: string
+  targetId?: EntityId
+  title?: string
+  content: string
+}
+
 /** 工具结果中给前端渲染的结构化数据 */
 export type AgentToolDisplayPayload =
   | {
@@ -196,6 +205,7 @@ export type AgentStreamEventBody =
     }
   | { type: 'message.start'; messageId: string; role: 'assistant' }
   | { type: 'text.delta'; messageId: string; delta: string }
+  | { type: 'text.final'; messageId: string; text: string; asReasoning: boolean }
   | { type: 'reasoning.delta'; messageId: string; delta: string }
   | {
       type: 'tool.call'
@@ -213,6 +223,8 @@ export type AgentStreamEventBody =
       messageId: string
       callId: string
       argsChars: number
+      /** chapter/plan 长文本参数的增量预览，前端据此逐字显示并锁定编辑器。 */
+      draft?: AgentToolDraft
     }
   | {
       type: 'tool.result'

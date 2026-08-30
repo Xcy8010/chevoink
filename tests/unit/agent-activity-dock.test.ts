@@ -28,8 +28,11 @@ describe('Agent activity presentation', () => {
     expect(markup).not.toContain('justify-end')
   })
 
-  it('keeps the inline activity rows collapsed initially', () => {
+  it('keeps inline rows mounted for a smooth automatic collapse animation', () => {
     const markup = renderToStaticMarkup(createElement(AgentActivityBar, { ...baseProps, appearance: 'inline' }))
-    expect(markup).not.toContain('完成第二章</span>')
+    expect(markup).toContain('完成第二章</span>')
+    expect(markup).toContain('grid-rows-[0fr]')
+    expect(markup).toContain('transition-[grid-template-rows,opacity]')
+    expect(markup).toContain('aria-hidden="true"')
   })
 })

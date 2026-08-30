@@ -62,6 +62,7 @@ const AdminUserDetailPage = lazyPage(() => import('@/features/admin/pages/AdminU
 const AdminUserFollowersPage = lazyPage(() => import('@/features/admin/pages/AdminUserFollowersPage'))
 const AdminUserFavoriteNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminUserFavoriteNovelsPage'))
 const AdminCreationRecordsPage = lazyPage(() => import('@/features/admin/pages/AdminCreationRecordsPage'))
+const AdminTokenManagementPage = lazyPage(() => import('@/features/admin/pages/AdminTokenManagementPage'))
 const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
 const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
 const AdminNovelPreviewPage = lazyPage(() => import('@/features/admin/pages/AdminNovelPreviewPage'))
@@ -342,6 +343,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminCreationRecordsPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/tokens',
+    title: 'Token 管理',
+    description: '查看全站 AI Token、联网搜索与生图工具用量。',
+    element: (
+      <AdminLayout>
+        <AdminTokenManagementPage />
       </AdminLayout>
     ),
     useShell: false,

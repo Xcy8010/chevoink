@@ -28,7 +28,7 @@ export type AdminUserRow = {
 
 export type AdminUserDetailPayload = {
   user: AdminUserRow & { bio: string | null }
-  stats: { novels: number; posts: number; comments: number; favorites: number }
+  stats: { novels: number; posts: number; comments: number; favorites: number; totalTokens: number; webSearchCalls: number; imageCalls: number }
 }
 
 export type AdminDashboardPayload = {
@@ -67,6 +67,7 @@ export type AdminNovelRow = {
 
 export type AdminNovelDetailPayload = {
   novel: AdminNovelRow & { summary: string; author: AdminUserRow; coverUrl: string | null }
+  usage: { totalTokens: number; requestTokens: number; responseTokens: number }
   chapters: Array<{
     id: string
     title: string
@@ -237,6 +238,7 @@ export type AdminCreationSessionRow = {
   runCount: number
   lastRunAt: string | null
   createdAt: string
+  totalTokens: number
 }
 
 /** 管理端创作记录：单部作品 + 其下 Agent 会话列表 */
@@ -248,6 +250,7 @@ export type AdminCreationRecordNovelRow = {
   chapterCount: number
   wordCount: number
   updatedAt: string
+  totalTokens: number
   sessions: AdminCreationSessionRow[]
 }
 
@@ -281,6 +284,7 @@ export type AdminAgentRunRow = {
   errorMessage: string | null
   createdAt: string
   finishedAt: string | null
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number }
   messages: Array<{
     id: string
     runId: string
@@ -299,4 +303,32 @@ export type AdminAgentSessionMessagesPayload = {
     createdAt: string
   }
   runs: AdminAgentRunRow[]
+}
+
+export type AdminTokenManagementPayload = {
+  summary: {
+    totalTokens: number
+    requestTokens: number
+    responseTokens: number
+    users: number
+    webSearchCalls: number
+    imageCalls: number
+  }
+  users: Array<{
+    user: AdminBriefUser
+    totalTokens: number
+    requestTokens: number
+    responseTokens: number
+    requestCount: number
+    webSearchCalls: number
+    imageCalls: number
+  }>
+  actions: Array<{
+    action: string
+    totalTokens: number
+    requestTokens: number
+    responseTokens: number
+    requestCount: number
+    averageTokens: number
+  }>
 }

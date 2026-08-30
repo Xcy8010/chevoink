@@ -119,6 +119,24 @@ function SectionHeader({
   )
 }
 
+/**
+ * 高度未知内容的折叠动效：grid 0fr/1fr 不需要测量 scrollHeight，自动展开和手动开合
+ * 走同一条渲染路径；内部保留滚动容器，长清单不会把输入区顶出视口。
+ */
+function AnimatedSection({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+        open ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0',
+      )}
+      aria-hidden={!open}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
 /** 待办清单区块 */
 function TodoSection({
   todos,
@@ -154,7 +172,7 @@ function TodoSection({
         title="待办"
         summary={`${completed}/${todos.length} 已完成`}
       />
-      {open ? (
+      <AnimatedSection open={open}>
         <ul className="max-h-40 overflow-y-auto pb-1">
           {todos.map((item, index) => (
             <li key={`${index}-${item.content}`} className="flex items-start gap-2 px-3 py-1.5 text-xs">
@@ -183,7 +201,7 @@ function TodoSection({
             </li>
           ))}
         </ul>
-      ) : null}
+      </AnimatedSection>
     </div>
   )
 }
@@ -261,7 +279,7 @@ function ChangesSection({
           ) : null
         }
       />
-      {open ? (
+      <AnimatedSection open={open}>
         <ul className="max-h-40 overflow-y-auto pb-1">
           {activities.map((activity) => {
             const delta = deltaLabel(activity)
@@ -303,7 +321,7 @@ function ChangesSection({
             )
           })}
         </ul>
-      ) : null}
+      </AnimatedSection>
     </div>
   )
 }

@@ -23,6 +23,7 @@ import type {
   AdminNovelRow,
   AdminPostDetailPayload,
   AdminPostRow,
+  AdminTokenManagementPayload,
   AdminUserDetailPayload,
   AdminUserFavoriteNovelRow,
   AdminUserFollowRow,
@@ -100,6 +101,10 @@ export function adminChangeMyPassword(
 
 export function getAdminDashboard(): Promise<AdminDashboardPayload> {
   return requestJson<AdminDashboardPayload>('/api/admin/dashboard')
+}
+
+export function getAdminTokenManagement(): Promise<AdminTokenManagementPayload> {
+  return requestJson<AdminTokenManagementPayload>('/api/admin/token-usage')
 }
 
 /* ---------------- Agent 3.0 专家盲评 ---------------- */

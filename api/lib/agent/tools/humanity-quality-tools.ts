@@ -107,10 +107,10 @@ severity 只能是 advisory 或 warning；审美意见绝不报 error。找不�
 
 type QualityReport = Awaited<ReturnType<typeof getQualityReport>>
 
-function automaticRepairFindings(report: QualityReport) {
+function automaticRepairFindings(report: QualityReport, includeAdvisory = false) {
   const selected: QualityReport['findings'] = []
   for (const finding of report.findings) {
-    if (finding.severity === 'advisory' || finding.disposition === 'repaired') continue
+    if ((!includeAdvisory && finding.severity === 'advisory') || finding.disposition === 'repaired') continue
     if (selected.some((item) => finding.startOffset < item.endOffset && item.startOffset < finding.endOffset)) continue
     selected.push(finding)
     if (selected.length >= 8) break
@@ -200,7 +200,9 @@ ${bundle.chapter.content}
     const report = await getQualityReport(ctx.userId, ctx.novelId, created.id)
     const warningCount = report.findings.filter((finding) => finding.severity === 'warning').length
     const advisoryCount = report.findings.filter((finding) => finding.severity === 'advisory').length
-    const selected = ctx.protectedChapterIds?.has(report.chapterId) ? [] : automaticRepairFindings(report)
+    const selected = ctx.protectedChapterIds?.has(report.chapterId)
+      ? []
+      : automaticRepairFindings(report, ctx.creativeFreedom === 'bold')
     if (selected.length > 0) {
       await selectQualityFindings(ctx.userId, ctx.novelId, report.id, selected.map((finding) => finding.id))
       const repaired = await applySelectedQualityRepairs(ctx, report, selected)

@@ -50,6 +50,19 @@ export class RunEventBus {
     return event
   }
 
+  /**
+   * 只面向当前 SSE 订阅者的高频预览事件。工具正文参数可能每几个 token 更新一次，
+   * 不写 agent_run_events，避免把同一篇正文的所有中间副本反复落库；正式 tool.call/result 仍完整持久化。
+   */
+  emitTransient(body: AgentStreamEventBody): AgentStreamEvent {
+    if (this.closed) throw new Error(`事件总线已关闭：${this.runId}`)
+    const event: AgentStreamEvent = { seq: ++this.seq, runId: this.runId, ts: new Date().toISOString(), ...body }
+    for (const listener of this.listeners) {
+      try { listener(event) } catch { /* 单个订阅者异常不影响其它订阅者 */ }
+    }
+    return event
+  }
+
   /** 订阅事件：先补发 sinceSeq 之后的内存历史，再接 live 流 */
   subscribe(listener: EventListener, sinceSeq = 0): () => void {
     for (const event of this.history) {

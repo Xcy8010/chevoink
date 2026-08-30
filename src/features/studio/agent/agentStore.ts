@@ -6,6 +6,8 @@ import type {
   AgentStreamEvent,
   AgentTodoItem,
   AgentTokenUsage,
+  AgentToolDisplayPayload,
+  AgentToolDraft,
   AgentUIMessage,
 } from '../../../../shared/contracts/index.js'
 
@@ -76,6 +78,13 @@ export type WorkspaceActivity = {
   summary?: string
   status: 'running' | 'done' | 'failed'
   accepted?: boolean
+}
+
+export type ToolNavigationRequest = {
+  nonce: number
+  toolName: string
+  args: unknown
+  display?: AgentToolDisplayPayload
 }
 
 /** 从章节/计划查看器选入输入框的结构化引用；正文独立保存，避免删除引用时污染草稿换行。 */
@@ -191,6 +200,10 @@ type AgentStoreState = {
   todos: AgentTodoItem[]
   /** 待办触发版本：仅 live 事件递增，驱动待办区自动展开（历史恢复不触发） */
   todosVersion: number
+  /** 长文本写工具参数的实时只读预览；tool.result 后移除。 */
+  liveToolDrafts: Record<string, AgentToolDraft>
+  /** 工具卡点击后的内容导航请求，由 StudioWorkspace 消费。 */
+  toolNavigationRequest: ToolNavigationRequest | null
   /** 事件 reducer：live 与 replay 共用同一构建逻辑 */
   applyEvent: (event: AgentStreamEvent) => void
   beginRun: (runId: string, userPrompt: string, sessionId: string | null, attachments?: AgentAttachmentMeta[]) => void
@@ -209,6 +222,8 @@ type AgentStoreState = {
   setComposerContent: (draft: string, references: ComposerReference[]) => void
   bumpComposerUploading: (delta: number) => void
   setAutoFollow: (value: boolean) => void
+  requestToolNavigation: (toolName: string, args: unknown, display?: AgentToolDisplayPayload) => void
+  clearToolNavigationRequest: () => void
   /** 将刚通过作者审查的写入活动标记为已接受；执行成功本身仍只是已完成。 */
   markWorkspaceActivitiesAccepted: (criteria: { chapterId?: string; toolNames?: string[]; all?: boolean }) => void
 }
@@ -402,6 +417,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   activitiesVersion: 0,
   todos: [],
   todosVersion: 0,
+  liveToolDrafts: {},
+  toolNavigationRequest: null,
 
   beginRun: (runId, userPrompt, sessionId, attachments) =>
     set((state) => ({
@@ -416,6 +433,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
+      liveToolDrafts: {},
+      toolNavigationRequest: null,
       // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空；
       // 上一个任务若被停止后遗留了「执行中」的工具卡片（终态事件丢失时），开新任务前一并收尾
       workspaceActivities: settleRunningActivities(state.workspaceActivities),
@@ -454,6 +473,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
+      liveToolDrafts: {},
+      toolNavigationRequest: null,
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
     }),
 
@@ -468,6 +489,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       pendingApproval: null,
       pendingQuestion: null,
       errorMessage: null,
+      liveToolDrafts: {},
+      toolNavigationRequest: null,
       // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
       ...deriveSessionStateFromMessages(restored),
     })
@@ -488,6 +511,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       errorMessage: null,
       workspaceActivities: [],
       todos: [],
+      liveToolDrafts: {},
+      toolNavigationRequest: null,
     }),
 
   clearError: () => set({ errorMessage: null }),
@@ -527,6 +552,12 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     writeStoredAutoFollow(value)
     set({ autoFollow: value })
   },
+
+  requestToolNavigation: (toolName, args, display) => set({
+    toolNavigationRequest: { nonce: Date.now(), toolName, args, display },
+  }),
+
+  clearToolNavigationRequest: () => set({ toolNavigationRequest: null }),
 
   markWorkspaceActivitiesAccepted: (criteria) =>
     set((state) => {
@@ -588,6 +619,27 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             messages: updateMessageParts(state.messages, event.messageId, (parts) =>
               appendDelta(parts, 'text', event.delta),
             ),
+          }
+
+        case 'text.final':
+          return {
+            ...base,
+            messages: updateMessageParts(state.messages, event.messageId, (parts) => {
+              const withoutText = parts.filter((part) => part.type !== 'text')
+              if (!event.text) return withoutText
+              if (!event.asReasoning) return [...withoutText, { type: 'text' as const, text: event.text }]
+              let reasoningIndex = -1
+              for (let index = withoutText.length - 1; index >= 0; index -= 1) {
+                if (withoutText[index]?.type === 'reasoning') {
+                  reasoningIndex = index
+                  break
+                }
+              }
+              if (reasoningIndex < 0) return [...withoutText, { type: 'reasoning' as const, text: event.text }]
+              return withoutText.map((part, index) => index === reasoningIndex && part.type === 'reasoning'
+                ? { ...part, text: [part.text, event.text].filter(Boolean).join('\n') }
+                : part)
+            }),
           }
 
         case 'reasoning.delta':
@@ -655,6 +707,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           // 参数流式生成进度：更新对应工具卡片的已生成字符数
           return {
             ...base,
+            ...(event.draft ? { liveToolDrafts: { ...state.liveToolDrafts, [event.callId]: event.draft } } : {}),
             messages: updateMessageParts(state.messages, event.messageId, (parts) =>
               parts.map((part) =>
                 part.type === 'tool-call' && part.callId === event.callId && part.status === 'running'
@@ -676,6 +729,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             ...base,
             ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null } : {}),
             ...todoUpdate,
+            liveToolDrafts: Object.fromEntries(Object.entries(state.liveToolDrafts).filter(([callId]) => callId !== event.callId)),
             workspaceActivities: state.workspaceActivities.map((activity) =>
               activity.callId === event.callId
                 ? {
@@ -741,6 +795,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             phase: 'paused',
             pendingApproval: null,
             pendingQuestion: null,
+            liveToolDrafts: {},
             messages: settleRunningToolParts(state.messages, '已停止'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
           }
@@ -753,6 +808,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             outputSummary: event.outputSummary,
             pendingApproval: null,
             pendingQuestion: null,
+            liveToolDrafts: {},
             messages: settleRunningToolParts(state.messages, '已中断'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
           }

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 
 import type { ProjectMemoryType, StoryMemoryLayer, StoryMemoryStatus } from '@prisma/client'
+import { z } from 'zod'
 
 import type { MemoryEvidence, MemoryGraph, MemorySearchHit } from '../../../shared/contracts/index.js'
+import { generateTextCompletion } from '../ai-service.js'
 import { DataAccessError, prisma } from '../prisma.js'
-import { extractCharacterNames } from './memory-entity-normalization.js'
 
 type EvidenceInput = {
   sourceType: MemoryEvidence['sourceType']
@@ -304,171 +305,142 @@ export async function processMemoryExtractionJob(jobId: string): Promise<void> {
   }
 }
 
-const memoryProjectionVersionCache = new Map<string, string>()
 const memoryProjectionInFlight = new Map<string, Promise<Awaited<ReturnType<typeof syncNovelMemoryProjectionOnce>>>>()
-const MEMORY_PROJECTION_CACHE_LIMIT = 500
-const MEMORY_PROJECTION_ALGORITHM_VERSION = 'character-normalization-v2'
+const MEMORY_GRAPH_REFRESH_COOLDOWN_MS = 10 * 60 * 1000
+const AI_GRAPH_DESCRIPTION_PREFIX = '[AI关系网] '
 
-function rememberMemoryProjectionVersion(novelId: string, version: string) {
-  memoryProjectionVersionCache.delete(novelId)
-  memoryProjectionVersionCache.set(novelId, version)
-  while (memoryProjectionVersionCache.size > MEMORY_PROJECTION_CACHE_LIMIT) {
-    const oldest = memoryProjectionVersionCache.keys().next().value
-    if (!oldest) break
-    memoryProjectionVersionCache.delete(oldest)
-  }
+const aiGraphEnvelopeSchema = z.object({
+  entities: z.array(z.object({
+    type: z.enum(['character', 'location', 'organization', 'item', 'event', 'concept']),
+    name: z.string().min(1).max(128),
+    aliases: z.array(z.string().min(1).max(128)).max(12).default([]),
+    description: z.string().max(1200).default(''),
+  })).max(80),
+  relations: z.array(z.object({
+    from: z.string().min(1).max(128),
+    to: z.string().min(1).max(128),
+    type: z.string().min(1).max(64),
+    state: z.string().max(800).default(''),
+    confidence: z.number().min(0).max(1).default(0.8),
+  })).max(180),
+})
+
+function parseJsonObject(raw: string): unknown {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw)?.[1] ?? raw
+  const start = fenced.indexOf('{')
+  const end = fenced.lastIndexOf('}')
+  return JSON.parse(start >= 0 && end > start ? fenced.slice(start, end + 1) : fenced)
+}
+
+function normalizedEntityKey(value: string) {
+  return value.toLocaleLowerCase('zh-CN').replace(/[\s·•._—-]+/g, '').replace(/[「」“”'‘’（）()]/g, '')
+}
+
+function isUsefulEntityName(type: string, value: string) {
+  const name = value.trim()
+  if (!name || name.length > 128) return false
+  if (type === 'character' && /^(他|她|它|那人|此人|有人|男人|女人|少年|少女|老人|老者|主角|配角|路人|众人|对方|自己|我|你|您|他们|她们)$/.test(name)) return false
+  return !/^(这里|那里|此处|某处|东西|物品|事件|地点|组织|未知|暂无|无)$/.test(name)
 }
 
 /**
- * 将已有正文投影为可视化记忆图谱，并为尚未抽取的章节补建幂等任务。
- * 全程只做本地规则抽取与数据库 upsert，不调用模型、不额外消耗 token。
+ * 用低推理模型从正文建立“整部小说关系网”。只在图谱为空时自动执行；手动刷新受服务端冷却限制。
+ * 关系网覆盖人物、地点、组织、物件、事件与概念，模型同时负责别名归一，避免规则抽取把代词/残句当人物。
  */
-async function syncNovelMemoryProjectionOnce(userId: string, novelId: string) {
+async function syncNovelMemoryProjectionOnce(userId: string, novelId: string, force = false) {
   const novel = await prisma.novel.findFirst({
     where: { id: novelId, authorId: userId },
+    select: { id: true, title: true, summary: true, categoryName: true, tagNames: true },
+  })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新关系网。')
+
+  const existingEntityCount = await prisma.storyEntity.count({ where: { novelId } })
+  if (!force && existingEntityCount > 0) {
+    return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: await prisma.entityRelation.count({ where: { fromEntity: { novelId } } }), reused: true }
+  }
+  if (force) {
+    const latest = await prisma.aiUsageLog.findFirst({
+      where: { userId, novelId, action: 'agentMemoryGraphBuild' },
+      orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+    })
+    if (latest && Date.now() - latest.createdAt.getTime() < MEMORY_GRAPH_REFRESH_COOLDOWN_MS) {
+      const waitSeconds = Math.ceil((MEMORY_GRAPH_REFRESH_COOLDOWN_MS - (Date.now() - latest.createdAt.getTime())) / 1000)
+      throw new DataAccessError(429, 'MEMORY_GRAPH_RATE_LIMITED', `关系网刚刚更新过，请 ${Math.ceil(waitSeconds / 60)} 分钟后再试。`)
+    }
+  }
+
+  const chapters = await prisma.chapter.findMany({
+    where: { novelId, content: { not: '' } }, orderBy: { orderIndex: 'asc' },
+    select: { id: true, title: true, content: true, revision: true, orderIndex: true }, take: 120,
+  })
+  if (chapters.length === 0) return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: 0, reused: true }
+
+  const chapterContext = chapters.map((chapter) =>
+    `【第${chapter.orderIndex}章 ${chapter.title}】\n${chapter.content.slice(0, 2600)}`,
+  ).join('\n\n')
+  const response = await generateTextCompletion(
+    `你是中文长篇小说的关系网编辑。请从正文建立全书级知识关系网，不只抽人物。实体类型只能是 character/location/organization/item/event/concept。\n严格规则：\n1. 合并同一实体的全名、简称、称谓和错别字到 aliases，禁止把“他/她/那人/众人/主角”等代词或泛称建成实体；禁止把残句、动作和形容词当名字。\n2. 关系必须有正文依据，使用具体中文关系词（亲属、同盟、敌对、隶属、位于、持有、参与、导致、知晓、追求等），不要用“同章出现”。\n3. description/state 只写已发生或明确设定，不推测后续剧情。\n4. 控制密度：保留影响主线、人物行动、世界规则和伏笔的实体，最多 60 个实体、140 条关系。\n只输出 JSON：{"entities":[{"type":"character|location|organization|item|event|concept","name":"规范名","aliases":["别名"],"description":"简洁事实"}],"relations":[{"from":"规范名或别名","to":"规范名或别名","type":"关系","state":"当前状态/依据","confidence":0.0}]}`,
+    `作品：${novel.title}\n简介：${novel.summary || '无'}\n分类：${novel.categoryName || '未设置'}\n标签：${novel.tagNames.join('、') || '无'}\n\n${chapterContext}`,
+    { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low' },
+  )
+  const parsed = aiGraphEnvelopeSchema.parse(parseJsonObject(response))
+  const selectedEntities = parsed.entities.filter((entity) => isUsefulEntityName(entity.type, entity.name))
+  const sourceId = `ai-graph:${createHash('sha256').update(chapters.map((chapter) => `${chapter.id}:${chapter.revision}`).join('|')).digest('hex').slice(0, 24)}`
+
+  const stale = await prisma.storyEntity.findMany({
+    where: { novelId, status: 'inferred', OR: [{ description: { startsWith: AI_GRAPH_DESCRIPTION_PREFIX } }, { description: { startsWith: '从正文中自动识别' } }] },
     select: { id: true },
   })
-  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新记忆。')
+  if (stale.length > 0) await prisma.storyEntity.deleteMany({ where: { id: { in: stale.map((item) => item.id) } } })
+  await prisma.entityRelation.deleteMany({ where: { fromEntity: { novelId }, sourceId: { startsWith: 'ai-graph:' } } })
 
-  const [chapters, characterCards] = await Promise.all([
-    prisma.chapter.findMany({
-      where: { novelId, content: { not: '' } },
-      orderBy: { orderIndex: 'asc' },
-      select: { id: true, content: true, revision: true, orderIndex: true },
-      take: 500,
-    }),
-    prisma.projectMemoryEntry.findMany({
-      where: { novelId, memoryType: 'characterCard', status: { in: ['confirmed', 'inferred'] } },
-      orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
-      select: { title: true, content: true, status: true, updatedAt: true },
-      take: 80,
-    }),
-  ])
-
-  const idempotencyKeys = chapters.map((chapter) => `${chapter.id}:${chapter.revision}`)
-  const existingJobs = await prisma.memoryExtractionJob.findMany({
-    where: { novelId, idempotencyKey: { in: idempotencyKeys } },
-    select: { id: true, idempotencyKey: true, status: true, leaseUntil: true },
-  })
-  const jobsByKey = new Map(existingJobs.map((job) => [job.idempotencyKey, job]))
-  const queuedJobIds: string[] = []
-  for (const chapter of chapters) {
-    const key = `${chapter.id}:${chapter.revision}`
-    const existing = jobsByKey.get(key)
-    if (!existing) {
-      queuedJobIds.push(await enqueueChapterMemoryExtraction({
-        novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: chapter.content,
-      }))
-    } else if (existing.status === 'pending' || existing.status === 'failed' && (!existing.leaseUntil || existing.leaseUntil < new Date())) {
-      queuedJobIds.push(existing.id)
-      queueMicrotask(() => void processMemoryExtractionJob(existing.id).catch(() => {}))
-    }
-  }
-
-  const projectionVersion = createHash('sha256').update([
-    MEMORY_PROJECTION_ALGORITHM_VERSION,
-    ...chapters.map((chapter) => `${chapter.id}:${chapter.revision}`),
-    ...characterCards.map((card) => `${card.title}:${card.status}:${card.updatedAt.toISOString()}`),
-  ].join('|')).digest('hex').slice(0, 20)
-  const currentEntityCount = await prisma.storyEntity.count({ where: { novelId } })
-  if (currentEntityCount > 0 && memoryProjectionVersionCache.get(novelId) === projectionVersion) {
-    return { chapterCount: chapters.length, jobCount: queuedJobIds.length, entityCount: currentEntityCount, relationCount: 0 }
-  }
-
-  const mentions = new Map<string, { count: number; chapterIds: Set<string>; description?: string; status: StoryMemoryStatus }>()
-  const canonicalCharacterNames = characterCards.map((card) => card.title.trim()).filter(Boolean)
-  for (const card of characterCards) {
-    const name = card.title.trim()
-    if (!name || name.length > 32) continue
-    mentions.set(name, { count: 10, chapterIds: new Set(), description: card.content, status: card.status })
-  }
-  const chapterNames = new Map<string, string[]>()
-  for (const chapter of chapters) {
-    const names = extractCharacterNames(chapter.content, canonicalCharacterNames)
-    chapterNames.set(chapter.id, names)
-    for (const name of names) {
-      const current = mentions.get(name) ?? { count: 0, chapterIds: new Set<string>(), status: 'inferred' as StoryMemoryStatus }
-      current.count += 1
-      current.chapterIds.add(chapter.id)
-      mentions.set(name, current)
-    }
-  }
-
-  const selectedNames = [...mentions.entries()]
-    .filter(([, item]) => item.description || item.count >= 2 || item.chapterIds.size >= 2)
-    .sort((left, right) => right[1].count - left[1].count || right[1].chapterIds.size - left[1].chapterIds.size)
-    .slice(0, 36)
-  const selectedNameSet = new Set(selectedNames.map(([name]) => name))
-  const staleProjectedEntities = await prisma.storyEntity.findMany({
-    where: { novelId, entityType: 'character', description: { startsWith: '从正文中自动识别' } },
-    select: { id: true, canonicalName: true },
-  })
-  const staleIds = staleProjectedEntities
-    .filter((entity) => !selectedNameSet.has(entity.canonicalName))
-    .map((entity) => entity.id)
-  if (staleIds.length > 0) {
-    // 仅删除旧规则自动生成且本轮不再成立的节点；作者/Agent 确认过的实体不会进入这个集合。
-    await prisma.storyEntity.deleteMany({ where: { id: { in: staleIds } } })
-  }
-  const entities = new Map<string, { id: string }>()
-  for (const [name, item] of selectedNames) {
+  const entityByKey = new Map<string, { id: string; canonicalName: string }>()
+  for (const item of selectedEntities) {
+    const canonicalName = item.name.trim()
     const entity = await prisma.storyEntity.upsert({
-      where: { novelId_entityType_canonicalName: { novelId, entityType: 'character', canonicalName: name } },
-      create: {
-        novelId, entityType: 'character', canonicalName: name,
-        description: item.description ?? `从正文中自动识别，出现于 ${item.chapterIds.size} 个章节。`,
-        status: item.status,
-      },
-      update: item.description ? { description: item.description, status: item.status } : {},
-      select: { id: true },
+      where: { novelId_entityType_canonicalName: { novelId, entityType: item.type, canonicalName } },
+      create: { novelId, entityType: item.type, canonicalName, description: `${AI_GRAPH_DESCRIPTION_PREFIX}${item.description}`.trim(), status: 'inferred' },
+      update: { description: `${AI_GRAPH_DESCRIPTION_PREFIX}${item.description}`.trim() },
+      select: { id: true, canonicalName: true },
     })
-    entities.set(name, entity)
+    entityByKey.set(normalizedEntityKey(canonicalName), entity)
+    for (const alias of [...new Set([canonicalName, ...item.aliases.map((value) => value.trim())])].filter(Boolean)) {
+      entityByKey.set(normalizedEntityKey(alias), entity)
+      await prisma.entityAlias.upsert({ where: { entityId_alias: { entityId: entity.id, alias } }, create: { entityId: entity.id, alias, sourceId }, update: { sourceId } })
+    }
   }
-
-  await prisma.entityRelation.deleteMany({
-    where: {
-      relationType: '同章出现',
-      state: '正文共现（待 Agent 进一步确认关系）',
-      fromEntity: { novelId },
-    },
-  })
 
   let relationCount = 0
-  for (const chapter of chapters) {
-    const names = (chapterNames.get(chapter.id) ?? []).filter((name) => entities.has(name)).slice(0, 8)
-    for (let left = 0; left < names.length && relationCount < 160; left += 1) {
-      for (let right = left + 1; right < names.length && relationCount < 160; right += 1) {
-        const from = entities.get(names[left])!
-        const to = entities.get(names[right])!
-        const existing = await prisma.entityRelation.findFirst({
-          where: { fromEntityId: from.id, toEntityId: to.id, relationType: '同章出现', validFrom: chapter.orderIndex },
-          select: { id: true },
-        })
-        const data = {
-          state: '正文共现（待 Agent 进一步确认关系）', validTo: chapter.orderIndex,
-          confidence: 0.55, sourceId: chapter.id, revision: chapter.revision,
-        }
-        if (existing) await prisma.entityRelation.update({ where: { id: existing.id }, data })
-        else await prisma.entityRelation.create({
-          data: {
-            fromEntityId: from.id, toEntityId: to.id, relationType: '同章出现', validFrom: chapter.orderIndex, ...data,
-          },
-        })
-        relationCount += 1
-      }
+  for (const relation of parsed.relations) {
+    const from = entityByKey.get(normalizedEntityKey(relation.from))
+    const to = entityByKey.get(normalizedEntityKey(relation.to))
+    if (!from || !to || from.id === to.id) continue
+    const relationType = relation.type.trim()
+    const existing = await prisma.entityRelation.findFirst({
+      where: { fromEntityId: from.id, toEntityId: to.id, relationType, validFrom: null },
+      select: { id: true },
+    })
+    if (existing) {
+      await prisma.entityRelation.update({
+        where: { id: existing.id },
+        data: { state: relation.state.trim(), confidence: relation.confidence, sourceId },
+      })
+    } else {
+      await prisma.entityRelation.create({
+        data: { fromEntityId: from.id, toEntityId: to.id, relationType, state: relation.state.trim(), confidence: relation.confidence, sourceId },
+      })
     }
+    relationCount += 1
   }
-
-  rememberMemoryProjectionVersion(novelId, projectionVersion)
-  return { chapterCount: chapters.length, jobCount: queuedJobIds.length, entityCount: entities.size, relationCount }
+  return { chapterCount: chapters.length, jobCount: 0, entityCount: new Set([...entityByKey.values()].map((item) => item.id)).size, relationCount, reused: false }
 }
 
 /** 同一作品的桌面/手机隐藏视图可能同时请求同步；服务端合并为一条事务链，避免重复重建关系。 */
-export function syncNovelMemoryProjection(userId: string, novelId: string) {
-  const key = `${userId}:${novelId}`
+export function syncNovelMemoryProjection(userId: string, novelId: string, options: { force?: boolean } = {}) {
+  const key = `${userId}:${novelId}:${options.force ? 'force' : 'auto'}`
   const running = memoryProjectionInFlight.get(key)
   if (running) return running
-  const task = syncNovelMemoryProjectionOnce(userId, novelId)
+  const task = syncNovelMemoryProjectionOnce(userId, novelId, options.force === true)
   memoryProjectionInFlight.set(key, task)
   const release = () => {
     if (memoryProjectionInFlight.get(key) === task) memoryProjectionInFlight.delete(key)

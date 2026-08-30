@@ -26,6 +26,7 @@ import type {
   AgentToolDisplayPayload,
 } from '../../../../../shared/contracts/index.js'
 import { stripAgentProtocolArtifacts } from '../../../../../shared/agent-output.js'
+import { useAgentStore } from '../agentStore'
 
 /**
  * 消息 Parts 渲染器（plan/13 §5.3 + plan/20 §3.3）：
@@ -654,6 +655,7 @@ const WRITE_TOOL_NAMES = new Set([
   'novel_rename', 'novel_update_meta', 'cover_prompt_set', 'cover_apply',
   'novel_publish', 'novel_archive', 'novel_delete',
 ])
+const NAVIGABLE_TOOL_NAMES = new Set(['chapter_create', 'chapter_write', 'chapter_append', 'chapter_edit_range', 'plan_save', 'plan_rename'])
 
 /** 工具真实执行耗时：不足 1 秒的瞬时操作不展示，避免满屏无意义的 0.0s */
 function formatToolDuration(durationMs: number | undefined): string | null {
@@ -672,6 +674,7 @@ const ToolCallCard = memo(function ToolCallCard({
   part: Extract<AgentMessagePart, { type: 'tool-call' }>
 }) {
   const [expanded, setExpanded] = useState(false)
+  const requestToolNavigation = useAgentStore((state) => state.requestToolNavigation)
   const argsPreview = useMemo(() => {
     try {
       const raw = JSON.stringify(part.args, null, 2)
@@ -690,6 +693,7 @@ const ToolCallCard = memo(function ToolCallCard({
   const collapsible = part.toolName === 'web_read' && !!part.display
   const expandable = !workflowDisplay && Boolean(argsPreview)
   const rowExpandable = expandable || collapsible
+  const navigable = NAVIGABLE_TOOL_NAMES.has(part.toolName)
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   const webSearchQuery =
@@ -735,8 +739,8 @@ const ToolCallCard = memo(function ToolCallCard({
       ) : null}
       {workflowDisplay
         ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
-        : rowExpandable
-          ? <button type="button" onClick={() => setExpanded((value) => !value)} className="group relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</button>
+        : rowExpandable || navigable
+          ? <button type="button" onClick={() => { if (navigable) requestToolNavigation(part.toolName, part.args, part.display); if (rowExpandable) setExpanded((value) => !value) }} title={navigable ? '打开对应内容' : undefined} className="group relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</button>
           : <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>}
       {part.summary ? (
         <p

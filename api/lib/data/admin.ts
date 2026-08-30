@@ -10,6 +10,7 @@ import type {
   AdminBriefUser,
   AdminCreationRecordsIndexPayload,
   AdminCreationRecordsPayload,
+  AdminTokenManagementPayload,
   AdminUserFavoriteNovelRow,
   AdminUserFollowRow,
   Pagination,
@@ -18,6 +19,26 @@ import { hashPassword, isLegacyPasswordHash, verifyPassword } from '../password.
 import { evictUserBanCache } from '../auth-session.js'
 import { prisma } from '../prisma.js'
 import { buildPagination, excerptContent, isUserOnline, toIso } from './internal.js'
+
+type AgentUsageSummary = { promptTokens: number; completionTokens: number; totalTokens: number }
+
+function parseAgentUsage(value: Prisma.JsonValue | null | undefined): AgentUsageSummary {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  const record = value as Record<string, unknown>
+  const promptTokens = Number(record.promptTokens) || 0
+  const completionTokens = Number(record.completionTokens) || 0
+  return { promptTokens, completionTokens, totalTokens: Number(record.totalTokens) || promptTokens + completionTokens }
+}
+
+function totalRunTokens(runs: Array<{ usage: Prisma.JsonValue | null }>): number {
+  return runs.reduce((total, run) => total + parseAgentUsage(run.usage).totalTokens, 0)
+}
+
+const trackedToolResultWhere = (toolName: 'web_search' | 'cover_generate', userId?: string): Prisma.AgentRunEventWhereInput => ({
+  type: 'tool.result',
+  payload: { path: ['toolName'], equals: toolName },
+  ...(userId ? { run: { userId } } : {}),
+})
 
 
 
@@ -496,7 +517,7 @@ export async function listAdminUsersData(input: {
 
 export async function getAdminUserDetailData(userId: string): Promise<{
   user: AdminUserRow & { bio: string | null }
-  stats: { novels: number; posts: number; comments: number; favorites: number }
+  stats: { novels: number; posts: number; comments: number; favorites: number; totalTokens: number; webSearchCalls: number; imageCalls: number }
 } | null> {
   const record = await prisma.user.findUnique({
     where: { id: userId },
@@ -520,11 +541,14 @@ export async function getAdminUserDetailData(userId: string): Promise<{
     return null
   }
 
-  const [novels, posts, comments, favorites] = await Promise.all([
+  const [novels, posts, comments, favorites, usage, webSearchCalls, imageCalls] = await Promise.all([
     prisma.novel.count({ where: { authorId: userId } }),
     prisma.post.count({ where: { userId } }),
     prisma.comment.count({ where: { userId } }),
     prisma.novelFavorite.count({ where: { userId } }),
+    prisma.aiUsageLog.aggregate({ where: { userId }, _sum: { requestTokens: true, responseTokens: true } }),
+    prisma.agentRunEvent.count({ where: trackedToolResultWhere('web_search', userId) }),
+    prisma.agentRunEvent.count({ where: trackedToolResultWhere('cover_generate', userId) }),
   ])
 
   return {
@@ -544,7 +568,15 @@ export async function getAdminUserDetailData(userId: string): Promise<{
       followerCount: record.followerCount,
       bio: record.bio,
     },
-    stats: { novels, posts, comments, favorites },
+    stats: {
+      novels,
+      posts,
+      comments,
+      favorites,
+      totalTokens: (usage._sum.requestTokens ?? 0) + (usage._sum.responseTokens ?? 0),
+      webSearchCalls,
+      imageCalls,
+    },
   }
 }
 
@@ -694,10 +726,16 @@ export async function getAdminCreationRecordsData(userId: string): Promise<Admin
     include: {
       agentSessions: {
         orderBy: { updatedAt: 'desc' },
-        include: { _count: { select: { runs: true } } },
+        include: { _count: { select: { runs: true } }, runs: { select: { usage: true } } },
       },
     },
   })
+  const novelUsage = await prisma.aiUsageLog.groupBy({
+    by: ['novelId'],
+    where: { userId, novelId: { not: null } },
+    _sum: { requestTokens: true, responseTokens: true },
+  })
+  const novelTokens = new Map(novelUsage.map((item) => [item.novelId, (item._sum.requestTokens ?? 0) + (item._sum.responseTokens ?? 0)]))
 
   return {
     user: { id: target.id, nickname: target.nickname, avatarUrl: target.avatarUrl },
@@ -709,6 +747,7 @@ export async function getAdminCreationRecordsData(userId: string): Promise<Admin
       chapterCount: novel.chapterCount,
       wordCount: novel.wordCount,
       updatedAt: novel.updatedAt.toISOString(),
+      totalTokens: novelTokens.get(novel.id) ?? 0,
       sessions: novel.agentSessions.map((session) => ({
         id: session.id,
         title: session.title,
@@ -716,6 +755,7 @@ export async function getAdminCreationRecordsData(userId: string): Promise<Admin
         runCount: session._count.runs,
         lastRunAt: toIso(session.lastRunAt),
         createdAt: session.createdAt.toISOString(),
+        totalTokens: totalRunTokens(session.runs),
       })),
     })),
   }
@@ -746,6 +786,7 @@ export async function getAdminAgentSessionMessagesData(
           errorMessage: true,
           createdAt: true,
           finishedAt: true,
+          usage: true,
           messages: {
             orderBy: { createdAt: 'asc' },
             select: { id: true, runId: true, role: true, parts: true, createdAt: true },
@@ -776,6 +817,7 @@ export async function getAdminAgentSessionMessagesData(
       errorMessage: run.errorMessage,
       createdAt: run.createdAt.toISOString(),
       finishedAt: toIso(run.finishedAt),
+      usage: parseAgentUsage(run.usage),
       messages: run.messages.map((message) => ({
         id: message.id,
         runId: message.runId,
@@ -784,6 +826,68 @@ export async function getAdminAgentSessionMessagesData(
         createdAt: message.createdAt.toISOString(),
       })),
     })),
+  }
+}
+
+
+/** 全站 AI 用量总览：AiUsageLog 是模型 token 的唯一计量源，工具次数来自成功的 Agent 工具事件。 */
+export async function getAdminTokenManagementData(): Promise<AdminTokenManagementPayload> {
+  const [summary, userGroups, actionGroups, toolEvents] = await Promise.all([
+    prisma.aiUsageLog.aggregate({ _sum: { requestTokens: true, responseTokens: true } }),
+    prisma.aiUsageLog.groupBy({ by: ['userId'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.aiUsageLog.groupBy({ by: ['action'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.agentRunEvent.findMany({
+      where: {
+        type: 'tool.result',
+        OR: [
+          { payload: { path: ['toolName'], equals: 'web_search' } },
+          { payload: { path: ['toolName'], equals: 'cover_generate' } },
+        ],
+      },
+      select: { payload: true, run: { select: { userId: true } } },
+    }),
+  ])
+  const sortedUserGroups = [...userGroups].sort((left, right) => {
+    const leftTotal = (left._sum.requestTokens ?? 0) + (left._sum.responseTokens ?? 0)
+    const rightTotal = (right._sum.requestTokens ?? 0) + (right._sum.responseTokens ?? 0)
+    return rightTotal - leftTotal
+  }).slice(0, 100)
+  const users = await prisma.user.findMany({
+    where: { id: { in: sortedUserGroups.map((item) => item.userId) } },
+    select: { id: true, nickname: true, avatarUrl: true },
+  })
+  const userMap = new Map(users.map((user) => [user.id, user]))
+  const toolCounts = new Map<string, { webSearchCalls: number; imageCalls: number }>()
+  for (const event of toolEvents) {
+    const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+      ? event.payload as Record<string, unknown>
+      : {}
+    if (payload.ok === false) continue
+    const counts = toolCounts.get(event.run.userId) ?? { webSearchCalls: 0, imageCalls: 0 }
+    if (payload.toolName === 'web_search') counts.webSearchCalls += 1
+    if (payload.toolName === 'cover_generate') counts.imageCalls += 1
+    toolCounts.set(event.run.userId, counts)
+  }
+  const requestTokens = summary._sum.requestTokens ?? 0
+  const responseTokens = summary._sum.responseTokens ?? 0
+  const webSearchCalls = [...toolCounts.values()].reduce((total, item) => total + item.webSearchCalls, 0)
+  const imageCalls = [...toolCounts.values()].reduce((total, item) => total + item.imageCalls, 0)
+  return {
+    summary: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens, users: userGroups.length, webSearchCalls, imageCalls },
+    users: sortedUserGroups.flatMap((item) => {
+      const user = userMap.get(item.userId)
+      if (!user) return []
+      const userRequestTokens = item._sum.requestTokens ?? 0
+      const userResponseTokens = item._sum.responseTokens ?? 0
+      const counts = toolCounts.get(item.userId) ?? { webSearchCalls: 0, imageCalls: 0 }
+      return [{ user, totalTokens: userRequestTokens + userResponseTokens, requestTokens: userRequestTokens, responseTokens: userResponseTokens, requestCount: item._count._all, ...counts }]
+    }),
+    actions: actionGroups.map((item) => {
+      const actionRequestTokens = item._sum.requestTokens ?? 0
+      const actionResponseTokens = item._sum.responseTokens ?? 0
+      const totalTokens = actionRequestTokens + actionResponseTokens
+      return { action: item.action, totalTokens, requestTokens: actionRequestTokens, responseTokens: actionResponseTokens, requestCount: item._count._all, averageTokens: item._count._all ? Math.round(totalTokens / item._count._all) : 0 }
+    }).sort((left, right) => right.totalTokens - left.totalTokens),
   }
 }
 
@@ -914,6 +1018,7 @@ export async function listAdminNovelsData(input: {
 
 export async function getAdminNovelDetailData(novelId: string): Promise<{
   novel: AdminNovelRow & { summary: string; author: AdminUserRow; coverUrl: string | null }
+  usage: { totalTokens: number; requestTokens: number; responseTokens: number }
   chapters: Array<{
     id: string
     title: string
@@ -935,6 +1040,12 @@ export async function getAdminNovelDetailData(novelId: string): Promise<{
   if (!record) {
     return null
   }
+  const usage = await prisma.aiUsageLog.aggregate({
+    where: { novelId },
+    _sum: { requestTokens: true, responseTokens: true },
+  })
+  const requestTokens = usage._sum.requestTokens ?? 0
+  const responseTokens = usage._sum.responseTokens ?? 0
 
   return {
     novel: {
@@ -968,6 +1079,7 @@ export async function getAdminNovelDetailData(novelId: string): Promise<{
         followerCount: record.author.followerCount,
       },
     },
+    usage: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens },
     chapters: record.chapters.map((chapter) => ({
       id: chapter.id,
       title: chapter.title,

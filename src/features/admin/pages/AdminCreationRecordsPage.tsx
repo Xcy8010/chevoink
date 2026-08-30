@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
 import { AdminCard, AdminPageHeader, AdminPanelState, StatusPill } from '../AdminLayout'
 import { cn } from '@/lib/utils'
+import { formatTokens } from '../admin-shared'
 import type { AdminAgentSessionMessagesPayload } from '../../../../shared/contracts/index.js'
 
 const RUN_STATUS_LABELS: Record<string, string> = {
@@ -170,6 +171,7 @@ function ChatRecord({ payload }: { payload: AdminAgentSessionMessagesPayload }) 
             <StatusPill tone={run.status === 'completed' || run.status === 'running' ? 'success' : run.status === 'failed' ? 'danger' : 'neutral'}>
               {RUN_STATUS_LABELS[run.status] ?? run.status}
             </StatusPill>
+            <span>{formatTokens(run.usage.totalTokens)} Token</span>
             <span className="ml-auto">{run.createdAt.slice(0, 16).replace('T', ' ')}</span>
           </div>
           {run.inputSummary ? <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--text-secondary)]">输入：{run.inputSummary}</p> : null}
@@ -312,7 +314,7 @@ export default function AdminCreationRecordsPage() {
                     </StatusPill>
                   </div>
                   <p className="text-xs text-[var(--text-secondary)]">
-                    {novel.wordCount.toLocaleString('zh-CN')} 字 · {novel.chapterCount} 章 · {novel.sessions.length} 个会话
+                    {novel.wordCount.toLocaleString('zh-CN')} 字 · {novel.chapterCount} 章 · {novel.sessions.length} 个会话 · {formatTokens(novel.totalTokens)} Token
                   </p>
                 </div>
 
@@ -334,6 +336,7 @@ export default function AdminCreationRecordsPage() {
                             <span className="min-w-0 flex-1 truncate">{session.title}</span>
                             <MessageSquareText className="h-3.5 w-3.5 text-[var(--text-secondary)]" />
                             <span className="text-xs text-[var(--text-secondary)]">{session.runCount} 轮</span>
+                            <span className="text-xs text-[var(--text-secondary)]">{formatTokens(session.totalTokens)} Token</span>
                             <span className="text-xs text-[var(--text-secondary)]">{session.lastRunAt ? session.lastRunAt.slice(0, 10) : session.createdAt.slice(0, 10)}</span>
                           </button>
                           {expanded ? (

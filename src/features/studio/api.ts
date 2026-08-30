@@ -246,9 +246,10 @@ export async function getNovelMemoryGraph(novelId: string): Promise<MemoryGraph>
   return data.graph
 }
 
-export async function syncNovelMemoryGraph(novelId: string): Promise<MemoryGraph> {
+export async function syncNovelMemoryGraph(novelId: string, force = false): Promise<MemoryGraph> {
   const data = await requestData<{ graph: MemoryGraph }>(`/api/agent/novels/${novelId}/memory-graph/sync`, {
     method: 'POST',
+    body: JSON.stringify({ force }),
   })
   return data.graph
 }

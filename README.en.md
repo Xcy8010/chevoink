@@ -84,10 +84,10 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ## ✨ Feature Overview
 
 - **Reading**: bookstore home (carousels, rankings, category picks), cloud-synced bookshelf & reading progress, immersive reader, TTS narration
-- **Studio**: novel/chapter management, AI writing Agent (streaming events, Harness-style compact tool flow and active-state motion, knowledge-set Skills, user/Agent-created private skills, confirmed shared-skill installation, maximum permissions by default, image/file attachments, vision, pdf/docx/txt/md reference reading, web search & page reading, in-platform novel references (browse all published works and your own unpublished works, similar-work detection by tags/genres, web fallback when the platform yields nothing, fan-fiction / prequel support), cross-session memory), AI cover generation (remote URLs auto-persisted), one-click zip export (plans / catalog / chapters / work info & publishing advice, with Fanqie Novel official-vocabulary publishing advice; the Agent tool supports custom scoping)
+- **Studio**: novel/chapter management, an AI writing Agent with token-by-token conclusions and document writes, write-time editor locking, Work auto-follow, compact Harness-style tool activity, Skills, image/file references, web and in-platform research, cross-session memory, and a low-reasoning AI relationship graph spanning characters, places, organizations, items, events, and concepts; plus AI covers and scoped zip export
 - **Community**: posts & topics, recommendation algorithm, comments/likes/bookmarks, follows & fans, direct messages with online presence
 - **Accounts**: phone + SMS-code login (Tencent Cloud SMS), HttpOnly Cookie session + Bearer fallback channel (survives Android shell process kills)
-- **Admin console**: data dashboard, user/novel/content governance, mobile-friendly
+- **Admin console**: data dashboard, user/novel/content governance, token ranking with user/novel/task drill-down, web-search and image-generation call counts, mobile-friendly
 - **Android client**: Capacitor shell loading the remote site, in-app update checks and APK distribution
 
 ## 🛠️ Tech Stack

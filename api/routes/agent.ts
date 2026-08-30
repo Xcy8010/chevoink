@@ -281,7 +281,8 @@ router.post('/novels/:novelId/memory-graph/sync', async (req: Request, res: Resp
   try {
     const userId = requireSessionUserId(req)
     requireAgent2Feature('memory2', userId)
-    const projection = await syncNovelMemoryProjection(userId, req.params.novelId)
+    const force = Boolean(req.body && typeof req.body === 'object' && !Array.isArray(req.body) && (req.body as { force?: unknown }).force === true)
+    const projection = await syncNovelMemoryProjection(userId, req.params.novelId, { force })
     const graph = await getMemoryGraph(userId, req.params.novelId)
     res.status(200).json(buildSuccess(requestId, { graph, projection }))
   } catch (error) {

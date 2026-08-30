@@ -16,6 +16,7 @@ const EVENT_TYPES = [
   'run.started',
   'message.start',
   'text.delta',
+  'text.final',
   'reasoning.delta',
   'tool.call',
   'tool.delta',

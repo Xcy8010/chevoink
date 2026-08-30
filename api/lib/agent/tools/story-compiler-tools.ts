@@ -12,6 +12,8 @@ import { generateTextCompletion } from '../../ai-service.js'
 import { prisma } from '../../prisma.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { getLatestQualityReport } from '../humanity-quality.js'
+import { recordChapterBaseline } from '../baseline.js'
+import { enqueueChapterMemoryExtraction } from '../story-memory.js'
 import {
   commitChapterBridge,
   getStoryCharterBundle,
@@ -22,7 +24,8 @@ import {
   updateReaderPromise,
   validateStoryContinuity,
 } from '../story-compiler.js'
-import { defineTool } from './types.js'
+import { defineTool, type ToolContext } from './types.js'
+import { recalcNovelStats } from './novel-tools.js'
 
 const ALL_READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const PLAN_BUILD_WRITE = { plan: 'allow', build: 'allow', review: 'deny' } as const
@@ -40,6 +43,45 @@ function parseIndependentContinuityResult(content: string) {
   const end = content.lastIndexOf('}')
   if (start === -1 || end <= start) throw new Error('独立连续性检查未返回 JSON 对象。')
   return independentContinuityResultSchema.parse(JSON.parse(content.slice(start, end + 1)))
+}
+
+const continuityRepairEnvelopeSchema = z.object({
+  patches: z.array(z.object({ oldText: z.string().min(1).max(1800), newText: z.string().max(2200) })).max(10),
+})
+
+async function applyBoldContinuityRepairs(
+  ctx: ToolContext,
+  chapter: { id: string; title: string; revision: number; content: string; orderIndex: number },
+  findings: Array<{ signal: string; severity: string; evidence: string; suggestion: string }>,
+) {
+  const response = await generateTextCompletion(
+    '你是中文网文连续性修订编辑。大胆探索模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
+    `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
+    { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: 'agent3BoldContinuityRepair', targetType: 'chapter', targetId: chapter.id, temperature: 0.35, reasoningEffort: 'low' },
+  )
+  const start = response.indexOf('{')
+  const end = response.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  const parsed = continuityRepairEnvelopeSchema.parse(JSON.parse(response.slice(start, end + 1)))
+  let after = chapter.content
+  let applied = 0
+  for (const patch of parsed.patches) {
+    const first = after.indexOf(patch.oldText)
+    if (first < 0 || after.indexOf(patch.oldText, first + patch.oldText.length) >= 0) continue
+    after = `${after.slice(0, first)}${patch.newText}${after.slice(first + patch.oldText.length)}`
+    applied += 1
+  }
+  if (applied === 0 || after === chapter.content) return null
+  const updated = await prisma.chapter.update({
+    where: { id: chapter.id }, data: { content: after, wordCount: after.length, revision: { increment: 1 } },
+    select: { id: true, title: true, revision: true, orderIndex: true },
+  })
+  await recalcNovelStats(ctx.novelId)
+  recordChapterBaseline(ctx.runId, updated.id, updated.revision)
+  if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
+    await enqueueChapterMemoryExtraction({ novelId: ctx.novelId, chapterId: updated.id, chapterRevision: updated.revision, before: chapter.content, after })
+  }
+  return { updated, before: chapter.content, after, applied }
 }
 
 export const storyCharterGetTool = defineTool({
@@ -200,24 +242,67 @@ export const sceneTaskBuildTool = defineTool({
   }),
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
-    const next = { ...(raw as Record<string, unknown>) }
+    let source = raw as Record<string, unknown>
+    for (const key of ['arguments', 'args', 'params', 'parameters'] as const) {
+      const wrapped = source[key]
+      if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
+        const candidate = wrapped as Record<string, unknown>
+        if (candidate.tasks !== undefined || candidate.sceneTasks !== undefined || candidate.scene_tasks !== undefined) {
+          source = { ...candidate, compilationId: source.compilationId ?? candidate.compilationId }
+          break
+        }
+      }
+    }
+    const next = { ...source }
     if (!next.compilationId && typeof next.compilation_id === 'string') next.compilationId = next.compilation_id
     if (!next.tasks && Array.isArray(next.sceneTasks)) next.tasks = next.sceneTasks
     if (!next.tasks && Array.isArray(next.scene_tasks)) next.tasks = next.scene_tasks
+    if (!Array.isArray(next.tasks) && next.tasks && typeof next.tasks === 'object') next.tasks = [next.tasks]
     if (Array.isArray(next.tasks)) {
-      next.tasks = next.tasks.map((value) => {
+      const asText = (value: unknown, fallback: string) => {
+        if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 1000)
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value).slice(0, 1000)
+        return fallback
+      }
+      const asList = (value: unknown) => Array.isArray(value)
+        ? value.map((item) => asText(item, '')).filter(Boolean).slice(0, 30)
+        : typeof value === 'string' && value.trim() ? [value.trim().slice(0, 300)] : []
+      const asState = (value: unknown) => {
+        const state = value && typeof value === 'object' && !Array.isArray(value)
+          ? value as Record<string, unknown>
+          : {}
+        return {
+          action: typeof state.action === 'string' ? state.action.slice(0, 500) : undefined,
+          location: typeof state.location === 'string' ? state.location.slice(0, 160) : undefined,
+          storyTime: typeof (state.storyTime ?? state.story_time) === 'string' ? String(state.storyTime ?? state.story_time).slice(0, 160) : undefined,
+          knowledge: asList(state.knowledge), emotion: asList(state.emotion), body: asList(state.body),
+          objects: asList(state.objects), relationships: asList(state.relationships), openLoops: asList(state.openLoops ?? state.open_loops),
+        }
+      }
+      const normalized = next.tasks.map((value, index) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return value
         const item = value as Record<string, unknown>
+        const purpose = asText(item.purpose ?? item.intent ?? item.summary, `推进第 ${index + 1} 个场景`)
+        const normalizeBudget = (value: unknown) => {
+          const budget = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+          const level = (candidate: unknown, fallback: 'low' | 'medium' | 'high') =>
+            candidate === 'low' || candidate === 'medium' || candidate === 'high' ? candidate : fallback
+          return { description: level(budget.description, 'low'), dialogue: level(budget.dialogue, 'medium'), rhetoric: level(budget.rhetoric, 'low') }
+        }
         return {
           ...item,
-          entryState: item.entryState ?? item.entry_state ?? {},
-          exitState: item.exitState ?? item.exit_state ?? {},
-          styleBudget: item.styleBudget ?? item.style_budget ?? {},
-          choice: item.choice ?? item.decision,
-          cost: item.cost ?? item.consequence,
-          turn: item.turn ?? item.twist,
+          purpose,
+          entryState: asState(item.entryState ?? item.entry_state),
+          goal: asText(item.goal ?? item.objective, purpose),
+          obstacle: asText(item.obstacle ?? item.resistance ?? item.conflict, '目标受到具体阻力'),
+          choice: asText(item.choice ?? item.decision, '人物必须作出选择'),
+          cost: asText(item.cost ?? item.consequence, '选择带来可见代价'),
+          turn: asText(item.turn ?? item.twist, '场景状态发生变化'),
+          exitState: asState(item.exitState ?? item.exit_state),
+          styleBudget: normalizeBudget(item.styleBudget ?? item.style_budget),
         }
-      })
+      }).filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+      next.tasks = normalized.slice(0, 4)
     }
     if (next.compilationId === null || next.compilationId === '') delete next.compilationId
     if (!Array.isArray(next.alternatives)) delete next.alternatives
@@ -322,7 +407,7 @@ export const continuityValidateTool = defineTool({
   async execute(ctx, args) {
     const compilation = await prisma.storyCompilation.findFirst({
       where: { id: args.compilationId, userId: ctx.userId, novelId: ctx.novelId, status: 'active' },
-      include: { bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } }, chapter: { select: { id: true, title: true, revision: true, content: true } } },
+      include: { bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } }, chapter: { select: { id: true, title: true, revision: true, content: true, orderIndex: true } } },
     })
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
@@ -365,6 +450,18 @@ export const continuityValidateTool = defineTool({
       .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.evidence === finding.evidence) === index)
     const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: args.compilationId, findings: independentFindings })
     const phase = result.errorCount > 0 ? 'repair' : 'check'
+    if (ctx.creativeFreedom === 'bold' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
+      const repaired = await applyBoldContinuityRepairs(ctx, chapter, result.findings)
+      if (repaired) {
+        await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { stage: 'repair' } })
+        return {
+          output: `大胆探索模式已把本轮 ${result.errorCount} 个错误、${result.warningCount} 个警告交给独立修订器，并原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
+          summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
+          display: { kind: 'chapterDiff', chapterId: repaired.updated.id, chapterTitle: repaired.updated.title, before: repaired.before, after: repaired.after, appliedDirectly: true, revision: repaired.updated.revision },
+          snapshot: { target: 'chapter', targetId: repaired.updated.id, field: 'content', previousValue: repaired.before },
+        }
+      }
+    }
     return {
       output: result.errorCount > 0
         ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`

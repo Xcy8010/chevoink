@@ -60,11 +60,14 @@ type EditorCanvasProps = {
   embedded?: boolean
   /** mobile=手机端零卡片单滚动形态；默认保持桌面卡片形态 */
   variant?: 'default' | 'mobile'
+  /** Agent 正在流式生成的只读正文；未落库前覆盖显示但不触发用户草稿。 */
+  streamingContent?: string
+  writeLocked?: boolean
 }
 
 export default function EditorCanvas({
-  chapterDraft,
-  workspaceDocument = null,
+  chapterDraft: sourceChapterDraft,
+  workspaceDocument: sourceWorkspaceDocument = null,
   chapterLoading,
   chapterErrorMessage,
   chapterSaveState: _chapterSaveState,
@@ -82,8 +85,8 @@ export default function EditorCanvas({
   onPublishNovel,
   novelPublished = false,
   onStatusChange: _onStatusChange,
-  onChange,
-  onWorkspaceDocumentChange,
+  onChange: sourceOnChange,
+  onWorkspaceDocumentChange: sourceOnWorkspaceDocumentChange,
   onRetrySave: _onRetrySave,
   onEditorBlur,
   pendingChapterReview = null,
@@ -105,7 +108,17 @@ export default function EditorCanvas({
   onRejectPlanReviewHunk,
   embedded = false,
   variant = 'default',
+  streamingContent,
+  writeLocked = false,
 }: EditorCanvasProps) {
+  const chapterDraft = sourceChapterDraft && streamingContent !== undefined
+    ? { ...sourceChapterDraft, content: streamingContent }
+    : sourceChapterDraft
+  const workspaceDocument = sourceWorkspaceDocument && streamingContent !== undefined
+    ? { ...sourceWorkspaceDocument, content: streamingContent, editableContent: false, editableTitle: false }
+    : sourceWorkspaceDocument
+  const onChange = writeLocked ? () => {} : sourceOnChange
+  const onWorkspaceDocumentChange = writeLocked ? undefined : sourceOnWorkspaceDocumentChange
   const isMobile = variant === 'mobile'
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const sectionClassName = embedded
