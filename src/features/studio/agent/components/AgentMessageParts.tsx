@@ -43,6 +43,26 @@ type DiffLine = {
 
 const DIFF_LINE_LIMIT = 300
 
+function ToolTargetLink({
+  title,
+  onNavigate,
+}: {
+  title: string
+  onNavigate?: () => void
+}) {
+  if (!onNavigate) return <>{title}</>
+  return (
+    <button
+      type="button"
+      onClick={onNavigate}
+      title={`打开《${title}》`}
+      className="inline cursor-pointer font-medium text-[var(--text-primary)] underline decoration-transparent decoration-1 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-current focus-visible:decoration-current focus-visible:outline-none"
+    >
+      {title}
+    </button>
+  )
+}
+
 /** 轻量行级 diff（LCS）；超长内容直接降级为仅展示新内容 */
 function computeLineDiff(before: string, after: string): DiffLine[] | null {
   const beforeLines = before.split('\n')
@@ -95,8 +115,10 @@ function computeLineDiff(before: string, after: string): DiffLine[] | null {
 
 function DiffCard({
   display,
+  onNavigateTarget,
 }: {
   display: Extract<AgentToolDisplayPayload, { kind: 'chapterDiff' }>
+  onNavigateTarget?: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const diffLines = useMemo(
@@ -108,15 +130,28 @@ function DiffCard({
 
   return (
     <div className="border-t border-[var(--border-subtle)]">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="group flex w-full items-center justify-between gap-2 py-1.5 text-left"
-      >
-        <span className="min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">
-          {display.chapterTitle}
-        </span>
-        <span className="flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+      <div className="group relative flex w-full items-center justify-between gap-2 py-1.5 text-left">
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-label={expanded ? '收起章节变更' : '展开章节变更'}
+          className="absolute inset-0 z-0"
+        />
+        {onNavigateTarget ? (
+          <button
+            type="button"
+            onClick={onNavigateTarget}
+            title={`打开《${display.chapterTitle}》`}
+            className="relative z-10 min-w-0 truncate text-xs font-medium text-[var(--text-primary)] underline decoration-transparent decoration-1 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-current focus-visible:decoration-current focus-visible:outline-none"
+          >
+            {display.chapterTitle}
+          </button>
+        ) : (
+          <span className="pointer-events-none relative z-10 min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">
+            {display.chapterTitle}
+          </span>
+        )}
+        <span className="pointer-events-none relative z-10 flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
           <span className={cn(addedChars >= 0 ? 'text-emerald-600' : 'text-rose-500')}>
             {addedChars >= 0 ? `+${addedChars}` : addedChars} 字
           </span>
@@ -126,7 +161,7 @@ function DiffCard({
             <ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} />
           </span>
         </span>
-      </button>
+      </div>
       {expanded ? (
         <div className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-2 pl-5">
           {diffLines ? (
@@ -534,10 +569,16 @@ function MarkdownCard({
   )
 }
 
-function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) {
+function ToolDisplayRenderer({
+  display,
+  onNavigateTarget,
+}: {
+  display: AgentToolDisplayPayload
+  onNavigateTarget?: () => void
+}) {
   switch (display.kind) {
     case 'chapterDiff':
-      return <DiffCard display={display} />
+      return <DiffCard display={display} onNavigateTarget={onNavigateTarget} />
     case 'plan':
       return <PlanCard display={display} />
     case 'storyCompiler':
@@ -559,19 +600,25 @@ function ToolDisplayRenderer({ display }: { display: AgentToolDisplayPayload }) 
     case 'chapterRef':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">
-          章节「{display.title}」 · {display.wordCount} 字
+          章节「<ToolTargetLink title={display.title} onNavigate={onNavigateTarget} />」 · {display.wordCount} 字
         </p>
       )
     case 'planFile':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">
-          计划「{display.title}」已写入计划文件夹 · {display.content.length} 字，可在左侧作品树直接编辑
+          计划「<ToolTargetLink title={display.title} onNavigate={onNavigateTarget} />」已写入计划文件夹 · {display.content.length} 字，可在左侧作品树直接编辑
+        </p>
+      )
+    case 'planDiff':
+      return (
+        <p className="border-t border-[var(--border-subtle)] py-1.5 text-[11px] text-[var(--text-secondary)]">
+          计划「<ToolTargetLink title={display.title} onNavigate={onNavigateTarget} />」 · {display.after.length - display.before.length >= 0 ? '+' : ''}{display.after.length - display.before.length} 字
         </p>
       )
     case 'planRename':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">
-          计划「{display.beforeTitle}」已重命名为「{display.title}」
+          计划「{display.beforeTitle}」已重命名为「<ToolTargetLink title={display.title} onNavigate={onNavigateTarget} />」
         </p>
       )
     case 'planDelete':
@@ -712,7 +759,6 @@ const ToolCallCard = memo(function ToolCallCard({
   const headerContent = <>
     {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
     <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">{part.title || part.toolName}</span>
-    {targetTitle ? <button type="button" onClick={(event) => { event.stopPropagation(); requestToolNavigation(part.toolName, part.args, part.display) }} title={`打开《${targetTitle}》`} className="relative z-10 max-w-[42%] shrink truncate text-[11px] text-[var(--text-secondary)] underline-offset-4 hover:text-[var(--text-primary)] hover:underline">《{targetTitle}》</button> : null}
     {running ? <span className="agent-tool-running-label shrink-0 text-[10px] font-medium text-[var(--text-secondary)]">{runningLabel}</span> : null}
     {durationLabel ? <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">{durationLabel}</span> : null}
     {writeTool && !running ? <span className={cn(
@@ -759,7 +805,10 @@ const ToolCallCard = memo(function ToolCallCard({
       ) : null}
       {part.display && workflowDisplayHasBody && (!collapsible || expanded) ? (
         <div className={cn(workflowDisplay ? 'pb-2' : 'pb-3 pt-1 pl-[22px]')}>
-          <ToolDisplayRenderer display={part.display} />
+          <ToolDisplayRenderer
+            display={part.display}
+            onNavigateTarget={targetTitle ? () => requestToolNavigation(part.toolName, part.args, part.display) : undefined}
+          />
         </div>
       ) : null}
     </div>
