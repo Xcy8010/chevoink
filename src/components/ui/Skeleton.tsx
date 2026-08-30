@@ -234,7 +234,7 @@ export function StudioSkeleton() {
   const perspective = resolveStudioPerspective()
   return (
     <div
-      className="flex h-full min-h-[70vh] min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]"
+      className="studio-workspace flex h-full min-h-[70vh] min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]"
       aria-busy="true"
       aria-label="创作区加载中"
     >
