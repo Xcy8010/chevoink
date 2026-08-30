@@ -22,6 +22,7 @@ describe('Agent 创作可观测与容错', () => {
     expect(source).toContain('MEMORY_GRAPH_REFRESH_COOLDOWN_MS')
     expect(source).toContain("z.enum(['character', 'location', 'organization', 'item', 'event', 'concept'])")
     expect(source).toContain('if (!force && existingEntityCount > 0)')
+    expect(source).toContain("从正文中自动识别")
   })
 
   it('最终正文和工具长文都走流式事件，写入期锁定编辑器', () => {

@@ -354,6 +354,11 @@ async function syncNovelMemoryProjectionOnce(userId: string, novelId: string, fo
   })
   if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权更新关系网。')
 
+  // 2.0 规则投影曾把“林舟知道”截成“林舟知”等伪人名。先清理有明确旧标记的节点：
+  // 若仍有人工/工具确认实体就直接复用；若因此变成空图，才进入一次 AI 重建。
+  await prisma.storyEntity.deleteMany({
+    where: { novelId, status: 'inferred', description: { startsWith: '从正文中自动识别' } },
+  })
   const existingEntityCount = await prisma.storyEntity.count({ where: { novelId } })
   if (!force && existingEntityCount > 0) {
     return { chapterCount: 0, jobCount: 0, entityCount: existingEntityCount, relationCount: await prisma.entityRelation.count({ where: { fromEntity: { novelId } } }), reused: true }
@@ -388,7 +393,7 @@ async function syncNovelMemoryProjectionOnce(userId: string, novelId: string, fo
   const sourceId = `ai-graph:${createHash('sha256').update(chapters.map((chapter) => `${chapter.id}:${chapter.revision}`).join('|')).digest('hex').slice(0, 24)}`
 
   const stale = await prisma.storyEntity.findMany({
-    where: { novelId, status: 'inferred', OR: [{ description: { startsWith: AI_GRAPH_DESCRIPTION_PREFIX } }, { description: { startsWith: '从正文中自动识别' } }] },
+    where: { novelId, status: 'inferred', description: { startsWith: AI_GRAPH_DESCRIPTION_PREFIX } },
     select: { id: true },
   })
   if (stale.length > 0) await prisma.storyEntity.deleteMany({ where: { id: { in: stale.map((item) => item.id) } } })
