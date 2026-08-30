@@ -27,6 +27,7 @@ import type {
 } from '../../../../../shared/contracts/index.js'
 import { stripAgentProtocolArtifacts } from '../../../../../shared/agent-output.js'
 import { useAgentStore } from '../agentStore'
+import { describeToolArguments, getToolTargetTitle } from '../tool-argument-view'
 
 /**
  * 消息 Parts 渲染器（plan/13 §5.3 + plan/20 §3.3）：
@@ -675,14 +676,7 @@ const ToolCallCard = memo(function ToolCallCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const requestToolNavigation = useAgentStore((state) => state.requestToolNavigation)
-  const argsPreview = useMemo(() => {
-    try {
-      const raw = JSON.stringify(part.args, null, 2)
-      return raw && raw !== '{}' ? raw : ''
-    } catch {
-      return ''
-    }
-  }, [part.args])
+  const argumentRows = useMemo(() => describeToolArguments(part.args), [part.args])
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
   const writeTool = WRITE_TOOL_NAMES.has(part.toolName)
@@ -691,9 +685,10 @@ const ToolCallCard = memo(function ToolCallCard({
     || (part.display.items.length > 0 || (part.display.errorCount ?? 0) > 0 || (part.display.warningCount ?? 0) > 0)
   // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
   const collapsible = part.toolName === 'web_read' && !!part.display
-  const expandable = !workflowDisplay && Boolean(argsPreview)
+  const expandable = !workflowDisplay && argumentRows.length > 0
   const rowExpandable = expandable || collapsible
   const navigable = NAVIGABLE_TOOL_NAMES.has(part.toolName)
+  const targetTitle = navigable ? getToolTargetTitle(part.display, part.args) : null
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   const webSearchQuery =
@@ -717,6 +712,7 @@ const ToolCallCard = memo(function ToolCallCard({
   const headerContent = <>
     {writeTool ? <FileText className="h-3.5 w-3.5 shrink-0 text-sky-500" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
     <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text-primary)]">{part.title || part.toolName}</span>
+    {targetTitle ? <button type="button" onClick={(event) => { event.stopPropagation(); requestToolNavigation(part.toolName, part.args, part.display) }} title={`打开《${targetTitle}》`} className="relative z-10 max-w-[42%] shrink truncate text-[11px] text-[var(--text-secondary)] underline-offset-4 hover:text-[var(--text-primary)] hover:underline">《{targetTitle}》</button> : null}
     {running ? <span className="agent-tool-running-label shrink-0 text-[10px] font-medium text-[var(--text-secondary)]">{runningLabel}</span> : null}
     {durationLabel ? <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">{durationLabel}</span> : null}
     {writeTool && !running ? <span className={cn(
@@ -739,9 +735,10 @@ const ToolCallCard = memo(function ToolCallCard({
       ) : null}
       {workflowDisplay
         ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
-        : rowExpandable || navigable
-          ? <button type="button" onClick={() => { if (navigable) requestToolNavigation(part.toolName, part.args, part.display); if (rowExpandable) setExpanded((value) => !value) }} title={navigable ? '打开对应内容' : undefined} className="group relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</button>
-          : <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>}
+        : <div className="group relative flex w-full items-center gap-2 py-2 text-left">
+            {rowExpandable ? <button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? '收起工具详情' : '展开工具详情'} className="absolute inset-0 z-0" /> : null}
+            {headerContent}
+          </div>}
       {part.summary ? (
         <p
           className={cn(
@@ -755,10 +752,10 @@ const ToolCallCard = memo(function ToolCallCard({
           {part.summary}
         </p>
       ) : null}
-      {expanded && argsPreview ? (
-        <pre className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)] py-2 pl-[22px] text-[10px] leading-5 text-[var(--text-secondary)]">
-          {argsPreview}
-        </pre>
+      {expanded && argumentRows.length > 0 ? (
+        <dl className="max-h-44 space-y-1.5 overflow-y-auto border-t border-[var(--border-subtle)] py-2 pl-[22px] pr-2 text-[10px] leading-5">
+          {argumentRows.map((row, index) => <div key={`${row.label}-${index}`} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-2"><dt className="text-[var(--text-tertiary)]">{row.label}</dt><dd className="min-w-0 break-words text-[var(--text-secondary)]">{row.value}</dd></div>)}
+        </dl>
       ) : null}
       {part.display && workflowDisplayHasBody && (!collapsible || expanded) ? (
         <div className={cn(workflowDisplay ? 'pb-2' : 'pb-3 pt-1 pl-[22px]')}>

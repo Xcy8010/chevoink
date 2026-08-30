@@ -49,20 +49,24 @@ const continuityRepairEnvelopeSchema = z.object({
   patches: z.array(z.object({ oldText: z.string().min(1).max(1800), newText: z.string().max(2200) })).max(10),
 })
 
-async function applyBoldContinuityRepairs(
+async function applyRigorousContinuityRepairs(
   ctx: ToolContext,
   chapter: { id: string; title: string; revision: number; content: string; orderIndex: number },
   findings: Array<{ signal: string; severity: string; evidence: string; suggestion: string }>,
 ) {
-  const response = await generateTextCompletion(
-    '你是中文网文连续性修订编辑。大胆探索模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
-    `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
-    { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: 'agent3BoldContinuityRepair', targetType: 'chapter', targetId: chapter.id, temperature: 0.35, reasoningEffort: 'low' },
-  )
-  const start = response.indexOf('{')
-  const end = response.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  const parsed = continuityRepairEnvelopeSchema.parse(JSON.parse(response.slice(start, end + 1)))
+  let parsed: z.infer<typeof continuityRepairEnvelopeSchema> | null = null
+  for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
+    const response = await generateTextCompletion(
+      '你是中文网文连续性修订编辑。严谨创作模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
+      `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
+      { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
+    )
+    const start = response.indexOf('{')
+    const end = response.lastIndexOf('}')
+    if (start < 0 || end <= start) continue
+    try { parsed = continuityRepairEnvelopeSchema.parse(JSON.parse(response.slice(start, end + 1))) } catch { /* 只重试一次格式错误 */ }
+  }
+  if (!parsed) return null
   let after = chapter.content
   let applied = 0
   for (const patch of parsed.patches) {
@@ -397,7 +401,7 @@ export const continuityValidateTool = defineTool({
   name: 'continuity_validate',
   title: '检查章节连续性',
   description:
-    'Story Compiler 的 CHECK 步骤。在整章/长场景写入后，由服务端启动与 Draft 上下文隔离的连续性编辑，只依据 Chapter Bridge、Scene Task 和当前正文检查人物知识、时空、身体、物品、关系、情绪余波、钩子与首尾结构；同时执行 revision/章序/空正文/Scene Task 数量等确定性硬检查。不得由主写 Agent 自报 findings。',
+    'Story Compiler 的 CHECK 步骤。在整章/长场景写入后，由服务端启动与 Draft 上下文隔离的连续性编辑，只依据 Chapter Bridge、Scene Task 和当前正文检查人物知识、时空、身体、物品、关系、情绪余波、钩子与首尾结构；同时执行 revision/章序/空正文/Scene Task 数量等确定性硬检查。严谨创作会自动落实有证据的错误和警告，其余模式只报告。不得由主写 Agent 自报 findings。',
   parameters: z.object({
     compilationId: z.string().min(1),
     focus: z.string().max(500).optional().describe('作者明确要求额外关注的连续性范围；未指定时不传'),
@@ -412,11 +416,23 @@ export const continuityValidateTool = defineTool({
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
     const bridge = compilation.bridge
-    const cachedValidation = compilation.validation as { checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string }>; errorCount?: number; warningCount?: number } | null
+    const cachedValidation = compilation.validation as { checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string; suggestion: string }>; errorCount?: number; warningCount?: number } | null
     if (!args.focus && cachedValidation?.checkedRevision === chapter.revision) {
       const findings = cachedValidation.findings ?? []
       const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
       const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
+      if (ctx.creativeFreedom === 'balanced' && findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
+        const repaired = await applyRigorousContinuityRepairs(ctx, chapter, findings)
+        if (repaired) {
+          await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { stage: 'repair' } })
+          return {
+            output: `严谨创作模式复用连续性报告并落实修订：已原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
+            summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
+            display: { kind: 'chapterDiff', chapterId: repaired.updated.id, chapterTitle: repaired.updated.title, before: repaired.before, after: repaired.after, appliedDirectly: true, revision: repaired.updated.revision },
+            snapshot: { target: 'chapter', targetId: repaired.updated.id, field: 'content', previousValue: repaired.before },
+          }
+        }
+      }
       return {
         output: `当前 r${chapter.revision} 已通过连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；无需再次消耗 Critic。`,
         summary: `复用连续性检查 · ${errorCount} 错误 ${warningCount} 警告`,
@@ -450,12 +466,12 @@ export const continuityValidateTool = defineTool({
       .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.evidence === finding.evidence) === index)
     const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: args.compilationId, findings: independentFindings })
     const phase = result.errorCount > 0 ? 'repair' : 'check'
-    if (ctx.creativeFreedom === 'bold' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
-      const repaired = await applyBoldContinuityRepairs(ctx, chapter, result.findings)
+    if (ctx.creativeFreedom === 'balanced' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
+      const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings)
       if (repaired) {
         await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { stage: 'repair' } })
         return {
-          output: `大胆探索模式已把本轮 ${result.errorCount} 个错误、${result.warningCount} 个警告交给独立修订器，并原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
+          output: `严谨创作模式已把本轮 ${result.errorCount} 个错误、${result.warningCount} 个警告交给独立修订器，并原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
           summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
           display: { kind: 'chapterDiff', chapterId: repaired.updated.id, chapterTitle: repaired.updated.title, before: repaired.before, after: repaired.after, appliedDirectly: true, revision: repaired.updated.revision },
           snapshot: { target: 'chapter', targetId: repaired.updated.id, field: 'content', previousValue: repaired.before },

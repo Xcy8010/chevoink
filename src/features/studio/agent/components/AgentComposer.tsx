@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, FileText, ImagePlus, LoaderCircle, Paperclip, Square, X } from 'lucide-react'
 
 import {
   MAX_AGENT_FILE_COUNT,
@@ -52,6 +52,12 @@ type ParsedComposerContent = {
   draft: string
   references: ComposerReference[]
 }
+
+const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description: string }> = [
+  { value: 'stable', label: '平衡延续', description: '贴合既有走向，适合续写与轻量调整。' },
+  { value: 'balanced', label: '严谨创作', description: '默认；强化因果与人类感，并自动落实检查建议。' },
+  { value: 'bold', label: '大胆探索', description: '适合试新场景和新结构，报告只提示不自动改写。' },
+]
 
 function referenceLineLabel(reference: ComposerReference): string {
   return formatReferenceLineLabel(reference)
@@ -169,6 +175,7 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
   const editorRef = useRef<HTMLDivElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const creativeModeRef = useRef<HTMLDetailsElement | null>(null)
 
   const imageCount = attachments.filter((attachment) => attachment.kind === 'image').length
   const fileCount = attachments.filter((attachment) => attachment.kind === 'file').length
@@ -451,18 +458,35 @@ export function AgentComposer({ running, disabled = false, onSend, onStop, creat
           >
             <ImagePlus className="h-4 w-4" />
           </button>
-          <select
-            value={creativeFreedom}
-            onChange={(event) => onCreativeFreedomChange(event.target.value as CreativeFreedom)}
-            disabled={running || disabled}
-            aria-label="创作自由度"
-            title="创作自由度只影响软技巧与表达探索，不降低事实一致性"
-            className="h-7 rounded-full border-0 bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] disabled:opacity-45"
-          >
-            <option value="stable">稳定延续</option>
-            <option value="balanced">平衡创作</option>
-            <option value="bold">大胆探索</option>
-          </select>
+          <details ref={creativeModeRef} className="group/mode relative" data-disabled={running || disabled || undefined}>
+            <summary
+              onClick={(event) => { if (running || disabled) event.preventDefault() }}
+              aria-label="创作模式"
+              title={CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.description}
+              className="flex h-7 cursor-pointer list-none items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] group-data-[disabled=true]/mode:pointer-events-none group-data-[disabled=true]/mode:opacity-45 [&::-webkit-details-marker]:hidden"
+            >
+              <span>{CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.label}</span>
+              <ChevronDown className="h-3 w-3 transition-transform group-open/mode:rotate-180" />
+            </summary>
+            <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
+              {CREATIVE_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  title={mode.description}
+                  onClick={() => {
+                    onCreativeFreedomChange(mode.value)
+                    creativeModeRef.current?.removeAttribute('open')
+                  }}
+                  aria-pressed={mode.value === creativeFreedom}
+                  className={`block w-full px-3 py-2 text-left transition-colors hover:bg-[var(--surface-muted)] ${mode.value === creativeFreedom ? 'bg-[var(--surface-muted)]' : ''}`}
+                >
+                  <span className="block text-xs font-medium text-[var(--text-primary)]">{mode.label}</span>
+                  <span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-tertiary)]">{mode.description}</span>
+                </button>
+              ))}
+            </div>
+          </details>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

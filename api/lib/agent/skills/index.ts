@@ -262,9 +262,9 @@ const legacySkillAliases: Record<string, string> = {
 }
 
 function freedomGuidance(freedom: CreativeFreedom): string {
-  if (freedom === 'stable') return '创作自由度：稳定延续。优先贴合已有文风、人物轨迹和段落节奏。'
-  if (freedom === 'bold') return '创作自由度：大胆探索。表达与场景可明显创新；核心设定和不可逆剧情仍服从作者与故事事实。'
-  return '创作自由度：平衡创作。守住人物与世界事实，同时允许有理由的场景、节奏和意象创新。'
+  if (freedom === 'stable') return '创作模式：平衡延续。优先承接已有文风、人物轨迹与段落节奏，只修明确错误，不主动清洗作者有意保留的不规则表达。'
+  if (freedom === 'bold') return '创作模式：大胆探索。允许明显的场景、结构和表达创新，优先打开新可能；核心设定和不可逆剧情仍服从作者与故事事实，质量报告只提示不自动改写。'
+  return '创作模式：严谨创作。默认执行证据化连续性修订和人类感质量建议，降低机械句式与 AI 味，同时守住人物知识、因果、时空和世界事实。'
 }
 
 export function inferSkillPhase(intent: TaskIntent): SkillPhase {

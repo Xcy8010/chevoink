@@ -16,6 +16,21 @@ describe('Agent 创作可观测与容错', () => {
     expect(coerced).toMatchObject({ memoryType: 'storyArc', title: '主线阶段', importance: 88 })
   })
 
+  it('容错计划工具的数组参数、深层正文与字符串化包装', () => {
+    const tool = allTools.find((item) => item.name === 'plan_save')
+    const fromParameterList = tool?.coerceArgs?.({ parameters: [
+      { name: 'title', value: '第三卷计划' },
+      { name: 'content', value: { value: '# 第三卷\n推进主线并完成阶段收束。' } },
+      { name: 'planId', value: null },
+    ] })
+    expect(tool?.parameters.safeParse(fromParameterList).success).toBe(true)
+    expect(fromParameterList).toMatchObject({ title: '第三卷计划', content: '# 第三卷\n推进主线并完成阶段收束。' })
+
+    const wrapped = tool?.coerceArgs?.({ tool_input: JSON.stringify({ name: '全书大纲', markdown: '# 全书大纲\n第一阶段进入军营。' }) })
+    expect(tool?.parameters.safeParse(wrapped).success).toBe(true)
+    expect(wrapped).toMatchObject({ title: '全书大纲', content: '# 全书大纲\n第一阶段进入军营。' })
+  })
+
   it('关系网仅在空置或受限刷新时使用 low AI，并支持全小说实体', () => {
     const source = read('api/lib/agent/story-memory.ts')
     expect(source).toContain("reasoningEffort: 'low'")

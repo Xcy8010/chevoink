@@ -117,29 +117,44 @@ export const planSaveTool = defineTool({
 
     let obj = raw as Record<string, unknown>
 
+    const asRecord = (value: unknown): Record<string, unknown> | null => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+      return value as Record<string, unknown>
+    }
+    const parseRecord = (value: unknown): Record<string, unknown> | null => {
+      const direct = asRecord(value)
+      if (direct) return direct
+      if (typeof value !== 'string' || !value.trim().startsWith('{')) return null
+      try { return asRecord(JSON.parse(value)) } catch { return null }
+    }
+
     // 模型偶发把参数包在 arguments/args/params 键里（把 function calling 内部结构当成参数），
     // 或该键值为字符串化 JSON：优先解包一层，避免「参数校验失败」把整次写入作废
     const unwrapWrapped = (record: unknown): Record<string, unknown> | null => {
-      if (!record || typeof record !== 'object' || Array.isArray(record)) return null
-      const candidate = record as Record<string, unknown>
-      return candidate.title !== undefined || candidate.content !== undefined ? candidate : null
+      const candidate = parseRecord(record)
+      return candidate && (candidate.title !== undefined || candidate.content !== undefined || candidate.text !== undefined || candidate.markdown !== undefined)
+        ? candidate
+        : null
     }
-    for (const wrapKey of ['arguments', 'args', 'params', 'parameter'] as const) {
+    for (const wrapKey of ['arguments', 'args', 'params', 'parameters', 'parameter', 'input', 'payload', 'tool_input', 'plan'] as const) {
       const wrapped = obj[wrapKey]
       const direct = unwrapWrapped(wrapped)
       if (direct) {
         obj = { ...direct, planId: obj.planId ?? direct.planId }
         break
       }
-      if (typeof wrapped === 'string' && wrapped.trim().startsWith('{')) {
-        try {
-          const parsed = unwrapWrapped(JSON.parse(wrapped))
-          if (parsed) {
-            obj = { ...parsed, planId: obj.planId ?? parsed.planId }
-            break
-          }
-        } catch { /* 非法 JSON 走下方正常校验 */ }
+    }
+
+    // 某些兼容层把参数编码成 [{name, value}]，或把 content 再包成 {value/text}。
+    const parameterList = Array.isArray(obj.parameters) ? obj.parameters : Array.isArray(obj.params) ? obj.params : null
+    if (parameterList) {
+      const flattened: Record<string, unknown> = {}
+      for (const item of parameterList) {
+        const entry = asRecord(item)
+        const name = typeof entry?.name === 'string' ? entry.name : typeof entry?.key === 'string' ? entry.key : ''
+        if (name) flattened[name] = entry?.value ?? entry?.content ?? entry?.text
       }
+      if (flattened.title !== undefined || flattened.content !== undefined) obj = { ...obj, ...flattened }
     }
 
     // 模型偶发把参数嵌套一层（如 {"plan": {...}}）：根层缺 title/content 时展平
@@ -161,6 +176,21 @@ export const planSaveTool = defineTool({
     if (result.content === undefined) {
       result.content = result.text ?? result.markdown ?? result.body
     }
+    if (result.content === 'undefined' || result.content === 'null') delete result.content
+    const nestedContent = asRecord(result.content)
+    if (nestedContent) {
+      result.content = nestedContent.value ?? nestedContent.text ?? nestedContent.markdown ?? nestedContent.body
+    }
+
+    // 最后一层保守恢复：根对象里若只有一段明显的长文本，把它视为计划正文；ID、标题与说明不参与。
+    if (result.content === undefined) {
+      const candidates = Object.entries(result)
+        .filter(([key, value]) => !['title', 'name', 'planTitle', 'planId', 'id', 'reason', 'summary'].includes(key) && typeof value === 'string')
+        .map(([, value]) => value as string)
+        .filter((value) => value.trim().length >= 20)
+        .sort((left, right) => right.length - left.length)
+      if (candidates[0]) result.content = candidates[0]
+    }
 
     // planId 空值（null 已在 loop 层剔除，这里再防空串）一律视为新建
     if (typeof result.planId !== 'string' || result.planId.trim().length === 0) {
@@ -174,7 +204,7 @@ export const planSaveTool = defineTool({
       result.content = result.content
         .map((item) => (typeof item === 'string' ? item : JSON.stringify(item)))
         .join('\n')
-    } else if (typeof result.content === 'number') {
+    } else if (typeof result.content === 'number' || typeof result.content === 'boolean') {
       result.content = String(result.content)
     }
 

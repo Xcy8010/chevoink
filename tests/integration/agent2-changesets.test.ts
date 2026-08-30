@@ -105,7 +105,7 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P2 全书检索与 ChangeSet（需 DB�
     expect(restored.body.data.total).toBe(36)
   })
 
-  it('任一章节版本冲突时整批 0 写入并记录 conflicted', async () => {
+  it('预览后出现无关编辑时在最新正文安全重放，并在回滚时保留该编辑', async () => {
     const preview = await request(app)
       .post(`/api/novels/${novelId}/changesets/preview`)
       .set('Cookie', cookie)
@@ -124,17 +124,45 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P2 全书检索与 ChangeSet（需 DB�
       .post(`/api/changesets/${preview.body.data.changeSet.id}/apply`)
       .set('Cookie', cookie)
       .send({})
+    expect(apply.status).toBe(200)
+    expect(apply.body.data.changeSet.status).toBe('applied')
+    expect(apply.body.data.changeSet.validations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'CONCURRENT_CHANGES_REBASED', status: 'passed' }),
+    ]))
+
+    const rebased = await request(app)
+      .get(`/api/novels/${novelId}/chapters/${chapterIds[0]}`)
+      .set('Cookie', cookie)
+    expect(rebased.body.data.chapter.content).toContain('林舟')
+    expect(rebased.body.data.chapter.content).toContain('用户刚补了一句。')
+
+    const rolledBack = await request(app)
+      .post(`/api/changesets/${preview.body.data.changeSet.id}/rollback`)
+      .set('Cookie', cookie)
+      .send({ reason: '验证回滚保留并发编辑' })
+    expect(rolledBack.status).toBe(200)
+    const restored = await request(app).get(`/api/novels/${novelId}/chapters/${chapterIds[0]}`).set('Cookie', cookie)
+    expect(restored.body.data.chapter.content).toContain('林默')
+    expect(restored.body.data.chapter.content).toContain('用户刚补了一句。')
+  })
+
+  it('替换目标本身已被改写时仍整批 0 写入并记录 conflicted', async () => {
+    const preview = await request(app)
+      .post(`/api/novels/${novelId}/changesets/preview`)
+      .set('Cookie', cookie)
+      .send({ query: '林默', replacement: '林舟', fields: ['content'], preserveQuotedText: false })
+    expect(preview.status).toBe(201)
+
+    const current = await request(app).get(`/api/novels/${novelId}/chapters/${chapterIds[0]}`).set('Cookie', cookie)
+    await request(app)
+      .patch(`/api/novels/${novelId}/chapters/${chapterIds[0]}`)
+      .set('Cookie', cookie)
+      .send({ content: current.body.data.chapter.content.replaceAll('林默', '林岚'), expectedRevision: current.body.data.chapter.revision })
+
+    const apply = await request(app).post(`/api/changesets/${preview.body.data.changeSet.id}/apply`).set('Cookie', cookie).send({})
     expect(apply.status).toBe(409)
-    expect(apply.body.error.code).toBe('CHANGESET_REVISION_CONFLICT')
-
-    const state = await request(app)
-      .get(`/api/changesets/${preview.body.data.changeSet.id}`)
-      .set('Cookie', cookie)
-    expect(state.body.data.changeSet.status).toBe('conflicted')
-
-    const untouched = await request(app)
-      .get(`/api/novels/${novelId}/chapters/${chapterIds[1]}`)
-      .set('Cookie', cookie)
+    expect(apply.body.error.code).toBe('CHANGESET_REBASE_CONFLICT')
+    const untouched = await request(app).get(`/api/novels/${novelId}/chapters/${chapterIds[1]}`).set('Cookie', cookie)
     expect(untouched.body.data.chapter.content).toContain('林默')
     expect(untouched.body.data.chapter.content).not.toContain('林舟')
   })

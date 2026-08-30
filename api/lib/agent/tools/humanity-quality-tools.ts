@@ -119,15 +119,30 @@ function automaticRepairFindings(report: QualityReport, includeAdvisory = false)
 }
 
 async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityReport, selected: QualityReport['findings']) {
-  const response = await generateTextCompletion(
-    `你是与 Writer/Critic 上下文隔离的局部修订编辑。只替换每条 evidence 本身，不扩写相邻内容，不改变事实、情节结果、人物知识或作者刻意的口语与断句。删除优先于同义词替换；补写只补建议中缺失的具体动作、选择或后果。punctuation_misuse 只移除误用符号，保留人物直接话语和逐字引文。replacement 可以为空。严格只输出 JSON：{"patches":[{"findingId":"原 id","replacement":"只替换证据范围的文本"}]}。必须为每个输入 id 返回且只返回一次。`,
-    selected.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
-    { userId: ctx.userId, action: 'agent3HumanityRevision', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: ctx.creativeFreedom === 'stable' ? 0.25 : ctx.creativeFreedom === 'bold' ? 0.55 : 0.4, reasoningEffort: 'low' },
-  )
-  const parsed = repairEnvelopeSchema.parse(parseJsonObject(response))
-  const returned = new Set(parsed.patches.map((patch) => patch.findingId))
-  if (returned.size !== selected.length || selected.some((finding) => !returned.has(finding.id))) throw new Error('修订模型没有逐项返回全部选中 finding，已阻止部分写入。')
-  const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, reportId: report.id, replacements: parsed.patches })
+  const selectedById = new Map(selected.map((finding) => [finding.id, finding]))
+  const patches = new Map<string, { findingId: string; replacement: string }>()
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const remaining = selected.filter((finding) => !patches.has(finding.id))
+    if (remaining.length === 0) break
+    const response = await generateTextCompletion(
+      `你是与 Writer/Critic 上下文隔离的局部修订编辑。只替换每条 evidence 本身，不扩写相邻内容，不改变事实、情节结果、人物知识或作者刻意的口语与断句。删除优先于同义词替换；补写只补建议中缺失的具体动作、选择或后果。punctuation_misuse 只移除误用符号，保留人物直接话语和逐字引文。replacement 可以为空。严格只输出 JSON：{"patches":[{"findingId":"原 id","replacement":"只替换证据范围的文本"}]}。必须为每个输入 id 返回且只返回一次。`,
+      remaining.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
+      { userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
+    )
+    try {
+      const parsedAttempt = repairEnvelopeSchema.parse(parseJsonObject(response))
+      for (const patch of parsedAttempt.patches) {
+        if (selectedById.has(patch.findingId)) patches.set(patch.findingId, patch)
+      }
+    } catch {
+      // 第一次格式不完整时由第二次只重试缺失项；两次都失败才让工具明确失败。
+    }
+  }
+  const replacements = [...patches.values()]
+  if (replacements.length === 0) throw new Error('局部修订器连续两次未返回可验证补丁，正文未改动。')
+  // 模型若仍漏掉个别项，只应用已逐字绑定的安全补丁，并把漏项退回待审，不让整章修订归零。
+  await selectQualityFindings(ctx.userId, ctx.novelId, report.id, replacements.map((patch) => patch.findingId))
+  const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, reportId: report.id, replacements })
   await recalcNovelStats(ctx.novelId)
   recordChapterBaseline(ctx.runId, result.updated.id, result.updated.revision)
   if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
@@ -137,15 +152,15 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
     await recordStoryCompilerWrite({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: result.updated.id, chapterOrderIndex: result.updated.orderIndex, chapterRevision: result.updated.revision })
   }
   await prisma.agentArtifact.create({
-    data: { runId: ctx.runId, artifactType: 'rewriteSelection', title: `${result.updated.title} · 人类感自动局部修订`, content: JSON.stringify(parsed.patches), summary: `${parsed.patches.length} 个证据范围 / r${report.chapterRevision}→r${result.updated.revision}`, metadata: { reportId: report.id, findingIds: result.repairedFindingIds, sourceRevision: report.chapterRevision, targetRevision: result.updated.revision, phase: 'humanity_revision_auto' } },
+    data: { runId: ctx.runId, artifactType: 'rewriteSelection', title: `${result.updated.title} · 人类感自动局部修订`, content: JSON.stringify(replacements), summary: `${replacements.length} 个证据范围 / r${report.chapterRevision}→r${result.updated.revision}`, metadata: { reportId: report.id, findingIds: result.repairedFindingIds, sourceRevision: report.chapterRevision, targetRevision: result.updated.revision, phase: 'humanity_revision_auto' } },
   })
-  return { result, parsed, report: await getQualityReport(ctx.userId, ctx.novelId, report.id) }
+  return { result, patchCount: replacements.length, missingCount: selected.length - replacements.length, report: await getQualityReport(ctx.userId, ctx.novelId, report.id) }
 }
 
 export const qualityAnalyzeTool = defineTool({
   name: 'quality_analyze',
   title: '人类感质量检查',
-  description: 'Humanity Quality Gate 的 CHECK 步骤。用于评估整章或完整长场景的人类感质量：当作者明确要求判断「有没有 AI 味 / 像不像 AI 写的」「文风是否自然、像真人」「要不要通篇精修润色」，或在整章写完要求深度审阅、或 Story Compiler 进入 CHECK 时，都必须调用本工具，而不是自己只读正文下结论。服务端先运行确定性统计，再启动与 Writer 隔离的 Critic；每条模型意见必须逐字定位正文才能保存，并做有界自动修订。标题、元数据、局部错字、单句润色、纯剧情/设定/写作建议等普通问答禁止触发。不得把科幻术语、华丽文风、口语或无悬念结尾按词表误判。',
+  description: 'Humanity Quality Gate 的 CHECK 步骤。用于评估整章或完整长场景的人类感质量：当作者明确要求判断「有没有 AI 味 / 像不像 AI 写的」「文风是否自然、像真人」「要不要通篇精修润色」，或在整章写完要求深度审阅、或 Story Compiler 进入 CHECK 时，都必须调用本工具，而不是自己只读正文下结论。服务端先运行确定性统计，再启动与 Writer 隔离的 Critic；每条模型意见必须逐字定位正文才能保存。严谨创作会在同一次调用内有界自动修订，平衡延续与大胆探索只展示报告。标题、元数据、局部错字、单句润色、纯剧情/设定/写作建议等普通问答禁止触发。不得把科幻术语、华丽文风、口语或无悬念结尾按词表误判。',
   parameters: z.object({
     chapterId: z.string().min(1).optional(),
     compilationId: z.string().min(1).optional(),
@@ -160,6 +175,19 @@ export const qualityAnalyzeTool = defineTool({
     const existing = await getLatestQualityReport(ctx.userId, ctx.novelId, chapterId)
     if (existing?.chapterRevision === bundle.chapter.revision && existing.criticVersion === HUMANITY_CRITIC_VERSION) {
       const hydrated = await getQualityReport(ctx.userId, ctx.novelId, existing.id)
+      const reusableRepairs = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(hydrated.chapterId)
+        ? automaticRepairFindings(hydrated, true)
+        : []
+      if (reusableRepairs.length > 0 && hydrated.repairRound === 0) {
+        await selectQualityFindings(ctx.userId, ctx.novelId, hydrated.id, reusableRepairs.map((finding) => finding.id))
+        const repaired = await applySelectedQualityRepairs(ctx, hydrated, reusableRepairs)
+        return {
+          output: `复用当前质量报告并落实修订：已原子修改 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定 r${repaired.result.updated.revision}，无需再次检查。`,
+          summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
+          display: reportDisplay(repaired.report),
+          snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+        }
+      }
       return { output: `当前 revision 已有质量报告 ${hydrated.id}，无需重复消耗 Critic。`, summary: '复用当前质量报告', display: reportDisplay(hydrated) }
     }
     const deterministic = analyzeDeterministicQuality(bundle.chapter.content, bundle.recentChapters.map((chapter) => chapter.content))
@@ -200,22 +228,22 @@ ${bundle.chapter.content}
     const report = await getQualityReport(ctx.userId, ctx.novelId, created.id)
     const warningCount = report.findings.filter((finding) => finding.severity === 'warning').length
     const advisoryCount = report.findings.filter((finding) => finding.severity === 'advisory').length
-    const selected = ctx.protectedChapterIds?.has(report.chapterId)
-      ? []
-      : automaticRepairFindings(report, ctx.creativeFreedom === 'bold')
+    const selected = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(report.chapterId)
+      ? automaticRepairFindings(report, true)
+      : []
     if (selected.length > 0) {
       await selectQualityFindings(ctx.userId, ctx.novelId, report.id, selected.map((finding) => finding.id))
       const repaired = await applySelectedQualityRepairs(ctx, report, selected)
       return {
-        output: `质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.parsed.patches.length} 处；审美 advisory 未自动清洗。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
-        summary: `人类感质量检查 · 自动修订 ${repaired.parsed.patches.length} 处`,
+        output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
+        summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
         display: reportDisplay(repaired.report),
         snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
       }
     }
     return {
       output: report.findings.length
-        ? `质量检查完成：${warningCount} 个需关注问题、${advisoryCount} 个审美建议。当前章节受作者保护或仅有 advisory，因此未自动改动；本轮不会重复检查或要求选择。`
+        ? `质量检查完成：${warningCount} 个需关注问题、${advisoryCount} 个审美建议。当前模式仅展示报告，或章节受作者保护，因此未自动改动；本轮不会重复检查或要求选择。`
         : `质量报告 ${report.id} 通过：确定性检查与独立 Critic 均未发现有证据的问题。`,
       summary: `人类感质量检查 · ${warningCount} 关注 ${advisoryCount} 建议`,
       display: reportDisplay(report),
@@ -255,8 +283,8 @@ export const qualityRevisionApplyTool = defineTool({
     if (selected.length === 0) return { output: '报告中没有已选择的 finding，请先调用 quality_findings_select。' }
     const repaired = await applySelectedQualityRepairs(ctx, report, selected)
     return {
-      output: `已原子应用 ${repaired.parsed.patches.length} 个局部修订并绑定 r${repaired.result.updated.revision}，无需再次质量检查。`,
-      summary: `局部质量修订 · ${repaired.parsed.patches.length} 处`,
+      output: `已原子应用 ${repaired.patchCount} 个局部修订并绑定 r${repaired.result.updated.revision}，无需再次质量检查。`,
+      summary: `局部质量修订 · ${repaired.patchCount} 处`,
       display: { kind: 'chapterDiff', chapterId: repaired.result.updated.id, chapterTitle: repaired.result.updated.title, before: repaired.result.before, after: repaired.result.after, appliedDirectly: true, revision: repaired.result.updated.revision },
       snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
     }

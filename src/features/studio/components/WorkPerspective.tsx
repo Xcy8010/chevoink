@@ -43,16 +43,16 @@ export default function WorkPerspective({ taskRail, compactTaskRail, conversatio
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
   const viewerOpen = Boolean(viewer)
   const viewerPresent = Boolean(renderedViewer)
-  // 四区展开时按参考稿保持约 35% 对话 / 44% 查看器 / 19% 检查区；
-  // 仅默认值按比例计算；用户一旦拖拽成自定义宽度就完全尊重持久化结果。
+  // 查看器打开时按参考稿优先保证正文阅读宽度：约 50% 查看器 / 18.5% 检查区，
+  // 其余空间留给对话与窄轨；用户一旦拖拽成自定义宽度就完全尊重持久化结果。
   const resolvedInspectorWidth = viewerOpen
     ? inspectorWidth === 520
-      ? Math.max(280, Math.round((containerWidth || 1600) * 0.19))
+      ? Math.max(280, Math.round((containerWidth || 1600) * 0.185))
       : inspectorWidth
     : inspectorWidth
   const resolvedViewerWidth = viewerOpen
     ? viewerWidth === 900
-      ? Math.max(520, Math.min(viewerWidth, Math.round((containerWidth || 1600) * 0.44)))
+      ? Math.max(560, Math.min(1280, Math.round((containerWidth || 1600) * 0.5)))
       : viewerWidth
     : viewerWidth
   const leftWidth = leftOpen ? taskWidth : 54

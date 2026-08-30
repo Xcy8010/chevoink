@@ -10,6 +10,7 @@ import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingRevi
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import PlanMarkdownEditor from './PlanMarkdownEditor'
+import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 type EditorCanvasProps = {
   chapterDraft: ChapterDraftState | null
@@ -120,6 +121,9 @@ export default function EditorCanvas({
   const onChange = writeLocked ? () => {} : sourceOnChange
   const onWorkspaceDocumentChange = writeLocked ? undefined : sourceOnWorkspaceDocumentChange
   const isMobile = variant === 'mobile'
+  const streaming = streamingContent !== undefined
+  const streamingContainer = useStreamingAutoFollow<HTMLElement>(streaming, streamingContent)
+  const streamingTextarea = useStreamingAutoFollow<HTMLTextAreaElement>(streaming, streamingContent)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const sectionClassName = embedded
     ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-default)]'
@@ -128,7 +132,7 @@ export default function EditorCanvas({
   if (workspaceDocument) {
     if (isMobile) {
       return (
-        <section className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
+        <section ref={streamingContainer.ref} onScroll={streamingContainer.onScroll} className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
           <div className="flex items-start justify-between gap-2 pb-3">
             <div className="min-w-0 flex-1 space-y-1">
               <p className="text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
@@ -186,6 +190,7 @@ export default function EditorCanvas({
               onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
               onBlur={onEditorBlur}
               onSelectionChange={onSelectionChange}
+              streaming={streaming}
             />
           ) : workspaceDocument.editableContent ? (
             <AutoGrowTextarea
@@ -277,9 +282,12 @@ export default function EditorCanvas({
                 onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
                 onBlur={onEditorBlur}
                 onSelectionChange={onSelectionChange}
+                streaming={streaming}
               />
             ) : workspaceDocument.editableContent ? (
               <textarea
+                ref={streamingTextarea.ref}
+                onScroll={streamingTextarea.onScroll}
                 value={workspaceDocument.content}
                 onChange={(event) =>
                   onWorkspaceDocumentChange?.({
@@ -407,7 +415,7 @@ export default function EditorCanvas({
             ) : null}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
+        <div ref={streamingContainer.ref} onScroll={streamingContainer.onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-8 [-webkit-overflow-scrolling:touch]">
           {pendingChapterReview ? (
             <ChapterChangeReview
               review={pendingChapterReview}
@@ -510,6 +518,8 @@ export default function EditorCanvas({
           <>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1">
             <textarea
+              ref={streamingTextarea.ref}
+              onScroll={streamingTextarea.onScroll}
               value={chapterDraft.content}
               onChange={(event) => {
                 onChange({ ...chapterDraft, content: event.target.value })

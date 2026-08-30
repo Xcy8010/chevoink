@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sceneTaskInputSchema, storyStateSchema } from '../../shared/contracts/index.js'
 import { allTools } from '../../api/lib/agent/tools/registry.js'
-import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
+import { buildTaskSpec, renderTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { normalizeBeatCandidates } from '../../api/lib/agent/story-compiler.js'
 
 describe('Agent 3.0 Story Compiler 契约', () => {
@@ -29,7 +29,9 @@ describe('Agent 3.0 Story Compiler 契约', () => {
   })
 
   it('默认精品且终态提交允许空参数，由服务端解析当前编译状态', () => {
-    expect(buildTaskSpec({ runId: 'run-default', novelId: 'novel-1', chapterId: null, prompt: '写下一章', creativeFreedom: 'stable' }).qualityMode).toBe('premium')
+    const defaultSpec = buildTaskSpec({ runId: 'run-default', novelId: 'novel-1', chapterId: null, prompt: '写下一章' })
+    expect(defaultSpec).toMatchObject({ qualityMode: 'premium', creativeFreedom: 'balanced' })
+    expect(renderTaskSpec(defaultSpec)).toContain('创作模式：严谨创作')
     const commit = allTools.find((tool) => tool.name === 'chapter_bridge_commit')
     expect(commit?.parameters.safeParse({}).success).toBe(true)
   })

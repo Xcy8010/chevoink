@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 
 import type { EditorSelectionState } from '../types'
+import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 const PlanRichMarkdownEditor = lazy(() => import('./PlanRichMarkdownEditor'))
 
@@ -15,6 +16,7 @@ type Props = {
   onChange?: (markdown: string) => void
   onBlur?: () => void
   onSelectionChange?: (selection: EditorSelectionState) => void
+  streaming?: boolean
 }
 
 function PlanEditorModeSwitch({ mode, onChange }: { mode: PlanEditorMode; onChange: (mode: PlanEditorMode) => void }) {
@@ -58,8 +60,10 @@ export default function PlanMarkdownEditor({
   onChange,
   onBlur,
   onSelectionChange,
+  streaming = false,
 }: Props) {
   const [mode, setMode] = useState<PlanEditorMode>('preview')
+  const markdownScroll = useStreamingAutoFollow<HTMLTextAreaElement>(streaming, markdown)
 
   useEffect(() => {
     setMode('preview')
@@ -87,10 +91,13 @@ export default function PlanMarkdownEditor({
             onChange={onChange}
             onBlur={onBlur}
             onSelectionChange={onSelectionChange}
+            streaming={streaming}
           />
         </Suspense>
       ) : (
         <textarea
+          ref={markdownScroll.ref}
+          onScroll={markdownScroll.onScroll}
           value={markdown}
           readOnly={!editable}
           onChange={(event) => {

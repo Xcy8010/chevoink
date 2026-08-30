@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { containsAgentProtocolInvocation, stripAgentProtocolArtifacts } from '../../../shared/agent-output.js'
+import { containsAgentProtocolInvocation, recoverAgentProtocolToolCalls, stripAgentProtocolArtifacts } from '../../../shared/agent-output.js'
 import type {
   AgentExecutionMode,
   AgentMessagePart,
@@ -931,17 +931,28 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       addUsage(usage, result.usage)
       await prisma.agentRun.update({ where: { id: runId }, data: { currentTurn: turn } }).catch(() => {})
 
+      const recoveredToolCalls = result.toolCalls.length === 0
+        ? recoverAgentProtocolToolCalls(result.content).map((call, index) => ({
+            id: `recovered_${messageId}_${index}`,
+            name: call.name,
+            arguments: call.arguments,
+          }))
+        : []
+      const effectiveToolCalls = result.toolCalls.length > 0 ? result.toolCalls : recoveredToolCalls
+
       messages.push({
         role: 'assistant',
-        content: result.content || null,
+        content: recoveredToolCalls.length > 0 ? null : (result.content || null),
         reasoning: result.reasoning || undefined,
-        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+        toolCalls: effectiveToolCalls.length > 0 ? effectiveToolCalls : undefined,
       })
 
       const cleanContent = result.content ? stripAgentProtocolArtifacts(result.content) : ''
       // 只要本轮真实产生工具调用，同行文本就是执行旁白而非最终答复，一律改道思考区。
-      const demoteNarration = result.toolCalls.length > 0 && Boolean(cleanContent)
+      const demoteNarration = effectiveToolCalls.length > 0 && Boolean(cleanContent)
 
+      // text.delta 已实时显示供应商原始流；无论最终是否有干净文本，都要发 text.final 做归一化，
+      // 这样 DSML/乱码被清洗成空串时能立即从界面移除，而不是残留到刷新前。
       if (result.content) bus.emit({ type: 'text.final', messageId, text: cleanContent, asReasoning: demoteNarration })
 
       const parts: AgentMessagePart[] = []
@@ -959,7 +970,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       }
 
       const invalidToolProtocol =
-        result.toolCalls.length === 0 &&
+        effectiveToolCalls.length === 0 &&
         (result.finishReason === 'tool_calls' || containsAgentProtocolInvocation(result.content) || looksLikePseudoToolCall(result.content, toolNameList))
 
       if (invalidToolProtocol) {
@@ -985,7 +996,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         return
       }
 
-      if (result.finishReason !== 'tool_calls') {
+      if (effectiveToolCalls.length === 0) {
         // C3：规划类任务未经 plan_save 落盘就想收尾，回填提醒（最多 2 次）防止全程只聊天不落盘
         if (expectsPlanSave && !planSavePerformed && planSaveReminders < 2) {
           planSaveReminders += 1
@@ -1020,7 +1031,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       }
 
       let structureCircuitTripped = false
-      for (const call of result.toolCalls) {
+      for (const call of effectiveToolCalls) {
         if (controller.signal.aborted) {
           throw new DOMException('run aborted', 'AbortError')
         }
@@ -1088,9 +1099,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           },
         })
         addUsage(usage, wrapUp.usage)
+        const cleanWrapUp = stripAgentProtocolArtifacts(wrapUp.content)
         if (wrapUp.content) {
+          bus.emit({ type: 'text.final', messageId, text: cleanWrapUp, asReasoning: false })
+        }
+        if (cleanWrapUp) {
           await persistMessage(randomUUID(), runId, params.sessionId, 'assistant', [
-            { type: 'text', text: wrapUp.content },
+            { type: 'text', text: cleanWrapUp },
           ])
         }
         // 待办未完成时以 failed 收尾：前端据此展示「继续执行」按钮，一键接着跑完剩余待办
@@ -1102,12 +1117,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
             'failed',
             usage,
             turn,
-            wrapUp.content.slice(0, 300),
+            cleanWrapUp.slice(0, 300),
             `本次运行的 token 预算已用尽，待办还剩 ${todoLeft} 项未完成。点击「继续执行」让 Agent 接着跑完。`,
           )
           return
         }
-        await finalizeRun(runId, bus, 'succeeded', usage, turn, `已达 token 预算上限：${wrapUp.content.slice(0, 300)}`)
+        await finalizeRun(runId, bus, 'succeeded', usage, turn, `已达 token 预算上限：${cleanWrapUp.slice(0, 300)}`)
         return
       }
     }

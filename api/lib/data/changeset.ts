@@ -17,12 +17,36 @@ import { ensureNovelOwner, recalculateNovelStats } from './internal.js'
 
 type ChangeSetRecord = PrismaChangeSet & { patches: PrismaChangeSetPatch[] }
 
+const INTERNAL_REBASE_VALIDATION = 'INTERNAL_BULK_REPLACE_OPERATION'
+
+type BulkReplaceRebaseOperation = Pick<BulkReplacePreviewRequest, 'query' | 'replacement' | 'caseSensitive' | 'preserveQuotedText'>
+
+function readRebaseOperation(validations: Prisma.JsonValue): BulkReplaceRebaseOperation | null {
+  if (!Array.isArray(validations)) return null
+  const entry = validations.find((item) => item && typeof item === 'object' && !Array.isArray(item) && item.code === INTERNAL_REBASE_VALIDATION)
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.message !== 'string') return null
+  try {
+    const parsed = JSON.parse(entry.message) as Partial<BulkReplaceRebaseOperation>
+    if (typeof parsed.query !== 'string' || typeof parsed.replacement !== 'string') return null
+    return {
+      query: parsed.query,
+      replacement: parsed.replacement,
+      caseSensitive: parsed.caseSensitive !== false,
+      preserveQuotedText: parsed.preserveQuotedText === true,
+    }
+  } catch {
+    return null
+  }
+}
+
 function hashValue(value: string | null): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
 function toChangeSet(record: ChangeSetRecord): ChangeSet {
-  const validations = Array.isArray(record.validations) ? record.validations : []
+  const validations = Array.isArray(record.validations)
+    ? record.validations.filter((item) => !(item && typeof item === 'object' && !Array.isArray(item) && item.code === INTERNAL_REBASE_VALIDATION))
+    : []
   return changeSetSchema.parse({
     id: record.id,
     novelId: record.novelId,
@@ -305,6 +329,20 @@ export async function previewBulkReplaceData(
         }]
       : []),
   ]
+  const persistedValidations = [
+    ...validations,
+    {
+      code: INTERNAL_REBASE_VALIDATION,
+      status: 'passed' as const,
+      message: JSON.stringify({
+        query: input.query,
+        replacement: input.replacement,
+        caseSensitive: input.caseSensitive,
+        preserveQuotedText: input.preserveQuotedText,
+      } satisfies BulkReplaceRebaseOperation),
+      targetIds: [],
+    },
+  ]
   const baseRevision = chapters.reduce((maximum, chapter) => Math.max(maximum, chapter.revision), 0)
   const record = await prisma.changeSet.create({
     data: {
@@ -312,7 +350,7 @@ export async function previewBulkReplaceData(
       userId,
       taskSpecId: input.taskSpecId ?? `adhoc-${randomUUID()}`,
       baseRevision,
-      validations,
+      validations: persistedValidations,
       patches: { create: patches },
     },
     include: { patches: { orderBy: { createdAt: 'asc' } } },
@@ -346,6 +384,8 @@ export async function applyChangeSetData(
   const selectedIds = input.selectedPatchIds ? new Set(input.selectedPatchIds) : null
   const selected = existing.patches.filter((patch) => selectedIds ? selectedIds.has(patch.id) : patch.selected)
   if (selected.length === 0) throw new DataAccessError(400, 'EMPTY_CHANGESET', '至少选择一个补丁后再应用。')
+  const rebaseOperation = readRebaseOperation(existing.validations)
+  let rebasedPatchCount = 0
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -367,30 +407,64 @@ export async function applyChangeSetData(
         const chapter = await tx.chapter.findFirst({ where: { id: chapterId, novelId: existing.novelId } })
         if (!chapter) throw new DataAccessError(409, 'CHANGESET_TARGET_MISSING', `章节 ${chapterId} 已不存在。`)
         const expectedRevision = patches[0].expectedRevision
-        if (patches.some((patch) => patch.expectedRevision !== expectedRevision) || chapter.revision !== expectedRevision) {
-          throw new DataAccessError(409, 'CHANGESET_REVISION_CONFLICT', `章节《${chapter.title}》版本已变化。`)
+        if (patches.some((patch) => patch.expectedRevision !== expectedRevision)) {
+          throw new DataAccessError(409, 'CHANGESET_REVISION_CONFLICT', `章节《${chapter.title}》的补丁基线不一致。`)
         }
+        const writeRevision = chapter.revision
         const update: Prisma.ChapterUpdateManyMutationInput = { revision: { increment: 1 } }
+        let hasMutation = false
         for (const patch of patches) {
           const current = fieldValue(chapter, patch.field)
+          let next = patch.after
+          let baselineRebased = false
           if (hashValue(current) !== patch.beforeHash) {
-            throw new DataAccessError(409, 'CHANGESET_HASH_CONFLICT', `章节《${chapter.title}》的 ${patch.field} 内容已变化。`)
+            if (hashValue(current) === hashValue(patch.after)) {
+              next = current
+              baselineRebased = true
+            } else if (rebaseOperation && current !== null) {
+              const rebased = replaceExact(
+                current,
+                rebaseOperation.query,
+                rebaseOperation.replacement,
+                rebaseOperation.caseSensitive,
+                rebaseOperation.preserveQuotedText,
+              )
+              if (rebased.replaced === 0) {
+                throw new DataAccessError(409, 'CHANGESET_REBASE_CONFLICT', `章节《${chapter.title}》的 ${patch.field} 已修改，且原替换目标不再存在。`)
+              }
+              next = rebased.after
+              baselineRebased = true
+              rebasedPatchCount += 1
+            } else {
+              throw new DataAccessError(409, 'CHANGESET_HASH_CONFLICT', `章节《${chapter.title}》的 ${patch.field} 内容已变化。`)
+            }
           }
-          if (patch.field === 'title') update.title = patch.after ?? ''
-          if (patch.field === 'summary') update.summary = patch.after
+          if (baselineRebased) {
+            // 回滚必须恢复“真正应用前”的最新内容，不能恢复预览时的旧快照而抹掉并发编辑。
+            await tx.changeSetPatch.update({
+              where: { id: patch.id },
+              data: { before: current, beforeHash: hashValue(current), after: next, expectedRevision: writeRevision },
+            })
+          }
+          if (current === next) continue
+          hasMutation = true
+          if (patch.field === 'title') update.title = next ?? ''
+          if (patch.field === 'summary') update.summary = next
           if (patch.field === 'content') {
-            update.content = patch.after ?? ''
-            update.wordCount = (patch.after ?? '').length
+            update.content = next ?? ''
+            update.wordCount = (next ?? '').length
           }
         }
-        const updated = await tx.chapter.updateMany({
-          where: { id: chapterId, revision: expectedRevision },
-          data: update,
-        })
-        if (updated.count !== 1) throw new DataAccessError(409, 'CHANGESET_REVISION_CONFLICT', `章节《${chapter.title}》写入时发生冲突。`)
+        if (hasMutation) {
+          const updated = await tx.chapter.updateMany({
+            where: { id: chapterId, revision: writeRevision },
+            data: update,
+          })
+          if (updated.count !== 1) throw new DataAccessError(409, 'CHANGESET_REVISION_CONFLICT', `章节《${chapter.title}》写入时发生冲突。`)
+        }
         await tx.changeSetPatch.updateMany({
           where: { id: { in: patches.map((patch) => patch.id) } },
-          data: { appliedRevision: expectedRevision + 1 },
+          data: { appliedRevision: hasMutation ? writeRevision + 1 : writeRevision },
         })
       }
 
@@ -398,6 +472,7 @@ export async function applyChangeSetData(
       const validations: ChangeSetValidation[] = [
         { code: 'ALL_PATCHES_ATOMIC', status: 'passed', message: `已原子应用 ${selected.length} 个补丁。`, targetIds: [...byChapter.keys()] },
         { code: 'REVISION_AND_HASH_VERIFIED', status: 'passed', message: '所有目标版本与内容哈希校验通过。', targetIds: [...byChapter.keys()] },
+        ...(rebasedPatchCount > 0 ? [{ code: 'CONCURRENT_CHANGES_REBASED', status: 'passed' as const, message: `检测到先前变更，已在最新正文上安全重放 ${rebasedPatchCount} 个补丁。`, targetIds: [...byChapter.keys()] }] : []),
       ]
       await tx.changeSet.update({
         where: { id: changeSetId },

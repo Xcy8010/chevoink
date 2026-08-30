@@ -8,6 +8,7 @@ import '@milkdown/crepe/theme/common/reset.css'
 import '@milkdown/crepe/theme/common/placeholder.css'
 
 import type { EditorSelectionState } from '../types'
+import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 type Props = {
   markdown: string
@@ -16,10 +17,12 @@ type Props = {
   onChange?: (markdown: string) => void
   onBlur?: () => void
   onSelectionChange?: (selection: EditorSelectionState) => void
+  streaming?: boolean
 }
 
-export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onChange, onBlur, onSelectionChange }: Props) {
-  const rootRef = useRef<HTMLDivElement | null>(null)
+export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onChange, onBlur, onSelectionChange, streaming = false }: Props) {
+  const streamingScroll = useStreamingAutoFollow<HTMLDivElement>(streaming, markdown)
+  const rootRef = streamingScroll.nodeRef
   const editorRef = useRef<CrepeBuilder | null>(null)
   const currentMarkdownRef = useRef(markdown)
   const desiredMarkdownRef = useRef(markdown)
@@ -119,10 +122,11 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
 
   return (
     <div
-      ref={rootRef}
+      ref={streamingScroll.ref}
       className={`plan-rich-markdown min-h-0 flex-1 ${mobile ? 'min-h-[60vh]' : 'overflow-y-auto'}`}
       onMouseUp={emitVisualSelection}
       onKeyUp={emitVisualSelection}
+      onScroll={streamingScroll.onScroll}
       data-mobile={mobile ? 'true' : 'false'}
     />
   )
