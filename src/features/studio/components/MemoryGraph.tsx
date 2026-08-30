@@ -52,6 +52,7 @@ export default function MemoryGraph({ novelId, active = false, className }: { no
       <span className="truncate text-[10px] text-[var(--text-tertiary)]">{graph.nodes.length} 个实体 · {graph.edges.length} 条关系</span>
       <button type="button" disabled={syncMutation.isPending} onClick={() => syncMutation.mutate(true)} className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-45" aria-label="刷新关系网" title="用低推理 AI 刷新关系网（10 分钟内限一次）">{syncMutation.isPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}</button>
     </div>
+    {syncMutation.isPending ? <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-secondary)]"><LoaderCircle className="h-3 w-3 animate-spin" />AI 正在从正文刷新关系网，请稍候…</div> : null}
     {syncMutation.isError ? <p className="border-b border-[var(--border-subtle)] px-3 py-2 text-[10px] text-rose-500">{syncMutation.error instanceof Error ? syncMutation.error.message : '关系网刷新失败，请稍后再试。'}</p> : null}
     <div className="min-h-0 flex-1">
       <Suspense fallback={<div className="flex h-full items-center justify-center"><LoaderCircle className="h-4 w-4 animate-spin text-[var(--text-tertiary)]" /></div>}>

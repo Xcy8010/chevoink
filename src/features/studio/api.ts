@@ -250,6 +250,8 @@ export async function syncNovelMemoryGraph(novelId: string, force = false): Prom
   const data = await requestData<{ graph: MemoryGraph }>(`/api/agent/novels/${novelId}/memory-graph/sync`, {
     method: 'POST',
     body: JSON.stringify({ force }),
+    // AI 需从正文（最长 120 章 × 2600 字）重建全网关系，耗时可远超默认 30s，放宽到 120s 避免误报超时。
+    timeoutMs: 120_000,
   })
   return data.graph
 }
