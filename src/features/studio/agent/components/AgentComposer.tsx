@@ -691,29 +691,23 @@ export function AgentComposer({
             <div className="absolute bottom-full right-0 z-50 mb-2 w-[272px] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.18)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
               <div className="px-2 pb-1">
                 <div className="flex items-center justify-between rounded-[9px] px-2 py-2 text-xs"><span className="font-medium text-[var(--text-primary)]">模型</span><span className="max-w-36 truncate text-[var(--text-secondary)]">{activeModelLabel} <ChevronRight className="ml-1 inline h-3 w-3" /></span></div>
-                <label className="flex items-center justify-between rounded-[9px] px-2 py-1 text-xs transition-colors hover:bg-[var(--surface-muted)]"><span className="font-medium text-[var(--text-primary)]">推理强度</span><span className="relative inline-flex items-center"><select value={activeReasoningEffort} onChange={(event) => onReasoningEffortChange(activeModelKey, event.target.value as ModelReasoningEffort)} className="h-8 cursor-pointer appearance-none bg-transparent py-1 pl-3 pr-6 text-right text-xs text-[var(--text-secondary)] outline-none" aria-label="推理强度">{activeReasoningEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select><ChevronRight className="pointer-events-none absolute right-0 h-3 w-3 text-[var(--text-tertiary)]" /></span></label>
+                <div className="mx-2 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/55 px-3 py-3">
+                  <div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-medium text-[var(--text-primary)]">推理强度</span><span className="text-[var(--text-secondary)]">{activeReasoningEffort}</span></div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, activeReasoningEfforts.length - 1)}
+                    step={1}
+                    value={activeReasoningIndex}
+                    disabled={activeReasoningEfforts.length <= 1}
+                    onChange={(event) => onReasoningEffortChange(activeModelKey, activeReasoningEfforts[Number(event.target.value)] ?? activeReasoningEffort)}
+                    aria-label="调整当前模型推理强度"
+                    className="agent-reasoning-slider h-7 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
+                    style={{ '--agent-slider-progress': `${activeReasoningEfforts.length <= 1 ? 100 : (activeReasoningIndex / (activeReasoningEfforts.length - 1)) * 100}%` } as CSSProperties}
+                  />
+                  <div className="mt-0.5 flex justify-between text-[9px] text-[var(--text-tertiary)]">{activeReasoningEfforts.map((effort) => <span key={effort}>{effort}</span>)}</div>
+                </div>
                 <div className="flex items-center justify-between rounded-[9px] px-2 py-2 text-xs"><span className="font-medium text-[var(--text-primary)]">速度</span><span className="text-[var(--text-secondary)]">标准</span></div>
-                <details className="group/advanced border-t border-[var(--border-subtle)] pt-1">
-                  <summary className="flex h-9 cursor-pointer list-none items-center justify-between rounded-[9px] px-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] [&::-webkit-details-marker]:hidden"><span>高级</span><ChevronDown className="h-3.5 w-3.5 transition-transform duration-200 group-open/advanced:rotate-180" /></summary>
-                  <div className="px-2 pb-2 pt-1">
-                    <div className="rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/70 px-3 py-3">
-                      <div className="mb-2 flex items-center justify-between text-[10px] text-[var(--text-tertiary)]"><span>推理强度</span><span>{activeReasoningEffort}</span></div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={Math.max(0, activeReasoningEfforts.length - 1)}
-                        step={1}
-                        value={activeReasoningIndex}
-                        disabled={activeReasoningEfforts.length <= 1}
-                        onChange={(event) => onReasoningEffortChange(activeModelKey, activeReasoningEfforts[Number(event.target.value)] ?? activeReasoningEffort)}
-                        aria-label="调整当前模型推理强度"
-                        className="agent-reasoning-slider h-6 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
-                        style={{ '--agent-slider-progress': `${activeReasoningEfforts.length <= 1 ? 100 : (activeReasoningIndex / (activeReasoningEfforts.length - 1)) * 100}%` } as CSSProperties}
-                      />
-                      <div className="mt-1 flex justify-between text-[9px] text-[var(--text-tertiary)]">{activeReasoningEfforts.map((effort) => <span key={effort}>{effort}</span>)}</div>
-                    </div>
-                  </div>
-                </details>
               </div>
               <div className="mx-3 border-t border-[var(--border-subtle)]" />
               <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">内置模型</p>

@@ -31,6 +31,7 @@ import type {
   StoryCompilerMode,
 } from '../../../../../shared/contracts/index.js'
 import { fetchCreditSummary, fetchCustomModels, fetchReferral } from '@/features/account/credits-api'
+import { formatCreditAmount } from '@/features/account/credit-format'
 import CreditQuotaDialog from '@/features/account/CreditQuotaDialog'
 import InviteCreditsDialog from '@/features/account/InviteCreditsDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -61,7 +62,6 @@ import { AgentQuestionCard } from './AgentQuestionCard'
 import { ProcessingHint } from './ProcessingHint'
 import AgentEmptyWelcome from './AgentEmptyWelcome'
 import ChevoinkAgentMark from './ChevoinkAgentMark'
-import AgentOperationsCenter from './AgentOperationsCenter'
 
 /**
  * Agent Loop 主面板（plan/13 §5）：
@@ -106,7 +106,8 @@ type AgentPanelProps = {
   referenceOptions?: Array<Omit<ComposerReference, 'offset'>>
   /** 桌面端由工作区左下角统一承载额度提醒；手机端没有该侧栏时在输入框上方展示。 */
   showCreditWarning?: boolean
-  onOpenStudioSettings?: (section: 'general' | 'models') => void
+  showEmptySuggestions?: boolean
+  onOpenStudioSettings?: (section: 'general' | 'models' | 'operations' | 'archives') => void
 }
 
 export function AgentPanel({
@@ -132,6 +133,7 @@ export function AgentPanel({
   activityPresentation = 'inline',
   mobileIntegratedHeader = false,
   showCreditWarning = false,
+  showEmptySuggestions = true,
   onOpenStudioSettings,
   referenceOptions = [],
 }: AgentPanelProps) {
@@ -184,7 +186,6 @@ export function AgentPanel({
 
   // 历史任务对话列表
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [operationsOpen, setOperationsOpen] = useState(false)
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
@@ -277,8 +278,8 @@ export function AgentPanel({
   useEffect(() => {
     // 管理员全局暂停会直接中止服务端活动 run；即便该 run 没来得及回传额度错误，
     // 轮询到全局状态后仍要向用户解释停止原因。
-    if (creditSummaryQuery.data?.globallyPaused) setQuotaDialogOpen(true)
-  }, [creditSummaryQuery.data?.globallyPaused])
+    if (creditSummaryQuery.data?.suspended) setQuotaDialogOpen(true)
+  }, [creditSummaryQuery.data?.suspended])
 
   useEffect(() => {
     if (previousActiveRef.current && !active) void refetchCredits()
@@ -852,7 +853,7 @@ export function AgentPanel({
         </span>
         <button
           type="button"
-          onClick={() => { setHistoryOpen(false); setOperationsOpen(true) }}
+          onClick={() => { setHistoryOpen(false); onOpenStudioSettings?.('operations') }}
           className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-1 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
           aria-label="打开 Agent 操作中心"
           title="Agent 操作中心"
@@ -992,6 +993,7 @@ export function AgentPanel({
             novelName={novelName}
             initializingNovel={initializingNovel}
             seed={emptyStateSeed ?? sessionId ?? novelId}
+            showSuggestions={showEmptySuggestions}
           />
         ) : (
           <div className="flex flex-col gap-4 pb-2">
@@ -1227,7 +1229,7 @@ export function AgentPanel({
       {showCreditWarning && creditWarning ? (
         <div className="mx-4 mb-2 border-l-2 border-amber-500 bg-[var(--surface-muted)] px-3 py-2.5 text-xs text-[var(--text-secondary)]">
           <div className="flex items-start gap-3">
-            <p className="min-w-0 flex-1 leading-5">本期 Credits 约剩 {creditWarning}%{creditSummaryQuery.data ? `（${creditSummaryQuery.data.totalRemaining.toLocaleString()}）` : ''}，长任务开始前建议先查看用量。</p>
+            <p className="min-w-0 flex-1 leading-5">本期 Credits 约剩 {creditWarning}%{creditSummaryQuery.data ? `（${formatCreditAmount(creditSummaryQuery.data.totalRemaining)}）` : ''}，长任务开始前建议先查看用量。</p>
             <button type="button" onClick={dismissCreditWarning} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" aria-label="关闭额度提醒"><X className="h-3.5 w-3.5" /></button>
           </div>
           <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="mt-1 font-medium text-[var(--text-primary)] hover:underline">了解更多</button>
@@ -1236,7 +1238,7 @@ export function AgentPanel({
       <CreditQuotaDialog
         open={quotaDialogOpen}
         resetsAt={creditSummaryQuery.data?.resetsAt}
-        globallyPaused={errorCode === 'credits_globally_paused' || Boolean(creditSummaryQuery.data?.globallyPaused)}
+        globallyPaused={errorCode === 'credits_globally_paused' || Boolean(creditSummaryQuery.data?.globallyPaused && creditSummaryQuery.data?.suspended)}
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
@@ -1293,16 +1295,6 @@ export function AgentPanel({
         copied={inviteCopied}
         onCopy={() => void copyInviteLink()}
         onClose={() => { autoCopyInviteRef.current = false; setInviteDialogOpen(false) }}
-      />
-      <AgentOperationsCenter
-        open={operationsOpen}
-        onClose={() => setOperationsOpen(false)}
-        novelId={novelId}
-        sessionId={sessionId}
-        chapterId={chapterId}
-        runIds={messages.map((message) => message.runId)}
-        currentSession={sessions.find((item) => item.id === sessionId) ?? null}
-        onSelectSession={onSelectSession}
       />
     </div>
   )

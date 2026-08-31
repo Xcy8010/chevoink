@@ -196,6 +196,7 @@ export type CreateNovelRequest = {
 
 export type UpdateNovelRequest = Omit<Partial<CreateNovelRequest>, 'status'> & {
   status?: Novel['status']
+  pinned?: boolean
   coverAssetId?: string | null
   coverPrompt?: string | null
 }

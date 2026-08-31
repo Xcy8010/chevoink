@@ -7,6 +7,7 @@ type Props = {
   novelName: string
   initializingNovel?: boolean
   seed: string
+  showSuggestions?: boolean
 }
 
 const NOVEL_GENRES = ['玄幻', '都市悬疑', '古代言情', '科幻', '仙侠', '历史架空', '现代言情', '末日生存']
@@ -55,7 +56,7 @@ function seededShuffle(values: string[], seed: string) {
   return result
 }
 
-export default function AgentEmptyWelcome({ novelName, initializingNovel = false, seed }: Props) {
+export default function AgentEmptyWelcome({ novelName, initializingNovel = false, seed, showSuggestions = true }: Props) {
   const setComposerDraft = useAgentStore((state) => state.setComposerDraft)
   const suggestions = useMemo(() => {
     if (initializingNovel) {
@@ -78,9 +79,9 @@ export default function AgentEmptyWelcome({ novelName, initializingNovel = false
           : `你想让我们在《${novelName}》构建什么？`}
       </h2>
       <p className="mt-2 max-w-[560px] text-xs leading-5 text-[var(--text-secondary)] sm:text-sm">
-        选择一个方向作为起点，内容只会填入输入框，你可以继续修改后再发送。
+        {showSuggestions ? '选择一个方向作为起点，内容只会填入输入框，你可以继续修改后再发送。' : '在下方输入任务，Agent 会结合当前作品和已打开的章节继续工作。'}
       </p>
-      <div className="mt-6 grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2">
+      {showSuggestions ? <div className="mt-6 grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2">
         {suggestions.map((suggestion, index) => {
           const Icon = CARD_ICONS[index] ?? Sparkles
           return (
@@ -95,7 +96,7 @@ export default function AgentEmptyWelcome({ novelName, initializingNovel = false
             </button>
           )
         })}
-      </div>
+      </div> : null}
     </div>
   )
 }

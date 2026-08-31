@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import Button from '@/components/ui/Button'
 import type { ReferralPayload } from '../../../shared/contracts'
+import { formatCreditAmount } from './credit-format'
 
 type InviteCreditsDialogProps = {
   open: boolean
@@ -38,7 +39,7 @@ export default function InviteCreditsDialog({
               邀请好友，继续创作
             </h2>
             <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-              好友通过专属链接完成首次注册后，你获得 {referral?.inviterReward ?? 300} Credits，好友获得 {referral?.inviteeReward ?? 120} Credits。
+              好友通过专属链接完成首次注册后，你获得 {formatCreditAmount(referral?.inviterReward ?? 300)} Credits，好友获得 {formatCreditAmount(referral?.inviteeReward ?? 120)} Credits。
             </p>
           </div>
           <button
@@ -60,7 +61,7 @@ export default function InviteCreditsDialog({
 
         <div className="mt-5 flex items-center justify-between gap-4">
           <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-            已成功邀请 {referral?.successfulInvites ?? 0} 人 · 累计获得 {referral?.totalEarned ?? 0} Credits
+            已成功邀请 {referral?.successfulInvites ?? 0} 人 · 累计获得 {formatCreditAmount(referral?.totalEarned ?? 0)} Credits
           </p>
           <Button variant="primary" onClick={onCopy} disabled={!referral} className="shrink-0">
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}

@@ -931,7 +931,16 @@ export async function listAgentSessionsData(userId: string, novelId?: string, op
       userId,
       ...(novelId ? { novelId } : {}),
       ...(options?.includeArchived ? {} : { status: 'active' }),
-      ...(query ? { OR: [{ title: { contains: query, mode: 'insensitive' } }, { novel: { title: { contains: query, mode: 'insensitive' } } }, { novel: { displayTitle: { contains: query, mode: 'insensitive' } } }] } : {}),
+      ...(query ? { OR: [
+        { title: { contains: query, mode: 'insensitive' } },
+        { novel: { title: { contains: query, mode: 'insensitive' } } },
+        { novel: { displayTitle: { contains: query, mode: 'insensitive' } } },
+        // 对话正文以 run 摘要保存；把它纳入全局搜索，而不把整段消息 JSON 拉到前端。
+        { runs: { some: { OR: [
+          { inputSummary: { contains: query, mode: 'insensitive' } },
+          { outputSummary: { contains: query, mode: 'insensitive' } },
+        ] } } },
+      ] } : {}),
     },
     include: { novel: { select: { title: true, displayTitle: true } } },
     orderBy: [{ pinnedAt: 'desc' }, { updatedAt: 'desc' }],

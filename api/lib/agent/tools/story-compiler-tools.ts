@@ -134,6 +134,48 @@ export const storyCharterSaveTool = defineTool({
   description:
     '创建或修订作品级 Story Charter。作者从一句题材描述开始规划新书、生成长纲或试制前三章时，应先收敛读者承诺、主角驱动力、持续冲突与题材边界后调用；不得把套路模板或未确认的真实事实写入。旧作局部编辑不要求补建。',
   parameters: storyCharterInputSchema,
+  coerceArgs(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    const asRecord = (value: unknown): Record<string, unknown> | null => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+      if (typeof value !== 'string' || !value.trim().startsWith('{')) return null
+      try {
+        const parsed = JSON.parse(value)
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+      } catch { return null }
+    }
+    let source = raw as Record<string, unknown>
+    for (const key of ['arguments', 'args', 'params', 'parameters', 'input', 'payload', 'tool_input', 'charter'] as const) {
+      const wrapped = asRecord(source[key])
+      if (wrapped && (wrapped.oneLinePromise !== undefined || wrapped.one_line_promise !== undefined || wrapped.targetAudience !== undefined)) {
+        source = wrapped
+        break
+      }
+    }
+    const aliases: Record<string, string[]> = {
+      oneLinePromise: ['one_line_promise', 'promise'], targetAudience: ['target_audience', 'audience'], targetPlatform: ['target_platform', 'platform'],
+      protagonistDesire: ['protagonist_desire', 'desire'], protagonistFear: ['protagonist_fear', 'fear'], protagonistMisbelief: ['protagonist_misbelief', 'misbelief'],
+      protagonistNonNegotiable: ['protagonist_non_negotiable', 'nonNegotiable', 'non_negotiable'], conflictEngine: ['conflict_engine'], relationshipEngine: ['relationship_engine'],
+      genreRules: ['genre_rules'], abilityCosts: ['ability_costs'], realityBoundaries: ['reality_boundaries'], emotionalBaseline: ['emotional_baseline'], emotionalRange: ['emotional_range'],
+      styleDna: ['style_dna', 'styleDNA'], forbiddenZones: ['forbidden_zones'], antiExamples: ['anti_examples'],
+    }
+    const result: Record<string, unknown> = { ...source }
+    for (const [canonical, candidates] of Object.entries(aliases)) {
+      if (result[canonical] !== undefined) continue
+      const alias = candidates.find((candidate) => result[candidate] !== undefined)
+      if (alias) result[canonical] = result[alias]
+    }
+    const listKeys = ['genreRules', 'abilityCosts', 'realityBoundaries', 'styleDna', 'forbiddenZones', 'antiExamples']
+    for (const key of listKeys) {
+      const value = result[key]
+      if (typeof value === 'string') {
+        result[key] = value.split(/[\n；;]+/).map((item) => item.trim()).filter(Boolean)
+      } else if (!Array.isArray(value) && value !== undefined) {
+        result[key] = [String(value)]
+      }
+    }
+    return result
+  },
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {

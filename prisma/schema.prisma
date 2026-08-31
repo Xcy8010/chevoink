@@ -481,6 +481,7 @@ model Novel {
   lastChapterTitle       String?                 @map("last_chapter_title") @db.VarChar(128)
   lastPublishedAt        DateTime?               @map("last_published_at")
   publishedAt            DateTime?               @map("published_at")
+  pinnedAt               DateTime?               @map("pinned_at")
   createdAt              DateTime                @default(now()) @map("created_at")
   updatedAt              DateTime                @updatedAt @map("updated_at")
   author                 User                    @relation(fields: [authorId], references: [id])
@@ -536,6 +537,7 @@ model Novel {
   @@index([categoryId])
   @@index([status, visibility, lastPublishedAt])
   @@index([authorId, updatedAt])
+  @@index([authorId, pinnedAt])
   @@map("novels")
 }
 

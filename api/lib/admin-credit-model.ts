@@ -6,12 +6,13 @@ import type { AdminCreditsManagementPayload, AdminModelManagementPayload } from 
 import type { ModelReasoningEffort } from '../../shared/contracts/index.js'
 import { ensureCreditAccount, getCreditWindow, parseModelCapabilities } from './credits.js'
 import { stopActiveRunsByUser, stopAllActiveRuns } from './agent/active-runs.js'
+import { env } from '../config/env.js'
 import { DataAccessError, prisma } from './prisma.js'
 import { encryptSecret } from './secret-box.js'
 
 const MILLI = 1000
 
-async function ensureAllPublicBetaAccounts(setting: { dailyAllowanceMilli: number; resetHourUtc8: number }) {
+async function ensureAllPublicBetaAccounts(setting: { dailyAllowanceMilli: number; resetHourUtc8: number; globallyPaused: boolean }) {
   const now = new Date()
   const window = getCreditWindow(now, setting.resetHourUtc8)
   const users = await prisma.user.findMany({ select: { id: true } })
@@ -24,6 +25,8 @@ async function ensureAllPublicBetaAccounts(setting: { dailyAllowanceMilli: numbe
         bonusBalanceMilli: 0,
         periodStartedAt: window.startedAt,
         periodEndsAt: window.endsAt,
+        // 全局暂停是新账户的默认状态；否则暂停期间注册的用户会绕过门禁。
+        suspendedAt: setting.globallyPaused ? now : null,
       })),
       skipDuplicates: true,
     })
@@ -147,12 +150,43 @@ export async function resetAllAdminCredits(adminId: string): Promise<{ users: nu
 }
 
 export async function setCreditsGloballyPaused(paused: boolean): Promise<{ paused: boolean; stoppedRuns: number }> {
-  await prisma.creditSystemSetting.upsert({
-    where: { id: 'global' },
-    create: { id: 'global', globallyPaused: paused, dailyAllowanceMilli: 450_000, resetHourUtc8: 15 },
-    update: { globallyPaused: paused },
+  // 把全局状态落到每个账户，而不只保存一个 UI 布尔值：这样新用户会继承暂停，
+  // 管理员又可以在全局暂停期间单独恢复选中用户。再次切换全局状态时重新统一所有账户。
+  await prisma.$transaction(async (tx) => {
+    await tx.creditSystemSetting.upsert({
+      where: { id: 'global' },
+      create: { id: 'global', globallyPaused: paused, dailyAllowanceMilli: 450_000, resetHourUtc8: 15 },
+      update: { globallyPaused: paused },
+    })
+    await tx.creditAccount.updateMany({ data: { suspendedAt: paused ? new Date() : null } })
   })
   return { paused, stoppedRuns: paused ? stopAllActiveRuns() : 0 }
+}
+
+type ToolEnvironment = Pick<typeof env,
+  'aiImageApiKeyConfigured' | 'aiImageProvider' | 'aiImageModel' | 'aiImageBaseUrl' |
+  'aiVisionApiKeyConfigured' | 'aiVisionModel' | 'aiVisionBaseUrl' |
+  'webSearchProvider' | 'webSearchBochaApiKeyConfigured'
+>
+
+export function toolEnvironmentFallback(modelKind: 'text' | 'image_generation' | 'vision' | 'web_search', config: ToolEnvironment = env) {
+  if (modelKind === 'image_generation' && config.aiImageApiKeyConfigured) {
+    return { provider: config.aiImageProvider, modelName: config.aiImageModel, baseUrl: config.aiImageBaseUrl, apiKeyConfigured: true }
+  }
+  if (modelKind === 'vision' && config.aiVisionApiKeyConfigured) {
+    return { provider: 'openai-compatible', modelName: config.aiVisionModel, baseUrl: config.aiVisionBaseUrl, apiKeyConfigured: true }
+  }
+  if (modelKind === 'web_search' && config.webSearchProvider !== 'disabled') {
+    const bocha = config.webSearchBochaApiKeyConfigured
+    return {
+      provider: bocha ? 'bocha' : 'auto',
+      modelName: bocha ? 'bocha-web-search' : 'sogou-bing-fallback',
+      baseUrl: bocha ? 'https://api.bochaai.com/v1/web-search' : null,
+      // 无密钥搜索兜底本身也是完整配置，密钥状态仍如实显示。
+      apiKeyConfigured: bocha,
+    }
+  }
+  return null
 }
 
 export async function getAdminModelManagement(): Promise<AdminModelManagementPayload> {
@@ -176,15 +210,18 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
       const capabilities = parseModelCapabilities(model.metadata, model.provider)
       const metadata = model.metadata && typeof model.metadata === 'object' && !Array.isArray(model.metadata) ? model.metadata as Record<string, unknown> : {}
       const modelKind = metadata.modelKind === 'image_generation' || metadata.modelKind === 'vision' || metadata.modelKind === 'web_search' ? metadata.modelKind : 'text'
+      const databaseReady = model.modelName !== 'unconfigured' && Boolean(model.baseUrl && model.apiKeyCiphertext)
+      const fallback = databaseReady ? null : toolEnvironmentFallback(modelKind)
+      const configurationReady = databaseReady || Boolean(fallback) || (model.tier === 'speed' && model.modelName !== 'unconfigured')
       return {
-        id: model.id, tier: model.tier, modelKind, provider: model.provider, displayName: model.displayName,
-        modelName: model.modelName, baseUrl: model.baseUrl, multiplier: model.multiplierBps / 10_000,
-        enabled: model.enabled, selectable: model.selectable, isDefault: model.isDefault,
-        apiKeyConfigured: Boolean(model.apiKeyCiphertext), requestCount: row?._count._all ?? 0,
+        id: model.id, tier: model.tier, modelKind, provider: fallback?.provider ?? model.provider, displayName: model.displayName,
+        modelName: fallback?.modelName ?? model.modelName, baseUrl: fallback?.baseUrl ?? model.baseUrl, multiplier: model.multiplierBps / 10_000,
+        enabled: model.enabled || Boolean(fallback), selectable: model.selectable, isDefault: model.isDefault,
+        apiKeyConfigured: Boolean(model.apiKeyCiphertext) || Boolean(fallback?.apiKeyConfigured), requestCount: row?._count._all ?? 0,
         requestTokens: row?._sum.requestTokens ?? 0, responseTokens: row?._sum.responseTokens ?? 0,
         reasoningEfforts: capabilities.reasoningEfforts, defaultReasoningEffort: capabilities.defaultReasoningEffort,
         visionEnabled: capabilities.visionEnabled,
-        configurationReady: model.tier === 'speed' ? model.modelName !== 'unconfigured' : Boolean(model.modelName !== 'unconfigured' && model.baseUrl && model.apiKeyCiphertext),
+        configurationReady,
         updatedAt: model.updatedAt.toISOString(),
       }
     }),

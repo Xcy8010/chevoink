@@ -55,4 +55,31 @@ describe('Agent 3.0 Story Compiler 契约', () => {
     expect(tool?.parameters.safeParse(coerced).success).toBe(true)
     expect(normalizeBeatCandidates([task])).toHaveLength(2)
   })
+
+  it('创作宪章兼容 arguments 包装、snake_case 和字符串列表', () => {
+    const tool = allTools.find((item) => item.name === 'story_charter_save')
+    const coerced = tool?.coerceArgs?.({
+      arguments: JSON.stringify({
+        one_line_promise: '一个普通人以记忆为代价拯救城市。',
+        target_audience: '喜欢悬疑成长线的读者',
+        target_platform: '番茄小说',
+        protagonist_desire: '找回失踪的姐姐',
+        protagonist_fear: '忘记所有重要的人',
+        protagonist_misbelief: '独自承担才不会伤害别人',
+        protagonist_non_negotiable: '不牺牲无辜者',
+        conflict_engine: '每次使用能力都会失去一段私人记忆',
+        relationship_engine: '主角必须逐步学会依赖队友',
+        emotional_baseline: '克制、警惕',
+        emotional_range: '从孤立到信任',
+        genre_rules: '线索必须可回溯；能力必须付出代价',
+        style_dna: '短句推进；对话留白',
+      }),
+    })
+    const parsed = tool?.parameters.safeParse(coerced)
+    expect(parsed?.success).toBe(true)
+    if (parsed?.success) {
+      expect(parsed.data.genreRules).toEqual(['线索必须可回溯', '能力必须付出代价'])
+      expect(parsed.data.styleDna).toEqual(['短句推进', '对话留白'])
+    }
+  })
 })

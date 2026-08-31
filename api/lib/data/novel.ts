@@ -157,6 +157,7 @@ export async function updateNovelData(
       tagNames: input.tags ?? undefined,
       visibility: input.visibility ?? undefined,
       status: input.status ?? undefined,
+      pinnedAt: input.pinned === undefined ? undefined : input.pinned ? new Date() : null,
       coverAssetId: input.coverAssetId === undefined ? undefined : input.coverAssetId,
       coverPrompt: input.coverPrompt === undefined ? undefined : input.coverPrompt,
       publishedAt:

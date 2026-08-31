@@ -54,6 +54,7 @@ type NovelRecord = {
   lastChapterTitle?: string | null
   lastPublishedAt?: Date | string | null
   publishedAt?: Date | string | null
+  pinnedAt?: Date | string | null
   author: UserRecord
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
@@ -373,6 +374,7 @@ export function toNovel(record: NovelRecord, viewerUserId?: string | null): Nove
     lastChapterTitle: record.lastChapterTitle ?? null,
     lastPublishedAt: toIso(record.lastPublishedAt),
     publishedAt: toIso(record.publishedAt),
+    pinnedAt: toIso(record.pinnedAt),
     author: toAuthorSummary(record.author, viewerUserId),
     createdAt: toIso(record.createdAt) ?? nowIso(),
     updatedAt: toIso(record.updatedAt) ?? nowIso(),

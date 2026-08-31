@@ -114,6 +114,8 @@ async function ensureAccountWithDb(db: CreditDb, userId: string, now = new Date(
       bonusBalanceMilli: 0,
       periodStartedAt: window.startedAt,
       periodEndsAt: window.endsAt,
+      // 暂停期间注册/首次使用的账户必须继承全局状态；之后允许管理员单独恢复。
+      suspendedAt: setting.globallyPaused ? now : null,
     },
     update: {},
   })
@@ -217,11 +219,8 @@ export async function getCreditUsage(userId: string, take = 100): Promise<Credit
 
 export async function assertCreditAccess(userId: string, tier: CreditModelTier = 'speed', requireSelectable = true): Promise<void> {
   const { account, setting } = await ensureCreditAccount(userId)
-  if (setting.globallyPaused) {
-    throw new DataAccessError(423, 'CREDITS_GLOBALLY_PAUSED', '公测模型服务已由管理员暂停，请稍后再试。')
-  }
   if (account.suspendedAt) {
-    throw new DataAccessError(423, 'CREDITS_ACCOUNT_SUSPENDED', '当前账户的模型使用权限已暂停。')
+    throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
   }
   if (tier === 'custom') return
   const remaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli
@@ -331,8 +330,7 @@ export async function consumeCredits(input: ConsumeCreditInput): Promise<CreditC
         }
 
         const { account, setting } = await ensureAccountWithDb(tx, input.userId)
-        if (setting.globallyPaused) throw new DataAccessError(423, 'CREDITS_GLOBALLY_PAUSED', '公测模型服务已由管理员暂停，请稍后再试。')
-        if (account.suspendedAt) throw new DataAccessError(423, 'CREDITS_ACCOUNT_SUSPENDED', '当前账户的模型使用权限已暂停。')
+        if (account.suspendedAt) throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
 
         const dailyRemaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli)
         const totalRemaining = dailyRemaining + account.bonusBalanceMilli

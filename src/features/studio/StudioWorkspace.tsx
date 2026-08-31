@@ -12,7 +12,7 @@ import { updateShelfCover } from '@/features/home/local-shelf'
 import { cn } from '@/lib/utils'
 import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
 import type { AgentStreamEvent, Chapter, CoverAsset, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
-import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteWritingAgentSession, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
+import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
 import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
@@ -20,7 +20,6 @@ import ChapterSidebar from './components/ChapterSidebar'
 import ChangeSetDrawer from './components/ChangeSetDrawer'
 import PlanSettingsPanel from './components/PlanSettingsPanel'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
-import AgentTaskSidebar from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
 import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
@@ -41,6 +40,7 @@ import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
 import SkillsPanel from './components/SkillsPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
+import { updateAgentSessionSettings } from './agent/agentApi'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import AgentContextPanel from './agent/components/AgentContextPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
@@ -51,7 +51,7 @@ import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterD
 
 
 import { buildArtifactsFromHistory, mergeRestoredArtifactsWithSnapshot, readStoredAgentWorkspace } from './lib/agent-persistence.js'
-import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_AGENT_TASK_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession } from './lib/agent-session.js'
+import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession } from './lib/agent-session.js'
 import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdatePayload, buildProjectNotes, createIdleAgentRunState, isNovelFormDirty } from './lib/form-state.js'
 import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
@@ -191,7 +191,6 @@ export default function StudioWorkspace() {
   // 当前任务窗口状态归属的作品：切换作品后状态水合落地前，快照写入效应
   // 不得用旧作品窗口写入/删除（会污染目标作品快照），仅状态归属当前作品时才允许写
   const [agentStateNovelId, setAgentStateNovelId] = useState(activeNovelId)
-  const [showAgentTaskList, setShowAgentTaskList] = useState(false)
   const [agentRunState, setAgentRunState] = useState<AgentRunState>(createIdleAgentRunState)
   const [agentArtifacts, setAgentArtifacts] = useState<AgentArtifact[]>([])
   const [activeAgentArtifactId, setActiveAgentArtifactId] = useState<string | null>(null)
@@ -595,7 +594,6 @@ export default function StudioWorkspace() {
   useEffect(() => {
     agentRunAbortControllerRef.current?.abort()
     resetAgentWorkspace()
-    setShowAgentTaskList(false)
     setAgentStateNovelId(activeNovelId)
 
     const requestedSessionId = searchParams.get('session')
@@ -3312,7 +3310,6 @@ export default function StudioWorkspace() {
     pruneTemporaryTaskWindows(nextTaskWindow.id)
     setAgentTaskWindows((current) => [nextTaskWindow, ...current])
     applyAgentTaskWindowState(nextTaskWindow)
-    setShowAgentTaskList(true)
   }
 
   async function handleSelectAgentTaskWindow(taskWindowId: string) {
@@ -3380,63 +3377,6 @@ export default function StudioWorkspace() {
         }))
       }
     }
-  }
-
-  function handleDeleteAgentTaskWindow(taskWindowId: string) {
-    const targetTaskWindow = agentTaskWindows.find((taskWindow) => taskWindow.id === taskWindowId)
-    if (!targetTaskWindow || agentRunState.active) {
-      return
-    }
-
-    const hasTaskContent = Boolean(targetTaskWindow.prompt.trim()) || targetTaskWindow.artifacts.length > 0
-    const taskTitle = targetTaskWindow.title.trim() || DEFAULT_AGENT_TASK_TITLE
-
-    setWorkspaceDialog({
-      title: '确认删除这个任务',
-      description: targetTaskWindow.sessionId || hasTaskContent
-        ? `删除后，“${taskTitle}”这轮对话、处理记录和结果都会一起移除，刷新后也不会再恢复出来。`
-        : `删除后，“${taskTitle}”会从当前任务栏移除。`,
-      confirmLabel: '确认删除',
-      cancelLabel: '取消',
-      tone: 'danger',
-      onConfirm: async () => {
-        if (targetTaskWindow.sessionId) {
-          await deleteWritingAgentSession(targetTaskWindow.sessionId)
-        }
-
-        const remainingTasks = dedupeAgentTaskWindows(
-          agentTaskWindows.filter((taskWindow) => taskWindow.id !== taskWindowId),
-        )
-        const fallbackTaskWindow = createLocalAgentTaskWindow()
-        const nextTasks = remainingTasks.length > 0 ? remainingTasks : [fallbackTaskWindow]
-        const nextActiveTaskWindow =
-          nextTasks.find((taskWindow) => taskWindow.id === activeAgentTaskWindowId && taskWindow.id !== taskWindowId) ??
-          nextTasks[0] ??
-          fallbackTaskWindow
-
-        setAgentTaskWindows(nextTasks)
-
-        if (nextActiveTaskWindow.id === activeAgentTaskWindowId && activeAgentTaskWindowId !== taskWindowId) {
-          setAgentRunState((current) => ({
-            ...current,
-            statusText: '已删除这个任务。',
-          }))
-          return
-        }
-
-        const hydratedTaskWindow = await hydrateAgentTaskWindow(nextActiveTaskWindow)
-        setAgentTaskWindows((current) =>
-          current.map((taskWindow) =>
-            taskWindow.id === hydratedTaskWindow.id ? hydratedTaskWindow : taskWindow,
-          ),
-        )
-        applyAgentTaskWindowState(hydratedTaskWindow)
-
-        if (!targetTaskWindow.sessionId && !hasTaskContent && nextTasks.length === 1) {
-          setShowAgentTaskList(false)
-        }
-      },
-    })
   }
 
   function handleSelectCatalogFromTree() {
@@ -3913,30 +3853,11 @@ export default function StudioWorkspace() {
           activityPresentation={activityPresentation}
           mobileIntegratedHeader={mobileIntegratedHeader}
           showCreditWarning={showCreditWarning}
+          showEmptySuggestions={workspacePerspective === 'work'}
           referenceOptions={composerReferenceOptions}
           onOpenStudioSettings={(section) => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
         />
       )
-  }
-
-  function renderAgentTaskSidebar(force = false) {
-    if (!force && !showAgentTaskList) {
-      return null
-    }
-
-    return (
-      <AgentTaskSidebar
-        embedded={force}
-        taskWindows={agentTaskSidebarItems}
-        activeTaskWindowId={activeAgentTaskWindowId}
-        taskSwitchLocked={agentRunState.active}
-        fallbackDescription={chapterTitle || '查看这轮任务的完整上下文。'}
-        onCreateTaskWindow={handleCreateAgentTaskWindow}
-        onSelectTaskWindow={(taskWindowId) => void handleSelectAgentTaskWindow(taskWindowId)}
-        onRenameTaskWindow={(taskWindowId, title) => void handleRenameAgentTaskWindow(taskWindowId, title)}
-        onDeleteTaskWindow={handleDeleteAgentTaskWindow}
-      />
-    )
   }
 
   function renderCoverToolPanel(close?: () => void) {
@@ -4323,7 +4244,7 @@ export default function StudioWorkspace() {
         </div>
 
         <div className="hidden min-h-0 flex-1 lg:flex">
-          <StudioWorkspaceSidebar
+          {workspacePerspective === 'work' ? <StudioWorkspaceSidebar
             open={workspaceSidebarOpen}
             onOpenChange={setWorkspaceSidebarOpen}
             perspective={workspacePerspective}
@@ -4334,18 +4255,26 @@ export default function StudioWorkspace() {
             novels={novelOptions}
             novelsLoading={myNovelsQuery.isLoading}
             switchingNovel={createNovelMutation.isPending}
+            currentTasks={agentTaskSidebarItems}
+            activeTaskId={activeAgentTaskWindowId}
+            taskSwitchLocked={agentRunState.active}
             onSelectNovel={handleSelectWorkspaceNovel}
             onCreateNovel={handleCreateWorkspaceNovel}
+            onCreateTask={handleCreateAgentTaskWindow}
+            onSelectTask={(taskId, taskNovelId) => {
+              if (taskNovelId === activeNovelId) void handleSelectAgentTaskWindow(taskId)
+              else navigate(`/studio/novel/${taskNovelId}?session=${encodeURIComponent(taskId)}`)
+            }}
+            onRenameTask={(taskId, title) => void handleRenameAgentTaskWindow(taskId, title)}
             autoFollow={autoFollow}
             onAutoFollowChange={setAutoFollow}
-            taskArea={<div className="[&>aside]:w-full">{renderAgentTaskSidebar(true)}</div>}
-            onOpenStudioSettings={() => { setStudioSettingsSection('general'); setStudioSettingsOpen(true) }}
-          />
+            onOpenStudioSettings={(section = 'general') => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
+          /> : null}
           <div className="flex min-w-0 flex-1 flex-col">
           <StudioCommandBar
-            workspaceControls={false}
-            workspaceSidebarOpen={workspaceSidebarOpen}
-            onWorkspaceSidebarToggle={() => setWorkspaceSidebarOpen((value) => !value)}
+            workspaceControls={workspacePerspective === 'ide'}
+            workspaceSidebarOpen={workspacePerspective === 'ide' ? ideTreeOpen : workspaceSidebarOpen}
+            onWorkspaceSidebarToggle={() => workspacePerspective === 'ide' ? setIdeTreeOpen((value) => !value) : setWorkspaceSidebarOpen((value) => !value)}
             perspective={workspacePerspective}
             perspectiveSwitchEnabled={featureFlags.dualWorkspace}
             onPerspectiveChange={setWorkspacePerspective}
@@ -4364,6 +4293,16 @@ export default function StudioWorkspace() {
             previewHref={previewHref}
             detailPreviewHref={detailPreviewHref}
             published={novelForm?.status === 'published'}
+            activeTaskTitle={activeAgentTaskWindow?.title ?? null}
+            activeTaskCanPersist={Boolean(activeAgentTaskWindow?.sessionId)}
+            onPinTask={() => {
+              if (!activeAgentTaskWindow?.sessionId) return
+              void updateAgentSessionSettings(activeAgentTaskWindow.sessionId, { pinned: true }).then(() => queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] }))
+            }}
+            onRenameTask={(title) => {
+              if (activeAgentTaskWindow) void handleRenameAgentTaskWindow(activeAgentTaskWindow.id, title)
+            }}
+            onOpenBranches={() => { setStudioSettingsSection('operations'); setStudioSettingsOpen(true) }}
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">
@@ -4630,6 +4569,16 @@ export default function StudioWorkspace() {
             onPerspectiveChange={setWorkspacePerspective}
             autoFollow={autoFollow}
             onAutoFollowChange={setAutoFollow}
+            novelId={activeNovelId}
+            novels={novelOptions}
+            sessionId={agentSessionId}
+            chapterId={selectedChapterId}
+            runIds={agentArtifacts.map((artifact) => artifact.runId).filter((runId): runId is string => Boolean(runId))}
+            onSelectSession={(sessionId) => {
+              setAgentSessionId(sessionId)
+              setActiveAgentTaskWindowId(sessionId)
+              setStudioSettingsOpen(false)
+            }}
           />
 
           {activeToolPanel && activeToolPanel !== 'assistant' ? (

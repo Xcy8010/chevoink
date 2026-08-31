@@ -13,7 +13,7 @@ import {
 } from '../agentApi'
 
 type Tab = 'tasks' | 'branches' | 'agents' | 'schedules' | 'permissions' | 'evals'
-type Props = { open: boolean; onClose: () => void; novelId: string; sessionId: string | null; chapterId?: string | null; runIds: string[]; currentSession?: AgentSession | null; onSelectSession?: (sessionId: string) => void }
+type Props = { open: boolean; onClose: () => void; novelId: string; sessionId: string | null; chapterId?: string | null; runIds: string[]; currentSession?: AgentSession | null; onSelectSession?: (sessionId: string) => void; embedded?: boolean }
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
   { id: 'tasks', label: '任务', icon: Search }, { id: 'branches', label: '版本', icon: GitBranch },
@@ -24,7 +24,7 @@ const defaultPolicy: AgentSessionToolPolicy = { network: 'ask', contentWrite: 'a
 const inputClass = 'h-10 w-full rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-sm outline-none transition-colors focus:border-[var(--border-strong)]'
 const textareaClass = 'min-h-24 w-full resize-y rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-3 text-sm leading-6 outline-none transition-colors focus:border-[var(--border-strong)]'
 
-export default function AgentOperationsCenter({ open, onClose, novelId, sessionId, chapterId, runIds, currentSession, onSelectSession }: Props) {
+export default function AgentOperationsCenter({ open, onClose, novelId, sessionId, chapterId, runIds, currentSession, onSelectSession, embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>('tasks')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -75,10 +75,10 @@ export default function AgentOperationsCenter({ open, onClose, novelId, sessionI
   const runOptions = useMemo(() => [...new Set(runIds)].slice(-12).reverse(), [runIds])
   if (!open) return null
 
-  return createPortal(
-    <div className="fixed inset-0 z-[155] flex items-end justify-center bg-black/35 backdrop-blur-[2px] sm:items-center sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section role="dialog" aria-modal="true" aria-label="Agent 操作中心" className="flex h-[92dvh] w-full max-w-5xl flex-col overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_28px_90px_rgba(15,23,42,0.28)] sm:h-[78dvh] sm:rounded-[24px]">
-        <header className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-6">
+  const content = (
+    <div className={cn(embedded ? 'h-full min-h-0' : 'fixed inset-0 z-[155] flex items-end justify-center bg-black/35 backdrop-blur-[2px] sm:items-center sm:p-6')} onMouseDown={(event) => { if (!embedded && event.target === event.currentTarget) onClose() }}>
+      <section role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="Agent 操作中心" className={cn('flex w-full flex-col overflow-hidden bg-[var(--surface-default)]', embedded ? 'h-full min-h-0' : 'h-[92dvh] max-w-5xl border border-[var(--border-subtle)] shadow-[0_28px_90px_rgba(15,23,42,0.28)] sm:h-[78dvh] sm:rounded-[24px]')}>
+        <header className={cn('items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-6', embedded ? 'hidden' : 'flex')}>
           <SlidersHorizontal className="h-4 w-4" /><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold">Agent 操作中心</h2><p className="truncate text-xs text-[var(--text-secondary)]">任务、版本、专业 Agent、定时与安全策略</p></div>
           <button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-[var(--surface-muted)]" aria-label="关闭"><X className="h-4 w-4" /></button>
         </header>
@@ -98,6 +98,7 @@ export default function AgentOperationsCenter({ open, onClose, novelId, sessionI
           </main>
         </div>
       </section>
-    </div>, document.body,
+    </div>
   )
+  return embedded ? content : createPortal(content, document.body)
 }

@@ -39,6 +39,7 @@ export const updateNovelSchema = z.object({
   tags: z.array(z.string()).optional(),
   visibility: visibilitySchema.optional(),
   status: novelStatusSchema.optional(),
+  pinned: z.boolean().optional(),
   coverAssetId: z.string().nullable().optional(),
   coverPrompt: z.string().nullable().optional(),
 })

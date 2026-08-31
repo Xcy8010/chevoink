@@ -296,6 +296,7 @@ export interface Novel {
   lastChapterTitle: string | null
   lastPublishedAt: string | null
   publishedAt: string | null
+  pinnedAt: string | null
   author: AuthorSummary
   createdAt: string
   updatedAt: string
