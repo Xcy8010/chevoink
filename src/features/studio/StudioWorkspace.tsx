@@ -152,7 +152,9 @@ export default function StudioWorkspace() {
   useAutoHideScrollbars()
   const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
     const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
-    const centerReserve = 288
+    // Work 必须同时为最左创作栏（最大 392）、任务轨（54）和可完整操作的 Agent 对话
+    // 保留空间；IDE 没有外层创作栏，但仍保证正文/编辑器不会被两侧面板夹没。
+    const centerReserve = workspacePerspective === 'work' ? 866 : 520
     if (panel === 'tree') {
       return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
     }
@@ -164,7 +166,7 @@ export default function StudioWorkspace() {
     if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
     if (panel === 'workInspector') return viewportWidth - centerReserve - viewerWidth
     return viewportWidth - centerReserve - inspectorWidth
-  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer])
+  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective])
   const { panelWidths, beginPanelResize } = useStudioPanelWidths({
     onCollapse: (panel) => {
       if (panel === 'tree') setIdeTreeOpen(false)

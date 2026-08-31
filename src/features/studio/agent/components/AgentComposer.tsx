@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Flame, Image, LoaderCircle, Plus, Scale, Settings2, Square, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Flame, Image, LoaderCircle, Pencil, Plus, Scale, Settings2, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 import {
@@ -87,6 +87,7 @@ const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description
 ]
 
 const REASONING_ORDER: ModelReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const REASONING_LABELS: Record<ModelReasoningEffort, string> = { none: '关闭', minimal: '轻度', low: '低', medium: '中', high: '高', xhigh: '极高', max: 'Max' }
 
 function orderedReasoningEfforts(efforts: ModelReasoningEffort[]) {
   return [...new Set(efforts)].sort((left, right) => REASONING_ORDER.indexOf(left) - REASONING_ORDER.indexOf(right))
@@ -227,6 +228,7 @@ export function AgentComposer({
   const [attachError, setAttachError] = useState<string | null>(null)
   const [referencePickerOpen, setReferencePickerOpen] = useState(false)
   const [referenceSearch, setReferenceSearch] = useState('')
+  const [editingReasoningTier, setEditingReasoningTier] = useState<Exclude<CreditModelTier, 'custom'> | null>(null)
   const editorRef = useRef<HTMLDivElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -664,7 +666,20 @@ export function AgentComposer({
                 <button type="button" className="flex h-9 w-full items-center justify-between rounded-[9px] px-2.5 text-xs hover:bg-[var(--surface-muted)]"><span className="font-medium text-[var(--text-primary)]">模型</span><span className="inline-flex max-w-36 items-center gap-1 truncate text-[var(--text-secondary)]">{activeModelLabel}<ChevronRight className="h-3 w-3" /></span></button>
                 <div className="invisible absolute bottom-0 right-[calc(100%-1px)] z-[70] w-60 translate-x-1 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 opacity-0 shadow-[0_18px_46px_rgba(15,23,42,0.2)] transition-[opacity,transform,visibility] duration-150 ease-out group-hover/models:visible group-hover/models:translate-x-0 group-hover/models:opacity-100 group-focus-within/models:visible group-focus-within/models:translate-x-0 group-focus-within/models:opacity-100">
                   <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">可用内置模型</p>
-                  {modelOptions.filter((option) => option.available).map((option) => <button key={option.tier} type="button" onClick={() => { onModelTierChange(option.tier); modelMenuRef.current?.removeAttribute('open') }} className={cn('flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs hover:bg-[var(--surface-muted)]', option.tier === modelTier && 'bg-[var(--surface-muted)] font-medium')}><span className="min-w-0 flex-1 truncate">{option.label}</span><span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{option.multiplier.toFixed(1)}x</span>{option.tier === modelTier ? <Check className="h-3.5 w-3.5" /> : null}</button>)}
+                  {editingReasoningTier ? (() => {
+                    const option = modelOptions.find((item) => item.tier === editingReasoningTier)
+                    if (!option) return null
+                    const efforts = orderedReasoningEfforts(option.reasoningEfforts)
+                    const modelKey = `tier:${option.tier}`
+                    const selected = reasoningSelections[modelKey] && efforts.includes(reasoningSelections[modelKey])
+                      ? reasoningSelections[modelKey]
+                      : option.defaultReasoningEffort
+                    return <div className="absolute bottom-0 right-[calc(100%+7px)] z-[80] w-52 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.2)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_140ms_cubic-bezier(.2,.8,.2,1)]">
+                      <div className="flex items-center justify-between px-2 pb-1 pt-1"><div><p className="text-[10px] text-[var(--text-tertiary)]">{option.label}</p><p className="text-xs font-medium text-[var(--text-primary)]">思考模式</p></div><button type="button" onClick={() => setEditingReasoningTier(null)} className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)]" aria-label="关闭思考模式设置"><X className="h-3.5 w-3.5" /></button></div>
+                      {efforts.map((effort) => <button key={effort} type="button" onClick={() => onReasoningEffortChange(modelKey, effort)} className={cn('flex h-9 w-full items-center justify-between rounded-[8px] px-2.5 text-left text-xs transition-colors hover:bg-[var(--surface-muted)]', effort === selected && 'bg-[var(--surface-muted)] font-medium')}><span>{REASONING_LABELS[effort]}</span><span className="inline-flex items-center gap-2 text-[10px] text-[var(--text-tertiary)]">{effort}{effort === selected ? <Check className="h-3.5 w-3.5 text-[var(--text-primary)]" /> : null}</span></button>)}
+                    </div>
+                  })() : null}
+                  {modelOptions.filter((option) => option.available).map((option) => <div key={option.tier} className={cn('group/model-row flex h-9 w-full items-center rounded-[8px] hover:bg-[var(--surface-muted)]', option.tier === modelTier && 'bg-[var(--surface-muted)] font-medium')}><button type="button" onClick={() => { onModelTierChange(option.tier); modelMenuRef.current?.removeAttribute('open'); setEditingReasoningTier(null) }} className="flex h-full min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-xs"><span className="min-w-0 flex-1 truncate">{option.label}</span><span className="text-[10px] tabular-nums text-[var(--text-tertiary)] group-hover/model-row:hidden group-focus-within/model-row:hidden">{option.multiplier.toFixed(1)}x</span>{option.tier === modelTier ? <Check className="h-3.5 w-3.5 group-hover/model-row:hidden group-focus-within/model-row:hidden" /> : null}</button><button type="button" onClick={(event) => { event.stopPropagation(); setEditingReasoningTier(option.tier) }} className="mr-1 hidden h-7 items-center gap-1 rounded-[7px] px-2 text-[10px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-default)] group-hover/model-row:inline-flex group-focus-within/model-row:inline-flex" aria-label={`编辑${option.label}思考模式`}><Pencil className="h-3 w-3" />编辑</button></div>)}
                   {customModels.some((model) => model.enabled) ? <><div className="mx-2 my-1 border-t border-[var(--border-subtle)]" /><p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">自定义模型</p>{customModels.filter((model) => model.enabled).map((model) => <button key={model.id} type="button" onClick={() => { onCustomModelChange(model.id); onModelTierChange('custom'); modelMenuRef.current?.removeAttribute('open') }} className={cn('flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs hover:bg-[var(--surface-muted)]', modelTier === 'custom' && model.id === customModelId && 'bg-[var(--surface-muted)] font-medium')}><span className="min-w-0 flex-1 truncate">{model.displayName}</span><span className="text-[10px] text-[var(--text-tertiary)]">BYOK</span>{modelTier === 'custom' && model.id === customModelId ? <Check className="h-3.5 w-3.5" /> : null}</button>)}</> : null}
                 </div>
               </div>

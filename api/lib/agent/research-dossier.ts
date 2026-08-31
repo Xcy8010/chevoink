@@ -45,15 +45,86 @@ async function assertOwnedNovel(userId: string, novelId: string) {
   return novel
 }
 
-function parseSynthesis(content: string): ResearchSynthesis {
+function parseJsonObject(content: string): Record<string, unknown> | null {
   const start = content.indexOf('{')
   const end = content.lastIndexOf('}')
-  if (start === -1 || end <= start) throw new DataAccessError(502, 'RESEARCH_SYNTHESIS_INVALID', '研究模型未返回有效 JSON。')
+  if (start === -1 || end <= start) return null
   try {
-    return researchSynthesisSchema.parse(JSON.parse(content.slice(start, end + 1)))
+    const parsed = JSON.parse(content.slice(start, end + 1))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
   } catch {
-    throw new DataAccessError(502, 'RESEARCH_SYNTHESIS_INVALID', '研究模型返回的档案结构不完整。')
+    return null
   }
+}
+
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+function asTextList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean)
+  const text = asText(value)
+  return text ? text.split(/[\n；;]+/).map((item) => item.trim()).filter(Boolean) : []
+}
+
+function firstValue(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) if (record[key] !== undefined && record[key] !== null) return record[key]
+  return undefined
+}
+
+function fallbackResearchSynthesis(input: ResearchDossierBuild): ResearchSynthesis {
+  const platform = input.targetPlatform ? `在${input.targetPlatform}` : ''
+  const signal = input.triggerSignals[0] || '题材进入门槛与读者预期需要被明确'
+  return {
+    readerPromise: `${platform}面向${input.targetAudience}，围绕「${input.topic}」持续提供清晰目标、有效冲突与可兑现推进。`,
+    abandonmentRisks: [`开篇只解释${input.genre}设定而缺少具体事件与人物选择`, signal],
+    marketPatterns: [],
+    differentiation: [`让「${input.topic}」直接改变人物选择和代价，而不是只作为背景资料`],
+    factCards: [],
+    languageRisks: ['避免资料堆砌、术语说明和无来源的确定性断言'],
+    recommendations: ['把研究摘要转为场景约束，并对现实事实保留来源与不确定性'],
+    rejectedIdeas: ['直接复写来源表达或模仿具体作者'],
+  }
+}
+
+/** 兼容字段别名与不完整 JSON；仍不合格时退回不虚构事实卡的安全档案。 */
+export function parseResearchSynthesis(content: string, input: ResearchDossierBuild, sourceCount: number): ResearchSynthesis {
+  const raw = parseJsonObject(content)
+  if (raw) {
+    const factCards = Array.isArray(firstValue(raw, ['factCards', 'fact_cards', 'facts']))
+      ? (firstValue(raw, ['factCards', 'fact_cards', 'facts']) as unknown[]).flatMap((value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+          const card = value as Record<string, unknown>
+          const indexes = (Array.isArray(firstValue(card, ['sourceIndexes', 'source_indexes', 'sources']))
+            ? firstValue(card, ['sourceIndexes', 'source_indexes', 'sources']) as unknown[]
+            : [])
+            .map(Number)
+            .filter((index) => Number.isInteger(index) && index >= 1 && index <= sourceCount)
+            .slice(0, 6)
+          const claim = asText(firstValue(card, ['claim', 'fact', 'statement']))
+          const storyUse = asText(firstValue(card, ['storyUse', 'story_use', 'use']))
+          if (!claim || !storyUse || indexes.length === 0) return []
+          const confidenceValue = asText(firstValue(card, ['confidence', 'certainty'])).toLowerCase()
+          const confidence = confidenceValue === 'high' || confidenceValue === 'low' ? confidenceValue : 'medium'
+          return [{ claim, confidence, sourceIndexes: indexes, storyUse }]
+        })
+      : []
+    const candidate = {
+      readerPromise: asText(firstValue(raw, ['readerPromise', 'reader_promise', 'promise'])),
+      abandonmentRisks: asTextList(firstValue(raw, ['abandonmentRisks', 'abandonment_risks', 'dropRisks', 'drop_risks'])),
+      marketPatterns: asTextList(firstValue(raw, ['marketPatterns', 'market_patterns', 'patterns'])),
+      differentiation: asTextList(firstValue(raw, ['differentiation', 'differences', 'uniquePoints', 'unique_points'])),
+      factCards,
+      languageRisks: asTextList(firstValue(raw, ['languageRisks', 'language_risks'])),
+      recommendations: asTextList(firstValue(raw, ['recommendations', 'suggestions'])),
+      rejectedIdeas: asTextList(firstValue(raw, ['rejectedIdeas', 'rejected_ideas', 'avoid'])),
+    }
+    const parsed = researchSynthesisSchema.safeParse(candidate)
+    if (parsed.success) return parsed.data
+  }
+  return fallbackResearchSynthesis(input)
 }
 
 function dossierCacheKey(input: ResearchDossierBuild): string {
@@ -211,7 +282,14 @@ export async function buildResearchDossier(
     temperature: 0.25,
     reasoningEffort: 'high',
   }))
-  const synthesis = parseSynthesis(await synthesize(systemPrompt, userPrompt))
+  let synthesisContent = ''
+  try {
+    synthesisContent = await synthesize(systemPrompt, userPrompt)
+  } catch {
+    // 搜索摘要已经取得时，综合模型临时失败不应让整条新书流程卡死；
+    // 下方只生成高层创作建议，不生成任何未经模型核验的事实卡。
+  }
+  const synthesis = parseResearchSynthesis(synthesisContent, input, sources.length)
   const sourceHash = hash(JSON.stringify(sources.map(({ url, snippet }) => ({ url, snippet }))))
   const estimatedInputTokens = Math.ceil((systemPrompt.length + userPrompt.length) / 3)
   const version = (latest?.version ?? 0) + 1

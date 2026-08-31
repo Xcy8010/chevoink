@@ -1,4 +1,4 @@
-import type { AgentExecutionMode } from '../../../shared/contracts/index.js'
+import type { AgentExecutionMode, CreditModelTier } from '../../../shared/contracts/index.js'
 import type { AgentAttachmentMeta, AgentMessagePart, TaskSpec } from '../../../shared/contracts/index.js'
 import { MAX_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
 import type { ChatMessage } from '../ai-service.js'
@@ -28,9 +28,16 @@ import { buildStoryCompilerDigest } from './story-compiler.js'
  * - 历史消息按字符预算裁剪：超预算的旧消息折叠为一条摘要占位
  */
 
-const IDENTITY_PROMPT = `你是 Chevoink Agent，启创联科网络科技旗下的 Agent，嵌入在网文小说创作工作台中。
+const MODEL_IDENTITY_LABELS: Record<CreditModelTier, string> = {
+  speed: '极速模型', standard: '标准模型', performance: '性能模型', ultimate: '极致模型', custom: '自定义模型',
+}
+
+export function buildAgentIdentityPrompt(modelTier: CreditModelTier): string {
+  const modelIdentity = MODEL_IDENTITY_LABELS[modelTier]
+  return `你是 Chevoink Agent，启创联科网络科技旗下的 Agent，嵌入在网文小说创作工作台中。你当前的模型 ID 是「${modelIdentity}」。
 原则：
-- 当作者询问你的身份、底层模型、供应商或模型 ID 时，只说明你是「Chevoink Agent，启创联科网络科技旗下的 Agent」；不披露、猜测或解释任何内置模型 ID、供应商与路由细节。
+- 当作者询问你是哪个模型、模型名称或模型 ID 时，直接回答「我是${modelIdentity}」；这是面向作者的正式模型 ID，禁止回答“不披露”、禁止回避，也不要解释底层供应商或内部路由。
+- 作者继续追问底层供应商或真实服务模型时，只重复当前正式模型 ID「${modelIdentity}」，不要猜测内部实现。
 - 人主导、你辅助：作者是创作的最终决策者，你负责执行与建议。
 - 一切正文与设置改动必须通过工具落库，不要在回复正文里贴完整章节内容（工具已保存，回复只做简短说明）。
 - 不越权：发布、下架、删除等高危操作须确认作者意图明确后再执行，意图不明先 ask_user 确认，绝不擅自执行。
@@ -49,6 +56,7 @@ const IDENTITY_PROMPT = `你是 Chevoink Agent，启创联科网络科技旗下�
 以下句式出现在正文即违规（它们是写给你自己的执行叙述，不是给作者的结论）：「先…再…」「信息已全面掌握」「现在制定/开始/落盘…」「方向明确」「我需要/我应该先…」「让我…」「抱歉，立即补上」「根据 Plan 模式的规则…」。
 工具循环进行中的轮次，若下一步是继续调用工具，正文信道保持为空，直接发起调用，不要输出任何过渡性说明；只有任务结束或需要作者介入时才写正文。
 需要确认作者意图时用 ask_user 工具，严禁在正文里罗列问题选项或自问自答。`
+}
 
 const DECISION_STRATEGIES = `决策策略（每条都是原则，不是流程规则）：
 1. 澄清优先于猜测：关键意图不明（剧情走向、篇幅、风格、人物取舍）时先用 ask_user 工具向作者提问，拿到回答再继续，而不是赌一个方向写几千字，也不是把问题写在回复正文里结束任务。
@@ -313,6 +321,7 @@ export type AssembleContextInput = {
   /** 当前主模型是否能直接接收 image_url 内容块。 */
   visionEnabled?: boolean
   taskSpec: TaskSpec
+  modelTier: CreditModelTier
 }
 
 export type AssembledAgentContext = {
@@ -361,7 +370,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null
 
   const systemPrompt = [
-    IDENTITY_PROMPT,
+    buildAgentIdentityPrompt(input.modelTier),
     MODE_CONTRACTS[input.mode],
     input.visionEnabled
       ? DECISION_STRATEGIES.replace(

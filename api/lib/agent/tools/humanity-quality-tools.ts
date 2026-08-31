@@ -124,11 +124,17 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const remaining = selected.filter((finding) => !patches.has(finding.id))
     if (remaining.length === 0) break
-    const response = await generateTextCompletion(
-      `你是与 Writer/Critic 上下文隔离的局部修订编辑。只替换每条 evidence 本身，不扩写相邻内容，不改变事实、情节结果、人物知识或作者刻意的口语与断句。删除优先于同义词替换；补写只补建议中缺失的具体动作、选择或后果。punctuation_misuse 只移除误用符号，保留人物直接话语和逐字引文。replacement 可以为空。严格只输出 JSON：{"patches":[{"findingId":"原 id","replacement":"只替换证据范围的文本"}]}。必须为每个输入 id 返回且只返回一次。`,
-      remaining.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
-      { userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
-    )
+    let response = ''
+    try {
+      response = await generateTextCompletion(
+        `你是与 Writer/Critic 上下文隔离的局部修订编辑。只替换每条 evidence 本身，不扩写相邻内容，不改变事实、情节结果、人物知识或作者刻意的口语与断句。删除优先于同义词替换；补写只补建议中缺失的具体动作、选择或后果。punctuation_misuse 只移除误用符号，保留人物直接话语和逐字引文。replacement 可以为空。严格只输出 JSON：{"patches":[{"findingId":"原 id","replacement":"只替换证据范围的文本"}]}。必须为每个输入 id 返回且只返回一次。`,
+        remaining.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
+        { userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
+      )
+    } catch {
+      // 修订器不可用时保留报告与正文，交回用户稍后重试，不把质量检查标成执行失败。
+      continue
+    }
     try {
       const parsedAttempt = repairEnvelopeSchema.parse(parseJsonObject(response))
       for (const patch of parsedAttempt.patches) {
@@ -139,7 +145,7 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
     }
   }
   const replacements = [...patches.values()]
-  if (replacements.length === 0) throw new Error('局部修订器连续两次未返回可验证补丁，正文未改动。')
+  if (replacements.length === 0) return null
   // 模型若仍漏掉个别项，只应用已逐字绑定的安全补丁，并把漏项退回待审，不让整章修订归零。
   await selectQualityFindings(ctx.userId, ctx.novelId, report.id, replacements.map((patch) => patch.findingId))
   const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, reportId: report.id, replacements })
@@ -181,12 +187,15 @@ export const qualityAnalyzeTool = defineTool({
       if (reusableRepairs.length > 0 && hydrated.repairRound === 0) {
         await selectQualityFindings(ctx.userId, ctx.novelId, hydrated.id, reusableRepairs.map((finding) => finding.id))
         const repaired = await applySelectedQualityRepairs(ctx, hydrated, reusableRepairs)
-        return {
-          output: `复用当前质量报告并落实修订：已原子修改 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定 r${repaired.result.updated.revision}，无需再次检查。`,
-          summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
-          display: reportDisplay(repaired.report),
-          snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+        if (repaired) {
+          return {
+            output: `复用当前质量报告并落实修订：已原子修改 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定 r${repaired.result.updated.revision}，无需再次检查。`,
+            summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
+            display: reportDisplay(repaired.report),
+            snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+          }
         }
+        return { output: '当前 revision 的质量报告已复用；局部修订器本次未返回可验证补丁，正文保持不变，可稍后重试。', summary: '复用质量报告 · 正文未改动', display: reportDisplay(hydrated) }
       }
       return { output: `当前 revision 已有质量报告 ${hydrated.id}，无需重复消耗 Critic。`, summary: '复用当前质量报告', display: reportDisplay(hydrated) }
     }
@@ -206,12 +215,18 @@ ${renderQualityLearning(bundle.feedback)}
 正文开始：
 ${bundle.chapter.content}
 正文结束。`
-    const response = await generateTextCompletion(
-      buildCriticSystem('balanced'), userPrompt,
-      { userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
-    )
-    const rawCriticFindings = criticEnvelopeSchema.parse(parseJsonObject(response)).findings
-      .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.quote === finding.quote) === index)
+    let rawCriticFindings: z.infer<typeof criticQualityFindingSchema>[] = []
+    let criticFallback = false
+    try {
+      const response = await generateTextCompletion(
+        buildCriticSystem('balanced'), userPrompt,
+        { userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
+      )
+      rawCriticFindings = criticEnvelopeSchema.parse(parseJsonObject(response)).findings
+        .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.quote === finding.quote) === index)
+    } catch {
+      criticFallback = true
+    }
     const criticFindings = calibrateCriticFindings(rawCriticFindings, bundle.feedback)
     const created = await persistHumanityQualityReport({
       userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
@@ -234,18 +249,22 @@ ${bundle.chapter.content}
     if (selected.length > 0) {
       await selectQualityFindings(ctx.userId, ctx.novelId, report.id, selected.map((finding) => finding.id))
       const repaired = await applySelectedQualityRepairs(ctx, report, selected)
-      return {
-        output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
-        summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
-        display: reportDisplay(repaired.report),
-        snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+      if (repaired) {
+        return {
+          output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
+          summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
+          display: reportDisplay(repaired.report),
+          snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+        }
       }
     }
     return {
       output: report.findings.length
         ? `质量检查完成：${warningCount} 个需关注问题、${advisoryCount} 个审美建议。当前模式仅展示报告，或章节受作者保护，因此未自动改动；本轮不会重复检查或要求选择。`
-        : `质量报告 ${report.id} 通过：确定性检查与独立 Critic 均未发现有证据的问题。`,
-      summary: `人类感质量检查 · ${warningCount} 关注 ${advisoryCount} 建议`,
+        : criticFallback
+          ? `质量报告 ${report.id} 已完成确定性检查兜底；独立 Critic 本次未返回结构化内容，正文保持不变，可继续当前任务。`
+          : `质量报告 ${report.id} 通过：确定性检查与独立 Critic 均未发现有证据的问题。`,
+      summary: `人类感质量检查${criticFallback ? '（确定性兜底）' : ''} · ${warningCount} 关注 ${advisoryCount} 建议`,
       display: reportDisplay(report),
     }
   },
@@ -282,6 +301,7 @@ export const qualityRevisionApplyTool = defineTool({
     const selected = report.findings.filter((finding) => finding.disposition === 'selected')
     if (selected.length === 0) return { output: '报告中没有已选择的 finding，请先调用 quality_findings_select。' }
     const repaired = await applySelectedQualityRepairs(ctx, report, selected)
+    if (!repaired) return { output: '局部修订器本次未返回可验证补丁，正文保持不变，可稍后重试。', summary: '局部质量修订 · 正文未改动', display: reportDisplay(report) }
     return {
       output: `已原子应用 ${repaired.patchCount} 个局部修订并绑定 r${repaired.result.updated.revision}，无需再次质量检查。`,
       summary: `局部质量修订 · ${repaired.patchCount} 处`,

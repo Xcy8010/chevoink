@@ -1,5 +1,8 @@
 export type CreditModelTier = 'speed' | 'standard' | 'performance' | 'ultimate' | 'custom'
 
+/** 产品语义顺序固定，不随管理员调整的 Credits 倍率漂移。 */
+export const BUILT_IN_MODEL_TIERS = ['speed', 'standard', 'performance', 'ultimate'] as const
+
 /** OpenAI-compatible providers expose different subsets; the server validates per model. */
 export type ModelReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 

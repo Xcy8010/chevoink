@@ -9,7 +9,7 @@ const STUDIO_PANEL_WIDTHS_STORAGE_KEY = 'studio-panel-widths'
 
 const LEGACY_TREE_PANEL_FALLBACK = 264
 export const TREE_PANEL_WIDTH_LIMITS = { min: 240, fallback: 420 }
-export const AGENT_PANEL_WIDTH_LIMITS = { min: 340, fallback: 424 }
+export const AGENT_PANEL_WIDTH_LIMITS = { min: 400, fallback: 440 }
 export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
 export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 260, fallback: 520 }
 export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 900 }

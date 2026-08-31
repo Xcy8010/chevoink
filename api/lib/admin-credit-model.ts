@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client'
 
 import type { AdminCreditsManagementPayload, AdminModelManagementPayload } from '../../shared/contracts/index.js'
 import type { ModelReasoningEffort } from '../../shared/contracts/index.js'
+import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
 import { ensureCreditAccount, getCreditWindow, parseModelCapabilities } from './credits.js'
 import { stopActiveRunsByUser, stopAllActiveRuns } from './agent/active-runs.js'
 import { env } from '../config/env.js'
@@ -191,7 +192,7 @@ export function toolEnvironmentFallback(modelKind: 'text' | 'image_generation' |
 
 export async function getAdminModelManagement(): Promise<AdminModelManagementPayload> {
   const [models, usage, recent] = await Promise.all([
-    prisma.aiModelConfig.findMany({ where: { ownerUserId: null }, orderBy: { multiplierBps: 'asc' } }),
+    prisma.aiModelConfig.findMany({ where: { ownerUserId: null } }),
     prisma.aiUsageLog.groupBy({ by: ['modelTier'], where: { modelTier: { not: null } }, _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
     prisma.aiUsageLog.findMany({ where: { createdAt: { gte: new Date(Date.now() - 13 * 86_400_000) } }, select: { createdAt: true, requestTokens: true, responseTokens: true } }),
   ])
@@ -205,7 +206,14 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
     trendMap.set(date, row)
   }
   return {
-    models: models.map((model) => {
+    models: models.sort((left, right) => {
+      const order = (tier: string | null) => {
+        if (!tier) return BUILT_IN_MODEL_TIERS.length
+        const index = BUILT_IN_MODEL_TIERS.indexOf(tier as typeof BUILT_IN_MODEL_TIERS[number])
+        return index >= 0 ? index : BUILT_IN_MODEL_TIERS.length
+      }
+      return order(left.tier) - order(right.tier)
+    }).map((model) => {
       const row = usageMap.get(model.tier)
       const capabilities = parseModelCapabilities(model.metadata, model.provider)
       const metadata = model.metadata && typeof model.metadata === 'object' && !Array.isArray(model.metadata) ? model.metadata as Record<string, unknown> : {}

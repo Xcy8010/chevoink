@@ -88,7 +88,7 @@ export default function WorkPerspective({ taskRail, conversation, activityDock, 
   return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
     <aside className="h-full w-[54px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)] motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{taskRail}</aside>
     <main
-      className="min-w-0 flex-1 overflow-hidden bg-[var(--surface-default)] transition-[padding] duration-200 ease-out"
+      className="min-w-[420px] flex-1 overflow-hidden bg-[var(--surface-default)] transition-[padding] duration-200 ease-out"
       style={{ paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0 }}
     >{conversation}</main>
     {showActivityDock ? <aside className="h-full min-h-0 w-[296px] shrink-0 bg-[var(--surface-default)] px-3 py-4">{activityDock}</aside> : null}

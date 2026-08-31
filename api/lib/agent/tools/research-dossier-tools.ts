@@ -8,6 +8,7 @@ import {
   getLatestResearchDossier,
 } from '../research-dossier.js'
 import { defineTool } from './types.js'
+import { coerceStringList, coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js'
 
 const ALL_READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const PLAN_BUILD_WRITE = { plan: 'allow', build: 'allow', review: 'deny' } as const
@@ -44,6 +45,28 @@ export const researchDossierBuildTool = defineTool({
   description:
     '低频建立或增量刷新 Research Dossier。仅限：新书只有一句描述、首次进入新题材/平台/受众、开启重大新卷/情节弧、核心职业技术历史事实影响剧情、作者明确要求联网研究、或质量系统连续发现陈词滥调且内部技法库不足。普通续写、局部润色、纯虚构场景、已有有效档案时禁止调用。每次最多 3 个查询，同作品 24 小时默认只建一次；forceRefresh 仅限作者明确要求或方向实质改变。不得搜索或抓取盗版小说正文，不得模仿具体在世作者。',
   parameters: researchDossierBuildSchema,
+  coerceArgs(raw) {
+    const source = coerceToolArgumentEnvelope(raw)
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source
+    const record = source as Record<string, unknown>
+    const triggerReason = firstDefined(record, ['triggerReason', 'trigger_reason', 'reason']) ?? 'new_book'
+    const topic = String(firstDefined(record, ['topic', 'researchTopic', 'research_topic', 'subject']) ?? firstDefined(record, ['genre', 'category']) ?? '新书定位与开篇').trim()
+    const genre = String(firstDefined(record, ['genre', 'category', 'categoryName', 'category_name']) ?? topic ?? '网络小说').trim()
+    const targetAudience = String(firstDefined(record, ['targetAudience', 'target_audience', 'audience']) ?? `${genre}题材读者`).trim()
+    const triggerSignals = coerceStringList(firstDefined(record, ['triggerSignals', 'trigger_signals', 'signals']))
+    const queries = coerceStringList(firstDefined(record, ['queries', 'searchQueries', 'search_queries', 'query']))
+    return {
+      ...record,
+      triggerReason,
+      triggerSignals: (triggerSignals.length ? triggerSignals : ['作者正在规划新书，需要明确题材预期与开篇风险']).slice(0, 8),
+      topic,
+      genre,
+      targetAudience,
+      targetPlatform: firstDefined(record, ['targetPlatform', 'target_platform', 'platform']) ?? '',
+      queries: (queries.length ? queries : [`${topic} ${genre} 读者期待 开篇风险`]).slice(0, 3),
+      forceRefresh: firstDefined(record, ['forceRefresh', 'force_refresh']) ?? false,
+    }
+  },
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
@@ -89,6 +112,73 @@ export const firstThreePrototypeBuildTool = defineTool({
   description:
     '在有效 Research Dossier 与 Story Charter 之后，为新书建立 2–3 个差异化方向、第一卷脊柱和恰好三章的试制任务。每章必须有具体事件、主角选择、代价、新信息与退出钩子，不能用空泛“推进剧情”或直接扩成 30 章模板长纲。只建立蓝图，不自动写正文；作者未选方向时可不传 selectedDirectionId。',
   parameters: firstThreePrototypeBuildSchema,
+  coerceArgs(raw) {
+    const source = coerceToolArgumentEnvelope(raw)
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source
+    const record = source as Record<string, unknown>
+    const normalizeObjectArray = (value: unknown, aliases: Record<string, string[]>) => Array.isArray(value)
+      ? value.map((item, index) => {
+          const current = item && typeof item === 'object' && !Array.isArray(item)
+            ? item as Record<string, unknown>
+            : { title: String(item ?? '').trim() || `方向 ${index + 1}` }
+          const next: Record<string, unknown> = { ...current }
+          for (const [key, keys] of Object.entries(aliases)) next[key] ??= firstDefined(current, keys)
+          next.id ??= `direction-${index + 1}`
+          return next
+        })
+      : []
+    const genreRisks = coerceStringList(firstDefined(record, ['genreRisks', 'genre_risks', 'risks']))
+    const volumeSpine = coerceStringList(firstDefined(record, ['volumeSpine', 'volume_spine', 'spine']))
+    const rawDirections = normalizeObjectArray(firstDefined(record, ['directions', 'storyDirections', 'story_directions', 'options']), {
+      title: ['name', 'label'], readerPromise: ['reader_promise', 'promise'], conflictEngine: ['conflict_engine', 'conflict'],
+      differentiation: ['difference', 'uniquePoint', 'unique_point'], risk: ['risks', 'genreRisk', 'genre_risk'],
+    }) as Record<string, unknown>[]
+    while (rawDirections.length < 2) rawDirections.push({ id: `direction-${rawDirections.length + 1}`, title: `方向 ${rawDirections.length + 1}` })
+    const directions = rawDirections.slice(0, 3).map((direction, index) => {
+      const title = String(direction.title ?? `方向 ${index + 1}`).trim()
+      const promise = String(direction.readerPromise ?? `以前三章的连续事件兑现「${title}」的核心吸引力`).trim()
+      return {
+        ...direction,
+        id: String(direction.id ?? `direction-${index + 1}`).slice(0, 48),
+        title: title.slice(0, 160),
+        readerPromise: promise.slice(0, 500),
+        conflictEngine: String(direction.conflictEngine ?? `${title}不断迫使主角在目标、关系与代价之间选择`).slice(0, 800),
+        differentiation: String(direction.differentiation ?? `${title}必须通过具体事件和人物选择呈现，而非设定说明`).slice(0, 500),
+        risk: String(direction.risk ?? genreRisks[index] ?? '避免只有背景介绍而没有可见行动与代价').slice(0, 500),
+      }
+    })
+    const rawBlueprints = normalizeObjectArray(firstDefined(record, ['chapterBlueprints', 'chapter_blueprints', 'chapters', 'blueprints']), {
+      orderIndex: ['order_index', 'order', 'chapterNumber', 'chapter_number'], title: ['name'], chapterJob: ['chapter_job', 'job', 'purpose'],
+      concreteEvent: ['concrete_event', 'event'], protagonistChoice: ['protagonist_choice', 'choice'], cost: ['consequence', 'price'],
+      newInformation: ['new_information', 'reveal', 'information'], exitHook: ['exit_hook', 'hook'], qualityRisks: ['quality_risks', 'risks'],
+    }) as Record<string, unknown>[]
+    while (rawBlueprints.length < 3) rawBlueprints.push({ orderIndex: rawBlueprints.length + 1, title: `第 ${rawBlueprints.length + 1} 章` })
+    const chapterBlueprints = rawBlueprints.slice(0, 3).map((chapter, index) => {
+      const orderIndex = index + 1
+      const event = String(chapter.concreteEvent ?? volumeSpine[index] ?? `${directions[0].title}在第 ${orderIndex} 章发生可见推进`).trim()
+      return {
+        ...chapter,
+        orderIndex,
+        title: String(chapter.title ?? `第 ${orderIndex} 章`).slice(0, 160),
+        chapterJob: String(chapter.chapterJob ?? `完成第 ${orderIndex} 个开篇推进并改变故事状态`).slice(0, 500),
+        concreteEvent: event.slice(0, 800),
+        protagonistChoice: String(chapter.protagonistChoice ?? `主角针对「${event}」作出会影响后续局势的主动选择`).slice(0, 800),
+        cost: String(chapter.cost ?? '该选择立即带来关系、资源或风险上的可见代价').slice(0, 500),
+        newInformation: String(chapter.newInformation ?? '揭示一条会改变读者和主角判断的新信息').slice(0, 500),
+        exitHook: String(chapter.exitHook ?? '以尚未解决的新变化推动读者进入下一章').slice(0, 500),
+        qualityRisks: coerceStringList(chapter.qualityRisks).slice(0, 6),
+      }
+    })
+    return {
+      ...record,
+      dossierId: firstDefined(record, ['dossierId', 'dossier_id', 'researchDossierId', 'research_dossier_id']),
+      genreRisks: (genreRisks.length ? genreRisks : ['避免前三章只讲设定、缺少事件推进']).slice(0, 12),
+      directions,
+      selectedDirectionId: firstDefined(record, ['selectedDirectionId', 'selected_direction_id', 'directionId', 'direction_id']),
+      volumeSpine: (volumeSpine.length >= 3 ? volumeSpine : [...volumeSpine, '建立主角目标与初始阻力', '让选择产生第一次明确代价', '用新信息改变局势并形成追读钩子']).slice(0, 12),
+      chapterBlueprints,
+    }
+  },
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {

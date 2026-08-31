@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 import { Prisma } from '@prisma/client'
 
+import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
 import type {
   CreditAccountSummary,
   CreditLedgerItem,
@@ -140,7 +141,6 @@ async function listPublicModelOptions(): Promise<CreditModelOption[]> {
   const configs = await prisma.aiModelConfig.findMany({
     where: { ownerUserId: null, tier: { not: null } },
     select: { tier: true, provider: true, displayName: true, modelName: true, baseUrl: true, apiKeyCiphertext: true, multiplierBps: true, enabled: true, selectable: true, isDefault: true, metadata: true },
-    orderBy: { multiplierBps: 'asc' },
   })
   if (configs.length === 0) return MODEL_FALLBACKS
   return configs.flatMap((item) => {
@@ -154,6 +154,12 @@ async function listPublicModelOptions(): Promise<CreditModelOption[]> {
       selectedByDefault: item.isDefault,
       ...capabilities,
     }]
+  }).sort((left, right) => {
+    const order = (tier: CreditModelTier) => {
+      const index = BUILT_IN_MODEL_TIERS.indexOf(tier as typeof BUILT_IN_MODEL_TIERS[number])
+      return index >= 0 ? index : BUILT_IN_MODEL_TIERS.length
+    }
+    return order(left.tier) - order(right.tier)
   })
 }
 

@@ -26,6 +26,7 @@ import {
 } from '../story-compiler.js'
 import { defineTool, type ToolContext } from './types.js'
 import { recalcNovelStats } from './novel-tools.js'
+import { coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js'
 
 const ALL_READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const PLAN_BUILD_WRITE = { plan: 'allow', build: 'allow', review: 'deny' } as const
@@ -38,11 +39,19 @@ const independentContinuityResultSchema = z.object({
   findings: z.array(continuityFindingInputSchema).max(30).default([]),
 })
 
-function parseIndependentContinuityResult(content: string) {
+export function parseIndependentContinuityResult(content: string): { findings: z.infer<typeof continuityFindingInputSchema>[]; structured: boolean } {
   const start = content.indexOf('{')
   const end = content.lastIndexOf('}')
-  if (start === -1 || end <= start) throw new Error('独立连续性检查未返回 JSON 对象。')
-  return independentContinuityResultSchema.parse(JSON.parse(content.slice(start, end + 1)))
+  if (start === -1 || end <= start) return { findings: [], structured: false }
+  try {
+    const raw = JSON.parse(content.slice(start, end + 1))
+    const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+    const candidate = { findings: firstDefined(record, ['findings', 'issues', 'problems']) ?? [] }
+    const parsed = independentContinuityResultSchema.safeParse(candidate)
+    return parsed.success ? { findings: parsed.data.findings, structured: true } : { findings: [], structured: false }
+  } catch {
+    return { findings: [], structured: false }
+  }
 }
 
 const continuityRepairEnvelopeSchema = z.object({
@@ -56,11 +65,17 @@ async function applyRigorousContinuityRepairs(
 ) {
   let parsed: z.infer<typeof continuityRepairEnvelopeSchema> | null = null
   for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
-    const response = await generateTextCompletion(
-      '你是中文网文连续性修订编辑。严谨创作模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
-      `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
-      { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
-    )
+    let response = ''
+    try {
+      response = await generateTextCompletion(
+        '你是中文网文连续性修订编辑。严谨创作模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
+        `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
+        { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
+      )
+    } catch {
+      // 修订器不可用时保留检查结果与原正文，不让可选自动修订拖垮整个 CHECK。
+      continue
+    }
     const start = response.indexOf('{')
     const end = response.lastIndexOf('}')
     if (start < 0 || end <= start) continue
@@ -445,15 +460,33 @@ export const continuityValidateTool = defineTool({
   description:
     'Story Compiler 的 CHECK 步骤。在整章/长场景写入后，由服务端启动与 Draft 上下文隔离的连续性编辑，只依据 Chapter Bridge、Scene Task 和当前正文检查人物知识、时空、身体、物品、关系、情绪余波、钩子与首尾结构；同时执行 revision/章序/空正文/Scene Task 数量等确定性硬检查。严谨创作会自动落实有证据的错误和警告，其余模式只报告。不得由主写 Agent 自报 findings。',
   parameters: z.object({
-    compilationId: z.string().min(1),
+    compilationId: z.string().min(1).optional(),
     focus: z.string().max(500).optional().describe('作者明确要求额外关注的连续性范围；未指定时不传'),
   }),
+  coerceArgs(raw) {
+    const source = coerceToolArgumentEnvelope(raw)
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return {}
+    const record = source as Record<string, unknown>
+    return {
+      ...record,
+      compilationId: firstDefined(record, ['compilationId', 'compilation_id', 'compilerId', 'compiler_id']),
+      focus: firstDefined(record, ['focus', 'scope', 'attention']),
+    }
+  },
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
     const compilation = await prisma.storyCompilation.findFirst({
-      where: { id: args.compilationId, userId: ctx.userId, novelId: ctx.novelId, status: 'active' },
+      where: {
+        userId: ctx.userId,
+        novelId: ctx.novelId,
+        status: 'active',
+        ...(args.compilationId
+          ? { id: args.compilationId }
+          : { OR: [{ runId: ctx.runId }, ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : [])] }),
+      },
       include: { bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } }, chapter: { select: { id: true, title: true, revision: true, content: true, orderIndex: true } } },
+      orderBy: { updatedAt: 'desc' },
     })
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
@@ -502,11 +535,13 @@ export const continuityValidateTool = defineTool({
       systemPrompt,
       criticInput,
       { userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
-    )))
-    const independentFindings = criticResponses
-      .flatMap((response) => parseIndependentContinuityResult(response).findings)
+    ).catch(() => '')))
+    const parsedCriticResponses = criticResponses.map(parseIndependentContinuityResult)
+    const criticFallback = parsedCriticResponses.every((response) => !response.structured)
+    const independentFindings = parsedCriticResponses
+      .flatMap((response) => response.findings)
       .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.evidence === finding.evidence) === index)
-    const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: args.compilationId, findings: independentFindings })
+    const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, findings: independentFindings })
     const phase = result.errorCount > 0 ? 'repair' : 'check'
     if (ctx.creativeFreedom === 'balanced' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
       const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings)
@@ -523,11 +558,11 @@ export const continuityValidateTool = defineTool({
     return {
       output: result.errorCount > 0
         ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
-        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。可以调用 chapter_bridge_commit 提交本章终态。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`,
-      summary: `连续性检查 · ${result.errorCount} 错误 ${result.warningCount} 警告`,
+        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。${criticFallback ? '独立复核器本次未返回结构化内容，已完成 revision、章序、正文与场景任务等确定性检查兜底；可以调用 chapter_bridge_commit 提交本章终态。' : '可以调用 chapter_bridge_commit 提交本章终态。'}${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`,
+      summary: `连续性检查${criticFallback ? '（确定性兜底）' : ''} · ${result.errorCount} 错误 ${result.warningCount} 警告`,
       display: {
-        kind: 'storyCompiler', compilationId: args.compilationId, phase, title: '连续性检查',
-        detail: `${result.errorCount} 错误 · ${result.warningCount} 警告`,
+        kind: 'storyCompiler', compilationId: compilation.id, phase, title: '连续性检查',
+        detail: `${result.errorCount} 错误 · ${result.warningCount} 警告${criticFallback ? ' · 确定性兜底' : ''}`,
         items: result.findings.map((item) => `${item.severity === 'error' ? '错误' : '警告'}：${item.evidence}`),
         errorCount: result.errorCount, warningCount: result.warningCount,
       },
