@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-MIT-crimson)](#-license)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#-license)
 [![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#-技术栈)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#-技术栈)
 [![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
@@ -172,7 +172,7 @@ npm run dev
 
 ## 📄 License
 
-本项目基于 [MIT License](LICENSE) 开源：可自由使用、修改与分发，需保留版权声明。
+本项目基于 [GNU AGPL-3.0 License](LICENSE) 开源：可自由使用、修改与分发；**若作为在线服务（SaaS / 网络服务器）对外提供，须同步公开对应、可修改的源代码**。闭源商业化部署需取得原作者另行的商业授权。
 
 ## 🙏 特别鸣谢
 

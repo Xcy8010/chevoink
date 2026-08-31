@@ -2,6 +2,7 @@
   "name": "chevoink-web",
   "private": true,
   "version": "0.0.0",
+  "license": "AGPL-3.0",
   "type": "module",
   "scripts": {
     "client:dev": "vite --host 0.0.0.0",
