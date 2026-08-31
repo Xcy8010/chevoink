@@ -371,6 +371,7 @@ export type AdminModelManagementPayload = {
   models: Array<{
     id: string
     tier: string | null
+    modelKind: 'text' | 'image_generation' | 'vision' | 'web_search'
     provider: string
     displayName: string
     modelName: string

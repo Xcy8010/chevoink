@@ -106,6 +106,7 @@ type AgentPanelProps = {
   referenceOptions?: Array<Omit<ComposerReference, 'offset'>>
   /** 桌面端由工作区左下角统一承载额度提醒；手机端没有该侧栏时在输入框上方展示。 */
   showCreditWarning?: boolean
+  onOpenStudioSettings?: (section: 'general' | 'models') => void
 }
 
 export function AgentPanel({
@@ -131,6 +132,7 @@ export function AgentPanel({
   activityPresentation = 'inline',
   mobileIntegratedHeader = false,
   showCreditWarning = false,
+  onOpenStudioSettings,
   referenceOptions = [],
 }: AgentPanelProps) {
   const runId = useAgentStore((state) => state.runId)
@@ -1261,6 +1263,7 @@ export function AgentPanel({
           reasoningSelections={reasoningSelections}
           onReasoningEffortChange={(modelKey, effort) => setReasoningSelections((value) => ({ ...value, [modelKey]: effort }))}
           referenceOptions={referenceOptions}
+          onOpenModelSettings={() => onOpenStudioSettings?.('models')}
           onStop={() => void handleStop()}
         />
       </div>

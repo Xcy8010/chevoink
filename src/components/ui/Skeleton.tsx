@@ -299,14 +299,23 @@ export function StudioSkeleton() {
         </div>
       </div>
 
-      {/* 桌面端：默认 Work 模式的紧凑任务条、居中对话区和检查器条。 */}
-      <div className="hidden min-h-0 flex-1 flex-col lg:flex" data-studio-skeleton="desktop">
+      {/* 桌面端：作品与任务融合侧栏固定在左侧，命令栏保留唯一折叠入口。 */}
+      <div className="hidden min-h-0 flex-1 lg:flex" data-studio-skeleton="desktop">
+        <aside className="flex w-[284px] shrink-0 flex-col border-r border-[var(--border-subtle)] p-3" data-studio-region="desktop-workspace-sidebar">
+          <div className="flex h-9 items-center gap-2"><Skeleton className="h-5 w-5 rounded-full" /><Skeleton className="h-3.5 w-24" /><Skeleton className="ml-auto h-7 w-7 rounded-[7px]" /></div>
+          <Skeleton className="mt-3 h-8 w-full rounded-[4px]" />
+          <Skeleton className="mt-3 h-10 w-full rounded-[14px]" />
+          <Skeleton className="mt-2 h-9 w-full rounded-[4px]" />
+          <Skeleton className="mt-5 h-3 w-12" />
+          <div className="mt-2 space-y-2">{Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-8 w-full rounded-[4px]" />)}</div>
+          <div className="mt-4 border-t border-[var(--border-subtle)] pt-4"><Skeleton className="h-3 w-12" /><div className="mt-2 space-y-2">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-10 w-full rounded-[4px]" />)}</div></div>
+          <div className="mt-auto"><Skeleton className="h-9 w-full rounded-[10px]" /><Skeleton className="mt-2 h-11 w-full rounded-[4px]" /></div>
+        </aside>
+        <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-3" data-studio-region="desktop-command-bar">
-          <Skeleton className="h-9 w-40 rounded-[4px]" />
+          <Skeleton className="h-8 w-8 rounded-[8px]" />
           <div className="h-6 w-px bg-[var(--border-subtle)]" />
-          <Skeleton className="h-9 w-40 rounded-[4px]" />
-          <div className="h-6 w-px bg-[var(--border-subtle)]" />
-          <Skeleton className="h-9 w-20 rounded-[4px]" />
+          <div><Skeleton className="h-3.5 w-32" /><Skeleton className="mt-1 h-2.5 w-20" /></div>
           <div className="ml-auto flex gap-2">
             <Skeleton className="h-9 w-24 rounded-[4px]" />
             <Skeleton className="h-9 w-20 rounded-[4px]" />
@@ -367,17 +376,6 @@ export function StudioSkeleton() {
           </div>
         ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className="flex w-[54px] shrink-0 flex-col items-center gap-1 border-r border-[var(--border-subtle)] py-2" data-studio-region="desktop-task-rail">
-            <Skeleton className="mb-1 h-9 w-9 rounded-[9px]" />
-            <Skeleton className="h-9 w-9 rounded-[9px]" />
-            <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
-            <div className="flex min-h-0 flex-1 flex-col items-center gap-[7px] overflow-hidden py-2">
-              {Array.from({ length: 4 }).map((_, index) => (
-                <Skeleton key={index} className={cn('h-[2px] rounded-full', index === 1 ? 'w-4' : 'w-2.5')} />
-              ))}
-            </div>
-          </aside>
-
           <main className="flex min-w-0 flex-1 justify-center overflow-hidden" data-studio-region="desktop-conversation">
             <div className="flex h-full min-h-0 w-full max-w-[960px] flex-col px-8">
               <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)]">
@@ -432,6 +430,7 @@ export function StudioSkeleton() {
           </aside>
         </div>
         )}
+        </div>
       </div>
     </div>
   )

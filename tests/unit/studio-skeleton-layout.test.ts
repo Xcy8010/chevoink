@@ -18,10 +18,11 @@ describe('StudioSkeleton responsive layout', () => {
     expect(markup).toContain('pb-[max(var(--safe-bottom),4px)]')
   })
 
-  it('provides a desktop Work skeleton with compact rails and a centered conversation', () => {
+  it('provides a desktop Work skeleton with the fused workspace sidebar and centered conversation', () => {
     expect(markup).toContain('data-studio-skeleton="desktop"')
     expect(markup).toContain('data-studio-region="desktop-command-bar"')
-    expect(markup).toContain('data-studio-region="desktop-task-rail"')
+    expect(markup).toContain('data-studio-region="desktop-workspace-sidebar"')
+    expect(markup).not.toContain('data-studio-region="desktop-task-rail"')
     expect(markup).toContain('data-studio-region="desktop-conversation"')
     expect(markup).toContain('data-studio-region="desktop-activity"')
     expect(markup).toContain('data-studio-region="desktop-composer"')

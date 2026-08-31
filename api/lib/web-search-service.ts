@@ -1,4 +1,5 @@
 import { env } from '../config/env.js'
+import { getToolModelRuntime, type ToolModelRuntime } from './tool-model-config.js'
 
 /**
  * 联网搜索服务（Agent web_search 工具的后端）：
@@ -79,11 +80,11 @@ function withTimeout(external: AbortSignal | undefined, timeoutMs: number): { si
   return { signal: controller.signal, cleanup }
 }
 
-async function searchBocha(query: string, maxResults: number, signal: AbortSignal): Promise<WebSearchResult[]> {
-  const response = await fetch('https://api.bochaai.com/v1/web-search', {
+async function searchBocha(query: string, maxResults: number, signal: AbortSignal, configured: ToolModelRuntime | null): Promise<WebSearchResult[]> {
+  const response = await fetch(configured?.baseUrl ?? 'https://api.bochaai.com/v1/web-search', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.webSearchBochaApiKey}`,
+      Authorization: `Bearer ${configured?.apiKey ?? env.webSearchBochaApiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ query, count: maxResults, summary: true }),
@@ -238,8 +239,9 @@ export async function searchWeb(
   const { signal: merged, cleanup } = withTimeout(signal, env.webSearchTimeoutMs)
 
   try {
+    const configured = await getToolModelRuntime('tool:web-search')
     const preferBocha =
-      env.webSearchProvider === 'bocha' || (env.webSearchProvider === 'auto' && env.webSearchBochaApiKeyConfigured)
+      Boolean(configured) || env.webSearchProvider === 'bocha' || (env.webSearchProvider === 'auto' && env.webSearchBochaApiKeyConfigured)
 
     if (env.webSearchProvider === 'disabled') {
       throw new WebSearchError('联网搜索已禁用（WEB_SEARCH_PROVIDER=disabled）')
@@ -247,7 +249,7 @@ export async function searchWeb(
 
     if (preferBocha) {
       try {
-        const results = await searchBocha(query, maxResults, merged)
+        const results = await searchBocha(query, maxResults, merged, configured)
         if (results.length > 0) {
           return { provider: 'bocha', results }
         }

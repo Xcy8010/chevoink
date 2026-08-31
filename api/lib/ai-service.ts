@@ -4,6 +4,7 @@ import { fetch as undiciFetch, Agent as UndiciAgent } from 'undici'
 
 import { prisma, DataAccessError } from './prisma.js'
 import { env } from '../config/env.js'
+import { getToolModelRuntime } from './tool-model-config.js'
 import type {
   ChapterAssistRequest,
   GenerateCoverImageRequest,
@@ -46,8 +47,8 @@ function ensureTextProviderConfigured(apiKey?: string | null) {
   }
 }
 
-function ensureImageProviderConfigured() {
-  if (!env.aiImageApiKeyConfigured || !env.aiImageApiKey) {
+function ensureImageProviderConfigured(apiKey: string) {
+  if (!apiKey) {
     throw new DataAccessError(503, 'AI_IMAGE_PROVIDER_UNAVAILABLE', '图片模型尚未配置。')
   }
 }
@@ -533,18 +534,22 @@ async function generateImageUrls(
   userId: string,
   action: string,
 ) {
-  ensureImageProviderConfigured()
+  const configured = await getToolModelRuntime('tool:image-generation')
+  const imageBaseUrl = configured?.baseUrl ?? env.aiImageBaseUrl
+  const imageApiKey = configured?.apiKey ?? env.aiImageApiKey
+  const imageModel = configured?.modelName ?? env.aiImageModel
+  ensureImageProviderConfigured(imageApiKey)
 
   const startedAt = Date.now()
   // Node 内置 fetch 默认 5 分钟头超时，第三方生图服务经常超过，这里用 undici 显式放宽到 aiImageTimeoutMs
-  const response = await undiciFetch(env.aiImageBaseUrl, {
+  const response = await undiciFetch(imageBaseUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.aiImageApiKey}`,
+      Authorization: `Bearer ${imageApiKey}`,
     },
     body: JSON.stringify({
-      model: env.aiImageModel,
+      model: imageModel,
       prompt,
       size,
       n: count,
@@ -584,7 +589,7 @@ async function generateImageUrls(
     userId,
     providerType: 'image',
     action,
-    modelName: env.aiImageModel,
+    modelName: imageModel,
     targetType: 'coverAsset',
     durationMs: Date.now() - startedAt,
   })

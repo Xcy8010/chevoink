@@ -36,36 +36,6 @@ function formatDateTime(value: string): string {
   }).format(new Date(value))
 }
 
-function UsageRing({ usedPercent }: { usedPercent: number }) {
-  const clamped = Math.min(100, Math.max(0, usedPercent))
-  const radius = 44
-  const circumference = 2 * Math.PI * radius
-  const offset = circumference * (1 - clamped / 100)
-  return (
-    <div className="relative h-28 w-28 shrink-0" aria-label={`每日额度已使用 ${clamped}%`}>
-      <svg viewBox="0 0 104 104" className="h-full w-full -rotate-90" aria-hidden="true">
-        <circle cx="52" cy="52" r={radius} fill="none" stroke="var(--border-subtle)" strokeWidth="7" />
-        <circle
-          cx="52"
-          cy="52"
-          r={radius}
-          fill="none"
-          stroke="var(--text-primary)"
-          strokeWidth="7"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          className="transition-[stroke-dashoffset] duration-700 ease-out"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <strong className="text-xl font-semibold tabular-nums text-[var(--text-primary)]">{clamped}%</strong>
-        <span className="text-[11px] text-[var(--text-tertiary)]">已使用</span>
-      </div>
-    </div>
-  )
-}
-
 function LedgerRow({ item }: { item: CreditLedgerItem }) {
   const positive = item.delta > 0
   return (
@@ -134,12 +104,12 @@ export default function AccountUsagePage() {
   }, [copyInviteLink, inviteOpen, referralQuery.data?.inviteUrl])
 
   if (usageQuery.isLoading) {
-    return <div className="flex min-h-screen items-center justify-center bg-[var(--app-bg)]"><LoaderCircle className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" /></div>
+    return <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto bg-[#f8f8f6]"><LoaderCircle className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" /></div>
   }
 
   if (!summary || !usage || usageQuery.isError) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--app-bg)] px-6 text-center">
+      <main className="flex h-full min-h-0 flex-col items-center justify-center gap-4 overflow-y-auto bg-[#f8f8f6] px-6 text-center">
         <p className="text-sm text-[var(--text-secondary)]">暂时无法读取额度信息。</p>
         <Button onClick={() => void usageQuery.refetch()}>重新加载</Button>
       </main>
@@ -147,7 +117,7 @@ export default function AccountUsagePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)] text-[var(--text-primary)]">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-[#f8f8f6] text-[var(--text-primary)] [scrollbar-gutter:stable]">
       <header className="sticky top-0 z-20 border-b border-[var(--border-subtle)] bg-[color:var(--app-bg)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-[1180px] items-center justify-between px-4 sm:px-6">
           <button type="button" onClick={() => navigate('/studio')} className="flex items-center gap-3 text-left">
@@ -160,7 +130,7 @@ export default function AccountUsagePage() {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1180px] gap-10 px-4 py-8 sm:px-6 lg:grid-cols-[210px_minmax(0,1fr)] lg:py-12">
+      <div className="mx-auto grid min-h-[calc(100%-4rem)] max-w-[1380px] gap-10 px-4 py-8 sm:px-6 lg:grid-cols-[230px_minmax(0,1fr)] lg:py-10">
         <aside className="hidden lg:block">
           <p className="mb-5 text-xs font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">ChevoInk 账户</p>
           <nav className="space-y-1">
@@ -176,30 +146,18 @@ export default function AccountUsagePage() {
         <main className="min-w-0">
           <div className="mb-8">
             <p className="text-sm text-[var(--text-tertiary)]">{sessionUser?.nickname ?? '创作者'} · {summary.planLabel}</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">用量与额度</h1>
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">用量明细</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
               每日额度在 UTC+8 15:00 重置；邀请奖励单独累计，不随每日重置清零。
             </p>
           </div>
 
-          <section className="border-y border-[var(--border-strong)] py-6 sm:py-8">
-            <div className="flex flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-[0.13em] text-[var(--text-tertiary)]">当前可用</p>
-                <p className="mt-2 text-4xl font-semibold tracking-[-0.04em] tabular-nums sm:text-5xl">{formatCredits(summary.totalRemaining)}</p>
-                <p className="mt-2 text-sm text-[var(--text-secondary)]">Credits</p>
-              </div>
-              <UsageRing usedPercent={summary.usedPercent} />
-            </div>
-            <div className="mt-7 grid grid-cols-2 gap-x-8 gap-y-5 border-t border-[var(--border-subtle)] pt-6 sm:grid-cols-4">
-              <div><p className="text-xs text-[var(--text-tertiary)]">每日额度</p><p className="mt-1 text-sm font-medium tabular-nums">{formatCredits(summary.dailyAllowance)}</p></div>
-              <div><p className="text-xs text-[var(--text-tertiary)]">今日已用</p><p className="mt-1 text-sm font-medium tabular-nums">{formatCredits(summary.dailyUsed)}</p></div>
-              <div><p className="text-xs text-[var(--text-tertiary)]">奖励余额</p><p className="mt-1 text-sm font-medium tabular-nums">{formatCredits(summary.bonusRemaining)}</p></div>
-              <div><p className="text-xs text-[var(--text-tertiary)]">下次重置</p><p className="mt-1 text-sm font-medium tabular-nums">{resetLabel}</p></div>
-            </div>
+          <section className="space-y-4">
+            <article className="rounded-[14px] border border-[#ececea] bg-[#f1f1ef] p-5 sm:p-6"><div className="flex items-start justify-between gap-5"><div><h2 className="text-base font-medium">每日公测额度</h2><p className="mt-1 text-xs text-[var(--text-secondary)]">每日自动补充，可用于内置模型与 Agent 工具。</p></div><p className="text-sm tabular-nums text-[var(--text-secondary)]">剩余 <strong className="text-[var(--text-primary)]">{formatCredits(Math.max(0, summary.dailyAllowance - summary.dailyUsed))}</strong></p></div><p className="mt-5 text-lg font-medium tabular-nums">{formatCredits(summary.dailyUsed)} / {formatCredits(summary.dailyAllowance)} <span className="text-sm font-normal text-[var(--text-secondary)]">（已使用 {summary.usedPercent}%）</span></p><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-[#1d2939] transition-[width] duration-500" style={{ width: `${Math.min(100, Math.max(0, summary.usedPercent))}%` }} /></div><p className="mt-3 text-xs text-[var(--text-tertiary)]">下次重置：{resetLabel}</p></article>
+            <article className="rounded-[14px] border border-[#ececea] bg-[#f1f1ef] p-5 sm:p-6"><div className="flex items-start justify-between gap-5"><div><h2 className="text-base font-medium">奖励额度</h2><p className="mt-1 text-xs text-[var(--text-secondary)]">邀请奖励长期有效，不随每日额度重置。</p></div><p className="text-sm tabular-nums text-[var(--text-secondary)]">剩余 <strong className="text-[var(--text-primary)]">{formatCredits(summary.bonusRemaining)}</strong></p></div><p className="mt-5 text-lg font-medium tabular-nums">当前总可用 {formatCredits(summary.totalRemaining)} Credits</p><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white"><div className="h-full w-full rounded-full bg-emerald-500/75" /></div></article>
           </section>
 
-          <section className="mt-10 flex flex-col justify-between gap-5 border-b border-[var(--border-strong)] pb-8 sm:flex-row sm:items-center">
+          <section className="mt-5 flex flex-col justify-between gap-5 rounded-[14px] border border-[#ececea] bg-[#f1f1ef] p-5 sm:flex-row sm:items-center sm:p-6">
             <div className="flex items-start gap-3">
               <Gift className="mt-0.5 h-5 w-5 shrink-0" />
               <div><h2 className="text-base font-semibold">邀请好友获得额外额度</h2><p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">每位成功注册的新好友为你增加 300 Credits，不受每日重置影响。</p></div>
@@ -207,7 +165,7 @@ export default function AccountUsagePage() {
             <Button variant="primary" onClick={() => void openInvite()} className="sm:shrink-0"><Sparkles className="h-4 w-4" /> 邀请好友</Button>
           </section>
 
-          <section className="mt-10 border-y border-[var(--border-subtle)] py-6">
+          <section className="mt-10 rounded-[14px] border border-[#ececea] bg-white/55 p-5 sm:p-6">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
               <h2 className="text-base font-semibold">Credits 计费规则</h2>
               <p className="text-xs text-[var(--text-tertiary)]">输入与输出按实际用量相加扣除</p>

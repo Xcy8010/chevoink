@@ -69,6 +69,7 @@ export function AgentTaskRail({
 }
 
 type AgentTaskSidebarProps = {
+  embedded?: boolean
   taskWindows: AgentTaskSidebarItem[]
   activeTaskWindowId: string | null
   taskSwitchLocked: boolean
@@ -94,6 +95,7 @@ function formatTaskWindowTime(value: string) {
 }
 
 export default function AgentTaskSidebar({
+  embedded = false,
   taskWindows,
   activeTaskWindowId,
   taskSwitchLocked,
@@ -134,11 +136,11 @@ export default function AgentTaskSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[220px] shrink-0 flex-col overflow-hidden bg-[var(--app-bg)]">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] py-4 pl-4 pr-12">
+    <aside className={cn('flex min-h-0 flex-col overflow-hidden bg-[var(--app-bg)]', embedded ? 'w-full' : 'h-full w-[220px] shrink-0')}>
+      <div className={cn('flex items-center justify-between gap-3', embedded ? 'px-2 pb-1 pt-4' : 'border-b border-[var(--border-subtle)] py-4 pl-4 pr-12')}>
         <div>
-          <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">任务</p>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">{taskWindows.length} 个对话窗口</p>
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">任务</p>
+          {!embedded ? <p className="mt-1 text-sm text-[var(--text-secondary)]">{taskWindows.length} 个对话窗口</p> : null}
         </div>
         <button
           type="button"
@@ -151,7 +153,7 @@ export default function AgentTaskSidebar({
           <SquarePlus className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className={cn('min-h-0 px-0.5 py-1', embedded ? '' : 'flex-1 overflow-y-auto px-2 py-2')}>
         <div className="space-y-0.5">
           {taskWindows.map((taskWindow) => {
             const isActiveTaskWindow = taskWindow.id === activeTaskWindowId
@@ -169,7 +171,7 @@ export default function AgentTaskSidebar({
                 )}
               >
                 {isActiveTaskWindow ? <span aria-hidden className="absolute inset-y-2 left-0 w-0.5 bg-[var(--text-primary)]" /> : null}
-                <div className="flex items-start gap-2 px-3 py-2.5">
+                <div className={cn('flex items-start gap-2', embedded ? 'px-2.5 py-2' : 'px-3 py-2.5')}>
                   {isEditingTaskWindow ? (
                     <div className="min-w-0 flex-1">
                       <input
@@ -194,7 +196,7 @@ export default function AgentTaskSidebar({
                       <p className="mt-1 text-xs text-[var(--text-secondary)]">
                         {taskWindow.temporary && !hasTaskContent ? '等待开始' : formatTaskWindowTime(taskWindow.updatedAt)}
                       </p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">
+                      <p className={cn('mt-1 text-xs leading-5 text-[var(--text-secondary)]', embedded ? 'line-clamp-1' : 'line-clamp-2')}>
                         {taskWindow.prompt.trim() ||
                           (taskWindow.temporary ? '开始第一轮对话后，这里会自动生成任务名。' : fallbackDescription)}
                       </p>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { BookCopy, ChevronLeft, ChevronRight, GitCompareArrows, ListTodo, Network, PanelLeftClose, PanelRightClose, ScrollText, Wrench } from 'lucide-react'
+import { BookCopy, ChevronLeft, GitCompareArrows, Network, PanelRightClose, ScrollText, Wrench } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { ResizablePanel } from '../panel-widths'
@@ -8,18 +8,13 @@ import type { WorkInspectorTab } from './WorkInspector'
 import { shouldShowWorkActivityDock } from './work-layout'
 
 type Props = {
-  taskRail: ReactNode
-  compactTaskRail?: ReactNode
   conversation: ReactNode
   activityDock?: ReactNode
   inspector: ReactNode
   viewer?: ReactNode
-  leftOpen: boolean
   rightOpen: boolean
-  taskWidth: number
   inspectorWidth: number
   viewerWidth: number
-  onToggleLeft: () => void
   onToggleRight: () => void
   inspectorTab: WorkInspectorTab
   onSelectInspectorTab: (tab: WorkInspectorTab) => void
@@ -37,7 +32,7 @@ const inspectorRailItems = [
 const PANEL_MOTION_MS = 220
 
 /** Agent-first 工作台：默认只保留两条窄轨，需要时再展开任务、作品与证据。 */
-export default function WorkPerspective({ taskRail, compactTaskRail, conversation, activityDock, inspector, viewer, leftOpen, rightOpen, taskWidth, inspectorWidth, viewerWidth, onToggleLeft, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
+export default function WorkPerspective({ conversation, activityDock, inspector, viewer, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
@@ -55,7 +50,7 @@ export default function WorkPerspective({ taskRail, compactTaskRail, conversatio
       ? Math.max(560, Math.min(1280, Math.round((containerWidth || 1600) * 0.5)))
       : viewerWidth
     : viewerWidth
-  const leftWidth = leftOpen ? taskWidth : 54
+  const leftWidth = 0
   const rightWidth = rightOpen ? resolvedInspectorWidth : 46
   const showActivityDock = shouldShowWorkActivityDock({
     containerWidth,
@@ -90,11 +85,6 @@ export default function WorkPerspective({ taskRail, compactTaskRail, conversatio
   }, [])
 
   return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
-    <aside data-studio-panel="workTask" className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: leftOpen ? taskWidth : 54 }}>
-      <div className={cn('absolute inset-0 min-h-0 overflow-hidden transition-[opacity,transform] duration-200 ease-out', leftOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-2 opacity-0')}>{taskRail}</div>
-      <div className={cn('absolute inset-0 transition-opacity duration-200 ease-out', leftOpen ? 'pointer-events-none opacity-0' : 'opacity-100')}>{compactTaskRail ?? <div className="flex h-full flex-col items-center py-2"><button type="button" onClick={onToggleLeft} className="inline-flex h-8 w-8 items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开任务区"><ChevronRight className="h-4 w-4" /></button><div className="mt-3 h-px w-5 bg-[var(--border-subtle)]" /><ListTodo className="mt-4 h-4 w-4 text-[var(--text-tertiary)]" /></div>}</div>
-      {leftOpen ? <><button type="button" onClick={onToggleLeft} className="absolute right-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)]" aria-label="收起任务区"><PanelLeftClose className="h-4 w-4" /></button><PanelResizeHandle panel="workTask" side="right" label="调整任务区宽度" onBegin={onBeginResize} /></> : null}
-    </aside>
     <main
       className="min-w-0 flex-1 overflow-hidden bg-[var(--surface-default)] transition-[padding] duration-200 ease-out"
       style={{ paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0 }}

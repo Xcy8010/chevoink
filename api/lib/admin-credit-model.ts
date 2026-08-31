@@ -174,8 +174,10 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
     models: models.map((model) => {
       const row = usageMap.get(model.tier)
       const capabilities = parseModelCapabilities(model.metadata, model.provider)
+      const metadata = model.metadata && typeof model.metadata === 'object' && !Array.isArray(model.metadata) ? model.metadata as Record<string, unknown> : {}
+      const modelKind = metadata.modelKind === 'image_generation' || metadata.modelKind === 'vision' || metadata.modelKind === 'web_search' ? metadata.modelKind : 'text'
       return {
-        id: model.id, tier: model.tier, provider: model.provider, displayName: model.displayName,
+        id: model.id, tier: model.tier, modelKind, provider: model.provider, displayName: model.displayName,
         modelName: model.modelName, baseUrl: model.baseUrl, multiplier: model.multiplierBps / 10_000,
         enabled: model.enabled, selectable: model.selectable, isDefault: model.isDefault,
         apiKeyConfigured: Boolean(model.apiKeyCiphertext), requestCount: row?._count._all ?? 0,
@@ -228,7 +230,7 @@ export async function updateAdminModel(modelId: string, input: UpdateAdminModelI
     const nextEnabled = input.enabled ?? model.enabled
     const nextSelectable = input.selectable ?? model.selectable
     if (model.tier !== 'speed' && (nextEnabled || nextSelectable) && (nextModelName === 'unconfigured' || !nextBaseUrl || !nextHasApiKey)) {
-      throw new DataAccessError(409, 'MODEL_CONFIG_INCOMPLETE', '标准、性能和极致档位必须先完整配置模型 ID、Base URL 与 API Key，才能启用或允许用户选择。')
+      throw new DataAccessError(409, 'MODEL_CONFIG_INCOMPLETE', '该服务必须先完整配置模型 ID、Base URL 与 API Key，才能启用。')
     }
     if (input.isDefault) await tx.aiModelConfig.updateMany({ where: { ownerUserId: null, id: { not: model.id } }, data: { isDefault: false } })
     await tx.aiModelConfig.update({

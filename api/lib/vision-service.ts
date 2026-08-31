@@ -1,5 +1,6 @@
 import { env } from '../config/env.js'
 import { DataAccessError } from './prisma.js'
+import { getToolModelRuntime, type ToolModelRuntime } from './tool-model-config.js'
 
 /**
  * GLM-4.1V 视觉推理旁路（ds-vision-skill 模式）：
@@ -50,18 +51,21 @@ function isRetryable(error: unknown): boolean {
   return error instanceof VisionRetryableError
 }
 
-async function requestOnce(image: { buffer: Buffer; mime: string }, question: string): Promise<string> {
+async function requestOnce(image: { buffer: Buffer; mime: string }, question: string, configured: ToolModelRuntime | null): Promise<string> {
   // 一律 base64 内联：规避 localhost/内网图片对智谱不可达的问题
   const dataUrl = `data:${image.mime};base64,${image.buffer.toString('base64')}`
 
-  const response = await fetch(`${env.aiVisionBaseUrl}/chat/completions`, {
+  const baseUrl = configured?.baseUrl ?? env.aiVisionBaseUrl
+  const apiKey = configured?.apiKey ?? env.aiVisionApiKey
+  const modelName = configured?.modelName ?? env.aiVisionModel
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      authorization: `Bearer ${env.aiVisionApiKey}`,
+      authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: env.aiVisionModel,
+      model: modelName,
       messages: [
         {
           role: 'user',
@@ -109,7 +113,8 @@ export async function describeImageWithVision(
   image: { buffer: Buffer; mime: string },
   question: string,
 ): Promise<string> {
-  if (!env.aiVisionApiKeyConfigured) {
+  const configured = await getToolModelRuntime('tool:image-vision')
+  if (!configured && !env.aiVisionApiKeyConfigured) {
     throw new DataAccessError(503, 'VISION_NOT_CONFIGURED', '视觉服务未配置（缺少 AI_VISION_API_KEY）。')
   }
 
@@ -118,7 +123,7 @@ export async function describeImageWithVision(
   try {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await requestOnce(image, question)
+        return await requestOnce(image, question, configured)
       } catch (error) {
         if (!isRetryable(error) || attempt >= 1) {
           throw error

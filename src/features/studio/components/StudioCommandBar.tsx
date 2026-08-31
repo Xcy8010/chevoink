@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpenText, Crosshair, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PenLine, Settings2, Upload } from 'lucide-react'
+import { BookOpenText, Crosshair, ExternalLink, FileText, FolderDown, Home, ImagePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PenLine, Settings2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -8,6 +8,8 @@ import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
 import { useAgentStore } from '../agent/agentStore'
 
 type Props = {
+  workspaceSidebarOpen?: boolean
+  onWorkspaceSidebarToggle?: () => void
   workspaceControls?: boolean
   perspective: 'work' | 'ide'
   perspectiveSwitchEnabled: boolean
@@ -44,6 +46,14 @@ export default function StudioCommandBar(props: Props) {
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--app-bg)] px-2.5">
+      {props.onWorkspaceSidebarToggle ? <button
+        type="button"
+        onClick={props.onWorkspaceSidebarToggle}
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+        aria-label={props.workspaceSidebarOpen ? '折叠左侧栏' : '展开左侧栏'}
+        title={props.workspaceSidebarOpen ? '折叠左侧栏' : '展开左侧栏'}
+      >{props.workspaceSidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}</button> : null}
+      {props.onWorkspaceSidebarToggle ? <div className="h-5 w-px shrink-0 bg-[var(--border-subtle)]" /> : null}
       {props.workspaceControls !== false && props.perspectiveSwitchEnabled ? <div className="relative inline-flex h-8 items-center overflow-hidden border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-0.5" aria-label="切换创作模式">
         <span aria-hidden className={cn('absolute bottom-0.5 top-0.5 w-[calc(50%-2px)] bg-[var(--surface-default)] shadow-sm transition-transform duration-200 ease-out', props.perspective === 'ide' && 'translate-x-full')} />
         {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('relative inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-200', props.perspective === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}

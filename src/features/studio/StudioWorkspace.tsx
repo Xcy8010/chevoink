@@ -20,7 +20,7 @@ import ChapterSidebar from './components/ChapterSidebar'
 import ChangeSetDrawer from './components/ChangeSetDrawer'
 import PlanSettingsPanel from './components/PlanSettingsPanel'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
-import AgentTaskSidebar, { AgentTaskRail } from './components/AgentTaskSidebar'
+import AgentTaskSidebar from './components/AgentTaskSidebar'
 import ConfirmDialog from './components/ConfirmDialog'
 import CoverPanel from './components/CoverPanel'
 import EditorCanvas from './components/EditorCanvas'
@@ -31,6 +31,7 @@ import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioCommandBar from './components/StudioCommandBar'
 import StudioWorkspaceSidebar from './components/StudioWorkspaceSidebar'
+import StudioSettingsDialog, { type StudioSettingsSection } from './components/StudioSettingsDialog'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
 import WorkInspector, { type WorkInspectorTab } from './components/WorkInspector'
@@ -120,7 +121,8 @@ export default function StudioWorkspace() {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('chevoink:workspace-sidebar') !== 'collapsed'
   })
-  const [workLeftOpen, setWorkLeftOpen] = useState(false)
+  const [studioSettingsOpen, setStudioSettingsOpen] = useState(false)
+  const [studioSettingsSection, setStudioSettingsSection] = useState<StudioSettingsSection>('general')
   const [workRightOpen, setWorkRightOpen] = useState(false)
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
   const [workViewer, setWorkViewer] = useState<'chapter' | 'document' | null>(null)
@@ -149,18 +151,16 @@ export default function StudioWorkspace() {
     if (panel === 'agent') {
       return viewportWidth - centerReserve - (ideTreeOpen ? widths.tree : 46)
     }
-    const taskWidth = workLeftOpen ? widths.workTask : 46
     const inspectorWidth = workRightOpen ? widths.workInspector : 46
     const viewerWidth = workViewer ? widths.workViewer : 0
     if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
-    if (panel === 'workInspector') return viewportWidth - centerReserve - taskWidth - viewerWidth
-    return viewportWidth - centerReserve - taskWidth - inspectorWidth
-  }, [ideAgentOpen, ideTreeOpen, workLeftOpen, workRightOpen, workViewer])
+    if (panel === 'workInspector') return viewportWidth - centerReserve - viewerWidth
+    return viewportWidth - centerReserve - inspectorWidth
+  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer])
   const { panelWidths, beginPanelResize } = useStudioPanelWidths({
     onCollapse: (panel) => {
       if (panel === 'tree') setIdeTreeOpen(false)
       if (panel === 'agent') setIdeAgentOpen(false)
-      if (panel === 'workTask') setWorkLeftOpen(false)
       if (panel === 'workInspector') setWorkRightOpen(false)
       if (panel === 'workViewer') setWorkViewer(null)
     },
@@ -3914,6 +3914,7 @@ export default function StudioWorkspace() {
           mobileIntegratedHeader={mobileIntegratedHeader}
           showCreditWarning={showCreditWarning}
           referenceOptions={composerReferenceOptions}
+          onOpenStudioSettings={(section) => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
         />
       )
   }
@@ -3925,6 +3926,7 @@ export default function StudioWorkspace() {
 
     return (
       <AgentTaskSidebar
+        embedded={force}
         taskWindows={agentTaskSidebarItems}
         activeTaskWindowId={activeAgentTaskWindowId}
         taskSwitchLocked={agentRunState.active}
@@ -4336,10 +4338,14 @@ export default function StudioWorkspace() {
             onCreateNovel={handleCreateWorkspaceNovel}
             autoFollow={autoFollow}
             onAutoFollowChange={setAutoFollow}
+            taskArea={<div className="[&>aside]:w-full">{renderAgentTaskSidebar(true)}</div>}
+            onOpenStudioSettings={() => { setStudioSettingsSection('general'); setStudioSettingsOpen(true) }}
           />
           <div className="flex min-w-0 flex-1 flex-col">
           <StudioCommandBar
             workspaceControls={false}
+            workspaceSidebarOpen={workspaceSidebarOpen}
+            onWorkspaceSidebarToggle={() => setWorkspaceSidebarOpen((value) => !value)}
             perspective={workspacePerspective}
             perspectiveSwitchEnabled={featureFlags.dualWorkspace}
             onPerspectiveChange={setWorkspacePerspective}
@@ -4364,15 +4370,6 @@ export default function StudioWorkspace() {
             <div className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
-                taskRail={<div className="h-full [&>aside]:w-full [&>aside]:border-l-0">{renderAgentTaskSidebar(true)}</div>}
-                compactTaskRail={<AgentTaskRail
-                  taskWindows={agentTaskSidebarItems}
-                  activeTaskWindowId={activeAgentTaskWindowId}
-                  taskSwitchLocked={agentRunState.active}
-                  onExpand={() => setWorkLeftOpen(true)}
-                  onCreateTaskWindow={handleCreateAgentTaskWindow}
-                  onSelectTaskWindow={(taskWindowId) => void handleSelectAgentTaskWindow(taskWindowId)}
-                />}
                 conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
                 activityDock={(workspaceActivities.length > 0 || agentTodos.length > 0 || pendingChapterReviews.length > 0 || Boolean(pendingPlanReview)) ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><AgentActivityBar
                   activities={workspaceActivities}
@@ -4430,12 +4427,9 @@ export default function StudioWorkspace() {
                   streamingContent={workViewer === 'chapter' ? chapterStreamingPreview : documentStreamingPreview}
                   writeLocked={workViewer === 'chapter' ? chapterStreamingPreview !== undefined : documentStreamingPreview !== undefined}
                 /> : undefined}
-                leftOpen={workLeftOpen}
                 rightOpen={workRightOpen}
-                taskWidth={panelWidths.workTask}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
-                onToggleLeft={() => setWorkLeftOpen((value) => !value)}
                 onToggleRight={() => {
                   if (!workRightOpen && workInspectorTab === 'work') {
                     if (selectedTreeItemId?.startsWith('chapter:')) setWorkViewer('chapter')
@@ -4627,6 +4621,16 @@ export default function StudioWorkspace() {
             )}
             </div>
           </div>
+          <StudioSettingsDialog
+            open={studioSettingsOpen}
+            section={studioSettingsSection}
+            onSectionChange={setStudioSettingsSection}
+            onClose={() => setStudioSettingsOpen(false)}
+            perspective={workspacePerspective}
+            onPerspectiveChange={setWorkspacePerspective}
+            autoFollow={autoFollow}
+            onAutoFollowChange={setAutoFollow}
+          />
 
           {activeToolPanel && activeToolPanel !== 'assistant' ? (
             <div className="fixed inset-0 z-40 hidden bg-[rgba(15,23,42,0.18)] md:block" onClick={() => setActiveToolPanel(null)}>

@@ -78,11 +78,14 @@ export default function WorkspaceNovelSwitcher({
       {open ? (
         /* 面板锚在按钮左边缘，按钮外侧还有壳层水平留白，宽度上限需同时扣掉左右两侧留白，
            否则窄屏机型上面板右侧会被壳层主区 overflow-hidden 裁掉 */
-        <div className="absolute left-0 top-full z-30 mt-2 w-[20rem] max-w-[calc(100vw-3rem)] overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[0_20px_48px_rgba(15,23,42,0.16)]">
+        <div className={cn(
+          'absolute left-0 top-full z-30 mt-2 overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[0_20px_48px_rgba(15,23,42,0.16)]',
+          fullWidth ? 'right-0 w-auto max-w-none' : 'w-[20rem] max-w-[calc(100vw-3rem)]',
+        )}>
           <div className="flex items-center justify-between gap-3 px-2 py-2">
             <div className="min-w-0">
               <p className="text-xs tracking-[0.08em] text-[var(--text-secondary)]">我的作品</p>
-              <p className="text-sm text-[var(--text-secondary)]">切换到你创建的其他作品，Agent 记录会一起恢复。</p>
+              <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-secondary)]">切换作品时会一起恢复对应的 Agent 任务。</p>
             </div>
           </div>
 
@@ -100,7 +103,7 @@ export default function WorkspaceNovelSwitcher({
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-medium text-[var(--text-primary)]">新建作品</span>
-              <span className="block text-xs text-[var(--text-secondary)]">立即创建一部新的作品并进入创作台</span>
+              <span className="block truncate text-xs text-[var(--text-secondary)]">立即创建并进入创作台</span>
             </span>
           </button>
 

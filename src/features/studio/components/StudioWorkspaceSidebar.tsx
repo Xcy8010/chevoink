@@ -8,13 +8,11 @@ import {
   Gauge,
   Gift,
   Home,
-  PanelLeftClose,
-  PanelLeftOpen,
   PenLine,
   Plus,
   Settings2,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import Avatar from '@/features/community/components/Avatar'
@@ -41,6 +39,8 @@ type Props = {
   onCreateNovel: () => void
   autoFollow: boolean
   onAutoFollowChange: (enabled: boolean) => void
+  taskArea?: ReactNode
+  onOpenStudioSettings: () => void
 }
 
 function getNovelTitle(novel: Novel) {
@@ -59,10 +59,7 @@ function formatCreditReset(value?: string | null) {
   return `${date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 重置`
 }
 
-/**
- * 桌面创作壳层的一级导航。作品与账户属于这里；任务对话仍由旁边独立细轨负责，
- * 避免把“切作品”和“切对话”揉成一棵难扫描的树。
- */
+/** 桌面创作壳层的融合导航：作品、当前作品任务与账户动作在同一条可滚动侧栏中。 */
 export default function StudioWorkspaceSidebar({
   open,
   onOpenChange,
@@ -78,11 +75,13 @@ export default function StudioWorkspaceSidebar({
   onCreateNovel,
   autoFollow,
   onAutoFollowChange,
+  taskArea,
+  onOpenStudioSettings,
 }: Props) {
   const navigate = useNavigate()
   const sessionUser = useShellStore((state) => state.sessionUser)
-  const [peekVisible, setPeekVisible] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [usageExpanded, setUsageExpanded] = useState(true)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteCopied, setInviteCopied] = useState(false)
   const [warningDismissed, setWarningDismissed] = useState(false)
@@ -158,22 +157,19 @@ export default function StudioWorkspaceSidebar({
     }
   }, [copyInvite, referralQuery.data?.inviteUrl])
 
-  const renderBody = (peek = false) => (
+  const renderBody = () => (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3">
         <ChevoinkAgentMark className="h-5 w-5 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight text-[var(--text-primary)]">Chevoink</span>
         <button
           type="button"
-          onClick={() => {
-            if (peek) setPeekVisible(false)
-            else onOpenChange(false)
-          }}
+          onClick={() => onOpenChange(false)}
           className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-          aria-label={peek ? '关闭临时侧栏' : '折叠左侧栏'}
-          title={peek ? '关闭临时侧栏' : '折叠左侧栏'}
+          aria-label="折叠左侧栏"
+          title="折叠左侧栏"
         >
-          {peek ? <ChevronLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          <ChevronLeft className="h-4 w-4" />
         </button>
       </div>
 
@@ -272,6 +268,7 @@ export default function StudioWorkspaceSidebar({
             )
           })}
         </div>
+        {perspective === 'work' && taskArea ? <div className="mt-3 border-t border-[var(--border-subtle)] pt-1">{taskArea}</div> : null}
       </div>
 
       <div className="relative shrink-0 border-t border-[var(--border-subtle)]" ref={accountMenuRef}>
@@ -295,13 +292,18 @@ export default function StudioWorkspaceSidebar({
             </div>
           </div>
         ) : null}
+        <div className="mx-2 mb-2 flex items-start gap-2 rounded-[10px] border border-emerald-700/15 bg-emerald-600 px-2.5 py-2 text-[11px] leading-4 text-white shadow-[0_6px_18px_rgba(5,150,105,0.16)]">
+          <Gift className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="font-medium">公测期间，每日送450credits！</span>
+        </div>
         <button
           type="button"
-          onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')}
+          onClick={() => { setAccountMenuOpen(true); setUsageExpanded((value) => !value) }}
           className="flex w-full items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)]"
+          aria-expanded={usageExpanded}
         >
           <Coins className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{summary?.planLabel ?? '公测版'}</span>
+          <span className="min-w-0 flex-1 truncate">剩余用量</span>
           <span className="shrink-0 tabular-nums text-[var(--text-primary)]">{summary ? `${remainingLabel(summary.totalRemaining)} Credits` : '读取中…'}</span>
         </button>
         <button
@@ -316,10 +318,16 @@ export default function StudioWorkspaceSidebar({
         </button>
 
         {accountMenuOpen ? (
-          <div className="absolute bottom-[calc(100%+6px)] left-2 right-2 z-50 border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_36px_rgba(15,23,42,0.16)]">
-            <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" />用量与 Credits</button>
+          <div className="absolute bottom-[calc(100%+6px)] left-2 right-2 z-50 overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--surface-default)_96%,#f6f0e7)] py-1 shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
+            <button type="button" onClick={() => setUsageExpanded((value) => !value)} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" /><span className="flex-1">剩余用量</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', usageExpanded && 'rotate-180')} /></button>
+            {usageExpanded ? <div className="mx-2 mb-1 rounded-[10px] bg-[var(--surface-muted)] px-3 py-2.5 text-[11px]">
+              <div className="flex items-end justify-between gap-3"><div><p className="text-[var(--text-tertiary)]">当前可用</p><p className="mt-0.5 text-base font-semibold tabular-nums text-[var(--text-primary)]">{summary ? remainingLabel(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p></div><span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span></div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"><div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${remainingPercent}%` }} /></div>
+              <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-tertiary)]"><span>每日 450 Credits</span><span>{formatCreditReset(summary?.resetsAt)}</span></div>
+              <button type="button" onClick={() => navigate('/account/usage')} className="mt-2 w-full text-left text-[10px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]">查看详细记录 →</button>
+            </div> : null}
             <button type="button" onClick={openInvite} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Gift className="h-3.5 w-3.5" />邀请好友</button>
-            <button type="button" onClick={() => navigate('/settings')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />设置</button>
+            <button type="button" onClick={() => { setAccountMenuOpen(false); onOpenStudioSettings() }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />创作区设置</button>
             <button type="button" onClick={() => navigate('/')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" />返回首页</button>
           </div>
         ) : null}
@@ -329,36 +337,11 @@ export default function StudioWorkspaceSidebar({
 
   return (
     <aside
-      className="relative z-30 h-full min-h-0 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)] transition-[width] duration-200 ease-out"
-      style={{ width: open ? 248 : 48 }}
-      onMouseEnter={() => { if (!open) setPeekVisible(true) }}
-      onMouseLeave={() => { if (!open) setPeekVisible(false) }}
+      className={cn('relative z-30 h-full min-h-0 shrink-0 overflow-hidden bg-[var(--app-bg)] transition-[width,border-color] duration-200 ease-out', open ? 'border-r border-[var(--border-subtle)]' : 'border-r border-transparent')}
+      style={{ width: open ? 284 : 0 }}
       data-workspace-sidebar={open ? 'open' : 'collapsed'}
     >
-      {open ? renderBody() : (
-        <div className="flex h-full flex-col items-center py-2">
-          <ChevoinkAgentMark className="mt-0.5 h-5 w-5" />
-          <button type="button" onClick={() => onOpenChange(true)} className="mt-3 inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="展开左侧栏" title="展开左侧栏"><PanelLeftOpen className="h-4 w-4" /></button>
-          <div className="my-3 h-px w-5 bg-[var(--border-subtle)]" />
-          <button type="button" onClick={() => onPerspectiveChange(perspective === 'work' ? 'ide' : 'work')} className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label={`切换到 ${perspective === 'work' ? 'IDE' : 'Work'}`} title={`切换到 ${perspective === 'work' ? 'IDE' : 'Work'}`}>{perspective === 'work' ? <BookOpenText className="h-4 w-4" /> : <PenLine className="h-4 w-4" />}</button>
-          <button type="button" onClick={() => onAutoFollowChange(!autoFollow)} className={cn('mt-1 inline-flex h-8 w-8 items-center justify-center rounded-[7px] hover:bg-[var(--surface-muted)]', autoFollow ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]')} aria-label="正文追踪" title="正文追踪"><Crosshair className="h-4 w-4" /></button>
-          <div className="mt-auto">
-            <Avatar name={sessionUser?.nickname ?? '创作者'} src={sessionUser?.avatarUrl} size="sm" className="h-7 w-7" />
-          </div>
-        </div>
-      )}
-
-      {!open ? (
-        <div
-          className={cn(
-            'absolute inset-y-0 left-0 z-40 w-[220px] border-r border-[var(--border-strong)] shadow-[14px_0_34px_rgba(15,23,42,0.10)] transition-[opacity,transform] duration-200 ease-out',
-            peekVisible ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-2 opacity-0',
-          )}
-          aria-hidden={!peekVisible}
-        >
-          {renderBody(true)}
-        </div>
-      ) : null}
+      {open ? renderBody() : null}
 
       <InviteCreditsDialog
         open={inviteOpen}
