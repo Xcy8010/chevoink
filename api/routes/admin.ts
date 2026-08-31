@@ -82,6 +82,16 @@ import {
   verifyCorpusSource,
 } from '../lib/agent/craft-library.js'
 import { getAgent3OperationsMetrics } from '../lib/agent/writing-experiments.js'
+import {
+  getAdminCreditsManagement,
+  getAdminModelManagement,
+  resetAdminUserCredits,
+  resetAdminUsersCredits,
+  resetAllAdminCredits,
+  setAdminUsersSuspended,
+  setCreditsGloballyPaused,
+  updateAdminModel,
+} from '../lib/admin-credit-model.js'
 
 const router = Router()
 
@@ -152,6 +162,29 @@ const agentEvalReviewSchema = z.object({
   notes: z.string().trim().max(2_000).optional(),
 })
 const corpusSourceRevokeSchema = z.object({ reason: z.string().trim().min(1).max(500) })
+const adminDangerActionSchema = z.object({
+  captchaId: nonEmptyText,
+  captchaAnswer: nonEmptyText,
+  confirmation: nonEmptyText,
+})
+const adminPauseCreditsSchema = adminDangerActionSchema.extend({ paused: z.boolean() })
+const adminBatchCreditsSchema = adminDangerActionSchema.extend({ userIds: z.array(z.string().trim().min(1).max(64)).min(1).max(200) })
+const adminBatchPauseCreditsSchema = adminBatchCreditsSchema.extend({ paused: z.boolean() })
+const modelReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+const adminModelUpdateSchema = z.object({
+  provider: z.string().trim().min(1).max(40).optional(),
+  displayName: z.string().trim().min(1).max(80).optional(),
+  modelName: z.string().trim().min(1).max(160).optional(),
+  baseUrl: z.string().trim().url().max(512).nullable().optional(),
+  apiKey: z.string().trim().min(8).max(2_000).optional(),
+  multiplier: z.number().min(0.1).max(100).optional(),
+  enabled: z.boolean().optional(),
+  selectable: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
+  reasoningEfforts: z.array(modelReasoningEffortSchema).min(1).max(7).optional(),
+  defaultReasoningEffort: modelReasoningEffortSchema.optional(),
+  visionEnabled: z.boolean().optional(),
+})
 
 function requireSuperAdmin(admin: { isSuperAdmin: boolean }): void {
   if (!admin.isSuperAdmin) {
@@ -951,7 +984,142 @@ router.get('/token-usage', async (req: Request, res: Response): Promise<void> =>
   const requestId = createRequestId()
   try {
     await requireAdmin(req)
-    res.status(200).json(buildSuccess(requestId, await getAdminTokenManagementData()))
+    const rawPeriod = typeof req.query.period === 'string' ? req.query.period : 'today'
+    const period = rawPeriod === 'week' || rawPeriod === 'month' ? rawPeriod : 'today'
+    res.status(200).json(buildSuccess(requestId, await getAdminTokenManagementData(period)))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/credits', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    await requireAdmin(req)
+    res.status(200).json(buildSuccess(requestId, await getAdminCreditsManagement()))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/users/:userId/reset', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminDangerActionSchema, req.body, '请完成人机验证并输入确认词。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    if (body.confirmation.trim() !== 'RESET_USER') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await resetAdminUserCredits(req.params.userId, admin.id)
+    await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_user', targetType: 'user', targetId: req.params.userId, detail: result, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/reset-all', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminDangerActionSchema, req.body, '请完成人机验证并输入确认词。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    if (body.confirmation.trim() !== 'RESET_ALL') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await resetAllAdminCredits(admin.id)
+    await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_all', targetType: 'creditSystem', targetId: 'global', detail: result, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/users/reset-selected', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminBatchCreditsSchema, req.body, '请选择用户并完成人机验证。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    if (body.confirmation.trim() !== 'RESET_SELECTED') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await resetAdminUsersCredits(body.userIds, admin.id)
+    await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_selected', targetType: 'users', targetId: `${result.users}`, detail: { ...result, userIds: body.userIds }, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/users/:userId/pause', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminPauseCreditsSchema, req.body, '请完成人机验证并输入确认词。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    const expected = body.paused ? 'PAUSE_USER' : 'RESUME_USER'
+    if (body.confirmation.trim() !== expected) throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await setAdminUsersSuspended([req.params.userId], body.paused)
+    await recordAdminAuditLog({ adminId: admin.id, action: body.paused ? 'credits.pause_user' : 'credits.resume_user', targetType: 'user', targetId: req.params.userId, detail: result, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/users/pause-selected', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminBatchPauseCreditsSchema, req.body, '请选择用户并完成人机验证。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    const expected = body.paused ? 'PAUSE_SELECTED' : 'RESUME_SELECTED'
+    if (body.confirmation.trim() !== expected) throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await setAdminUsersSuspended(body.userIds, body.paused)
+    await recordAdminAuditLog({ adminId: admin.id, action: body.paused ? 'credits.pause_selected' : 'credits.resume_selected', targetType: 'users', targetId: `${result.users}`, detail: { ...result, userIds: body.userIds }, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.post('/credits/pause', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminPauseCreditsSchema, req.body, '请完成人机验证并输入确认词。')
+    verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
+    const expected = body.paused ? 'PAUSE_ALL' : 'RESUME_ALL'
+    if (body.confirmation.trim() !== expected) throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
+    const result = await setCreditsGloballyPaused(body.paused)
+    await recordAdminAuditLog({ adminId: admin.id, action: body.paused ? 'credits.pause_all' : 'credits.resume_all', targetType: 'creditSystem', targetId: 'global', detail: result, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/models', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    await requireAdmin(req)
+    res.status(200).json(buildSuccess(requestId, await getAdminModelManagement()))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/models/:modelId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(adminModelUpdateSchema, req.body, '模型配置格式不正确。')
+    await updateAdminModel(req.params.modelId, body)
+    await recordAdminAuditLog({ adminId: admin.id, action: 'models.update', targetType: 'aiModelConfig', targetId: req.params.modelId, detail: { ...body, apiKey: body.apiKey ? '[REPLACED]' : undefined }, ip: getRequestIp(req) })
+    res.status(200).json(buildSuccess(requestId, { ok: true }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

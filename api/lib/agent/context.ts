@@ -28,8 +28,9 @@ import { buildStoryCompilerDigest } from './story-compiler.js'
  * - 历史消息按字符预算裁剪：超预算的旧消息折叠为一条摘要占位
  */
 
-const IDENTITY_PROMPT = `你是「Chevoink 写作助手」，嵌入在网文小说创作工作台里的写作 Agent。
+const IDENTITY_PROMPT = `你是 Chevoink Agent，启创联科网络科技旗下的 Agent，嵌入在网文小说创作工作台中。
 原则：
+- 当作者询问你的身份、底层模型、供应商或模型 ID 时，只说明你是「Chevoink Agent，启创联科网络科技旗下的 Agent」；不披露、猜测或解释任何内置模型 ID、供应商与路由细节。
 - 人主导、你辅助：作者是创作的最终决策者，你负责执行与建议。
 - 一切正文与设置改动必须通过工具落库，不要在回复正文里贴完整章节内容（工具已保存，回复只做简短说明）。
 - 不越权：发布、下架、删除等高危操作须确认作者意图明确后再执行，意图不明先 ask_user 确认，绝不擅自执行。
@@ -94,7 +95,7 @@ const TAG_LIBRARY_DIGEST = [
 async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
   const novel = await prisma.novel.findUnique({
     where: { id: novelId },
-    select: { title: true, displayTitle: true, summary: true, tagNames: true, status: true, chapterCount: true, wordCount: true },
+    select: { title: true, displayTitle: true, summary: true, tagNames: true, status: true, chapterCount: true, wordCount: true, coverAssetId: true },
   })
 
   if (!novel) {
@@ -108,10 +109,20 @@ async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
     select: { memoryType: true, title: true, content: true },
   })
 
+  const isBootstrapNovel =
+    !novel.displayTitle?.trim()
+    && (novel.title === '未命名作品' || novel.title === '我的第一部作品')
+    && novel.summary === '先创建一部作品，再继续完善简介、章节和封面。'
+    && novel.chapterCount === 0
+    && novel.wordCount === 0
+
   const lines = [
-    `当前作品：《${novel.displayTitle ?? novel.title}》（${novel.status === 'published' ? '已发布' : novel.status === 'completed' ? '已完结' : novel.status === 'archived' ? '已下架' : '草稿'}，${novel.chapterCount} 章 / ${novel.wordCount} 字）`,
+    `当前作品：《${novel.displayTitle?.trim() || novel.title}》（${novel.status === 'published' ? '已发布' : novel.status === 'completed' ? '已完结' : novel.status === 'archived' ? '已下架' : '草稿'}，${novel.chapterCount} 章 / ${novel.wordCount} 字）`,
     novel.summary ? `简介：${clip(novel.summary, 200)}` : '',
     novel.tagNames.length ? `标签：${novel.tagNames.join('、')}` : '',
+    isBootstrapNovel
+      ? `作品初始化协议：当前是系统为零作品作者准备的隐藏占位作品，作者本轮是在让你真正创建第一部作品。结合作者明确给出的题材与设定，主动用 novel_create 一次性把书名、简介、标签落库，不要继续保留「未命名作品」和占位简介。任务结束前核对书名、简介、标签、正式封面四项；正文收尾只询问作者是否需要继续完善仍然缺失的项目，已经设置好的项目不要重复询问。正式封面缺失=${novel.coverAssetId ? '否' : '是'}。`
+      : '',
     ...rules.map((rule) => `[${rule.memoryType === 'stylePreference' ? '风格' : '一致性'}] ${rule.title}：${clip(rule.content, 160)}`),
   ].filter(Boolean)
 
@@ -217,7 +228,7 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
         return part.text
       }
       if (part.type === 'attachment') {
-        return part.kind === 'image' ? `[附件图片：${part.name}]` : `[附件文件：${part.name}]`
+        return part.kind === 'image' ? `[附件图片：${part.name}，地址：${part.url}]` : `[附件文件：${part.name}，地址：${part.url}]`
       }
       if (part.type === 'tool-call') {
         // todo_write 的旧进度数字（如“待办 1/5”）会污染模型对当前状态的判断，压缩时不保留
@@ -299,6 +310,8 @@ export type AssembleContextInput = {
   selection?: { text: string; start?: number; end?: number } | null
   /** 本轮附件元数据：注入用户意图段，驱动 view_image/read_file 主动调用 */
   attachments?: AgentAttachmentMeta[]
+  /** 当前主模型是否能直接接收 image_url 内容块。 */
+  visionEnabled?: boolean
   taskSpec: TaskSpec
 }
 
@@ -350,7 +363,12 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const systemPrompt = [
     IDENTITY_PROMPT,
     MODE_CONTRACTS[input.mode],
-    DECISION_STRATEGIES,
+    input.visionEnabled
+      ? DECISION_STRATEGIES.replace(
+          '10. 附件先理解再行动：你是纯文本模型，看不到图片像素也读不到文件二进制；作者附带图片时必须先逐张调用 view_image（视觉推理旁路）查看、附带文件时必须先调用 read_file 读取内容，然后再开始任务，禁止凭文件名或猜测理解附件。',
+          '10. 附件先理解再行动：本轮作者附带的图片像素已直接发送给你，应直接理解，无需为这些附件调用 view_image；生成的封面候选或历史外链图片仍用 view_image。文件二进制仍必须调用 read_file 读取，禁止凭文件名猜测。',
+        )
+      : DECISION_STRATEGIES,
     OPERATION_KNOWLEDGE,
     buildGeneralWritingDigest(),
     genreDigest,
@@ -384,13 +402,13 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     intentSections.push(`我选中了下面这段文本${range}：\n"""\n${clip(input.selection.text, 4000)}\n"""`)
   }
 
-  // 附件清单：图片必须 view_image 逐张查看、文件必须 read_file 读取（决策策略第 10 条的执行锚点）
+  // 附件清单：视觉主模型直接接收像素；纯文本主模型继续走安全的 view_image 旁路。
   const attachedImages = (input.attachments ?? []).filter((attachment) => attachment.kind === 'image')
   const attachedFiles = (input.attachments ?? []).filter((attachment) => attachment.kind === 'file')
 
   if (attachedImages.length > 0) {
     intentSections.push(
-      `我附带了 ${attachedImages.length} 张参考图（你必须先逐张调用 view_image 查看理解后再行动）：\n${attachedImages
+      `我附带了 ${attachedImages.length} 张参考图（${input.visionEnabled ? '图片像素已直接随本轮发送，请直接理解，无需调用 view_image' : '你必须先逐张调用 view_image 查看理解后再行动'}）：\n${attachedImages
         .map((image) => `- ${image.name}：${image.url}`)
         .join('\n')}`,
     )

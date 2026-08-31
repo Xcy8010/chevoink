@@ -78,3 +78,22 @@ export function stopAgentRun(runId: string): boolean {
   active.controller.abort()
   return true
 }
+
+export function stopActiveRunsByUser(userId: string): number {
+  let stopped = 0
+  for (const run of activeRuns.values()) {
+    if (run.userId !== userId) continue
+    run.controller.abort()
+    stopped += 1
+  }
+  return stopped
+}
+
+export function stopAllActiveRuns(): number {
+  let stopped = 0
+  for (const run of activeRuns.values()) {
+    run.controller.abort()
+    stopped += 1
+  }
+  return stopped
+}

@@ -15,7 +15,7 @@ import { defineTool } from './types.js'
 
 /**
  * 附件理解工具（视觉旁路 + 文件提取）：
- * DeepSeek 主模型是纯文本模型，view_image 把图片发给 GLM 视觉模型换回文字描述（ds-vision-skill 模式），
+ * 纯文本主模型由 view_image 把图片发给视觉旁路换回描述；具备视觉能力的主模型可直接接收本轮附件，
  * read_file 用 pdf-parse/mammoth 提取上传文件文本。两者均为只读、三模式放行。
  */
 
@@ -158,7 +158,7 @@ export const viewImageTool = defineTool({
   name: 'view_image',
   title: '查看图片',
   description:
-    '查看并理解一张图片（作者附带的参考图、cover_generate 返回的封面候选图、novel_get_context 返回的正式封面地址，含历史遗留的外网封面链接）。你是纯文本模型，看不到图片像素；本工具把图片发给视觉推理模型，返回文字描述。作者消息附带参考图时必须先逐张调用本工具理解图片再开始任务；cover_generate 生成封面后必须对每张候选调用本工具校验画面是否符合提示词；作者询问当前封面效果时用正式封面地址调用本工具查看。url 接受本站附件/封面地址、封面候选的 coverAssetId 或 https 外网图片地址。',
+    '查看并理解一张图片（纯文本主模型收到的作者参考图、cover_generate 返回的封面候选图、novel_get_context 返回的正式封面地址，含历史外网封面链接）。本工具通过安全视觉旁路返回文字描述；若系统已说明本轮附件像素直接可见，不要为同一附件重复调用。cover_generate 后仍须查看候选以校验画面，作者询问当前封面效果时用正式封面地址查看。url 接受本站附件/封面地址、封面候选 coverAssetId 或 https 公网地址。',
   parameters: z.object({
     url: z
       .string()

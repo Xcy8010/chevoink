@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { StudioPayload } from '../../../../shared/contracts/index.js'
 import type { WorkspacePlanFile } from '../types'
+import { COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer } from '../agent/composer-content'
 
 function formatChapterTreeLabel(chapter: StudioPayload['chapters'][number]) {
   const normalizedTitle = chapter.title.trim()
@@ -165,8 +166,16 @@ export default function ChapterSidebar({
                         draggable={Boolean(onMovePlan)}
                         onDragStart={(event) => {
                           setDraggedItem({ kind: 'plan', id: plan.id })
-                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.effectAllowed = 'copyMove'
                           event.dataTransfer.setData('text/plain', `plan:${plan.id}`)
+                          event.dataTransfer.setData(COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer({
+                            id: `plan:${plan.id}`,
+                            kind: 'plan',
+                            name: plan.title.trim() || `计划 ${savedPlans.length - index}`,
+                            text: plan.content,
+                            startLine: 1,
+                            endLine: Math.max(1, plan.content.split('\n').length),
+                          }))
                         }}
                         onDragEnd={() => { setDraggedItem(null); setDropTarget(null) }}
                         onDragOver={(event) => {
@@ -281,8 +290,17 @@ export default function ChapterSidebar({
                         draggable={Boolean(onMoveChapter)}
                         onDragStart={(event) => {
                           setDraggedItem({ kind: 'chapter', id: chapter.id })
-                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.effectAllowed = 'copyMove'
                           event.dataTransfer.setData('text/plain', `chapter:${chapter.id}`)
+                          event.dataTransfer.setData(COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer({
+                            id: `chapter:${chapter.id}`,
+                            kind: 'chapter',
+                            name: formatChapterTreeLabel(chapter),
+                            // 作品树列表为轻量 ChapterListItem，不携带正文；输入框接收后按 id 懒取全文。
+                            text: '',
+                            startLine: 1,
+                            endLine: 1,
+                          }))
                         }}
                         onDragEnd={() => { setDraggedItem(null); setDropTarget(null) }}
                         onDragOver={(event: DragEvent<HTMLDivElement>) => {

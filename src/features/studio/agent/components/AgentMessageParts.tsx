@@ -54,9 +54,12 @@ function ToolTargetLink({
   return (
     <button
       type="button"
-      onClick={onNavigate}
+      onClick={(event) => {
+        event.stopPropagation()
+        onNavigate()
+      }}
       title={`打开《${title}》`}
-      className="inline cursor-pointer font-medium text-[var(--text-primary)] underline decoration-transparent decoration-1 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-current focus-visible:decoration-current focus-visible:outline-none"
+      className="inline cursor-pointer font-medium text-[var(--text-primary)] underline-offset-[3px] hover:underline focus-visible:underline focus-visible:outline-none"
     >
       {title}
     </button>
@@ -140,9 +143,12 @@ function DiffCard({
         {onNavigateTarget ? (
           <button
             type="button"
-            onClick={onNavigateTarget}
+            onClick={(event) => {
+              event.stopPropagation()
+              onNavigateTarget()
+            }}
             title={`打开《${display.chapterTitle}》`}
-            className="relative z-10 min-w-0 truncate text-xs font-medium text-[var(--text-primary)] underline decoration-transparent decoration-1 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-current focus-visible:decoration-current focus-visible:outline-none"
+            className="relative z-10 min-w-0 truncate text-xs font-medium text-[var(--text-primary)] underline-offset-[3px] hover:underline focus-visible:underline focus-visible:outline-none"
           >
             {display.chapterTitle}
           </button>
@@ -700,7 +706,7 @@ const WRITE_TOOL_NAMES = new Set([
   'changeset_apply', 'changeset_rollback', 'directive_save', 'directive_supersede',
   'memory_save', 'memory_relation_save', 'memory_event_save',
   'plan_save', 'plan_rename', 'plan_delete',
-  'novel_rename', 'novel_update_meta', 'cover_prompt_set', 'cover_apply',
+  'novel_create', 'novel_rename', 'novel_update_meta', 'cover_prompt_set', 'cover_apply',
   'novel_publish', 'novel_archive', 'novel_delete',
 ])
 const NAVIGABLE_TOOL_NAMES = new Set(['chapter_create', 'chapter_write', 'chapter_append', 'chapter_edit_range', 'plan_save', 'plan_rename'])

@@ -131,14 +131,33 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 1.6 数据模型概览（prisma/schema.prisma）
 
-29 张表，按域划分：
+80 张表，按域划分（以下列核心表，完整定义以 schema 为准）：
 
-- **账号**：User、SmsVerificationCode、AdminAuditLog
+- **账号与额度**：User、SmsVerificationCode、AdminAuditLog、CreditAccount、CreditLedgerEntry、ReferralCode、ReferralRedemption、CreditSystemSetting、AiModelConfig
 - **创作与阅读**：Novel、Chapter、CoverAsset、ReadingProgress、NovelRead、ParagraphUnderline、NovelFavorite
 - **推荐**：RecommendationEvent
 - **社区互动**：Post、Topic、PostTopic、PostLike、PostBookmark、Comment、CommentLike、UserFollow
 - **私信**：Conversation、ConversationMember、Message
-- **Agent**：AgentSession、AgentRun、AgentMessage、AgentRunEvent、AgentArtifact、ProjectMemoryEntry、AiUsageLog
+- **Agent**：AgentSession、AgentRun、AgentMessage、AgentRunEvent、AgentArtifact、ProjectMemoryEntry、AiUsageLog、StoryBranch、AgentSubtask、AgentSchedule、AgentEvalComparison
+
+### 1.7 Credits、邀请与模型路由
+
+- **精度与计费**：数据库统一存 milli-credit（1000 milli = 1 Credit），避免浮点累计误差。文本采用绑定池公式 `ceil(max(inputTokens, outputTokens × 10) × multiplierBps / 100000)` milli；因此 1 Credit 同时包含 10,000 输入 Token 与 1,000 输出 Token，按两者使用比例较大值计费，不做双重相加。生图和联网搜索分别按 6 / 2 Credits 固定扣费。
+- **每日窗口**：公测日额度为 450 Credits，窗口在 UTC+8 15:00 滚动重置；邀请奖励存于 bonus balance，永不被日重置清空。跨日退款把旧窗口的日额度退款转入 bonus，防止 `dailyUsed` 变成负数。
+- **并发与幂等**：扣费在 Serializable 事务中执行，每条调用使用唯一 `idempotencyKey`；冲突最多自动重试三次。固定价工具必须先有足额额度；文本调用在拿到 provider usage 后记账，余额不足时扣至零并停止后续 Agent 轮次。
+- **邀请约束**：用户拥有唯一邀请码；注册与奖励写入同一事务。`ReferralRedemption.inviteeUserId` 唯一，确保只有新用户在首次注册时兑现一次，邀请人 +300、被邀请人 +120。
+- **模型路由**：用户端只暴露档位名、倍率、视觉能力与支持的推理强度，不返回内置模型 ID；默认推理为 high，服务端逐模型校验。极速 / 标准 / 性能 / 极致分别为 1.0x / 1.1x / 1.8x / 4.8x，后三档必须同时具备模型 ID、Base URL 和加密 API Key 才可选。支持图片的主模型直接接收受管图片 `image_url`，纯文本模型自动走安全视觉旁路。关系网、导出等内部 AI 功能不继承用户高倍率选择，默认走极速。BYOK 自定义模型不消耗平台 Credits，但仍受全局暂停和账户封禁控制。
+- **密钥安全**：内置与用户自定义 API Key 使用 AES-256-GCM 加密后落库；接口只返回 `apiKeyConfigured`，更新时空值代表保持原密钥，任何读取路径都不回显明文。生产环境使用独立 `MODEL_CONFIG_ENCRYPTION_KEY`。
+- **入口与管理**：`/api/credits/*` 提供余额、账本、邀请和自定义模型；`/account/usage` 是当前唯一公开的账户子页。后台 Credits 操作采用验证码人机校验 + 确认词双门，支持单用户或批量重置、暂停和恢复，另保留全局暂停；Token 管理以 UTC+8 自然日/周/月聚合模型 Token 和固定价工具次数。
+
+### 1.8 Agent 生产力与治理层
+
+- **任务管理**：`AgentSession.pinnedAt/status` 支持置顶与归档；服务端按标题和作品名全文检索，可不传 `novelId` 获取跨作品最近任务。
+- **版本分支**：`StoryBranch` 保存章节基线 revision、基线正文与分支正文。合并在事务内用 `updateMany(id + revision)` 乐观锁；冲突返回 409，不会覆盖源章节的新版本，同时按字数差原子更新作品统计。
+- **专业子 Agent**：调研、一致性、质量、设定分别使用独立会话、独立 run 与工具白名单；用户设置的 Token 预算与全局预算取较小值，取消复用运行中止链路，轨迹复用持久化 SSE 回放。
+- **长期任务**：`AgentSchedule` 持久化提示词、周期和下次运行时间；执行前以数据库条件锁抢占，同一到期任务不会被重复领取，执行冲突会延后重试。
+- **权限沙箱**：会话保存网络、正文写入、批量改写、发布、破坏性操作五类策略及 read-only/workspace/full-access 档位；工具列表在服务端生成后再次过滤，`ask` 改写为运行时审批，`deny` 直接不向模型暴露。
+- **回放评测**：`AgentEvalComparison` 固化 2–4 个真实 run 的模型档位、推理强度、Token、状态、耗时与摘要；详细轨迹仍读取同一 `AgentRunEvent` 流。
 
 ---
 
@@ -158,6 +177,8 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 幻觉治理 | 知识集（世界观/人物卡）+ Skill 注入 + 联网调研预算 | `plan/14`：先读事实再动笔，预算防跑飞 |
 | 联网搜索 | 博查为主引擎的多级降级策略 | 单一引擎故障时自动切换，保证调研链路可用 |
 | 图像理解 | 智谱 GLM-4.1V 视觉旁路 + 进程内并发信号量（默认 4） | 免费档并发 5，留 1 缓冲（`api/config/env.ts`） |
+| Credits 账本 | milli-credit 整数账本 + Serializable 事务 + 幂等键 | 精确表达小额 Token 成本，并阻止并发重复扣费、重复邀请奖励与跨日退款负数 |
+| 模型密钥 | AES-256-GCM 加密落库，只替换不回显 | 数据库泄露时不直接暴露供应商 API Key；独立主密钥便于运维轮换 |
 | 大文件治理 | 模块级拆分只搬无状态/纯逻辑，tsc 全量为权威验证 | 本轮冲刺完成：run-service 1447→1043 行、write-tools 826→285 行、loop 903→837 行、AgentPanel 1096→1020 行 |
 | 前端组件拆分纪律 | 无测试覆盖的组件本体一律不拆，仅抽模块级纯声明 | 任何 JSX 切割在无覆盖下都是回归风险；拆出的纯函数补护栏单测 |
 | 一键导出 | 服务端零依赖 ZIP writer（store 不压缩）+ 番茄词表共享契约 | 不引入 jszip（产物纯文本为主，store 模式够用）；词表固化于 `shared/contracts/fanqie-tags.ts` 双端共用，AI 发布建议输出强制钳制到官方词表不自创标签；AI 不可用时降级文案不阻断导出 |
@@ -220,7 +241,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 ```
 
 - PM2 配置：`ecosystem.config.cjs`；远端脚本：`deploy/deploy-production.sh`。
-- 数据库迁移走 `prisma migrate deploy`（当前 26 次迁移；本地新增迁移将在正式发布时随部署脚本应用）。
+- 数据库迁移走 `prisma migrate deploy`（当前 41 次迁移；新增 Credits/模型基础迁移会在正式发布时随部署脚本应用）。
 - 发布 Tag 与 APK：`scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk路径>`。
 
 ### 4.2 生产环境形态
@@ -242,7 +263,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 域 | 变量 | 说明 |
 | --- | --- | --- |
 | 应用 | `APP_NAME` / `APP_ENV` / `APP_PORT` / `APP_WEB_URL` / `APP_SERVER_URL` | 服务标识与跨域基址 |
-| 数据库与会话 | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma 连接串与 Cookie 会话签名 |
+| 数据库与会话 | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `MODEL_CONFIG_ENCRYPTION_KEY` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma 连接串、Cookie 会话签名与模型密钥加密主密钥 |
 | 短信 | `SMS_TENCENT_*` + 发码策略（长度 6 / 有效期 300s / 冷却 60s / 小时限 5） | 腾讯云 SMS 登录验证码 |
 | 文本生成 | `AI_TEXT_BASE_URL` / `AI_TEXT_API_KEY` / `AI_TEXT_MODEL` / `AI_TEXT_MAX_OUTPUT_TOKENS` | DeepSeek；单轮输出上限默认 8192 防长章截断 |
 | Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS`（默认 100）/ `AGENT_RUN_TOKEN_BUDGET`（默认 200 万）/ `AGENT_AUTO_APPROVE` | 轮次与 token 预算配合上下文瘦身防爆窗 |
@@ -291,7 +312,9 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 鉴权边界 | 所有写端点 401 优先于 400（未登录先拒，不泄露校验细节）；zod 校验统一文案 |
 | 限流 | 短信发码 IP 双窗口（小时/天）；admin 登录 IP+账号双键失败锁定；TTS 合成同 IP 每分钟 20 次；限流 Map 超上限清空防无界增长 |
 | 密钥 | 全部经 `.env` 注入（模板 `.env.example`）；`.env`、证书、密钥库均被 `.gitignore` 排除（`plan/08`） |
-| Agent | 工具权限分级（读/写/危险）；每 run 预算封顶（ask_user 3、联网搜索 5、网页深读 8、站内搜索 5、站内深读 8）；AiUsageLog 全量记录 token 消耗；AdminAuditLog 记录后台高危操作 |
+| Agent | 工具权限分级（读/写/危险）+ 会话级服务端沙箱；每 run/子 Agent 预算封顶（ask_user 3、联网搜索 5、网页深读 8、站内搜索 5、站内深读 8）；AiUsageLog 全量记录 token 消耗；AdminAuditLog 记录后台高危操作 |
+| 额度与邀请 | 日重置由 `periodEndsAt <= now` 条件更新保证幂等；受邀用户唯一约束 + 注册奖励同事务 + 账本幂等键阻止刷新、重试或并发重复领取 |
+| 模型密钥 | API Key 使用 AES-256-GCM 加密；普通接口只返回是否配置；`.env.example` 仅含占位符，不含真实密钥 |
 | 依赖 | CI 与部署双闸门 `npm audit --omit=dev --audit-level=high`；当前 **0 漏洞** |
 
 ### 6.2 明确的风险取舍（书面记录）
@@ -345,6 +368,7 @@ Studio / Agent 2.0 桌面与记忆体验（2026-08-26）已落地：
 - 每轮 Agent 对话结束后按阈值自动压缩上下文；关系网已存在时直接复用，避免每个任务重复消耗 Token。
 
 Agent 流式写入与用量治理（2026-08-30）已落地：最终答复与长文工具参数均通过 SSE 增量展示，工具写入期对应章节/计划为只读并可点击工具记录定位；管理后台以 `AiUsageLog` 为模型 Token 唯一计量源，支持用户排行、作品/会话/任务下钻及联网、生图次数统计。
+- 2026-08-31 的 Agent 入口改为零作品也直接进入完整工作台：系统建立不会公开展示的占位作品，首轮提示驱动 Agent 使用 `novel_create` 原子动作完善作品；该动作同时校验用户与占位状态，普通作品无法重复调用。空任务统一使用带作品语境的随机建议，建议点击只写入草稿。首次创建收尾按实际缺项询问书名、简介、标签和封面，Work、IDE、手机共用同一空状态组件。
 - Work 四区展开采用对话 / 查看器 / 作品检查区的响应式比例，查看器统一承载章节、目录与计划；默认比例收敛后仍允许用户继续拖拽自定义；
 - 上下文页改为会话真实 token 窗口，展示占用率、自动压缩阈值、有效要求、检查点摘要与硬约束保留率，并提供空闲期手动压缩；
 - 会话历史按“最新 500 条→时间正序”恢复，消息写入采用幂等 upsert 与三次短重试；前端记录已恢复会话，视图切换不再用旧历史响应覆盖直播末尾总结；

@@ -37,6 +37,51 @@ export async function recalcNovelStats(novelId: string) {
   })
 }
 
+export const novelCreateTool = defineTool({
+  name: 'novel_create',
+  title: '创建作品',
+  description: `仅用于作者还没有任何正式作品时，把系统准备的隐藏占位作品原子化初始化为第一部作品。应结合用户给出的题材和设定生成书名、简介与标签；标签必须来自站内统一标签库，最多 ${MAX_NOVEL_TAGS} 个。普通作品不能调用此工具。`,
+  parameters: z.object({
+    title: z.string().min(1).max(120).describe('作品名称'),
+    summary: z.string().min(1).max(1000).describe('作品简介'),
+    tags: z.array(z.string().min(1).max(24)).min(1).max(MAX_NOVEL_TAGS).describe(`站内标签，最多 ${MAX_NOVEL_TAGS} 个`),
+  }),
+  permission: WRITE_PERMISSION,
+  readOnly: false,
+  async execute(ctx, args) {
+    const novel = await prisma.novel.findFirst({
+      where: { id: ctx.novelId, authorId: ctx.userId },
+      select: { title: true, displayTitle: true, summary: true, chapterCount: true, wordCount: true },
+    })
+    if (!novel) return { output: '未找到当前作品。' }
+
+    const isBootstrap =
+      !novel.displayTitle?.trim()
+      && (novel.title === '未命名作品' || novel.title === '我的第一部作品')
+      && novel.summary === '先创建一部作品，再继续完善简介、章节和封面。'
+      && novel.chapterCount === 0
+      && novel.wordCount === 0
+    if (!isBootstrap) return { output: '当前已是正式作品，不能重复执行创建作品。如需调整，请使用重命名或更新作品设置。' }
+
+    const dedupedTags = [...new Set(args.tags.map((tag) => tag.trim()).filter(Boolean))]
+    const rejectedTags = dedupedTags.filter((tag) => !ALL_NOVEL_TAGS.includes(tag))
+    if (rejectedTags.length > 0) {
+      return { output: `作品未创建：标签「${rejectedTags.join('、')}」不在站内标签库中，请改用上下文给出的标签。` }
+    }
+
+    const title = args.title.trim()
+    await prisma.novel.update({
+      where: { id: ctx.novelId },
+      data: { title, displayTitle: title, summary: args.summary.trim(), tagNames: dedupedTags.slice(0, MAX_NOVEL_TAGS) },
+    })
+    return {
+      output: `已创建作品《${title}》，并写入简介与标签。`,
+      summary: `创建作品《${title}》`,
+      snapshot: { target: 'novel', targetId: ctx.novelId, field: 'title', previousValue: novel.title },
+    }
+  },
+})
+
 export const novelRenameTool = defineTool({
   name: 'novel_rename',
   title: '重命名作品',

@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Check,
   ChevronLeft,
@@ -17,6 +17,7 @@ import {
   UserRoundCheck,
   Users,
   X,
+  Cpu,
 } from 'lucide-react'
 
 import { ApiClientError, requestJson } from '@/app/api-client'
@@ -55,6 +56,7 @@ import {
   type SettingsDialogState,
 } from './settings/privacy'
 import { SectionTitle, SettingsRow } from './settings/settings-row'
+import CustomModelSettingsDialog from '@/features/account/CustomModelSettingsDialog'
 
 /** 等待指定毫秒（检测更新动画至少展示 1.5 秒，哪怕请求提前返回） */
 function delay(ms: number): Promise<void> {
@@ -65,6 +67,7 @@ function delay(ms: number): Promise<void> {
 
 export default function SettingsPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const toast = useToast()
   const { isMobile } = useDevice()
   const theme = useShellStore((state) => state.theme)
@@ -105,6 +108,7 @@ export default function SettingsPage() {
   /** 退出登录二次确认弹窗 */
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const [logoutSubmitting, setLogoutSubmitting] = useState(false)
+  const [customModelsOpen, setCustomModelsOpen] = useState(() => searchParams.get('section') === 'models')
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
@@ -838,6 +842,21 @@ export default function SettingsPage() {
 
       {/* 分组三：显示 */}
       <section>
+        <SectionTitle>AI 与模型</SectionTitle>
+        <div className="divide-y divide-[var(--border-subtle)]">
+          <SettingsRow
+            icon={<Cpu className="h-[18px] w-[18px]" />}
+            title="自定义模型"
+            caption="配置自己的 OpenAI 兼容模型与 API Key"
+            value="管理"
+            chevron="right"
+            onClick={() => setCustomModelsOpen(true)}
+          />
+        </div>
+      </section>
+
+      {/* 分组三：显示 */}
+      <section>
         <SectionTitle>显示</SectionTitle>
         {appearanceRows}
       </section>
@@ -886,6 +905,8 @@ export default function SettingsPage() {
       {clientSection}
 
       {clientDialog}
+
+      <CustomModelSettingsDialog open={customModelsOpen} onClose={() => setCustomModelsOpen(false)} />
 
       {/* 退出登录二次确认弹窗 */}
       <ConfirmDialog

@@ -1,6 +1,6 @@
 import type { Response } from 'express'
 
-import type { AgentRun as AgentRunRecord } from '@prisma/client'
+import type { AgentRun as AgentRunRecord, Prisma } from '@prisma/client'
 
 import type {
   AgentActionHandoff,
@@ -25,6 +25,7 @@ import type {
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import { DataAccessError, prisma } from '../prisma.js'
+import { assertCreditAccess, getModelTierRuntime } from '../credits.js'
 import { getRunEventBus, loadPersistedEvents } from './events.js'
 import {
   countActiveRunsByUser,
@@ -59,6 +60,10 @@ export async function startLoopRun(
     throw new DataAccessError(400, 'VALIDATION_ERROR', '会话与作品不匹配。')
   }
 
+  const modelTier = input.modelTier ?? 'speed'
+  await assertCreditAccess(userId, modelTier)
+  const modelRuntime = await getModelTierRuntime(modelTier, userId, input.customModelId, input.reasoningEffort)
+
   // 同一 session 仅允许 1 个进行中的 run；单用户全局并发受 env 限制
   if (hasActiveRunInSession(session.id)) {
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行，请先停止或等待完成。')
@@ -82,6 +87,15 @@ export async function startLoopRun(
     }
   }
 
+  const agentType = input.agentProfile === 'research'
+    ? 'storyPlanner'
+    : input.agentProfile === 'continuity'
+      ? 'continuityEditor'
+      : input.agentProfile === 'quality'
+        ? 'styleEditor'
+        : input.agentProfile === 'lore'
+          ? 'loreLibrarian'
+          : 'writingOrchestrator'
   const run = await prisma.agentRun.create({
     data: {
       sessionId: session.id,
@@ -91,10 +105,13 @@ export async function startLoopRun(
       // DB 枚举 act ↔ 契约 build
       mode: input.mode === 'build' ? 'act' : input.mode,
       action: 'workspaceAgent',
-      agentType: 'writingOrchestrator',
+      agentType,
       status: 'queued',
       engine: 'loop',
       inputSummary: input.prompt.slice(0, 300),
+      modelTier,
+      customModelId: modelTier === 'custom' ? input.customModelId : null,
+      reasoningEffort: modelRuntime.reasoningEffort,
     },
   })
 
@@ -113,6 +130,11 @@ export async function startLoopRun(
     attachments: input.attachments ?? [],
     creativeFreedom: input.creativeFreedom ?? 'balanced',
     qualityMode: input.qualityMode ?? 'premium',
+    modelTier,
+    customModelId: modelTier === 'custom' ? input.customModelId : null,
+    reasoningEffort: modelRuntime.reasoningEffort,
+    agentType: input.agentProfile ?? 'orchestrator',
+    tokenBudget: input.tokenBudget,
   })
 
   return {
@@ -352,6 +374,9 @@ export async function continueLoopRun(
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行。')
   }
 
+  await assertCreditAccess(userId, run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier)
+  await getModelTierRuntime(run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier, userId, run.customModelId, run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort)
+
   void executeAgentRun({
     runId: run.id,
     sessionId: run.sessionId,
@@ -361,6 +386,9 @@ export async function continueLoopRun(
     mode: run.mode === 'act' ? 'build' : run.mode,
     prompt: run.inputSummary ?? '请继续完成之前的任务。',
     resume: true,
+    modelTier: run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier,
+    customModelId: run.customModelId,
+    reasoningEffort: run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort,
   })
 
   return {
@@ -686,6 +714,10 @@ function toAgentSession(record: {
   novelId: string
   title: string
   status: AgentSession['status']
+  pinnedAt?: Date | string | null
+  toolPolicy?: unknown
+  sandboxMode?: string
+  novel?: { title: string; displayTitle: string | null }
   lastRunAt?: Date | string | null
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
@@ -696,6 +728,10 @@ function toAgentSession(record: {
     novelId: record.novelId,
     title: record.title,
     status: record.status,
+    pinnedAt: toIso(record.pinnedAt),
+    toolPolicy: record.toolPolicy as AgentSession['toolPolicy'] ?? null,
+    sandboxMode: record.sandboxMode === 'read_only' || record.sandboxMode === 'full_access' ? record.sandboxMode : 'workspace',
+    novelTitle: record.novel?.displayTitle?.trim() || record.novel?.title,
     lastRunAt: toIso(record.lastRunAt),
     createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
     updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
@@ -888,13 +924,18 @@ function buildAgentRunResultPayload(
   }
 }
 
-export async function listAgentSessionsData(userId: string, novelId?: string) {
+export async function listAgentSessionsData(userId: string, novelId?: string, options?: { query?: string; includeArchived?: boolean }) {
+  const query = options?.query?.trim()
   const items = await prisma.agentSession.findMany({
     where: {
       userId,
       ...(novelId ? { novelId } : {}),
+      ...(options?.includeArchived ? {} : { status: 'active' }),
+      ...(query ? { OR: [{ title: { contains: query, mode: 'insensitive' } }, { novel: { title: { contains: query, mode: 'insensitive' } } }, { novel: { displayTitle: { contains: query, mode: 'insensitive' } } }] } : {}),
     },
-    orderBy: [{ updatedAt: 'desc' }],
+    include: { novel: { select: { title: true, displayTitle: true } } },
+    orderBy: [{ pinnedAt: 'desc' }, { updatedAt: 'desc' }],
+    take: 100,
   })
 
   // 空且未命名的会话不进入列表：只有产生过对话（lastRunAt）或已被命名的会话才保留展示
@@ -930,14 +971,14 @@ export async function updateAgentSessionData(
   const session = await ensureOwnedSession(userId, sessionId)
   const nextTitle = input.title?.trim()
 
-  if (!nextTitle) {
-    throw new DataAccessError(400, 'VALIDATION_ERROR', '请提供会话标题。')
-  }
-
   const updatedSession = await prisma.agentSession.update({
     where: { id: session.id },
     data: {
-      title: nextTitle.slice(0, 160),
+      title: nextTitle ? nextTitle.slice(0, 160) : undefined,
+      status: input.status,
+      pinnedAt: input.pinned === undefined ? undefined : input.pinned ? new Date() : null,
+      toolPolicy: input.toolPolicy as Prisma.InputJsonValue | undefined,
+      sandboxMode: input.sandboxMode,
     },
   })
 

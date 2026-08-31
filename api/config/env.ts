@@ -48,6 +48,7 @@ export const env = {
   authAccessTokenExpiresIn: process.env.AUTH_ACCESS_TOKEN_EXPIRES_IN ?? '15m',
   authRefreshTokenExpiresIn: process.env.AUTH_REFRESH_TOKEN_EXPIRES_IN ?? '30d',
   authSessionSecret: process.env.AUTH_SESSION_SECRET ?? '',
+  modelConfigEncryptionKey: process.env.MODEL_CONFIG_ENCRYPTION_KEY ?? '',
   authCookieDomain: process.env.AUTH_COOKIE_DOMAIN ?? '',
   authCookieSecure: parseBoolean(process.env.AUTH_COOKIE_SECURE, false),
   smsTencentSecretIdConfigured: isConfigured(process.env.SMS_TENCENT_SECRET_ID),

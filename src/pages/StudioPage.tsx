@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import AppState from '@/components/ui/AppState'
@@ -17,6 +17,7 @@ export default function StudioPage() {
   const { novelId } = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const bootstrapRequestedRef = useRef(false)
 
   const meQuery = useQuery({
     queryKey: ['community', 'me'],
@@ -98,6 +99,16 @@ export default function StudioPage() {
     navigate(`/studio/novel/${studioEntryNovelId}`, { replace: true })
   }, [meQuery.isSuccess, navigate, novelId, studioEntryNovelId])
 
+  // 零作品用户直接进入完整 Agent 工作台。占位作品不会出现在公开作品列表中，
+  // 首次真正发送后由 Agent 按提示补齐书名、简介与标签；示例点击本身不会创建额外作品。
+  useEffect(() => {
+    if (novelId || !meQuery.isSuccess || studioEntryNovelId || createNovelMutation.isPending || createNovelMutation.isSuccess || bootstrapRequestedRef.current) {
+      return
+    }
+    bootstrapRequestedRef.current = true
+    createNovelMutation.mutate()
+  }, [createNovelMutation, meQuery.isSuccess, novelId, studioEntryNovelId])
+
   if (novelId) {
     return <StudioWorkspace />
   }
@@ -134,27 +145,6 @@ export default function StudioPage() {
           label: '重新创建',
           onClick: () => {
             createNovelMutation.reset()
-            createNovelMutation.mutate()
-          },
-        }}
-        className="min-h-[360px]"
-      />
-    )
-  }
-
-  if (meQuery.isSuccess && !studioEntryNovelId) {
-    return (
-      <AppState
-        tone="empty"
-        title="当前没有作品"
-        description="点击新建一个作品吧！"
-        primaryAction={{
-          label: createNovelMutation.isPending ? '正在创建作品...' : '新建一个作品',
-          onClick: () => {
-            if (createNovelMutation.isPending) {
-              return
-            }
-
             createNovelMutation.mutate()
           },
         }}

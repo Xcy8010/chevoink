@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CommentTargetType, FollowUserItem, InteractionBadges, InteractionItem, Post, PrivacyLevel, PrivacySettings, ProfileVisibility, ReceivedLikeItem, User, UserMePayload, UserReplyItem } from '../../../shared/contracts/index.js'
 import { createUnsetPasswordHash, hashPassword, isLegacyPasswordHash, verifyPassword } from '../password.js'
+import { initializeNewUserCredits } from '../credits.js'
 import { evictUserBanCache } from '../auth-session.js'
 import { normalizePhoneNumber } from '../phone.js'
 import { DataAccessError, prisma } from '../prisma.js'
@@ -805,6 +806,7 @@ export async function registerUserData(input: {
   phone?: string
   nickname?: string
   password?: string
+  referralCode?: string
 }): Promise<User> {
   const email = input.email?.trim() || undefined
   const phone = input.phone ? normalizePhoneNumber(input.phone) : undefined
@@ -831,18 +833,22 @@ export async function registerUserData(input: {
     throw new DataAccessError(409, 'AUTH_ACCOUNT_EXISTS', '该账号或昵称已被使用。')
   }
 
-  const created = await prisma.user.create({
-    data: {
-      id: randomUUID(),
-      email: email ?? null,
-      phone: phone ?? null,
-      passwordHash: password ? hashPassword(password) : createUnsetPasswordHash(),
-      nickname,
-      avatarUrl: null,
-      bio: null,
-      role: 'user',
-      isAuthor: false,
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        id: randomUUID(),
+        email: email ?? null,
+        phone: phone ?? null,
+        passwordHash: password ? hashPassword(password) : createUnsetPasswordHash(),
+        nickname,
+        avatarUrl: null,
+        bio: null,
+        role: 'user',
+        isAuthor: false,
+      },
+    })
+    await initializeNewUserCredits(tx, user.id, input.referralCode)
+    return user
   })
 
   return toUser(created)

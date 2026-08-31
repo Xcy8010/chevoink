@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -49,6 +49,22 @@ export function resolveManagedAttachmentPath(url: string): string | null {
     return null
   }
   return path.join(getAttachmentDirectory(), basename)
+}
+
+/** 仅供已声明视觉能力的主模型直传；仍复用本站托管前缀白名单，绝不接受任意路径或 URL。 */
+export async function readManagedImageDataUrl(url: string): Promise<string | null> {
+  const diskPath = resolveManagedAttachmentPath(url)
+  if (!diskPath) return null
+  const extension = path.extname(diskPath).slice(1).toLowerCase()
+  const mime = extension === 'png' ? 'image/png' : extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : extension === 'webp' ? 'image/webp' : null
+  if (!mime) return null
+  try {
+    const buffer = await readFile(diskPath)
+    if (!buffer.length || buffer.byteLength > MAX_AGENT_IMAGE_BYTES) return null
+    return `data:${mime};base64,${buffer.toString('base64')}`
+  } catch {
+    return null
+  }
 }
 
 function parseImageDataUrl(dataUrl: string): { mimeType: SupportedImageMimeType; buffer: Buffer } {

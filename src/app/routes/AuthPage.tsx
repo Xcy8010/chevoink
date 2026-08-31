@@ -98,6 +98,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const toast = useToast()
 
   const redirectPath = useMemo(() => normalizeRedirectPath(searchParams.get('redirect')), [searchParams])
+  const referralCode = useMemo(() => searchParams.get('ref')?.trim().toUpperCase() || undefined, [searchParams])
   const isRegisterPage = mode === 'register'
 
   const [loginMethod, setLoginMethod] = useState<LoginMethod>(isRegisterPage ? 'sms' : 'password')
@@ -243,6 +244,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
               body: JSON.stringify({
                 phone: buildPhoneSubmitValue(phone),
                 code: code.trim(),
+                referralCode,
               } satisfies SmsRegisterRequest),
             })
           : await requestJson<AuthSessionPayload>('/api/auth/sms/login', {

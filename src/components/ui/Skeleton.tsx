@@ -278,7 +278,7 @@ export function StudioSkeleton() {
           <div className="h-[126px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-4" data-studio-region="mobile-composer">
             <Skeleton className="h-3.5 w-3/4" />
             <div className="mt-12 flex items-center gap-3">
-              <Skeleton className="h-7 w-7 rounded-[8px]" />
+              <Skeleton className="h-7 w-20 rounded-[var(--radius-pill)]" data-studio-skeleton-model-effort />
               <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
               <Skeleton className="h-7 w-7 rounded-[8px]" />
               <Skeleton className="ml-auto h-10 w-10 rounded-full" />
@@ -412,7 +412,7 @@ export function StudioSkeleton() {
               <div className="mb-4 h-[132px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-5" data-studio-region="desktop-composer">
                 <Skeleton className="h-3.5 w-2/5" />
                 <div className="mt-14 flex items-center gap-3">
-                  <Skeleton className="h-7 w-7 rounded-[8px]" />
+                  <Skeleton className="h-7 w-20 rounded-[var(--radius-pill)]" data-studio-skeleton-model-effort />
                   <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
                   <Skeleton className="h-7 w-7 rounded-[8px]" />
                   <Skeleton className="ml-auto h-10 w-10 rounded-full" />

@@ -30,6 +30,7 @@ import MetaPanel from './components/MetaPanel'
 import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioCommandBar from './components/StudioCommandBar'
+import StudioWorkspaceSidebar from './components/StudioWorkspaceSidebar'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
 import WorkInspector, { type WorkInspectorTab } from './components/WorkInspector'
@@ -41,7 +42,7 @@ import SkillsPanel from './components/SkillsPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import AgentContextPanel from './agent/components/AgentContextPanel'
-import { WORKSPACE_WRITE_TOOLS, useAgentStore } from './agent/agentStore'
+import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
 import { PanelResizeHandle } from './panel-resize'
 import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
@@ -115,6 +116,10 @@ export default function StudioWorkspace() {
     if (typeof window === 'undefined') return 'work'
     return window.localStorage.getItem(`chevoink:perspective:${activeNovelId}`) === 'ide' ? 'ide' : 'work'
   })
+  const [workspaceSidebarOpen, setWorkspaceSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem('chevoink:workspace-sidebar') !== 'collapsed'
+  })
   const [workLeftOpen, setWorkLeftOpen] = useState(false)
   const [workRightOpen, setWorkRightOpen] = useState(false)
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
@@ -128,6 +133,8 @@ export default function StudioWorkspace() {
   const agentTodos = useAgentStore((state) => state.todos)
   const agentTodosVersion = useAgentStore((state) => state.todosVersion)
   const liveToolDrafts = useAgentStore((state) => state.liveToolDrafts)
+  const autoFollow = useAgentStore((state) => state.autoFollow)
+  const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   const toolNavigationRequest = useAgentStore((state) => state.toolNavigationRequest)
   const clearToolNavigationRequest = useAgentStore((state) => state.clearToolNavigationRequest)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
@@ -260,6 +267,10 @@ export default function StudioWorkspace() {
   useEffect(() => {
     window.localStorage.setItem(`chevoink:perspective:${activeNovelId}`, workspacePerspective)
   }, [activeNovelId, workspacePerspective])
+
+  useEffect(() => {
+    window.localStorage.setItem('chevoink:workspace-sidebar', workspaceSidebarOpen ? 'open' : 'collapsed')
+  }, [workspaceSidebarOpen])
 
   useEffect(() => {
     if (!featureFlags.dualWorkspace && workspacePerspective !== 'ide') {
@@ -587,6 +598,7 @@ export default function StudioWorkspace() {
     setShowAgentTaskList(false)
     setAgentStateNovelId(activeNovelId)
 
+    const requestedSessionId = searchParams.get('session')
     const snapshot = readStoredAgentWorkspace(activeNovelId)
     const snapshotTasks = snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
     setAgentTaskWindows(snapshotTasks)
@@ -652,6 +664,7 @@ export default function StudioWorkspace() {
         }, dedupeAgentTaskWindows(aliveSnapshotTasks)))
 
         const nextTaskWindow =
+          (requestedSessionId ? mergedTasks.find((taskWindow) => taskWindow.sessionId === requestedSessionId || taskWindow.id === requestedSessionId) : null) ??
           mergedTasks.find((taskWindow) => taskWindow.id === (snapshot?.activeTaskId ?? initialTaskWindow?.id)) ??
           mergedTasks[0] ??
           null
@@ -664,6 +677,11 @@ export default function StudioWorkspace() {
         // 先激活任务窗口：sessionId 立即生效，Agent 面板并行拉取会话消息；
         // 历史工件（计划/大纲等）在后台补载，不再串行阻塞对话上下文首屏
         applyAgentTaskWindowState(nextTaskWindow)
+        if (requestedSessionId) {
+          const nextParams = new URLSearchParams(searchParams)
+          nextParams.delete('session')
+          setSearchParams(nextParams, { replace: true })
+        }
         if (nextTaskWindow.loaded || !nextTaskWindow.sessionId) {
           return
         }
@@ -697,6 +715,9 @@ export default function StudioWorkspace() {
     return () => {
       cancelled = true
     }
+    // 任务深链只在作品切换/首载时消费一次；把 searchParams 加入依赖会在删除
+    // `session` 参数后再次重置工作区，反而覆盖刚恢复的目标任务。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeNovelId])
 
   useEffect(() => {
@@ -1412,6 +1433,33 @@ export default function StudioWorkspace() {
 
     return null
   }, [catalogDocument, catalogPreview, savedPlanFiles, selectedTreeItemId])
+
+  const composerReferenceOptions = useMemo<Array<Omit<ComposerReference, 'offset'>>>(() => [
+    {
+      id: 'catalog',
+      kind: 'catalog',
+      name: catalogDocument?.title ?? catalogPreview.title,
+      text: catalogDocument?.content ?? catalogPreview.content,
+      startLine: 1,
+      endLine: Math.max(1, (catalogDocument?.content ?? catalogPreview.content).split('\n').length),
+    },
+    ...savedPlanFiles.map((plan) => ({
+      id: `plan:${plan.id}`,
+      kind: 'plan' as const,
+      name: plan.title,
+      text: plan.content,
+      startLine: 1,
+      endLine: Math.max(1, plan.content.split('\n').length),
+    })),
+    ...chapters.map((chapter) => ({
+      id: `chapter:${chapter.id}`,
+      kind: 'chapter' as const,
+      name: chapter.title.trim() ? `第 ${chapter.orderInVolume} 章 · ${chapter.title.trim()}` : `第 ${chapter.orderInVolume} 章`,
+      text: '',
+      startLine: 1,
+      endLine: 1,
+    })),
+  ], [catalogDocument?.content, catalogDocument?.title, catalogPreview.content, catalogPreview.title, chapters, savedPlanFiles])
 
   const activeLiveToolDraft = useMemo(() => Object.values(liveToolDrafts).at(-1) ?? null, [liveToolDrafts])
   const liveChapterTargetId = activeLiveToolDraft?.kind === 'chapter'
@@ -3821,11 +3869,15 @@ export default function StudioWorkspace() {
     showCloseAction = true,
     activityPresentation: 'inline' | 'responsive' = 'inline',
     mobileIntegratedHeader = false,
+    showCreditWarning = false,
   ) {
     return (
       <AgentPanel
           sessionId={agentSessionId}
           novelId={activeNovelId}
+          novelName={currentNovel?.displayTitle?.trim() || currentNovel?.title?.trim() || '未命名作品'}
+          initializingNovel={currentNovel ? isBootstrapNovel(currentNovel) : false}
+          emptyStateSeed={activeAgentTaskWindowId ?? activeNovelId}
           chapterId={
             selectedChapterId && !selectedChapterId.startsWith('local-') ? selectedChapterId : null
           }
@@ -3860,6 +3912,8 @@ export default function StudioWorkspace() {
           onClose={showCloseAction ? close : undefined}
           activityPresentation={activityPresentation}
           mobileIntegratedHeader={mobileIntegratedHeader}
+          showCreditWarning={showCreditWarning}
+          referenceOptions={composerReferenceOptions}
         />
       )
   }
@@ -4094,7 +4148,7 @@ export default function StudioWorkspace() {
 
             {mobileView === 'assistant' ? (
               <div className="relative z-20 flex min-h-0 flex-1 flex-col overflow-visible">
-                {renderWritingAgent(undefined, false, 'inline', true)}
+                {renderWritingAgent(undefined, false, 'inline', true, true)}
               </div>
             ) : null}
 
@@ -4266,8 +4320,26 @@ export default function StudioWorkspace() {
           </BottomSheet>
         </div>
 
-        <div className="hidden min-h-0 flex-1 flex-col lg:flex">
+        <div className="hidden min-h-0 flex-1 lg:flex">
+          <StudioWorkspaceSidebar
+            open={workspaceSidebarOpen}
+            onOpenChange={setWorkspaceSidebarOpen}
+            perspective={workspacePerspective}
+            perspectiveSwitchEnabled={featureFlags.dualWorkspace}
+            onPerspectiveChange={setWorkspacePerspective}
+            currentNovelId={currentNovel.id}
+            currentNovelTitle={novelTitle}
+            novels={novelOptions}
+            novelsLoading={myNovelsQuery.isLoading}
+            switchingNovel={createNovelMutation.isPending}
+            onSelectNovel={handleSelectWorkspaceNovel}
+            onCreateNovel={handleCreateWorkspaceNovel}
+            autoFollow={autoFollow}
+            onAutoFollowChange={setAutoFollow}
+          />
+          <div className="flex min-w-0 flex-1 flex-col">
           <StudioCommandBar
+            workspaceControls={false}
             perspective={workspacePerspective}
             perspectiveSwitchEnabled={featureFlags.dualWorkspace}
             onPerspectiveChange={setWorkspacePerspective}
@@ -4563,6 +4635,7 @@ export default function StudioWorkspace() {
               </div>
             </div>
           ) : null}
+          </div>
         </div>
       </div>
 

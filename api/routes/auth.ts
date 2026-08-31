@@ -35,12 +35,14 @@ const registerSchema = z.object({
   phone: z.string().optional(),
   nickname: z.string().min(1),
   password: z.string().optional(),
+  referralCode: z.string().max(24).optional(),
 })
 
 const smsRegisterSchema = z.object({
   phone: z.string().min(1),
   code: z.string().min(1),
   password: z.string().optional(),
+  referralCode: z.string().max(24).optional(),
 })
 
 const loginSchema = z.object({
@@ -153,6 +155,7 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       phone: body.phone?.trim() || undefined,
       nickname: body.nickname.trim(),
       password: body.password?.trim() || undefined,
+      referralCode: body.referralCode?.trim() || undefined,
     })
 
     const tokens = await createSession(user.id, res)
@@ -177,6 +180,7 @@ router.post('/sms/register', async (req: Request, res: Response): Promise<void> 
     const user = await registerUserData({
       phone,
       password: body.password?.trim() || undefined,
+      referralCode: body.referralCode?.trim() || undefined,
     })
 
     const tokens = await createSession(user.id, res)

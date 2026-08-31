@@ -83,6 +83,7 @@ export const AGENT_TOOL_GOVERNANCE = {
   entity_rename_preview: { category: 'read', risk: 'low', postconditions: ['changeset_preview_created', 'ambiguity_policy_recorded', 'no_content_written'] },
   changeset_apply: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'all_revisions_verified', 'atomic_commit', 'rollback_point_created'] },
   changeset_rollback: { category: 'high_risk', risk: 'high', postconditions: ['explicit_confirmation', 'post_apply_revisions_verified', 'atomic_rollback'] },
+  novel_create: { category: 'write', risk: 'medium', postconditions: ['bootstrap_scope_verified', 'novel_initialized', 'rollback_snapshot_created'] },
   novel_rename: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'rollback_snapshot_created'] },
   novel_update_meta: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'rollback_snapshot_created'] },
   plan_save: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'plan_artifact_persisted'] },

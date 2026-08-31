@@ -10,11 +10,14 @@ import type {
   AgentToolDraft,
   CreativeFreedom,
   StoryCompilerMode,
+  CreditModelTier,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import { chatWithTools, type ChatMessage, type ToolCallRequest } from '../ai-service.js'
-import { prisma } from '../prisma.js'
-import { getAgentDefinition, getToolsForAgent, type AgentDefinition } from './agents.js'
+import { DataAccessError, prisma } from '../prisma.js'
+import { getModelTierRuntime } from '../credits.js'
+import { readManagedImageDataUrl } from '../agent-attachment-storage.js'
+import { applySessionToolPolicy, getAgentDefinition, getToolsForAgent, type AgentDefinition } from './agents.js'
 import { deregisterActiveRun, registerActiveRun } from './active-runs.js'
 import { clearRunBaselines } from './baseline.js'
 import { assembleContext } from './context.js'
@@ -61,6 +64,10 @@ export type ExecuteAgentRunParams = {
   qualityMode?: StoryCompilerMode
   /** 从 paused 恢复：历史含本 run 已持久化的消息，prompt 换成续跑指令 */
   resume?: boolean
+  modelTier?: CreditModelTier
+  customModelId?: string | null
+  reasoningEffort?: import('../../../shared/contracts/index.js').ModelReasoningEffort
+  tokenBudget?: number
 }
 
 const emptyUsage = (): AgentTokenUsage => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
@@ -578,6 +585,7 @@ async function handleToolCall(
       },
     }
   } catch (error) {
+    if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
     // 错误即观察：不中断 run，把错误回填给模型自行重试或换路
     const message = error instanceof Error ? error.message : String(error)
     return fail('执行失败', `工具 ${call.name} 执行失败：${message}。可以调整参数重试，或换用其他工具。`, 'failed')
@@ -653,6 +661,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   let turn = 0
 
   try {
+    const modelRuntime = await getModelTierRuntime(params.modelTier ?? 'speed', params.userId, params.customModelId, params.reasoningEffort)
+    const runtimeModelName = modelRuntime.modelName ?? agent.model
     const storedRun = await prisma.agentRun.update({
       where: { id: runId },
       data: { status: 'running', startedAt: new Date(), errorMessage: null },
@@ -665,7 +675,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
     bus.emit({
       type: 'run.started',
-      agent: { type: agent.type, title: agent.title, model: agent.model },
+      agent: { type: agent.type, title: agent.title, model: modelRuntime.tier },
       mode: params.mode,
       title: params.prompt.slice(0, 80),
     })
@@ -739,6 +749,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       })
     }
 
+    const imageAttachments = (params.attachments ?? []).filter((attachment) => attachment.kind === 'image')
+    const directImageInputs = modelRuntime.visionEnabled
+      ? await Promise.all(imageAttachments.map(async (attachment) => ({ attachment, dataUrl: await readManagedImageDataUrl(attachment.url) })))
+      : []
+    const directVisionEnabled = imageAttachments.length > 0
+      && directImageInputs.length === imageAttachments.length
+      && directImageInputs.every((item) => Boolean(item.dataUrl))
+
     const assembledContext = await assembleContext({
       agent,
       mode: params.mode,
@@ -751,9 +769,21 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       prompt,
       selection: params.selection,
       attachments: params.attachments ?? [],
+      visionEnabled: directVisionEnabled,
       taskSpec,
     })
     const messages: ChatMessage[] = assembledContext.messages
+    if (directVisionEnabled) {
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message?.role !== 'user' || typeof message.content !== 'string') continue
+        message.content = [
+          { type: 'text', text: message.content },
+          ...directImageInputs.flatMap((item) => item.dataUrl ? [{ type: 'image_url' as const, image_url: { url: item.dataUrl, detail: 'auto' as const } }] : []),
+        ]
+        break
+      }
+    }
 
     if (assembledContext.skillRoute) {
       const skillRoute = assembledContext.skillRoute
@@ -809,9 +839,17 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
 
     const featureFlags = resolveAgent2FeatureFlags(params.userId)
-    const tools = getToolsForAgent(agent, params.mode, featureFlags)
+    const sessionPolicy = await prisma.agentSession.findUnique({ where: { id: params.sessionId }, select: { toolPolicy: true, sandboxMode: true } })
+    const scopedTools = getToolsForAgent(agent, params.mode, featureFlags)
+    const tools = applySessionToolPolicy(
+      scopedTools,
+      params.mode,
+      sessionPolicy?.toolPolicy,
+      sessionPolicy?.sandboxMode === 'read_only' || sessionPolicy?.sandboxMode === 'full_access' ? sessionPolicy.sandboxMode : 'workspace',
+    )
     const openAITools = toOpenAITools(tools)
     const maxTurns = env.agentMaxTurns
+    const runTokenBudget = Math.min(env.agentRunTokenBudget, Math.max(500, params.tokenBudget ?? env.agentRunTokenBudget))
 
     const toolContext: ToolContext = {
       userId: params.userId,
@@ -856,7 +894,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         messages.splice(reminderIndex, 1)
       }
       const totalChars = messages.reduce(
-        (sum, message) => sum + (typeof message.content === 'string' ? message.content.length : 0),
+        (sum, message) => sum + (typeof message.content === 'string'
+          ? message.content.length
+          : Array.isArray(message.content) ? message.content.reduce((partSum, part) => partSum + (part.type === 'text' ? part.text.length : 0), 0) : 0),
         0,
       )
       if (totalChars > CONTEXT_REMINDER_THRESHOLD_CHARS) {
@@ -879,7 +919,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const result = await chatWithTools({
         messages,
         tools: openAITools,
-        model: agent.model,
+        model: runtimeModelName,
+        providerBaseUrl: modelRuntime.baseUrl,
+        providerApiKey: modelRuntime.apiKey,
+        provider: modelRuntime.provider,
+        reasoningEffort: modelRuntime.reasoningEffort,
         temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
@@ -925,6 +969,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           chapterId: params.chapterId,
           targetType: 'agentRun',
           targetId: runId,
+          modelTier: modelRuntime.tier,
+          multiplierBps: modelRuntime.multiplierBps,
         },
       })
 
@@ -1073,7 +1119,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         return
       }
 
-      if (usage.totalTokens >= env.agentRunTokenBudget) {
+      if (usage.totalTokens >= runTokenBudget) {
         messages.push({
           role: 'user',
           content: '[系统] 本次运行的 token 预算已用尽，请立即停止调用工具，用一段话总结目前的进展与剩余工作。',
@@ -1081,7 +1127,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         const wrapUp = await chatWithTools({
           messages,
           tools: [],
-          model: agent.model,
+          model: runtimeModelName,
+          providerBaseUrl: modelRuntime.baseUrl,
+          providerApiKey: modelRuntime.apiKey,
+          provider: modelRuntime.provider,
+          reasoningEffort: modelRuntime.reasoningEffort,
           temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
           onChunk: (chunk) => {
             if (chunk.type === 'text-delta') {
@@ -1096,6 +1146,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
             chapterId: params.chapterId,
             targetType: 'agentRun',
             targetId: runId,
+            modelTier: modelRuntime.tier,
+            multiplierBps: modelRuntime.multiplierBps,
           },
         })
         addUsage(usage, wrapUp.usage)
@@ -1140,6 +1192,19 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) {
       await finalizeRun(runId, bus, 'paused', usage, turn, '已被用户停止，可随时继续。')
+      return
+    }
+
+    if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) {
+      const messageId = randomUUID()
+      const message = error.code === 'CREDITS_EXHAUSTED'
+        ? '今日创作额度已用尽，任务已安全停止。邀请好友注册可获得额外额度。'
+        : error.message
+      bus.emit({ type: 'message.start', messageId, role: 'assistant' })
+      bus.emit({ type: 'text.delta', messageId, delta: message })
+      await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: message }])
+      bus.emit({ type: 'error', code: error.code.toLowerCase(), message, recoverable: false })
+      await finalizeRun(runId, bus, 'failed', usage, turn, message, message)
       return
     }
 

@@ -11,6 +11,14 @@ import type {
   StartAgentLoopRunResponse,
   UploadAgentAttachmentRequest,
   UploadAgentAttachmentResponse,
+  AgentEvalComparisonView,
+  AgentScheduleView,
+  AgentSessionToolPolicy,
+  AgentSandboxMode,
+  AgentSubtaskRole,
+  AgentSubtaskView,
+  StoryBranchDiffView,
+  StoryBranchView,
 } from '../../../../shared/contracts/index.js'
 
 /** Agent Loop 新链路 API 客户端（与旧 api.ts 并行，迁移完成后旧链路下线） */
@@ -119,9 +127,13 @@ export function fetchAgentSessionMessages(
 }
 
 /** 历史任务对话列表（后端已过滤空且未命名的会话） */
-export function fetchAgentSessions(novelId: string): Promise<{ items: AgentSession[] }> {
+export function fetchAgentSessions(novelId?: string, options?: { query?: string; includeArchived?: boolean }): Promise<{ items: AgentSession[] }> {
+  const query = new URLSearchParams()
+  if (novelId) query.set('novelId', novelId)
+  if (options?.query?.trim()) query.set('q', options.query.trim())
+  if (options?.includeArchived) query.set('includeArchived', 'true')
   return requestData<{ items: AgentSession[] }>(
-    `/api/agent/sessions?novelId=${encodeURIComponent(novelId)}`,
+    `/api/agent/sessions?${query.toString()}`,
   )
 }
 
@@ -184,6 +196,53 @@ export function renameAgentSession(sessionId: string, title: string): Promise<{ 
     method: 'PATCH',
     body: JSON.stringify({ title }),
   })
+}
+
+export function updateAgentSessionSettings(sessionId: string, patch: { status?: 'active' | 'archived'; pinned?: boolean; toolPolicy?: AgentSessionToolPolicy; sandboxMode?: AgentSandboxMode }): Promise<{ session: AgentSession }> {
+  return requestData<{ session: AgentSession }>(`/api/agent/sessions/${sessionId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function fetchStoryBranches(novelId: string): Promise<{ items: StoryBranchView[] }> {
+  return requestData(`/api/agent/branches?novelId=${encodeURIComponent(novelId)}`)
+}
+export function createStoryBranchRequest(input: { novelId: string; chapterId: string; sourceRunId?: string | null; name: string }): Promise<{ item: StoryBranchView }> {
+  return requestData('/api/agent/branches', { method: 'POST', body: JSON.stringify(input) })
+}
+export function updateStoryBranchRequest(branchId: string, patch: { name?: string; content?: string }): Promise<{ item: StoryBranchView }> {
+  return requestData(`/api/agent/branches/${branchId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+export function fetchStoryBranchDiff(branchId: string): Promise<{ diff: StoryBranchDiffView }> {
+  return requestData(`/api/agent/branches/${branchId}/diff`)
+}
+export function mergeStoryBranchRequest(branchId: string): Promise<{ item: StoryBranchView }> {
+  return requestData(`/api/agent/branches/${branchId}/merge`, { method: 'POST' })
+}
+
+export function fetchAgentSubtasks(novelId: string): Promise<{ items: AgentSubtaskView[] }> {
+  return requestData(`/api/agent/subtasks?novelId=${encodeURIComponent(novelId)}`)
+}
+export function createAgentSubtaskRequest(input: { novelId: string; parentSessionId: string; chapterId?: string | null; role: AgentSubtaskRole; prompt: string; tokenBudget: number }): Promise<{ item: AgentSubtaskView }> {
+  return requestData('/api/agent/subtasks', { method: 'POST', body: JSON.stringify(input) })
+}
+export function cancelAgentSubtaskRequest(subtaskId: string): Promise<{ item: AgentSubtaskView }> {
+  return requestData(`/api/agent/subtasks/${subtaskId}/cancel`, { method: 'POST' })
+}
+
+export function fetchAgentSchedules(novelId: string): Promise<{ items: AgentScheduleView[] }> {
+  return requestData(`/api/agent/schedules?novelId=${encodeURIComponent(novelId)}`)
+}
+export function createAgentScheduleRequest(input: { novelId: string; sessionId: string; name: string; prompt: string; cadenceMinutes: number }): Promise<{ item: AgentScheduleView }> {
+  return requestData('/api/agent/schedules', { method: 'POST', body: JSON.stringify(input) })
+}
+export function updateAgentScheduleRequest(scheduleId: string, patch: { status?: 'active' | 'paused'; nextRunAt?: string }): Promise<{ item: AgentScheduleView }> {
+  return requestData(`/api/agent/schedules/${scheduleId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function fetchEvalComparisons(novelId: string): Promise<{ items: AgentEvalComparisonView[] }> {
+  return requestData(`/api/agent/eval-comparisons?novelId=${encodeURIComponent(novelId)}`)
+}
+export function createEvalComparisonRequest(input: { novelId: string; name: string; runIds: string[] }): Promise<{ item: AgentEvalComparisonView }> {
+  return requestData('/api/agent/eval-comparisons', { method: 'POST', body: JSON.stringify(input) })
 }
 
 export function deleteAgentSession(sessionId: string): Promise<{ sessionId: string; deleted: true }> {

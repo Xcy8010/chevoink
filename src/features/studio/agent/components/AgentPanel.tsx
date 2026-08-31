@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Check,
   CircleAlert,
@@ -8,7 +9,7 @@ import {
   LoaderCircle,
   Pencil,
   RotateCcw,
-  Sparkles,
+  SlidersHorizontal,
   SquarePen,
   Trash2,
   Undo2,
@@ -24,9 +25,14 @@ import type {
   AgentSession,
   AgentStreamEvent,
   CreativeFreedom,
+  CreditModelTier,
   EntityId,
+  ModelReasoningEffort,
   StoryCompilerMode,
 } from '../../../../../shared/contracts/index.js'
+import { fetchCreditSummary, fetchCustomModels, fetchReferral } from '@/features/account/credits-api'
+import CreditQuotaDialog from '@/features/account/CreditQuotaDialog'
+import InviteCreditsDialog from '@/features/account/InviteCreditsDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ImageLightbox from '../../components/ImageLightbox'
 
@@ -44,7 +50,7 @@ import {
   startAgentLoopRun,
   stopAgentLoopRun,
 } from '../agentApi'
-import { isRunActive, useAgentStore } from '../agentStore'
+import { isRunActive, useAgentStore, type ComposerReference } from '../agentStore'
 import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
@@ -53,7 +59,9 @@ import { AgentMessageParts } from './AgentMessageParts'
 import { AgentPermissionCard } from './AgentPermissionCard'
 import { AgentQuestionCard } from './AgentQuestionCard'
 import { ProcessingHint } from './ProcessingHint'
+import AgentEmptyWelcome from './AgentEmptyWelcome'
 import ChevoinkAgentMark from './ChevoinkAgentMark'
+import AgentOperationsCenter from './AgentOperationsCenter'
 
 /**
  * Agent Loop 主面板（plan/13 §5）：
@@ -65,6 +73,10 @@ type AgentPanelProps = {
   /** 未建会话时为 null，首次发送前通过 ensureSession 懒创建 */
   sessionId: EntityId | null
   novelId: EntityId
+  /** 空对话欢迎区使用真实作品名；占位作品会展示“创建小说”引导。 */
+  novelName: string
+  initializingNovel?: boolean
+  emptyStateSeed?: string
   chapterId?: EntityId | null
   selection?: { text: string; start?: number; end?: number } | null
   ensureSession: () => Promise<EntityId>
@@ -90,11 +102,18 @@ type AgentPanelProps = {
   activityPresentation?: 'inline' | 'responsive'
   /** 手机工作台把 Agent 标题与任务按钮并入作品选择同一行。 */
   mobileIntegratedHeader?: boolean
+  /** “+”菜单可直接选择的目录/计划/章节；章节正文由输入框按需读取。 */
+  referenceOptions?: Array<Omit<ComposerReference, 'offset'>>
+  /** 桌面端由工作区左下角统一承载额度提醒；手机端没有该侧栏时在输入框上方展示。 */
+  showCreditWarning?: boolean
 }
 
 export function AgentPanel({
   sessionId,
   novelId,
+  novelName,
+  initializingNovel = false,
+  emptyStateSeed,
   chapterId,
   selection,
   ensureSession,
@@ -111,6 +130,8 @@ export function AgentPanel({
   className,
   activityPresentation = 'inline',
   mobileIntegratedHeader = false,
+  showCreditWarning = false,
+  referenceOptions = [],
 }: AgentPanelProps) {
   const runId = useAgentStore((state) => state.runId)
   const phase = useAgentStore((state) => state.phase)
@@ -120,6 +141,7 @@ export function AgentPanel({
   const usage = useAgentStore((state) => state.usage)
   const currentTurn = useAgentStore((state) => state.currentTurn)
   const errorMessage = useAgentStore((state) => state.errorMessage)
+  const errorCode = useAgentStore((state) => state.errorCode)
   const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
   const activitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const todos = useAgentStore((state) => state.todos)
@@ -135,11 +157,32 @@ export function AgentPanel({
     return saved === 'stable' || saved === 'bold' ? saved : 'balanced'
   })
   const qualityMode: StoryCompilerMode = 'premium'
+  const [modelTier, setModelTier] = useState<CreditModelTier>(() => {
+    if (typeof window === 'undefined') return 'speed'
+    const saved = window.localStorage.getItem('chevoink:agent-model-tier')
+    return saved === 'standard' || saved === 'performance' || saved === 'ultimate' || saved === 'custom' ? saved : 'speed'
+  })
+  const [customModelId, setCustomModelId] = useState<string | null>(() => typeof window === 'undefined' ? null : window.localStorage.getItem('chevoink:agent-custom-model-id'))
+  const [reasoningSelections, setReasoningSelections] = useState<Record<string, ModelReasoningEffort>>(() => {
+    if (typeof window === 'undefined') return {}
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem('chevoink:agent-reasoning-efforts') ?? '{}')
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  })
   /** 用户气泡附件图片的大图预览 */
   const [attachmentPreview, setAttachmentPreview] = useState<{ url: string; name: string } | null>(null)
+  const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false)
+  const [inviteCopied, setInviteCopied] = useState(false)
+  const autoCopyInviteRef = useRef(false)
+  const [creditWarning, setCreditWarning] = useState<5 | 10 | 20 | null>(null)
 
   // 历史任务对话列表
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [operationsOpen, setOperationsOpen] = useState(false)
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
@@ -166,6 +209,21 @@ export function AgentPanel({
   const pinnedToBottomRef = useRef(true)
   const lastScrollTopRef = useRef(0)
   const active = isRunActive(phase)
+  const creditSummaryQuery = useQuery({
+    queryKey: ['credits', 'summary'],
+    queryFn: fetchCreditSummary,
+    staleTime: 20_000,
+    refetchInterval: active ? 20_000 : 60_000,
+  })
+  const refetchCredits = creditSummaryQuery.refetch
+  const previousActiveRef = useRef(active)
+  const referralQuery = useQuery({
+    queryKey: ['credits', 'referral'],
+    queryFn: fetchReferral,
+    staleTime: 60_000,
+    enabled: inviteDialogOpen || quotaDialogOpen,
+  })
+  const customModelsQuery = useQuery({ queryKey: ['credits', 'custom-models'], queryFn: fetchCustomModels, staleTime: 30_000 })
   // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
   const awaiting =
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
@@ -173,6 +231,106 @@ export function AgentPanel({
   useEffect(() => {
     window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
   }, [creativeFreedom, novelId])
+
+  useEffect(() => {
+    window.localStorage.setItem('chevoink:agent-model-tier', modelTier)
+  }, [modelTier])
+
+  useEffect(() => {
+    if (customModelId) window.localStorage.setItem('chevoink:agent-custom-model-id', customModelId)
+    else window.localStorage.removeItem('chevoink:agent-custom-model-id')
+  }, [customModelId])
+
+  useEffect(() => {
+    window.localStorage.setItem('chevoink:agent-reasoning-efforts', JSON.stringify(reasoningSelections))
+  }, [reasoningSelections])
+
+  const selectedModelCapability = modelTier === 'custom'
+    ? customModelsQuery.data?.models.find((model) => model.id === customModelId)
+    : creditSummaryQuery.data?.models.find((model) => model.tier === modelTier)
+  const selectedModelKey = modelTier === 'custom' ? `custom:${customModelId ?? ''}` : `tier:${modelTier}`
+  const savedReasoningEffort = reasoningSelections[selectedModelKey]
+  const selectedReasoningEffort = savedReasoningEffort && selectedModelCapability?.reasoningEfforts.includes(savedReasoningEffort)
+    ? savedReasoningEffort
+    : selectedModelCapability?.defaultReasoningEffort ?? 'high'
+
+  useEffect(() => {
+    const options = creditSummaryQuery.data?.models
+    if (modelTier !== 'custom' && options && !options.some((item) => item.tier === modelTier && item.available)) setModelTier('speed')
+  }, [creditSummaryQuery.data?.models, modelTier])
+
+  useEffect(() => {
+    if (modelTier !== 'custom') return
+    const selected = customModelsQuery.data?.models.find((model) => model.id === customModelId && model.enabled)
+    if (customModelsQuery.data && !selected) setModelTier('speed')
+  }, [customModelId, customModelsQuery.data, modelTier])
+
+  useEffect(() => {
+    if (errorCode === 'credits_exhausted' || errorCode === 'credits_globally_paused' || errorCode === 'credits_account_suspended') {
+      setQuotaDialogOpen(true)
+      void refetchCredits()
+    }
+  }, [errorCode, refetchCredits])
+
+  useEffect(() => {
+    // 管理员全局暂停会直接中止服务端活动 run；即便该 run 没来得及回传额度错误，
+    // 轮询到全局状态后仍要向用户解释停止原因。
+    if (creditSummaryQuery.data?.globallyPaused) setQuotaDialogOpen(true)
+  }, [creditSummaryQuery.data?.globallyPaused])
+
+  useEffect(() => {
+    if (previousActiveRef.current && !active) void refetchCredits()
+    previousActiveRef.current = active
+  }, [active, refetchCredits])
+
+  useEffect(() => {
+    const summary = creditSummaryQuery.data
+    if (!summary || summary.dailyAllowance <= 0 || summary.totalRemaining <= 0) return
+    const remainingPercent = (summary.totalRemaining / summary.dailyAllowance) * 100
+    const threshold: 5 | 10 | 20 | null = remainingPercent <= 5 ? 5 : remainingPercent <= 10 ? 10 : remainingPercent <= 20 ? 20 : null
+    if (!threshold) {
+      setCreditWarning(null)
+      return
+    }
+    const key = `chevoink:credit-warning:${summary.resetsAt}:${threshold}`
+    if (window.localStorage.getItem(key) !== 'dismissed') setCreditWarning(threshold)
+  }, [creditSummaryQuery.data])
+
+  const dismissCreditWarning = useCallback(() => {
+    const summary = creditSummaryQuery.data
+    if (summary && creditWarning) window.localStorage.setItem(`chevoink:credit-warning:${summary.resetsAt}:${creditWarning}`, 'dismissed')
+    setCreditWarning(null)
+  }, [creditSummaryQuery.data, creditWarning])
+
+  const copyInviteLink = useCallback(async () => {
+    const url = referralQuery.data?.inviteUrl
+    if (!url || !navigator.clipboard) return
+    await navigator.clipboard.writeText(url)
+    setInviteCopied(true)
+    window.setTimeout(() => setInviteCopied(false), 1800)
+  }, [referralQuery.data?.inviteUrl])
+
+  const openInviteDialog = useCallback(async () => {
+    setQuotaDialogOpen(false)
+    setInviteDialogOpen(true)
+    autoCopyInviteRef.current = true
+    const url = referralQuery.data?.inviteUrl
+    if (url) {
+      autoCopyInviteRef.current = false
+      try {
+        await navigator.clipboard.writeText(url)
+        setInviteCopied(true)
+      } catch {
+        // 浏览器禁止自动复制时，弹窗仍保留显式复制按钮。
+      }
+    }
+  }, [referralQuery.data?.inviteUrl])
+
+  useEffect(() => {
+    if (!inviteDialogOpen || !autoCopyInviteRef.current || !referralQuery.data?.inviteUrl) return
+    autoCopyInviteRef.current = false
+    void copyInviteLink()
+  }, [copyInviteLink, inviteDialogOpen, referralQuery.data?.inviteUrl])
 
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
@@ -395,6 +553,9 @@ export function AgentPanel({
             attachments: attachments.length > 0 ? attachments : undefined,
             creativeFreedom: freedom,
             qualityMode: selectedQualityMode,
+            modelTier,
+            customModelId: modelTier === 'custom' ? customModelId ?? undefined : undefined,
+            reasoningEffort: selectedReasoningEffort,
           })
         let result: Awaited<ReturnType<typeof startAgentLoopRun>>
         try {
@@ -425,11 +586,15 @@ export function AgentPanel({
           throw error
         }
         setActionError(error instanceof Error ? error.message : '启动失败，请稍后再试。')
+        if (error instanceof AgentApiError && error.code?.startsWith('CREDITS_')) {
+          setQuotaDialogOpen(true)
+          void refetchCredits()
+        }
         // 抛回输入框：发送失败时保留草稿，避免用户输入丢失
         throw error
       }
     },
-    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession],
+    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits],
   )
 
   const handleStop = useCallback(async () => {
@@ -685,6 +850,15 @@ export function AgentPanel({
         </span>
         <button
           type="button"
+          onClick={() => { setHistoryOpen(false); setOperationsOpen(true) }}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-1 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+          aria-label="打开 Agent 操作中心"
+          title="Agent 操作中心"
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
           onClick={toggleHistory}
           className={cn(
             'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-1 transition-colors',
@@ -812,13 +986,11 @@ export function AgentPanel({
             正在载入对话…
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <Sparkles className="h-6 w-6 text-[var(--text-secondary)]" />
-            <p className="text-sm font-medium text-[var(--text-primary)]">让我来帮你推进这本书</p>
-            <p className="max-w-[260px] text-xs leading-5 text-[var(--text-secondary)]">
-              直接说出你的想法，我会自主阅读上下文、规划并执行——写章节、改设定、做封面都可以。
-            </p>
-          </div>
+          <AgentEmptyWelcome
+            novelName={novelName}
+            initializingNovel={initializingNovel}
+            seed={emptyStateSeed ?? sessionId ?? novelId}
+          />
         ) : (
           <div className="flex flex-col gap-4 pb-2">
             {messages.map((message) => {
@@ -1050,14 +1222,45 @@ export function AgentPanel({
       ) : null}
 
       {/* 输入区 */}
+      {showCreditWarning && creditWarning ? (
+        <div className="mx-4 mb-2 border-l-2 border-amber-500 bg-[var(--surface-muted)] px-3 py-2.5 text-xs text-[var(--text-secondary)]">
+          <div className="flex items-start gap-3">
+            <p className="min-w-0 flex-1 leading-5">本期 Credits 约剩 {creditWarning}%{creditSummaryQuery.data ? `（${creditSummaryQuery.data.totalRemaining.toLocaleString()}）` : ''}，长任务开始前建议先查看用量。</p>
+            <button type="button" onClick={dismissCreditWarning} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" aria-label="关闭额度提醒"><X className="h-3.5 w-3.5" /></button>
+          </div>
+          <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="mt-1 font-medium text-[var(--text-primary)] hover:underline">了解更多</button>
+        </div>
+      ) : null}
+      <CreditQuotaDialog
+        open={quotaDialogOpen}
+        resetsAt={creditSummaryQuery.data?.resetsAt}
+        globallyPaused={errorCode === 'credits_globally_paused' || Boolean(creditSummaryQuery.data?.globallyPaused)}
+        onInvite={() => void openInviteDialog()}
+        onClose={() => setQuotaDialogOpen(false)}
+      />
       <div className="px-4 pb-4">
         <AgentComposer
+          novelId={novelId}
           running={active}
           disabled={historyLoading}
           onSend={(prompt, attachments, freedom, selectedQualityMode) => void handleSend(prompt, attachments, freedom, selectedQualityMode)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
           qualityMode={qualityMode}
+          modelTier={modelTier}
+          modelOptions={creditSummaryQuery.data?.models ?? [
+            { tier: 'speed', label: '极速', multiplier: 1, available: true, selectedByDefault: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', visionEnabled: false },
+            { tier: 'standard', label: '标准', multiplier: 1.1, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
+            { tier: 'performance', label: '性能', multiplier: 1.8, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
+            { tier: 'ultimate', label: '极致', multiplier: 4.8, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
+          ]}
+          onModelTierChange={setModelTier}
+          customModels={customModelsQuery.data?.models ?? []}
+          customModelId={customModelId}
+          onCustomModelChange={setCustomModelId}
+          reasoningSelections={reasoningSelections}
+          onReasoningEffortChange={(modelKey, effort) => setReasoningSelections((value) => ({ ...value, [modelKey]: effort }))}
+          referenceOptions={referenceOptions}
           onStop={() => void handleStop()}
         />
       </div>
@@ -1080,6 +1283,23 @@ export function AgentPanel({
         busy={confirmBusy}
         onConfirm={() => void handleConfirmAction()}
         onCancel={() => setConfirmAction(null)}
+      />
+      <InviteCreditsDialog
+        open={inviteDialogOpen}
+        referral={referralQuery.data ?? null}
+        copied={inviteCopied}
+        onCopy={() => void copyInviteLink()}
+        onClose={() => { autoCopyInviteRef.current = false; setInviteDialogOpen(false) }}
+      />
+      <AgentOperationsCenter
+        open={operationsOpen}
+        onClose={() => setOperationsOpen(false)}
+        novelId={novelId}
+        sessionId={sessionId}
+        chapterId={chapterId}
+        runIds={messages.map((message) => message.runId)}
+        currentSession={sessions.find((item) => item.id === sessionId) ?? null}
+        onSelectSession={onSelectSession}
       />
     </div>
   )

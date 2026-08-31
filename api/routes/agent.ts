@@ -64,6 +64,11 @@ import { agentDataControlPatchSchema } from '../../shared/contracts/index.js'
 import { acceptSkillShareInviteSchema, createSkillShareInviteSchema } from '../../shared/contracts/index.js'
 import { getResearchWorkbench, updateAgentDataControl } from '../lib/agent/research-dossier.js'
 import { acceptSkillShareInvite, createSkillShareInvite, declineSkillShareInvite, listSkillShareInvites } from '../lib/agent/skills/sharing.js'
+import {
+  cancelAgentSubtask, createAgentSchedule, createAgentSubtask, createEvalComparison, createStoryBranch,
+  getStoryBranchDiff, listAgentSchedules, listAgentSubtasks, listEvalComparisons, listStoryBranches,
+  mergeStoryBranch, updateAgentSchedule, updateStoryBranch,
+} from '../lib/agent/productivity.js'
 
 const router = Router()
 
@@ -75,8 +80,18 @@ const createAgentSessionSchema = z.object({
 })
 
 const updateAgentSessionSchema = z.object({
-  title: z.string().refine((value) => value.trim().length > 0),
-})
+  title: z.string().refine((value) => value.trim().length > 0).optional(),
+  status: z.enum(['active', 'archived']).optional(),
+  pinned: z.boolean().optional(),
+  sandboxMode: z.enum(['read_only', 'workspace', 'full_access']).optional(),
+  toolPolicy: z.object({
+    network: z.enum(['allow', 'ask', 'deny']),
+    contentWrite: z.enum(['allow', 'ask', 'deny']),
+    bulkWrite: z.enum(['allow', 'ask', 'deny']),
+    publish: z.enum(['allow', 'ask', 'deny']),
+    destructive: z.enum(['allow', 'ask', 'deny']),
+  }).optional(),
+}).refine((body) => Object.keys(body).length > 0)
 
 const createAgentPlanSchema = z.object({
   novelId: z.string().refine((value) => value.trim().length > 0),
@@ -143,6 +158,12 @@ const testSkillSchema = z.object({
 const publishSkillSchema = z.object({ version: z.string().trim().min(1).max(32) })
 const qualityFindingFeedbackSchema = z.object({ accepted: z.boolean(), reason: z.string().trim().max(500).optional() })
 const revokePrivateStyleSourceSchema = z.object({ reason: z.string().trim().min(1).max(500) })
+const storyBranchCreateSchema = z.object({ novelId: z.string().min(1), chapterId: z.string().min(1), sourceRunId: z.string().min(1).nullable().optional(), name: z.string().trim().min(1).max(160) })
+const storyBranchUpdateSchema = z.object({ name: z.string().trim().min(1).max(160).optional(), content: z.string().optional() }).refine((value) => value.name !== undefined || value.content !== undefined)
+const subtaskCreateSchema = z.object({ novelId: z.string().min(1), parentSessionId: z.string().min(1), chapterId: z.string().min(1).nullable().optional(), role: z.enum(['research', 'continuity', 'quality', 'lore']), prompt: z.string().trim().min(1).max(12_000), tokenBudget: z.number().int().min(500).max(32_000).default(4_000) })
+const scheduleCreateSchema = z.object({ novelId: z.string().min(1), sessionId: z.string().min(1), name: z.string().trim().min(1).max(160), prompt: z.string().trim().min(1).max(12_000), cadenceMinutes: z.number().int().min(30).max(43_200), nextRunAt: z.string().datetime().optional() })
+const scheduleUpdateSchema = z.object({ status: z.enum(['active', 'paused']).optional(), nextRunAt: z.string().datetime().optional() }).refine((value) => value.status !== undefined || value.nextRunAt !== undefined)
+const evalComparisonCreateSchema = z.object({ novelId: z.string().min(1), name: z.string().trim().min(1).max(160), runIds: z.array(z.string().min(1)).min(2).max(4).refine((value) => new Set(value).size === value.length) })
 
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
@@ -150,7 +171,9 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = requireSessionUserId(req)
     const novelId = typeof req.query.novelId === 'string' ? req.query.novelId : undefined
-    const payload = await listAgentSessionsData(userId, novelId)
+    const query = typeof req.query.q === 'string' ? req.query.q : undefined
+    const includeArchived = req.query.includeArchived === 'true'
+    const payload = await listAgentSessionsData(userId, novelId, { query, includeArchived })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -179,10 +202,10 @@ router.patch('/sessions/:sessionId', async (req: Request, res: Response): Promis
 
   try {
     const userId = requireSessionUserId(req)
-    const body = parseBody(updateAgentSessionSchema, req.body, '请提供会话标题。')
+    const body = parseBody(updateAgentSessionSchema, req.body, '请提供需要更新的会话设置。')
 
     const payload = await updateAgentSessionData(userId, req.params.sessionId, {
-      title: body.title,
+      ...body,
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
@@ -673,6 +696,9 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       attachments: body.attachments ?? [],
       creativeFreedom: body.creativeFreedom ?? 'balanced',
       qualityMode: body.qualityMode ?? 'premium',
+      modelTier: body.modelTier ?? 'speed',
+      customModelId: body.customModelId,
+      reasoningEffort: body.reasoningEffort,
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
@@ -829,6 +855,66 @@ router.get('/exports/:exportId', async (req: Request, res: Response): Promise<vo
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
+})
+
+function queryNovelId(req: Request): string {
+  return typeof req.query.novelId === 'string' ? req.query.novelId.trim() : ''
+}
+
+router.get('/branches', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await listStoryBranches(requireSessionUserId(req), queryNovelId(req)))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/branches', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(201).json(buildSuccess(requestId, await createStoryBranch(requireSessionUserId(req), parseBody(storyBranchCreateSchema, req.body, '请提供版本分支参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.patch('/branches/:branchId', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await updateStoryBranch(requireSessionUserId(req), req.params.branchId, parseBody(storyBranchUpdateSchema, req.body, '请提供版本分支变更。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.get('/branches/:branchId/diff', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await getStoryBranchDiff(requireSessionUserId(req), req.params.branchId))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/branches/:branchId/merge', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await mergeStoryBranch(requireSessionUserId(req), req.params.branchId))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+
+router.get('/subtasks', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await listAgentSubtasks(requireSessionUserId(req), queryNovelId(req)))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/subtasks', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(201).json(buildSuccess(requestId, await createAgentSubtask(requireSessionUserId(req), parseBody(subtaskCreateSchema, req.body, '请提供子 Agent 参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/subtasks/:subtaskId/cancel', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await cancelAgentSubtask(requireSessionUserId(req), req.params.subtaskId))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+
+router.get('/schedules', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await listAgentSchedules(requireSessionUserId(req), queryNovelId(req)))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/schedules', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(201).json(buildSuccess(requestId, await createAgentSchedule(requireSessionUserId(req), parseBody(scheduleCreateSchema, req.body, '请提供定时任务参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.patch('/schedules/:scheduleId', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await updateAgentSchedule(requireSessionUserId(req), req.params.scheduleId, parseBody(scheduleUpdateSchema, req.body, '请提供定时任务变更。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+
+router.get('/eval-comparisons', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await listEvalComparisons(requireSessionUserId(req), queryNovelId(req)))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/eval-comparisons', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(201).json(buildSuccess(requestId, await createEvalComparison(requireSessionUserId(req), parseBody(evalComparisonCreateSchema, req.body, '请提供评测对比参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
 })
 
 export default router

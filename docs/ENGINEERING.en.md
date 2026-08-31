@@ -137,14 +137,33 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 
 ### 1.6 Data Model Overview (prisma/schema.prisma)
 
-29 tables, organized by domain:
+80 tables, organized by domain (core tables listed below; the schema is authoritative):
 
-- **Accounts**: User, SmsVerificationCode, AdminAuditLog
+- **Accounts & Credits**: User, SmsVerificationCode, AdminAuditLog, CreditAccount, CreditLedgerEntry, ReferralCode, ReferralRedemption, CreditSystemSetting, AiModelConfig
 - **Writing & reading**: Novel, Chapter, CoverAsset, ReadingProgress, NovelRead, ParagraphUnderline, NovelFavorite
 - **Recommendation**: RecommendationEvent
 - **Community interaction**: Post, Topic, PostTopic, PostLike, PostBookmark, Comment, CommentLike, UserFollow
 - **Direct messages**: Conversation, ConversationMember, Message
-- **Agent**: AgentSession, AgentRun, AgentMessage, AgentRunEvent, AgentArtifact, ProjectMemoryEntry, AiUsageLog
+- **Agent**: AgentSession, AgentRun, AgentMessage, AgentRunEvent, AgentArtifact, ProjectMemoryEntry, AiUsageLog, StoryBranch, AgentSubtask, AgentSchedule, AgentEvalComparison
+
+### 1.7 Credits, referrals, and model routing
+
+- **Precision and charging**: the database stores milli-credits (1,000 milli = 1 Credit), avoiding floating-point drift. Text uses the bundled-pool formula `ceil(max(inputTokens, outputTokens × 10) × multiplierBps / 100000)` milli. One Credit therefore includes both 10,000 input tokens and 1,000 output tokens, charging the larger utilization ratio instead of adding both. Image generation and web search are fixed at 6 and 2 Credits per invocation.
+- **Daily window**: public beta grants 450 Credits per day, resetting at 15:00 UTC+8. Referral rewards live in a bonus balance that daily resets never clear. A refund crossing the reset boundary moves the old-window daily portion into bonus, so `dailyUsed` cannot become negative.
+- **Concurrency and idempotency**: charging runs in Serializable transactions and every invocation carries a unique `idempotencyKey`; serialization conflicts retry up to three times. Fixed-price tools require the full balance up front. Text is charged after provider usage is known; an over-budget result charges the remainder down to zero and stops later Agent turns.
+- **Referral constraints**: every user owns a unique code, and registration plus rewards share one transaction. The unique `ReferralRedemption.inviteeUserId` means only a brand-new account can redeem once: +300 to the inviter and +120 to the invitee.
+- **Model routing**: user APIs expose only tier labels, multipliers, vision capability, and supported reasoning efforts—never built-in model IDs. High is the default effort and the server validates it per model. Speed / Standard / Performance / Ultimate are 1.0x / 1.1x / 1.8x / 4.8x; the latter three require a model ID, Base URL, and encrypted API key before they become selectable. Vision-capable main models receive managed `image_url` inputs directly; text-only models automatically use the safe vision sidecar. Internal AI features such as relationship-graph generation and export default to Speed. BYOK custom models do not consume platform Credits, but global pause and account suspension still apply.
+- **Secret custody**: built-in and user API keys are encrypted at rest with AES-256-GCM. APIs return only `apiKeyConfigured`; an empty update keeps the old key and no read path reveals plaintext. Production uses a dedicated `MODEL_CONFIG_ENCRYPTION_KEY`.
+- **Surfaces and administration**: `/api/credits/*` serves balances, ledger, referrals, and custom models; `/account/usage` is the only public account subpage. Admin Credit actions use CAPTCHA plus a typed confirmation and support single-user or bulk reset, pause, and resume, alongside global pause. Token management aggregates model tokens and fixed-price tool counts by UTC+8 calendar day/week/month.
+
+### 1.8 Agent productivity and governance layer
+
+- **Task management**: `AgentSession.pinnedAt/status` powers pinning and archiving. Server-side search covers task and novel titles; omitting `novelId` returns cross-novel recent tasks.
+- **Story branches**: `StoryBranch` stores the source revision, baseline text, and branch head. Merge uses an `id + revision` conditional update inside a transaction; conflicts return 409 instead of overwriting newer chapter text, while novel word totals are adjusted atomically.
+- **Specialist subagents**: research, continuity, quality, and lore each run in an isolated session/run with a role-specific tool allowlist. User budgets are capped by the global budget; cancellation reuses the run stop path and traces reuse persisted SSE replay.
+- **Durable schedules**: `AgentSchedule` persists prompts, cadence, and next fire time. A conditional database lease is acquired before polling execution, preventing duplicate claims; busy-session conflicts are deferred.
+- **Tool sandbox**: sessions store policies for network, content writes, bulk writes, publishing, and destructive actions plus read-only/workspace/full-access tiers. The server filters tools after registry resolution; `ask` becomes runtime approval and `deny` removes the tool from the model schema.
+- **Replay and evaluation**: `AgentEvalComparison` freezes real metrics for 2–4 runs—model tier, reasoning effort, tokens, status, duration, and summary—while detailed replay still reads the canonical `AgentRunEvent` stream.
 
 ---
 
@@ -164,6 +183,8 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 | Hallucination governance | Knowledge sets (worldbuilding/character cards) + Skill injection + web-research budgets | `plan/14`: read the facts before writing; budgets prevent runaway |
 | Web search | Multi-tier fallback strategy with Bocha as the primary engine | Automatic switch on single-engine failure keeps the research chain available |
 | Image understanding | Zhipu GLM-4.1V vision side-channel + in-process concurrency semaphore (default 4) | Free tier allows 5 concurrent; keep 1 in reserve (`api/config/env.ts`) |
+| Credits ledger | Integer milli-credit ledger + Serializable transactions + idempotency keys | Represents small token costs exactly and prevents duplicate concurrent charges, duplicate referral rewards, and negative cross-reset refunds |
+| Model secrets | AES-256-GCM encrypted at rest, replace-only and never revealed | A database leak does not directly expose provider API keys; a dedicated master key supports deliberate operations rotation |
 | Large-file governance | Module-level splits move only stateless/pure logic; full tsc is the authoritative verification | Completed in this sprint: run-service 1447→1043 lines, write-tools 826→285, loop 903→837, AgentPanel 1096→1020 |
 | Frontend component split discipline | Never split untested component bodies; only extract module-level pure declarations | Any JSX slicing without coverage is a regression risk; extracted pure functions get guardrail unit tests |
 | One-click export | Server-side dependency-free ZIP writer (store, no compression) + shared Fanqie vocabulary contract | Avoids adding jszip (artifacts are mostly plain text; store mode suffices); the vocabulary lives in `shared/contracts/fanqie-tags.ts` shared by both sides; AI publishing-advice output is clamped to the official vocabulary (no invented tags); AI unavailability degrades to fallback copy without blocking the export |
@@ -226,7 +247,7 @@ scp upload (fallback to sftp on failure, 3 retries each) → remote extract to /
 ```
 
 - PM2 config: `ecosystem.config.cjs`; remote script: `deploy/deploy-production.sh`.
-- Database migrations go through `prisma migrate deploy` (26 migrations currently; the new local migration will be applied by the deployment script at release time).
+- Database migrations go through `prisma migrate deploy` (41 migrations currently; the new Credits/model foundation migration is applied by the deployment script at release time).
 - Release tags & APK: `scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk path>`.
 
 ### 4.2 Production Topology
@@ -248,7 +269,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 | Domain | Variables | Notes |
 | --- | --- | --- |
 | App | `APP_NAME` / `APP_ENV` / `APP_PORT` / `APP_WEB_URL` / `APP_SERVER_URL` | Service identity & cross-origin base URLs |
-| Database & session | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma connection string & Cookie session signing |
+| Database & session | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `MODEL_CONFIG_ENCRYPTION_KEY` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma connection string, Cookie signing, and the model-key encryption master secret |
 | SMS | `SMS_TENCENT_*` + code policy (length 6 / TTL 300s / cooldown 60s / hourly cap 5) | Tencent Cloud SMS login codes |
 | Text generation | `AI_TEXT_BASE_URL` / `AI_TEXT_API_KEY` / `AI_TEXT_MODEL` / `AI_TEXT_MAX_OUTPUT_TOKENS` | DeepSeek; per-turn output cap defaults to 8192 to avoid long-chapter truncation |
 | Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS` (default 100) / `AGENT_RUN_TOKEN_BUDGET` (default 2M) / `AGENT_AUTO_APPROVE` | Turn & token budgets combined with context slimming to avoid context explosion |
@@ -297,7 +318,9 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 | Auth boundary | All write endpoints return 401 before 400 (reject unauthenticated first, leaking no validation details); unified zod validation copy |
 | Rate limiting | SMS code IP dual window (hourly/daily); admin login IP+account dual-key failure lockout; TTS synthesis 20/min per IP; rate-limit Maps cleared past the cap to prevent unbounded growth |
 | Secrets | All injected via `.env` (template `.env.example`); `.env`, certificates and keystores excluded by `.gitignore` (`plan/08`) |
-| Agent | Tiered tool permissions (read/write/dangerous); per-run budget caps (ask_user 3, web search 5, web deep-read 8, platform search 5, platform deep-read 8); AiUsageLog records all token consumption; AdminAuditLog records high-risk console operations |
+| Agent | Tiered tool permissions plus a server-enforced per-session sandbox; per-run/subagent budgets (ask_user 3, web search 5, web deep-read 8, platform search 5, platform deep-read 8); AiUsageLog records token consumption; AdminAuditLog records high-risk console operations |
+| Credits & referrals | Daily reset is an idempotent `periodEndsAt <= now` conditional update; invitee uniqueness, same-transaction registration/reward writes, and ledger idempotency keys prevent refresh/retry/concurrency double claims |
+| Model secrets | API keys are encrypted with AES-256-GCM; ordinary APIs return only configured/not-configured; `.env.example` contains placeholders and no live key |
 | Dependencies | Dual gates in CI and deployment `npm audit --omit=dev --audit-level=high`; currently **0 vulnerabilities** |
 
 ### 6.2 Explicit Risk Trade-offs (written record)
@@ -336,6 +359,8 @@ Completed 1.0 plans: three-device adaptation & phased launch (04), writing Agent
 Agent 2.0 P0 engineering foundations landed on 2026-08-25: frozen runtime contracts; chapter revision migration and optimistic locking; version-guarded Agent chapter writes; revision propagation across publishing, insertion, deletion compaction, and rollback; test-enforced governance for 32 tools; and seven core eval scenarios with stable success/token/P95-latency/rollback aggregation. The formal P0 gate still requires at least five real-model runs per scenario against an available test database; P1 must not start before those measurements exist.
 
 The 2026-08-30 Studio iteration streams final answers and long document-tool arguments over SSE, locks the target chapter/plan while the Agent writes, and lets tool activity navigate to that target. The former memory tab is now a whole-novel relationship graph: low-reasoning AI runs only when chapters exist and the graph is empty, while manual rebuilds have a ten-minute cooldown. The admin console treats `AiUsageLog` as the canonical model-token meter and exposes user ranking, novel/session/run drill-down, plus web-search and image-generation invocation counts.
+
+The 2026-08-31 Agent entry opens the complete workspace even when an author has no work. The system creates a non-public bootstrap novel and the first prompt drives the Agent to initialize it through the atomic `novel_create` action, which verifies both ownership and bootstrap state and cannot be replayed against a normal novel. Empty tasks share one context-aware randomized suggestion component across Work, IDE, and mobile; choosing a suggestion only fills the draft. First-work completion asks only about still-missing title, synopsis, tags, or cover.
 
 Studio / Agent 2.0 desktop and memory UX landed on 2026-08-26: the Work/IDE command bar now keeps only novel selection while chapter hierarchy lives in the editor header; the editor uses a flat edge-to-edge surface; Studio has a scoped neutral light/dark palette; side panels have no fixed maximum width and snap closed below their collapse thresholds; Work renders the memory graph directly in the inspector and mobile includes a dedicated memory view. Existing prose is projected into the graph through idempotent local rules, while every completed Agent turn performs threshold-based context compaction and revision-aware memory refresh without an additional model call. The in-process projection-version cache is capped at 500 novels.
 

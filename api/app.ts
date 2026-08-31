@@ -19,6 +19,7 @@ import recommendationsRoutes from './routes/recommendations.js'
 import searchRoutes from './routes/search.js'
 import topicsRoutes from './routes/topics.js'
 import usersRoutes from './routes/users.js'
+import creditsRoutes from './routes/credits.js'
 import { env } from './config/env.js'
 import { getSessionUserId, resolveSessionGate } from './lib/auth-session.js'
 import { getUploadsStaticDirectory } from './lib/avatar-storage.js'
@@ -92,6 +93,7 @@ app.use('/api/recommendations', recommendationsRoutes)
 app.use('/api/search', searchRoutes)
 app.use('/api/topics', topicsRoutes)
 app.use('/api/users', usersRoutes)
+app.use('/api/credits', creditsRoutes)
 
 app.get('/api/health', (_req: Request, res: Response): void => {
   res.status(200).json({

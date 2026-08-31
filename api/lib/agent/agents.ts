@@ -1,8 +1,9 @@
-import type { AgentExecutionMode } from '../../../shared/contracts/index.js'
+import type { AgentExecutionMode, AgentSessionToolPolicy, AgentSandboxMode, AgentWorkspaceToolPermission } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
 import type { AgentTool } from './tools/types.js'
 import { getToolsForMode } from './tools/registry.js'
 import type { Agent2FeatureFlags } from '../../../shared/contracts/index.js'
+import { AGENT_TOOL_GOVERNANCE } from './tools/governance.js'
 
 /** Agent 声明式定义（替代 buildExecutionAgent 的硬编码 switch） */
 export type AgentDefinition = {
@@ -15,8 +16,7 @@ export type AgentDefinition = {
 }
 
 /**
- * P0/P1 只保留 orchestrator 单主 Agent 跑通循环（plan/13 §4.8）。
- * 子 Agent（storyPlanner/continuityReviewer 等）在 P2 通过 task_delegate 收窄工具集引入。
+ * 主控与四种专业子 Agent。子 Agent 使用显式工具白名单，避免继承主控的写入权限。
  */
 export const agentRegistry: AgentDefinition[] = [
   {
@@ -25,6 +25,34 @@ export const agentRegistry: AgentDefinition[] = [
     model: env.agentModel,
     tools: '*',
     modes: ['plan', 'build', 'review'],
+  },
+  {
+    type: 'research',
+    title: '调研 Agent',
+    model: env.agentModel,
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'plan_read', 'web_search', 'web_read', 'platform_novel_search', 'platform_novel_read', 'research_dossier_get', 'research_dossier_build', 'craft_search', 'todo_write'],
+    modes: ['plan', 'review'],
+  },
+  {
+    type: 'continuity',
+    title: '一致性 Agent',
+    model: env.agentModel,
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'story_charter_get', 'chapter_bridge_get', 'continuity_validate', 'quality_report_get', 'project_search', 'structure_validate', 'todo_write'],
+    modes: ['review'],
+  },
+  {
+    type: 'quality',
+    title: '质量 Agent',
+    model: env.agentModel,
+    tools: ['novel_get_context', 'chapter_read', 'quality_analyze', 'quality_report_get', 'quality_findings_select', 'creative_critique', 'style_profile_get', 'style_leakage_check', 'todo_write'],
+    modes: ['review'],
+  },
+  {
+    type: 'lore',
+    title: '设定 Agent',
+    model: env.agentModel,
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'memory_review_list', 'memory_relation_save', 'memory_event_save', 'story_charter_get', 'character_voice_get', 'experience_anchor_get', 'todo_write'],
+    modes: ['plan', 'review'],
   },
 ]
 
@@ -75,4 +103,42 @@ export function getToolsForAgent(
 
   const allowed = new Set(agent.tools)
   return modeTools.filter((tool) => allowed.has(tool.name))
+}
+
+const DEFAULT_POLICY: AgentSessionToolPolicy = {
+  network: 'ask',
+  contentWrite: 'allow',
+  bulkWrite: 'ask',
+  publish: 'ask',
+  destructive: 'ask',
+}
+
+function governedPolicyKey(tool: AgentTool): keyof AgentSessionToolPolicy | null {
+  if (tool.name === 'web_search' || tool.name === 'web_read' || tool.name === 'research_dossier_build') return 'network'
+  if (tool.name === 'novel_publish' || tool.name === 'cover_apply') return 'publish'
+  if (tool.name === 'changeset_apply' || tool.name === 'changeset_rollback' || tool.name === 'chapter_merge' || tool.name === 'chapter_split') return 'bulkWrite'
+  const governance = AGENT_TOOL_GOVERNANCE[tool.name as keyof typeof AGENT_TOOL_GOVERNANCE]
+  if (tool.dangerous || governance?.category === 'high_risk' || /(?:delete|archive|rollback)$/.test(tool.name)) return 'destructive'
+  if (!tool.readOnly && governance?.category !== 'workflow') return 'contentWrite'
+  return null
+}
+
+/** 服务端会话级权限闸：客户端隐藏按钮不能绕过此处。 */
+export function applySessionToolPolicy(
+  tools: AgentTool[],
+  mode: AgentExecutionMode,
+  rawPolicy: unknown,
+  sandboxMode: AgentSandboxMode = 'workspace',
+): AgentTool[] {
+  const policy = rawPolicy && typeof rawPolicy === 'object' ? { ...DEFAULT_POLICY, ...(rawPolicy as Partial<AgentSessionToolPolicy>) } : DEFAULT_POLICY
+  return tools.flatMap((tool) => {
+    if (sandboxMode === 'read_only' && !tool.readOnly) return []
+    const key = governedPolicyKey(tool)
+    if (!key) return [tool]
+    const level = policy[key]
+    if (level === 'deny') return []
+    if (level === 'allow') return [tool]
+    const permission: Record<AgentExecutionMode, AgentWorkspaceToolPermission> = { ...tool.permission, [mode]: 'ask' }
+    return [{ ...tool, permission }]
+  })
 }

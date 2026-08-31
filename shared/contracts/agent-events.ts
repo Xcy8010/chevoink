@@ -318,6 +318,16 @@ export interface StartAgentLoopRunRequest {
   attachments?: AgentAttachmentMeta[]
   creativeFreedom?: CreativeFreedom
   qualityMode?: import('./story-compiler-contracts.js').StoryCompilerMode
+  /** 内置模型档位；用户侧永不接触真实供应商 model id。 */
+  modelTier?: import('./credits.js').CreditModelTier
+  /** 自定义模型配置 id；仅 modelTier=custom 时生效，后端校验归属。 */
+  customModelId?: EntityId
+  /** 用户为当前模型选择的推理强度；后端按该模型允许档位校验，不信任客户端。 */
+  reasoningEffort?: import('./credits.js').ModelReasoningEffort
+  /** 服务端子 Agent 调度使用；普通创作请求保持 orchestrator。 */
+  agentProfile?: 'orchestrator' | 'research' | 'continuity' | 'quality' | 'lore'
+  /** 单次子任务硬预算；服务端还会与全局预算取较小值。 */
+  tokenBudget?: number
 }
 
 export type CreativeFreedom = 'stable' | 'balanced' | 'bold'

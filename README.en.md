@@ -73,21 +73,30 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 
 ### Authors
 
-1. Enter the **Studio** and create a novel with title, synopsis and tags;
+1. Enter the **Studio** and start talking to Chevoink Agent immediately. With no existing work, randomized creation examples appear; selecting one only fills the composer, and after the first send the Agent turns the hidden bootstrap workspace into a real novel through the scope-checked, atomic `novel_create` action. A new empty task inside an existing novel also receives four randomized building prompts;
 2. Write directly in the chapter editor, or summon the **AI writing Agent**: autonomous execution with maximum permissions by default (tool calls auto-approved, with a trace button), streaming chapter drafts and rewrites grounded in your settings and knowledge sets (worldbuilding, character cards), web research for source material, references to published works on the platform and your own unpublished works (fan-fiction / prequels, similar-work detection), cross-session memory of your preferences — intervenable at any time;
 3. Use the **Work Skills** area in Work, IDE, or mobile to save reusable long-term writing rules as private drafts. Each field has placeholder examples, or simply ask in chat: “create a … skill for me.” The Agent drafts and runs positive/negative trigger tests; it publishes only after your explicit confirmation. Shared skills can be installed after confirmation, while third-party source imports must declare their licence, attribution, and immutable version;
-4. Attach **images (≤6) and files (≤3, pdf/docx/txt/md)** to the prompt; the Agent first understands attachments via vision/reading tools before acting; files in the conversation are clickable, and long file contents are collapsed by default;
+4. Attach **images (≤6) and files (≤3, pdf/docx/txt/md)** to the prompt. Multimodal models receive image pixels directly, while text-only models automatically use the safe vision sidecar; files are always read before action. Conversation files are clickable, and long contents are collapsed by default;
 5. Generate cover art with one click via **AI cover generation** (remote URLs are automatically persisted to the site); you can also ask the Agent to "look at the current cover" to verify the artwork;
 6. **One-click export**: launch it from the immersive-mode toolbar, the "…" more menu or the mobile "More" sheet; pick the export scope (plans / catalog / chapters / work info & publishing advice, with per-chapter selection), and the server packs a zip for direct download, including AI-generated publishing advice for Fanqie Novel based on its official tag vocabulary; you can also ask the Agent in chat to export on demand (only certain chapters, or excluding specific parts);
-7. Publish finished chapters — readers see them instantly; scheduled updates and chapter management are supported.
+7. Open the **Agent Operations Center** from the Agent header to search, pin, or archive tasks across novels; fork a novel version from the current chapter/run snapshot and compare or merge it; launch budgeted/cancellable research, continuity, quality, and lore subagents with trace replay; configure durable inspections, server-enforced tool sandboxes, and 2–4-run comparisons across model tier, reasoning, tokens, and latency;
+8. Publish finished chapters — readers see them instantly; scheduled updates and chapter management are supported.
+
+### Public-beta Credits
+
+- Public-beta accounts receive **450 Credits per day**, resetting at **15:00 UTC+8**. Referral rewards live in a separate balance and survive daily resets.
+- Text uses a bundled allowance: **1 Credit includes both 10,000 input tokens and 1,000 output tokens**. Charging uses the larger utilization ratio instead of adding input and output charges. Image generation costs 6 Credits per invocation and web search costs 2 Credits per invocation.
+- Every user gets a unique referral URL. Only a brand-new account can redeem it on first registration: the inviter receives 300 Credits and the invitee receives 120 Credits; each invitee can redeem exactly once.
+- Studio warns at 20%, 10%, and 5% remaining. Exhaustion safely stops the task; [`/account/usage`](/account/usage) shows the plan, balances, and itemized ledger.
+- The Agent defaults to the Speed tier (1.0x) with high reasoning. Each built-in or custom model exposes only its supported effort levels. Standard 1.1x, Performance 1.8x, and Ultimate 4.8x remain unavailable until an administrator fully configures their URL, API key, and model. Authors may also use an OpenAI-compatible BYOK model; its key is encrypted and never revealed again.
 
 ## ✨ Feature Overview
 
 - **Reading**: bookstore home (carousels, rankings, category picks), cloud-synced bookshelf & reading progress, immersive reader, TTS narration
-- **Studio**: novel/chapter management, an AI writing Agent with token-by-token conclusions and document writes, write-time editor locking, Work auto-follow, compact Harness-style tool activity, Skills, image/file references, web and in-platform research, cross-session memory, and a low-reasoning AI relationship graph spanning characters, places, organizations, items, events, and concepts; plus AI covers and scoped zip export
+- **Studio**: a Codex-inspired Work/IDE shell, no-work Agent creation entry, randomized empty-task suggestions that only fill the composer, cross-novel task search/pin/archive, novel-version fork/diff/conflict-safe merge, four specialist subagents, durable schedules, server-enforced tool sandboxes, run replay/evaluation, novel/chapter management, an AI writing Agent with token-by-token conclusions and document writes, write-time editor locking, Work auto-follow, compact Harness-style tool activity, Skills, modality-aware attachments, image/file/work-tree references, web and in-platform research, cross-session memory, and a low-reasoning AI relationship graph spanning characters, places, organizations, items, events, and concepts; plus AI covers and scoped zip export
 - **Community**: posts & topics, recommendation algorithm, comments/likes/bookmarks, follows & fans, direct messages with online presence
-- **Accounts**: phone + SMS-code login (Tencent Cloud SMS), HttpOnly Cookie session + Bearer fallback channel (survives Android shell process kills)
-- **Admin console**: data dashboard, user/novel/content governance, token ranking with user/novel/task drill-down, web-search and image-generation call counts, mobile-friendly
+- **Accounts**: phone + SMS-code login (Tencent Cloud SMS), HttpOnly Cookie session + Bearer fallback channel (survives Android shell process kills), public-beta Credits, and one-time referral rewards
+- **Admin console**: data dashboard, user/novel/content governance, encrypted built-in-model configuration, single-user and bulk Credits reset/pause controls, token ranking with user/novel/task drill-down, web-search and image-generation call counts, mobile-friendly
 - **Android client**: Capacitor shell loading the remote site, in-app update checks and APK distribution
 
 ## 🛠️ Tech Stack
@@ -153,7 +162,7 @@ Common scripts:
 
 ## 🔐 Environment Variables
 
-All secrets are injected via `.env` (database, session signing, Tencent Cloud SMS, AI services, etc.); the template is at [.env.example](.env.example). Sensitive files such as `.env`, certificates and keystores are excluded by `.gitignore` and never enter the repository.
+All secrets are injected via `.env` (database, session signing, Tencent Cloud SMS, AI services, etc.); the template is at [.env.example](.env.example). Model API keys are encrypted at rest with AES-256-GCM. Production must use a dedicated `MODEL_CONFIG_ENCRYPTION_KEY`; back it up and rotate it deliberately, because losing it makes stored keys undecryptable. Sensitive files such as `.env`, certificates and keystores are excluded by `.gitignore` and never enter the repository.
 
 ## 💬 Community
 

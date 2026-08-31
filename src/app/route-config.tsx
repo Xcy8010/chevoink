@@ -39,6 +39,7 @@ function lazyPage(load: () => Promise<{ default: ComponentType }>) {
 
 // 首页/登录/404 保持同步导入保障首屏，其余页面按路由拆包懒加载
 const SettingsPage = lazyPage(() => import('@/app/routes/SettingsPage'))
+const AccountUsagePage = lazyPage(() => import('@/features/account/AccountUsagePage'))
 const AuthorPage = lazyPage(() => import('@/pages/AuthorPage'))
 const CommunityPage = lazyPage(() => import('@/pages/CommunityPage'))
 const DiscoverPage = lazyPage(() => import('@/pages/DiscoverPage'))
@@ -63,6 +64,8 @@ const AdminUserFollowersPage = lazyPage(() => import('@/features/admin/pages/Adm
 const AdminUserFavoriteNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminUserFavoriteNovelsPage'))
 const AdminCreationRecordsPage = lazyPage(() => import('@/features/admin/pages/AdminCreationRecordsPage'))
 const AdminTokenManagementPage = lazyPage(() => import('@/features/admin/pages/AdminTokenManagementPage'))
+const AdminCreditsManagementPage = lazyPage(() => import('@/features/admin/pages/AdminCreditsManagementPage'))
+const AdminModelsPage = lazyPage(() => import('@/features/admin/pages/AdminModelsPage'))
 const AdminNovelsPage = lazyPage(() => import('@/features/admin/pages/AdminNovelsPage'))
 const AdminNovelDetailPage = lazyPage(() => import('@/features/admin/pages/AdminNovelDetailPage'))
 const AdminNovelPreviewPage = lazyPage(() => import('@/features/admin/pages/AdminNovelPreviewPage'))
@@ -244,6 +247,17 @@ export const appRoutes: AppRouteDefinition[] = [
     fallback: <SettingsSkeleton />,
   },
   {
+    path: '/account/usage',
+    title: '查看 ChevoInk Credits 用量与记录',
+    description: '查看公测额度、每日重置时间、邀请奖励和 Credits 消耗记录。',
+    element: (
+      <RequireAuthRoute title="登录后查看额度" description="登录后即可查看公测 Credits 用量、记录和邀请奖励。">
+        <AccountUsagePage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
+  },
+  {
     path: '/login',
     title: '登录启创墨域，继续你的阅读和创作',
     description: '回到书架、草稿和互动记录，把上一次停下的地方接起来。',
@@ -356,6 +370,20 @@ export const appRoutes: AppRouteDefinition[] = [
         <AdminTokenManagementPage />
       </AdminLayout>
     ),
+    useShell: false,
+  },
+  {
+    path: '/admin/credits',
+    title: 'Credits 管理',
+    description: '管理公测额度、奖励余额、重置与全局调用状态。',
+    element: <AdminLayout><AdminCreditsManagementPage /></AdminLayout>,
+    useShell: false,
+  },
+  {
+    path: '/admin/models',
+    title: '模型管理',
+    description: '配置内置模型、密钥、开放状态与 Credits 倍率。',
+    element: <AdminLayout><AdminModelsPage /></AdminLayout>,
     useShell: false,
   },
   {

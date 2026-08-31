@@ -16,6 +16,7 @@ import { askUserTool } from './interact-tools.js'
 import {
   coverPromptSetTool,
   novelArchiveTool,
+  novelCreateTool,
   novelDeleteTool,
   novelPublishTool,
   novelRenameTool,
@@ -164,6 +165,7 @@ export const allTools: AgentTool<any>[] = [
   entityRenamePreviewTool,
   changeSetApplyTool,
   changeSetRollbackTool,
+  novelCreateTool,
   novelRenameTool,
   novelUpdateMetaTool,
   planSaveTool,

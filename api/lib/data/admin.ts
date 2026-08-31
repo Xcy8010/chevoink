@@ -830,57 +830,88 @@ export async function getAdminAgentSessionMessagesData(
 }
 
 
-/** 全站 AI 用量总览：AiUsageLog 是模型 token 的唯一计量源，工具次数来自成功的 Agent 工具事件。 */
-export async function getAdminTokenManagementData(): Promise<AdminTokenManagementPayload> {
-  const [summary, userGroups, actionGroups, toolEvents] = await Promise.all([
-    prisma.aiUsageLog.aggregate({ _sum: { requestTokens: true, responseTokens: true } }),
-    prisma.aiUsageLog.groupBy({ by: ['userId'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
-    prisma.aiUsageLog.groupBy({ by: ['action'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
-    prisma.agentRunEvent.findMany({
-      where: {
-        type: 'tool.result',
-        OR: [
-          { payload: { path: ['toolName'], equals: 'web_search' } },
-          { payload: { path: ['toolName'], equals: 'cover_generate' } },
-        ],
-      },
-      select: { payload: true, run: { select: { userId: true } } },
+type AdminTokenPeriod = 'today' | 'week' | 'month'
+
+function utc8PeriodStart(period: AdminTokenPeriod, now = new Date()): Date {
+  const local = new Date(now.getTime() + 8 * 3_600_000)
+  const year = local.getUTCFullYear()
+  const month = local.getUTCMonth()
+  let day = local.getUTCDate()
+  if (period === 'week') {
+    const weekday = local.getUTCDay() || 7
+    day -= weekday - 1
+  } else if (period === 'month') {
+    day = 1
+  }
+  return new Date(Date.UTC(year, month, day) - 8 * 3_600_000)
+}
+
+/** 全站 AI 用量总览：AiUsageLog 是模型 Token 的唯一计量源，固定价工具次数来自 Credits 账本。 */
+export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'today'): Promise<AdminTokenManagementPayload> {
+  const startedAt = utc8PeriodStart(period)
+  const usageWhere = { createdAt: { gte: startedAt } }
+  const [summary, userGroups, actionGroups, modelGroups, toolEntries, rawTrend] = await Promise.all([
+    prisma.aiUsageLog.aggregate({ where: usageWhere, _sum: { requestTokens: true, responseTokens: true } }),
+    prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['userId'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['action'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['modelTier'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.creditLedgerEntry.findMany({
+      where: { createdAt: { gte: startedAt }, sourceType: { in: ['web_search', 'image_generation'] }, deltaMilli: { lte: 0 } },
+      select: { userId: true, sourceType: true },
     }),
+    prisma.aiUsageLog.findMany({ where: usageWhere, select: { createdAt: true, requestTokens: true, responseTokens: true } }),
   ])
-  const sortedUserGroups = [...userGroups].sort((left, right) => {
-    const leftTotal = (left._sum.requestTokens ?? 0) + (left._sum.responseTokens ?? 0)
-    const rightTotal = (right._sum.requestTokens ?? 0) + (right._sum.responseTokens ?? 0)
-    return rightTotal - leftTotal
-  }).slice(0, 100)
+  const toolCounts = new Map<string, { webSearchCalls: number; imageCalls: number }>()
+  for (const entry of toolEntries) {
+    const counts = toolCounts.get(entry.userId) ?? { webSearchCalls: 0, imageCalls: 0 }
+    if (entry.sourceType === 'web_search') counts.webSearchCalls += 1
+    if (entry.sourceType === 'image_generation') counts.imageCalls += 1
+    toolCounts.set(entry.userId, counts)
+  }
+  const usageByUser = new Map(userGroups.map((item) => [item.userId, item]))
+  const rankedUserIds = [...new Set([...usageByUser.keys(), ...toolCounts.keys()])]
+    .sort((leftId, rightId) => {
+      const left = usageByUser.get(leftId)
+      const right = usageByUser.get(rightId)
+      const leftTokens = (left?._sum.requestTokens ?? 0) + (left?._sum.responseTokens ?? 0)
+      const rightTokens = (right?._sum.requestTokens ?? 0) + (right?._sum.responseTokens ?? 0)
+      if (rightTokens !== leftTokens) return rightTokens - leftTokens
+      const leftTools = toolCounts.get(leftId)
+      const rightTools = toolCounts.get(rightId)
+      return ((rightTools?.webSearchCalls ?? 0) + (rightTools?.imageCalls ?? 0))
+        - ((leftTools?.webSearchCalls ?? 0) + (leftTools?.imageCalls ?? 0))
+    })
+    .slice(0, 100)
   const users = await prisma.user.findMany({
-    where: { id: { in: sortedUserGroups.map((item) => item.userId) } },
+    where: { id: { in: rankedUserIds } },
     select: { id: true, nickname: true, avatarUrl: true },
   })
   const userMap = new Map(users.map((user) => [user.id, user]))
-  const toolCounts = new Map<string, { webSearchCalls: number; imageCalls: number }>()
-  for (const event of toolEvents) {
-    const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-      ? event.payload as Record<string, unknown>
-      : {}
-    if (payload.ok === false) continue
-    const counts = toolCounts.get(event.run.userId) ?? { webSearchCalls: 0, imageCalls: 0 }
-    if (payload.toolName === 'web_search') counts.webSearchCalls += 1
-    if (payload.toolName === 'cover_generate') counts.imageCalls += 1
-    toolCounts.set(event.run.userId, counts)
-  }
   const requestTokens = summary._sum.requestTokens ?? 0
   const responseTokens = summary._sum.responseTokens ?? 0
   const webSearchCalls = [...toolCounts.values()].reduce((total, item) => total + item.webSearchCalls, 0)
   const imageCalls = [...toolCounts.values()].reduce((total, item) => total + item.imageCalls, 0)
+  const modelLabels: Record<string, string> = { speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', custom: '自定义' }
+  const trendMap = new Map<string, { requestTokens: number; responseTokens: number }>()
+  for (const item of rawTrend) {
+    const date = new Date(item.createdAt.getTime() + 8 * 3_600_000).toISOString().slice(0, 10)
+    const current = trendMap.get(date) ?? { requestTokens: 0, responseTokens: 0 }
+    current.requestTokens += item.requestTokens ?? 0
+    current.responseTokens += item.responseTokens ?? 0
+    trendMap.set(date, current)
+  }
   return {
-    summary: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens, users: userGroups.length, webSearchCalls, imageCalls },
-    users: sortedUserGroups.flatMap((item) => {
-      const user = userMap.get(item.userId)
+    period,
+    periodStartedAt: startedAt.toISOString(),
+    summary: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens, users: rankedUserIds.length, webSearchCalls, imageCalls },
+    users: rankedUserIds.flatMap((userId) => {
+      const user = userMap.get(userId)
       if (!user) return []
-      const userRequestTokens = item._sum.requestTokens ?? 0
-      const userResponseTokens = item._sum.responseTokens ?? 0
-      const counts = toolCounts.get(item.userId) ?? { webSearchCalls: 0, imageCalls: 0 }
-      return [{ user, totalTokens: userRequestTokens + userResponseTokens, requestTokens: userRequestTokens, responseTokens: userResponseTokens, requestCount: item._count._all, ...counts }]
+      const usage = usageByUser.get(userId)
+      const userRequestTokens = usage?._sum.requestTokens ?? 0
+      const userResponseTokens = usage?._sum.responseTokens ?? 0
+      const counts = toolCounts.get(userId) ?? { webSearchCalls: 0, imageCalls: 0 }
+      return [{ user, totalTokens: userRequestTokens + userResponseTokens, requestTokens: userRequestTokens, responseTokens: userResponseTokens, requestCount: usage?._count._all ?? 0, ...counts }]
     }),
     actions: actionGroups.map((item) => {
       const actionRequestTokens = item._sum.requestTokens ?? 0
@@ -888,6 +919,19 @@ export async function getAdminTokenManagementData(): Promise<AdminTokenManagemen
       const totalTokens = actionRequestTokens + actionResponseTokens
       return { action: item.action, totalTokens, requestTokens: actionRequestTokens, responseTokens: actionResponseTokens, requestCount: item._count._all, averageTokens: item._count._all ? Math.round(totalTokens / item._count._all) : 0 }
     }).sort((left, right) => right.totalTokens - left.totalTokens),
+    models: modelGroups.map((item) => {
+      const modelRequestTokens = item._sum.requestTokens ?? 0
+      const modelResponseTokens = item._sum.responseTokens ?? 0
+      return {
+        modelTier: item.modelTier ?? 'unclassified',
+        modelLabel: modelLabels[item.modelTier ?? ''] ?? '未分类',
+        totalTokens: modelRequestTokens + modelResponseTokens,
+        requestTokens: modelRequestTokens,
+        responseTokens: modelResponseTokens,
+        requestCount: item._count._all,
+      }
+    }).sort((left, right) => right.totalTokens - left.totalTokens),
+    trend: [...trendMap.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, value]) => ({ date, ...value })),
   }
 }
 

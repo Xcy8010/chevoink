@@ -849,6 +849,10 @@ export interface AgentSession {
   novelId: EntityId
   title: string
   status: AgentSessionStatus
+  pinnedAt: string | null
+  toolPolicy: import('./agent-productivity.js').AgentSessionToolPolicy | null
+  sandboxMode: import('./agent-productivity.js').AgentSandboxMode
+  novelTitle?: string
   lastRunAt: string | null
   createdAt: string
   updatedAt: string

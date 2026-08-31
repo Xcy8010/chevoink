@@ -338,91 +338,101 @@ enum PrivacyLevel {
 }
 
 model User {
-  id                        String                  @id @default(cuid()) @db.VarChar(64)
-  email                     String?                 @unique @db.VarChar(255)
-  phone                     String?                 @unique @db.VarChar(32)
-  passwordHash              String                  @map("password_hash") @db.VarChar(255)
-  nickname                  String                  @db.VarChar(64)
-  avatarUrl                 String?                 @map("avatar_url")
-  profileCoverUrl           String?                 @map("profile_cover_url")
-  bio                       String?
-  role                      UserRole                @default(user)
+  id                         String                  @id @default(cuid()) @db.VarChar(64)
+  email                      String?                 @unique @db.VarChar(255)
+  phone                      String?                 @unique @db.VarChar(32)
+  passwordHash               String                  @map("password_hash") @db.VarChar(255)
+  nickname                   String                  @db.VarChar(64)
+  avatarUrl                  String?                 @map("avatar_url")
+  profileCoverUrl            String?                 @map("profile_cover_url")
+  bio                        String?
+  role                       UserRole                @default(user)
   /**
    * 超级管理（唯一）：仅该账号可在后台设置用户身份（用户↔管理）
    */
-  isSuperAdmin              Boolean                 @default(false) @map("is_super_admin")
-  isAuthor                  Boolean                 @default(false) @map("is_author")
-  followerCount             Int                     @default(0) @map("follower_count")
-  followingCount            Int                     @default(0) @map("following_count")
-  novelCount                Int                     @default(0) @map("novel_count")
-  postCount                 Int                     @default(0) @map("post_count")
-  unreadMessageCount        Int                     @default(0) @map("unread_message_count")
-  unreadNotificationCount   Int                     @default(0) @map("unread_notification_count")
+  isSuperAdmin               Boolean                 @default(false) @map("is_super_admin")
+  isAuthor                   Boolean                 @default(false) @map("is_author")
+  followerCount              Int                     @default(0) @map("follower_count")
+  followingCount             Int                     @default(0) @map("following_count")
+  novelCount                 Int                     @default(0) @map("novel_count")
+  postCount                  Int                     @default(0) @map("post_count")
+  unreadMessageCount         Int                     @default(0) @map("unread_message_count")
+  unreadNotificationCount    Int                     @default(0) @map("unread_notification_count")
   /**
    * 会话令牌版本：改密/登出/封禁时 +1，即刻吊销该用户全部 v2 会话令牌
    */
-  tokenVersion              Int                     @default(0) @map("token_version")
-  interactionsSeenAt        DateTime?               @map("interactions_seen_at")
-  followersSeenAt           DateTime?               @map("followers_seen_at")
-  lastActiveAt              DateTime?               @map("last_active_at")
+  tokenVersion               Int                     @default(0) @map("token_version")
+  interactionsSeenAt         DateTime?               @map("interactions_seen_at")
+  followersSeenAt            DateTime?               @map("followers_seen_at")
+  lastActiveAt               DateTime?               @map("last_active_at")
   /**
    * 封禁时间（NULL = 正常）：后台管理封禁后全站登录态失效
    */
-  bannedAt                  DateTime?               @map("banned_at")
-  privacyFollowers          PrivacyLevel            @default(public) @map("privacy_followers")
-  privacyFollowing          PrivacyLevel            @default(public) @map("privacy_following")
-  privacyLikes              PrivacyLevel            @default(public) @map("privacy_likes")
-  privacyFavorites          PrivacyLevel            @default(public) @map("privacy_favorites")
-  privacyReplies            PrivacyLevel            @default(public) @map("privacy_replies")
-  createdAt                 DateTime                @default(now()) @map("created_at")
-  updatedAt                 DateTime                @updatedAt @map("updated_at")
-  novels                    Novel[]
-  chapters                  Chapter[]
-  comments                  Comment[]
-  posts                     Post[]
-  sharedInPosts             Post[]                  @relation("PostSharedUser")
-  coverAssets               CoverAsset[]
-  conversationMembers       ConversationMember[]
-  messages                  Message[]
-  aiUsageLogs               AiUsageLog[]
-  agentSessions             AgentSession[]
-  agentRuns                 AgentRun[]
-  smsVerificationCodes      SmsVerificationCode[]
-  postLikes                 PostLike[]
-  postBookmarks             PostBookmark[]
-  commentLikes              CommentLike[]
-  novelFavorites            NovelFavorite[]
-  readingProgress           ReadingProgress[]
-  novelReads                NovelRead[]
-  paragraphUnderlines       ParagraphUnderline[]
-  changeSets                ChangeSet[]
-  userDirectives            UserDirective[]
-  storyCharters             StoryCharter[]
-  readerPromises            ReaderPromise[]
-  storyCompilations         StoryCompilation[]
-  sceneTasks                SceneTask[]
-  chapterBridges            ChapterBridge[]
-  characterVoiceProfiles    CharacterVoiceProfile[]
-  experienceAnchors         ExperienceAnchor[]
-  chapterQualityReports     ChapterQualityReport[]
-  qualityFindings           QualityFinding[]
-  ownedCorpusSources        CorpusSource[]          @relation("CorpusSourceOwner")
-  auditedCorpusSources      CorpusSource[]          @relation("CorpusSourceAuditor")
-  corpusDocuments           CorpusDocument[]
-  corpusPassages            CorpusPassage[]
-  techniqueCards            TechniqueCard[]
-  styleProfiles             StyleProfile[]
-  retrievalTraces           RetrievalTrace[]
-  leakageChecks             LeakageCheck[]
-  corpusDeletionReceipts    CorpusDeletionReceipt[]
-  researchDossiers          ResearchDossier[]
-  firstThreePrototypes      FirstThreePrototype[]
-  writingExperiments        WritingExperiment[]
-  agentDataControls         AgentDataControl[]
-  sentSkillShareInvites     SkillShareInvite[]      @relation("SkillShareInviteSender")
-  receivedSkillShareInvites SkillShareInvite[]      @relation("SkillShareInviteRecipient")
-  following                 UserFollow[]            @relation("UserFollowFollower")
-  followers                 UserFollow[]            @relation("UserFollowFollowing")
+  bannedAt                   DateTime?               @map("banned_at")
+  privacyFollowers           PrivacyLevel            @default(public) @map("privacy_followers")
+  privacyFollowing           PrivacyLevel            @default(public) @map("privacy_following")
+  privacyLikes               PrivacyLevel            @default(public) @map("privacy_likes")
+  privacyFavorites           PrivacyLevel            @default(public) @map("privacy_favorites")
+  privacyReplies             PrivacyLevel            @default(public) @map("privacy_replies")
+  createdAt                  DateTime                @default(now()) @map("created_at")
+  updatedAt                  DateTime                @updatedAt @map("updated_at")
+  novels                     Novel[]
+  chapters                   Chapter[]
+  comments                   Comment[]
+  posts                      Post[]
+  sharedInPosts              Post[]                  @relation("PostSharedUser")
+  coverAssets                CoverAsset[]
+  conversationMembers        ConversationMember[]
+  messages                   Message[]
+  aiUsageLogs                AiUsageLog[]
+  creditAccount              CreditAccount?
+  creditLedgerEntries        CreditLedgerEntry[]
+  referralCode               ReferralCode?
+  sentReferralRedemptions    ReferralRedemption[]    @relation("ReferralInviter")
+  receivedReferralRedemption ReferralRedemption?     @relation("ReferralInvitee")
+  aiModelConfigs             AiModelConfig[]
+  agentSessions              AgentSession[]
+  agentRuns                  AgentRun[]
+  smsVerificationCodes       SmsVerificationCode[]
+  postLikes                  PostLike[]
+  postBookmarks              PostBookmark[]
+  commentLikes               CommentLike[]
+  novelFavorites             NovelFavorite[]
+  readingProgress            ReadingProgress[]
+  novelReads                 NovelRead[]
+  paragraphUnderlines        ParagraphUnderline[]
+  changeSets                 ChangeSet[]
+  userDirectives             UserDirective[]
+  storyCharters              StoryCharter[]
+  readerPromises             ReaderPromise[]
+  storyCompilations          StoryCompilation[]
+  sceneTasks                 SceneTask[]
+  chapterBridges             ChapterBridge[]
+  characterVoiceProfiles     CharacterVoiceProfile[]
+  experienceAnchors          ExperienceAnchor[]
+  chapterQualityReports      ChapterQualityReport[]
+  qualityFindings            QualityFinding[]
+  ownedCorpusSources         CorpusSource[]          @relation("CorpusSourceOwner")
+  auditedCorpusSources       CorpusSource[]          @relation("CorpusSourceAuditor")
+  corpusDocuments            CorpusDocument[]
+  corpusPassages             CorpusPassage[]
+  techniqueCards             TechniqueCard[]
+  styleProfiles              StyleProfile[]
+  retrievalTraces            RetrievalTrace[]
+  leakageChecks              LeakageCheck[]
+  corpusDeletionReceipts     CorpusDeletionReceipt[]
+  researchDossiers           ResearchDossier[]
+  firstThreePrototypes       FirstThreePrototype[]
+  writingExperiments         WritingExperiment[]
+  agentDataControls          AgentDataControl[]
+  sentSkillShareInvites      SkillShareInvite[]      @relation("SkillShareInviteSender")
+  receivedSkillShareInvites  SkillShareInvite[]      @relation("SkillShareInviteRecipient")
+  storyBranches              StoryBranch[]
+  agentSubtasks              AgentSubtask[]
+  agentSchedules             AgentSchedule[]
+  agentEvalComparisons       AgentEvalComparison[]
+  following                  UserFollow[]            @relation("UserFollowFollower")
+  followers                  UserFollow[]            @relation("UserFollowFollowing")
 
   @@map("users")
 }
@@ -516,6 +526,10 @@ model Novel {
   writingExperiments     WritingExperiment[]
   agentDataControls      AgentDataControl[]
   skillShareInvites      SkillShareInvite[]
+  storyBranches          StoryBranch[]
+  agentSubtasks          AgentSubtask[]
+  agentSchedules         AgentSchedule[]
+  agentEvalComparisons   AgentEvalComparison[]
 
   @@index([authorId])
   @@index([status, visibility])
@@ -561,6 +575,7 @@ model Chapter {
   bridgesFrom          ChapterBridge[]        @relation("ChapterBridgeFrom")
   bridgesTo            ChapterBridge[]        @relation("ChapterBridgeTo")
   qualityReports       ChapterQualityReport[]
+  storyBranches        StoryBranch[]
 
   @@unique([novelId, orderIndex])
   @@unique([volumeId, orderInVolume])
@@ -946,28 +961,136 @@ model CoverAsset {
 }
 
 model AiUsageLog {
-  id             String         @id @default(cuid()) @db.VarChar(64)
-  userId         String         @map("user_id") @db.VarChar(64)
-  novelId        String?        @map("novel_id") @db.VarChar(64)
-  chapterId      String?        @map("chapter_id") @db.VarChar(64)
-  coverAssetId   String?        @map("cover_asset_id") @db.VarChar(64)
-  targetType     String         @map("target_type") @db.VarChar(32)
-  targetId       String?        @map("target_id") @db.VarChar(64)
-  providerType   AiProviderType @map("provider_type")
-  providerMode   String         @map("provider_mode") @db.VarChar(16)
-  modelName      String         @map("model_name") @db.VarChar(128)
-  action         String         @db.VarChar(64)
-  requestTokens  Int?           @map("request_tokens")
-  responseTokens Int?           @map("response_tokens")
-  durationMs     Int            @map("duration_ms")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  user           User           @relation(fields: [userId], references: [id])
-  novel          Novel?         @relation(fields: [novelId], references: [id])
-  chapter        Chapter?       @relation(fields: [chapterId], references: [id])
+  id                String         @id @default(cuid()) @db.VarChar(64)
+  userId            String         @map("user_id") @db.VarChar(64)
+  novelId           String?        @map("novel_id") @db.VarChar(64)
+  chapterId         String?        @map("chapter_id") @db.VarChar(64)
+  coverAssetId      String?        @map("cover_asset_id") @db.VarChar(64)
+  targetType        String         @map("target_type") @db.VarChar(32)
+  targetId          String?        @map("target_id") @db.VarChar(64)
+  providerType      AiProviderType @map("provider_type")
+  providerMode      String         @map("provider_mode") @db.VarChar(16)
+  modelName         String         @map("model_name") @db.VarChar(128)
+  action            String         @db.VarChar(64)
+  requestTokens     Int?           @map("request_tokens")
+  responseTokens    Int?           @map("response_tokens")
+  modelTier         String?        @map("model_tier") @db.VarChar(24)
+  multiplierBps     Int            @default(10000) @map("multiplier_bps")
+  creditChargeMilli Int            @default(0) @map("credit_charge_milli")
+  durationMs        Int            @map("duration_ms")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  user              User           @relation(fields: [userId], references: [id])
+  novel             Novel?         @relation(fields: [novelId], references: [id])
+  chapter           Chapter?       @relation(fields: [chapterId], references: [id])
 
   @@index([userId, createdAt])
   @@index([targetType, targetId])
   @@map("ai_usage_logs")
+}
+
+/// 用户额度账户。金额统一使用 milli-credit（1000 milli = 1 Credit），避免浮点误差。
+model CreditAccount {
+  userId              String    @id @map("user_id") @db.VarChar(64)
+  dailyAllowanceMilli Int       @default(450000) @map("daily_allowance_milli")
+  dailyUsedMilli      Int       @default(0) @map("daily_used_milli")
+  bonusBalanceMilli   Int       @default(0) @map("bonus_balance_milli")
+  periodStartedAt     DateTime  @map("period_started_at")
+  periodEndsAt        DateTime  @map("period_ends_at")
+  suspendedAt         DateTime? @map("suspended_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([periodEndsAt])
+  @@index([suspendedAt])
+  @@map("credit_accounts")
+}
+
+/// 额度不可变账本：消费为负，邀请/管理员补发为正；idempotencyKey 防止网络重试重复扣款。
+model CreditLedgerEntry {
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  userId          String   @map("user_id") @db.VarChar(64)
+  deltaMilli      Int      @map("delta_milli")
+  dailyDeltaMilli Int      @default(0) @map("daily_delta_milli")
+  bonusDeltaMilli Int      @default(0) @map("bonus_delta_milli")
+  kind            String   @db.VarChar(32)
+  sourceType      String   @map("source_type") @db.VarChar(40)
+  referenceId     String?  @map("reference_id") @db.VarChar(96)
+  idempotencyKey  String   @unique @map("idempotency_key") @db.VarChar(160)
+  modelTier       String?  @map("model_tier") @db.VarChar(24)
+  multiplierBps   Int      @default(10000) @map("multiplier_bps")
+  requestTokens   Int?     @map("request_tokens")
+  responseTokens  Int?     @map("response_tokens")
+  metadata        Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([sourceType, createdAt])
+  @@map("credit_ledger_entries")
+}
+
+model ReferralCode {
+  userId      String               @id @map("user_id") @db.VarChar(64)
+  code        String               @unique @db.VarChar(24)
+  createdAt   DateTime             @default(now()) @map("created_at")
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redemptions ReferralRedemption[]
+
+  @@map("referral_codes")
+}
+
+model ReferralRedemption {
+  id                 String       @id @default(cuid()) @db.VarChar(64)
+  code               String       @db.VarChar(24)
+  inviterUserId      String       @map("inviter_user_id") @db.VarChar(64)
+  inviteeUserId      String       @unique @map("invitee_user_id") @db.VarChar(64)
+  inviterRewardMilli Int          @default(300000) @map("inviter_reward_milli")
+  inviteeRewardMilli Int          @default(120000) @map("invitee_reward_milli")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  referralCode       ReferralCode @relation(fields: [code], references: [code], onDelete: Restrict)
+  inviter            User         @relation("ReferralInviter", fields: [inviterUserId], references: [id], onDelete: Cascade)
+  invitee            User         @relation("ReferralInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  @@index([inviterUserId, createdAt])
+  @@index([code])
+  @@map("referral_redemptions")
+}
+
+/// 额度系统全局开关与公测默认值。固定使用 id=global 的单例记录。
+model CreditSystemSetting {
+  id                  String   @id @db.VarChar(32)
+  globallyPaused      Boolean  @default(false) @map("globally_paused")
+  dailyAllowanceMilli Int      @default(450000) @map("daily_allowance_milli")
+  resetHourUtc8       Int      @default(15) @map("reset_hour_utc8")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("credit_system_settings")
+}
+
+/// 平台内置模型与用户 BYOK 模型共用配置表。真实 modelName/API Key 永不进入用户侧契约。
+model AiModelConfig {
+  id               String   @id @default(cuid()) @db.VarChar(64)
+  ownerUserId      String?  @map("owner_user_id") @db.VarChar(64)
+  key              String   @unique @db.VarChar(96)
+  provider         String   @db.VarChar(40)
+  displayName      String   @map("display_name") @db.VarChar(80)
+  modelName        String   @map("model_name") @db.VarChar(160)
+  baseUrl          String?  @map("base_url") @db.VarChar(512)
+  apiKeyCiphertext String?  @map("api_key_ciphertext")
+  tier             String?  @db.VarChar(24)
+  multiplierBps    Int      @default(10000) @map("multiplier_bps")
+  enabled          Boolean  @default(true)
+  selectable       Boolean  @default(true)
+  isDefault        Boolean  @default(false) @map("is_default")
+  metadata         Json?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  owner            User?    @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUserId, enabled])
+  @@index([tier, enabled, selectable])
+  @@map("ai_model_configs")
 }
 
 model AgentSession {
@@ -976,6 +1099,9 @@ model AgentSession {
   novelId            String              @map("novel_id") @db.VarChar(64)
   title              String              @db.VarChar(160)
   status             AgentSessionStatus  @default(active)
+  pinnedAt           DateTime?           @map("pinned_at")
+  toolPolicy         Json?               @map("tool_policy")
+  sandboxMode        String              @default("workspace") @map("sandbox_mode") @db.VarChar(24)
   lastRunAt          DateTime?           @map("last_run_at")
   createdAt          DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")
@@ -984,10 +1110,101 @@ model AgentSession {
   runs               AgentRun[]
   directives         UserDirective[]
   contextCheckpoints ContextCheckpoint[]
+  parentSubtasks     AgentSubtask[]       @relation("ParentAgentSubtask")
+  childSubtasks      AgentSubtask[]       @relation("ChildAgentSubtask")
+  schedules          AgentSchedule[]
 
   @@index([userId, novelId])
   @@index([novelId, updatedAt])
   @@map("agent_sessions")
+}
+
+model StoryBranch {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  chapterId      String   @map("chapter_id") @db.VarChar(64)
+  sourceRunId    String?  @map("source_run_id") @db.VarChar(64)
+  name           String   @db.VarChar(160)
+  baseRevision   Int      @map("base_revision")
+  baseContent    String   @map("base_content")
+  headContent    String   @map("head_content")
+  status         String   @default("active") @db.VarChar(24)
+  mergedAt       DateTime? @map("merged_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel          Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapter        Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  sourceRun      AgentRun? @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId, novelId, updatedAt])
+  @@index([chapterId, status])
+  @@map("story_branches")
+}
+
+model AgentSubtask {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  parentSessionId String  @map("parent_session_id") @db.VarChar(64)
+  childSessionId String   @map("child_session_id") @db.VarChar(64)
+  childRunId     String?  @map("child_run_id") @db.VarChar(64)
+  role           String   @db.VarChar(32)
+  prompt         String
+  tokenBudget    Int      @default(4000) @map("token_budget")
+  status         String   @default("queued") @db.VarChar(24)
+  cancelledAt    DateTime? @map("cancelled_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel          Novel        @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  parentSession  AgentSession @relation("ParentAgentSubtask", fields: [parentSessionId], references: [id], onDelete: Cascade)
+  childSession   AgentSession @relation("ChildAgentSubtask", fields: [childSessionId], references: [id], onDelete: Cascade)
+  childRun       AgentRun?    @relation(fields: [childRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId, novelId, createdAt])
+  @@index([parentSessionId, createdAt])
+  @@map("agent_subtasks")
+}
+
+model AgentSchedule {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  sessionId      String   @map("session_id") @db.VarChar(64)
+  name           String   @db.VarChar(160)
+  prompt         String
+  cadenceMinutes Int      @map("cadence_minutes")
+  nextRunAt      DateTime @map("next_run_at")
+  lastRunId      String?  @map("last_run_id") @db.VarChar(64)
+  status         String   @default("active") @db.VarChar(24)
+  lockedAt       DateTime? @map("locked_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel          Novel        @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  lastRun        AgentRun?    @relation(fields: [lastRunId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextRunAt])
+  @@index([userId, novelId, updatedAt])
+  @@map("agent_schedules")
+}
+
+model AgentEvalComparison {
+  id             String   @id @default(cuid()) @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  novelId        String   @map("novel_id") @db.VarChar(64)
+  name           String   @db.VarChar(160)
+  runIds         Json     @map("run_ids")
+  metrics        Json
+  createdAt      DateTime @default(now()) @map("created_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel          Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([userId, novelId, createdAt])
+  @@map("agent_eval_comparisons")
 }
 
 model AgentRun {
@@ -1007,6 +1224,9 @@ model AgentRun {
   currentTurn        Int                    @default(0) @map("current_turn")
   usage              Json?
   taskSpec           Json?                  @map("task_spec")
+  modelTier          String                 @default("speed") @map("model_tier") @db.VarChar(24)
+  customModelId      String?                @map("custom_model_id") @db.VarChar(64)
+  reasoningEffort    String                 @default("high") @map("reasoning_effort") @db.VarChar(16)
   startedAt          DateTime?              @map("started_at")
   finishedAt         DateTime?              @map("finished_at")
   createdAt          DateTime               @default(now()) @map("created_at")
@@ -1025,6 +1245,9 @@ model AgentRun {
   qualityReports     ChapterQualityReport[]
   retrievalTraces    RetrievalTrace[]
   leakageChecks      LeakageCheck[]
+  sourceBranches     StoryBranch[]
+  childSubtasks      AgentSubtask[]
+  scheduleRuns       AgentSchedule[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])

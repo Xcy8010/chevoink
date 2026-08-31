@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, PencilLine, SquarePlus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -20,8 +20,22 @@ export function AgentTaskRail({
   onCreateTaskWindow,
   onSelectTaskWindow,
 }: Pick<AgentTaskSidebarProps, 'taskWindows' | 'activeTaskWindowId' | 'taskSwitchLocked' | 'onCreateTaskWindow' | 'onSelectTaskWindow'> & { onExpand: () => void }) {
+  const rootRef = useRef<HTMLElement | null>(null)
+  const [preview, setPreview] = useState<{ task: AgentTaskSidebarItem; top: number } | null>(null)
+  const dense = taskWindows.length > 28
+  const veryDense = taskWindows.length > 56
+
+  const showPreview = (task: AgentTaskSidebarItem, element: HTMLButtonElement) => {
+    const root = rootRef.current
+    if (!root) return
+    const rootRect = root.getBoundingClientRect()
+    const itemRect = element.getBoundingClientRect()
+    const top = Math.max(8, Math.min(rootRect.height - 94, itemRect.top - rootRect.top - 18))
+    setPreview({ task, top })
+  }
+
   return (
-    <nav className="flex h-full w-[54px] flex-col items-center gap-1 overflow-hidden py-2" aria-label="任务快捷栏">
+    <nav ref={rootRef} className="relative flex h-full w-[54px] flex-col items-center gap-1 overflow-visible py-2" aria-label="任务快捷栏">
       <button type="button" onClick={onExpand} className="mb-1 inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="展开任务区" title="展开任务区">
         <ChevronRight className="h-4 w-4" />
       </button>
@@ -29,13 +43,26 @@ export function AgentTaskRail({
         <SquarePlus className="h-4 w-4" />
       </button>
       <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
-      <div className="flex min-h-0 flex-1 flex-col items-center gap-[7px] overflow-y-auto py-2 [scrollbar-width:none]">
+      <div className={cn('flex min-h-0 flex-1 flex-col items-center overflow-y-auto py-2 [scrollbar-width:none]', veryDense ? 'gap-0.5' : dense ? 'gap-1' : 'gap-[7px]')}>
         {taskWindows.map((taskWindow) => {
           const active = taskWindow.id === activeTaskWindowId
-          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} disabled={taskSwitchLocked} className="group flex h-[7px] w-9 shrink-0 items-center justify-center disabled:opacity-55" aria-label={taskWindow.title} title={taskWindow.title} aria-current={active ? 'page' : undefined}>
-            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200', active ? 'w-4 bg-[var(--text-primary)] opacity-95' : 'w-2.5 bg-[var(--text-tertiary)] opacity-45 group-hover:w-3.5 group-hover:opacity-80')} aria-hidden />
+          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} onMouseEnter={(event) => showPreview(taskWindow, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(taskWindow, event.currentTarget)} onBlur={() => setPreview(null)} disabled={taskSwitchLocked} className={cn('group flex w-9 shrink-0 items-center justify-center disabled:opacity-55', veryDense ? 'h-[3px]' : dense ? 'h-[5px]' : 'h-[7px]')} aria-label={taskWindow.title} aria-current={active ? 'page' : undefined}>
+            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-out', active ? 'w-4 bg-[var(--text-primary)] opacity-95' : 'w-2.5 bg-[var(--text-tertiary)] opacity-45 group-hover:w-3.5 group-hover:opacity-80')} aria-hidden />
           </button>
         })}
+      </div>
+      <div
+        className={cn(
+          'pointer-events-none absolute left-[calc(100%+8px)] z-50 w-64 border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2.5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 ease-out',
+          preview ? 'translate-x-0 opacity-100' : '-translate-x-1 opacity-0',
+        )}
+        style={{ top: preview?.top ?? 8 }}
+        aria-hidden={!preview}
+      >
+        <p className="truncate text-xs font-medium text-[var(--text-primary)]">{preview?.task.title}</p>
+        <p className="mt-1 line-clamp-3 text-[11px] leading-5 text-[var(--text-secondary)]">
+          {preview?.task.prompt.trim() || (preview?.task.temporary ? '等待开始第一轮对话。' : '打开这轮任务的完整上下文。')}
+        </p>
       </div>
     </nav>
   )
@@ -107,7 +134,7 @@ export default function AgentTaskSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[220px] shrink-0 flex-col overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]">
+    <aside className="flex h-full w-[220px] shrink-0 flex-col overflow-hidden bg-[var(--app-bg)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] py-4 pl-4 pr-12">
         <div>
           <p className="text-xs font-medium tracking-[0.08em] text-[var(--text-secondary)]">任务</p>
@@ -117,15 +144,15 @@ export default function AgentTaskSidebar({
           type="button"
           onClick={onCreateTaskWindow}
           disabled={taskSwitchLocked}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
           aria-label="新建任务"
           title="新建任务"
         >
           <SquarePlus className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        <div className="space-y-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <div className="space-y-0.5">
           {taskWindows.map((taskWindow) => {
             const isActiveTaskWindow = taskWindow.id === activeTaskWindowId
             const isEditingTaskWindow = editingTaskWindowId === taskWindow.id
@@ -135,13 +162,14 @@ export default function AgentTaskSidebar({
               <div
                 key={taskWindow.id}
                 className={cn(
-                  'group/task rounded-[18px] border transition-colors',
+                  'group/task relative transition-colors',
                   isActiveTaskWindow
-                    ? 'border-[var(--border-strong)] bg-[var(--surface-default)]'
-                    : 'border-transparent hover:border-[var(--border-subtle)] hover:bg-[var(--surface-default)]/78',
+                    ? 'bg-[var(--surface-muted)]'
+                    : 'hover:bg-[var(--surface-muted)]/70',
                 )}
               >
-                <div className="flex items-start gap-2 px-3 py-3">
+                {isActiveTaskWindow ? <span aria-hidden className="absolute inset-y-2 left-0 w-0.5 bg-[var(--text-primary)]" /> : null}
+                <div className="flex items-start gap-2 px-3 py-2.5">
                   {isEditingTaskWindow ? (
                     <div className="min-w-0 flex-1">
                       <input
@@ -161,7 +189,7 @@ export default function AgentTaskSidebar({
                         }}
                         autoFocus
                         maxLength={160}
-                        className="w-full rounded-[10px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 py-1 text-sm text-[var(--text-primary)] outline-none"
+                        className="w-full border border-[var(--border-subtle)] bg-[var(--surface-default)] px-2 py-1 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                       />
                       <p className="mt-1 text-xs text-[var(--text-secondary)]">
                         {taskWindow.temporary && !hasTaskContent ? '等待开始' : formatTaskWindowTime(taskWindow.updatedAt)}

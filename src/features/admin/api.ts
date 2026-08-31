@@ -24,6 +24,8 @@ import type {
   AdminPostDetailPayload,
   AdminPostRow,
   AdminTokenManagementPayload,
+  AdminCreditsManagementPayload,
+  AdminModelManagementPayload,
   AdminUserDetailPayload,
   AdminUserFavoriteNovelRow,
   AdminUserFollowRow,
@@ -103,8 +105,50 @@ export function getAdminDashboard(): Promise<AdminDashboardPayload> {
   return requestJson<AdminDashboardPayload>('/api/admin/dashboard')
 }
 
-export function getAdminTokenManagement(): Promise<AdminTokenManagementPayload> {
-  return requestJson<AdminTokenManagementPayload>('/api/admin/token-usage')
+export function getAdminTokenManagement(period: 'today' | 'week' | 'month' = 'today'): Promise<AdminTokenManagementPayload> {
+  return requestJson<AdminTokenManagementPayload>(`/api/admin/token-usage?period=${period}`)
+}
+
+export function getAdminCreditsManagement(): Promise<AdminCreditsManagementPayload> {
+  return requestJson<AdminCreditsManagementPayload>('/api/admin/credits')
+}
+
+export function resetAdminUserCredits(userId: string, payload: { captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ stoppedRuns: number }> {
+  return requestJson(`/api/admin/credits/users/${userId}/reset`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function resetAllAdminCredits(payload: { captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; stoppedRuns: number }> {
+  return requestJson('/api/admin/credits/reset-all', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function resetSelectedAdminCredits(payload: { userIds: string[]; captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; stoppedRuns: number }> {
+  return requestJson('/api/admin/credits/users/reset-selected', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function setAdminUserCreditsPaused(userId: string, payload: { paused: boolean; captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; paused: boolean; stoppedRuns: number }> {
+  return requestJson(`/api/admin/credits/users/${userId}/pause`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function setSelectedAdminCreditsPaused(payload: { userIds: string[]; paused: boolean; captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; paused: boolean; stoppedRuns: number }> {
+  return requestJson('/api/admin/credits/users/pause-selected', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function setAdminCreditsPaused(payload: { paused: boolean; captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ paused: boolean; stoppedRuns: number }> {
+  return requestJson('/api/admin/credits/pause', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function getAdminModelManagement(): Promise<AdminModelManagementPayload> {
+  return requestJson<AdminModelManagementPayload>('/api/admin/models')
+}
+
+export function updateAdminModel(modelId: string, payload: {
+  provider?: string; displayName?: string; modelName?: string; baseUrl?: string | null; apiKey?: string
+  multiplier?: number; enabled?: boolean; selectable?: boolean; isDefault?: boolean
+  reasoningEfforts?: import('../../../shared/contracts').ModelReasoningEffort[]
+  defaultReasoningEffort?: import('../../../shared/contracts').ModelReasoningEffort
+  visionEnabled?: boolean
+}): Promise<{ ok: true }> {
+  return requestJson(`/api/admin/models/${modelId}`, { method: 'PATCH', body: JSON.stringify(payload) })
 }
 
 /* ---------------- Agent 3.0 专家盲评 ---------------- */

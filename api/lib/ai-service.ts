@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { fetch as undiciFetch, Agent as UndiciAgent } from 'undici'
 
 import { prisma, DataAccessError } from './prisma.js'
@@ -9,6 +11,8 @@ import type {
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
 import { createCoverAssetsData } from './data-access.js'
+import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, IMAGE_CALL_MILLI, refundCreditCharge } from './credits.js'
+import type { CreditModelTier } from '../../shared/contracts/index.js'
 import {
   FANQIE_ALL_CATEGORIES,
   FANQIE_CONTENT_EMOTION_TAGS,
@@ -32,10 +36,12 @@ type TextCompletionOptions = {
   temperature?: number
   /** 思考强度按调用覆盖：简单分类/打标类任务用 low 提速，默认走 env 全局值 */
   reasoningEffort?: 'low' | 'high' | 'max'
+  modelTier?: CreditModelTier
+  multiplierBps?: number
 }
 
-function ensureTextProviderConfigured() {
-  if (!env.aiTextApiKeyConfigured || !env.aiTextApiKey) {
+function ensureTextProviderConfigured(apiKey?: string | null) {
+  if ((!env.aiTextApiKeyConfigured || !env.aiTextApiKey) && !apiKey) {
     throw new DataAccessError(503, 'AI_TEXT_PROVIDER_UNAVAILABLE', '文本模型尚未配置。')
   }
 }
@@ -52,6 +58,21 @@ const imageFetchAgent = new UndiciAgent({
   bodyTimeout: env.aiImageTimeoutMs,
 })
 
+/**
+ * 少数 OpenAI-compatible 网关不会返回 usage。此时不能把一次真实调用记成 0 Credits；
+ * 中文按每个非 ASCII 字符约 1 token、ASCII 按约 4 字符 1 token 做保守估算。
+ * Provider 返回 usage 时始终以真实值为准。
+ */
+function estimateTokenCount(value: string): number {
+  let ascii = 0
+  let nonAscii = 0
+  for (const character of value) {
+    if (character.codePointAt(0)! <= 0x7f) ascii += 1
+    else nonAscii += 1
+  }
+  return Math.max(1, Math.ceil(ascii / 4 + nonAscii))
+}
+
 async function recordUsage(input: {
   userId: string
   providerType: 'text' | 'image'
@@ -64,8 +85,10 @@ async function recordUsage(input: {
   requestTokens?: number | null
   responseTokens?: number | null
   durationMs: number
+  modelTier?: CreditModelTier | null
+  multiplierBps?: number
 }) {
-  await prisma.aiUsageLog.create({
+  const usageLog = await prisma.aiUsageLog.create({
     data: {
       userId: input.userId,
       novelId: input.novelId ?? null,
@@ -79,9 +102,29 @@ async function recordUsage(input: {
       action: input.action,
       requestTokens: input.requestTokens ?? null,
       responseTokens: input.responseTokens ?? null,
+      modelTier: input.modelTier ?? null,
+      multiplierBps: input.multiplierBps ?? 10000,
       durationMs: input.durationMs,
     },
   })
+  if (input.providerType === 'text' && input.modelTier !== 'custom') {
+    const charged = await consumeTokenCredits({
+      userId: input.userId,
+      usageLogId: usageLog.id,
+      requestTokens: input.requestTokens ?? 0,
+      responseTokens: input.responseTokens ?? 0,
+      modelTier: input.modelTier ?? 'speed',
+      multiplierBps: input.multiplierBps ?? 10000,
+      referenceId: input.targetId ?? usageLog.id,
+    })
+    if (charged.chargedMilli > 0) {
+      await prisma.aiUsageLog.update({ where: { id: usageLog.id }, data: { creditChargeMilli: charged.chargedMilli } })
+    }
+    if (charged.exhausted) {
+      throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
+    }
+  }
+  return usageLog
 }
 
 type JsonProviderPayload = {
@@ -109,8 +152,11 @@ async function parseJsonResponse(response: Response): Promise<JsonProviderPayloa
 // 原生工具调用通道（Agent Loop 专用，OpenAI 兼容 tools + stream）
 // ---------------------------------------------------------------------------
 
+export type ChatImageContentPart = { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } }
+export type ChatTextContentPart = { type: 'text'; text: string }
 export type ChatMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | Array<ChatTextContentPart | ChatImageContentPart> }
   | { role: 'assistant'; content: string | null; reasoning?: string; toolCalls?: ToolCallRequest[] }
   | { role: 'tool'; toolCallId: string; content: string }
 
@@ -153,6 +199,10 @@ type ChatWithToolsParams = {
   messages: ChatMessage[]
   tools: OpenAIToolDefinition[]
   model?: string
+  providerBaseUrl?: string | null
+  providerApiKey?: string | null
+  provider?: string
+  reasoningEffort?: import('../../shared/contracts/index.js').ModelReasoningEffort
   temperature?: number
   onChunk?: (chunk: ChatStreamChunk) => void
   signal?: AbortSignal
@@ -163,6 +213,8 @@ type ChatWithToolsParams = {
     chapterId?: string | null
     targetType?: string
     targetId?: string | null
+    modelTier?: CreditModelTier
+    multiplierBps?: number
   }
 }
 
@@ -185,6 +237,7 @@ function toProviderMessages(messages: ChatMessage[]) {
           function: { name: call.name, arguments: call.arguments },
         }))
       }
+      if (message.reasoning) payload.reasoning_content = message.reasoning
 
       return payload
     }
@@ -198,17 +251,18 @@ function toProviderMessages(messages: ChatMessage[]) {
  * 支持 AbortSignal 真实中断上游请求，每次调用都落 AiUsageLog。
  */
 export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCompletionResult> {
-  ensureTextProviderConfigured()
+  ensureTextProviderConfigured(params.providerApiKey)
+  await assertCreditAccess(params.usageLog.userId, params.usageLog.modelTier ?? 'speed', false)
 
   const startedAt = Date.now()
   const model = params.model ?? env.aiTextModel
-  const endpoint = `${env.aiTextBaseUrl.replace(/\/$/, '')}/chat/completions`
+  const endpoint = `${(params.providerBaseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`
 
+  const reasoningEffort = params.reasoningEffort ?? env.aiReasoningEffort
+  const isDeepSeek = (params.provider ?? '').toLowerCase() === 'deepseek'
   const body: Record<string, unknown> = {
     model,
     temperature: params.temperature ?? 0.6,
-    // 思考强度：默认 high 兼顾周到与成本（low 考虑不周、max 过度思考），env 可调整
-    reasoning_effort: env.aiReasoningEffort,
     // 显式拉满单轮输出上限：不传时 DeepSeek 默认仅 4096，
     // Agent 写 3000+ 字长章时工具参数 JSON 会被 length 截断导致写入失败
     max_tokens: env.aiTextMaxOutputTokens,
@@ -217,15 +271,23 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     messages: toProviderMessages(params.messages),
   }
 
+  // DeepSeek 的关闭思考通过 thinking=disabled 表达；把 none 错传给 reasoning_effort 会触发 400。
+  // 其他 OpenAI 兼容供应商保留各自声明的强度值。
+  if (isDeepSeek) {
+    body.thinking = { type: reasoningEffort === 'none' ? 'disabled' : 'enabled' }
+    if (reasoningEffort !== 'none') body.reasoning_effort = reasoningEffort
+  } else {
+    body.reasoning_effort = reasoningEffort
+  }
+
   if (params.tools.length > 0) {
     body.tools = params.tools
   }
-
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.aiTextApiKey}`,
+      Authorization: `Bearer ${params.providerApiKey ?? env.aiTextApiKey}`,
     },
     body: JSON.stringify(body),
     signal: params.signal,
@@ -366,6 +428,14 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     finishReason = 'tool_calls'
   }
 
+  if (usage.promptTokens <= 0) {
+    usage.promptTokens = estimateTokenCount(JSON.stringify({ messages: toProviderMessages(params.messages), tools: params.tools }))
+  }
+  if (usage.completionTokens <= 0) {
+    usage.completionTokens = estimateTokenCount(JSON.stringify({ content, reasoning, toolCalls }))
+  }
+  if (usage.totalTokens <= 0) usage.totalTokens = usage.promptTokens + usage.completionTokens
+
   await recordUsage({
     userId: params.usageLog.userId,
     providerType: 'text',
@@ -378,6 +448,8 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     requestTokens: usage.promptTokens || null,
     responseTokens: usage.completionTokens || null,
     durationMs: Date.now() - startedAt,
+    modelTier: params.usageLog.modelTier ?? 'speed',
+    multiplierBps: params.usageLog.multiplierBps ?? 10000,
   })
 
   return { content, reasoning, toolCalls, finishReason, usage }
@@ -388,20 +460,31 @@ export async function generateTextCompletion(
   userPrompt: string,
   options: TextCompletionOptions,
 ) {
-  ensureTextProviderConfigured()
+  const modelRuntime = await getModelTierRuntime(options.modelTier ?? 'speed')
+  const completionReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
+  const isDeepSeek = modelRuntime.provider.toLowerCase() === 'deepseek'
+  ensureTextProviderConfigured(modelRuntime.apiKey)
+  await assertCreditAccess(options.userId, modelRuntime.tier, false)
 
   const startedAt = Date.now()
-  const endpoint = `${env.aiTextBaseUrl.replace(/\/$/, '')}/chat/completions`
+  const endpoint = `${(modelRuntime.baseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.aiTextApiKey}`,
+      Authorization: `Bearer ${modelRuntime.apiKey ?? env.aiTextApiKey}`,
     },
     body: JSON.stringify({
-      model: env.aiTextModel,
+      model: modelRuntime.modelName ?? env.aiTextModel,
       temperature: options.temperature ?? 0.7,
-      reasoning_effort: options.reasoningEffort ?? env.aiReasoningEffort,
+      ...(
+        isDeepSeek
+          ? {
+              thinking: { type: completionReasoning === 'none' ? 'disabled' : 'enabled' },
+              ...(completionReasoning === 'none' ? {} : { reasoning_effort: completionReasoning }),
+            }
+          : { reasoning_effort: completionReasoning }
+      ),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -428,14 +511,16 @@ export async function generateTextCompletion(
     userId: options.userId,
     providerType: 'text',
     action: options.action,
-    modelName: env.aiTextModel,
+    modelName: modelRuntime.modelName ?? env.aiTextModel,
     novelId: options.novelId ?? null,
     chapterId: options.chapterId ?? null,
     targetType: options.targetType ?? 'text',
     targetId: options.targetId ?? null,
-    requestTokens: payload.usage?.prompt_tokens ?? null,
-    responseTokens: payload.usage?.completion_tokens ?? null,
+    requestTokens: payload.usage?.prompt_tokens ?? estimateTokenCount(`${systemPrompt}\n${userPrompt}`),
+    responseTokens: payload.usage?.completion_tokens ?? estimateTokenCount(content),
     durationMs: Date.now() - startedAt,
+    modelTier: modelRuntime.tier,
+    multiplierBps: options.multiplierBps ?? modelRuntime.multiplierBps,
   })
 
   return content.trim()
@@ -509,8 +594,9 @@ async function generateImageUrls(
 
 export async function getAiConfigPayload() {
   return {
-    textModel: env.aiTextModel,
-    imageModel: env.aiImageModel,
+    // 用户侧只暴露产品档位，不返回供应商的真实 model id。
+    textModelLabel: '极速',
+    imageModelLabel: '图片生成',
     providerMode: env.aiProviderMode,
     contextWindow: {
       maxTokens: env.aiTextContextMaxTokens,
@@ -615,7 +701,23 @@ export async function generateCoverImageData(
   userId: string,
   input: GenerateCoverImageRequest & { novelId?: string | null; negativePrompt?: string | null },
 ) {
-  const imageUrls = await generateImageUrls(input.prompt, input.size, input.count, userId, 'generateCoverImage')
+  const chargeKey = `image:${randomUUID()}`
+  await consumeCredits({
+    userId,
+    amountMilli: IMAGE_CALL_MILLI,
+    kind: 'usage',
+    sourceType: 'image_generation',
+    idempotencyKey: chargeKey,
+    referenceId: input.novelId ?? null,
+    metadata: { count: input.count, size: input.size },
+  })
+  let imageUrls: string[]
+  try {
+    imageUrls = await generateImageUrls(input.prompt, input.size, input.count, userId, 'generateCoverImage')
+  } catch (error) {
+    await refundCreditCharge(userId, chargeKey, 'provider_failed').catch(() => {})
+    throw error
+  }
   const images = await createCoverAssetsData({
     userId,
     prompt: input.prompt,

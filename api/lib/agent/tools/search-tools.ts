@@ -5,6 +5,8 @@ import { z } from 'zod'
 import { env } from '../../../config/env.js'
 import { decodeWebPageBuffer, extractArticleText } from '../../html-extract.js'
 import { searchWeb } from '../../web-search-service.js'
+import { consumeCredits, WEB_SEARCH_CALL_MILLI } from '../../credits.js'
+import { DataAccessError } from '../../prisma.js'
 import type { WebSearchOutcome } from '../../web-search-service.js'
 import { consumeWebReadBudget, consumeWebSearchBudget, getCachedWebSearch, setCachedWebSearch } from '../permissions.js'
 import { defineTool } from './types.js'
@@ -61,6 +63,18 @@ export const webSearchTool = defineTool({
     }
 
     try {
+      if (!cached) {
+        await consumeCredits({
+          userId: ctx.userId,
+          amountMilli: WEB_SEARCH_CALL_MILLI,
+          kind: 'usage',
+          sourceType: 'web_search',
+          idempotencyKey: `web-search:${ctx.runId}:${ctx.callId}`,
+          referenceId: ctx.runId,
+          modelTier: 'speed',
+          metadata: { query: normalizedQuery },
+        })
+      }
       const outcome = cached ?? (await searchWeb(args.query, args.maxResults, ctx.signal))
 
       if (!cached && outcome.results.length > 0) {
@@ -88,6 +102,7 @@ export const webSearchTool = defineTool({
         display: { kind: 'webSearch', query: args.query, provider: outcome.provider, results: outcome.results },
       }
     } catch (error) {
+      if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
       const reason = error instanceof Error ? error.message : '未知错误'
       return {
         output: `联网搜索暂时不可用（${reason}）。请基于既有知识完成任务，并在最终说明中如实告知作者本次未能联网检索。`,

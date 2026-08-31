@@ -1,5 +1,36 @@
 import type { ComposerReference } from './agentStore'
 
+export const COMPOSER_REFERENCE_MIME = 'application/x-chevoink-reference'
+
+export function serializeComposerReferenceTransfer(reference: Omit<ComposerReference, 'offset'>): string {
+  return JSON.stringify(reference)
+}
+
+export function parseComposerReferenceTransfer(value: string): Omit<ComposerReference, 'offset'> | null {
+  if (!value) return null
+  try {
+    const item = JSON.parse(value) as Partial<ComposerReference>
+    if (
+      typeof item.id !== 'string'
+      || (item.kind !== 'chapter' && item.kind !== 'plan' && item.kind !== 'catalog')
+      || typeof item.name !== 'string'
+      || typeof item.text !== 'string'
+      || typeof item.startLine !== 'number'
+      || typeof item.endLine !== 'number'
+    ) return null
+    return {
+      id: item.id,
+      kind: item.kind,
+      name: item.name,
+      text: item.text,
+      startLine: item.startLine,
+      endLine: item.endLine,
+    }
+  } catch {
+    return null
+  }
+}
+
 function referenceLineLabel(reference: ComposerReference): string {
   return reference.startLine === reference.endLine
     ? `${reference.startLine}`

@@ -124,6 +124,7 @@ export const WORKSPACE_WRITE_TOOLS = new Set([
   'memory_save',
   'memory_relation_save',
   'memory_event_save',
+  'novel_create',
   'novel_rename',
   'novel_update_meta',
   'cover_prompt_set',
@@ -157,6 +158,7 @@ const WRITE_TOOL_LABELS: Record<string, string> = {
   memory_save: '更新作品记忆',
   memory_relation_save: '更新人物关系',
   memory_event_save: '记录故事事件',
+  novel_create: '创建作品',
   novel_rename: '重命名作品',
   novel_update_meta: '更新作品设置',
   cover_prompt_set: '设置封面描述',
@@ -178,6 +180,7 @@ type AgentStoreState = {
   lastSeq: number
   outputSummary: string
   errorMessage: string | null
+  errorCode: string | null
   /** 当前 run 所属会话：面板重挂载（沉浸切换/路由往返）时用于判断能否续接直播而非重置 */
   activeSessionId: string | null
   /** 当前 messages 已完成恢复的会话；用于 Work/IDE 切换时复用同一份会话而不闪烁重载。 */
@@ -406,6 +409,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   lastSeq: 0,
   outputSummary: '',
   errorMessage: null,
+  errorCode: null,
   activeSessionId: null,
   loadedSessionId: null,
   composerDraft: '',
@@ -433,6 +437,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
+      errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
       // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空；
@@ -473,6 +478,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
+      errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
@@ -489,6 +495,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       pendingApproval: null,
       pendingQuestion: null,
       errorMessage: null,
+      errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
       // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
@@ -509,13 +516,14 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       lastSeq: 0,
       outputSummary: '',
       errorMessage: null,
+      errorCode: null,
       workspaceActivities: [],
       todos: [],
       liveToolDrafts: {},
       toolNavigationRequest: null,
     }),
 
-  clearError: () => set({ errorMessage: null }),
+  clearError: () => set({ errorMessage: null, errorCode: null }),
 
   setComposerDraft: (value) => set({ composerDraft: value }),
 
@@ -817,6 +825,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           return {
             ...base,
             errorMessage: event.message,
+            errorCode: event.code,
             ...(event.recoverable
               ? {}
               : {

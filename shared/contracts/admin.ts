@@ -306,6 +306,8 @@ export type AdminAgentSessionMessagesPayload = {
 }
 
 export type AdminTokenManagementPayload = {
+  period?: 'today' | 'week' | 'month'
+  periodStartedAt?: string
   summary: {
     totalTokens: number
     requestTokens: number
@@ -331,4 +333,61 @@ export type AdminTokenManagementPayload = {
     requestCount: number
     averageTokens: number
   }>
+  models?: Array<{
+    modelTier: string
+    modelLabel: string
+    totalTokens: number
+    requestTokens: number
+    responseTokens: number
+    requestCount: number
+  }>
+  trend?: Array<{ date: string; requestTokens: number; responseTokens: number }>
+}
+
+export type AdminCreditsManagementPayload = {
+  summary: {
+    globallyPaused: boolean
+    users: number
+    dailyAllowance: number
+    dailyUsed: number
+    bonusBalance: number
+    exhaustedUsers: number
+  }
+  users: Array<{
+    user: AdminBriefUser
+    planLabel: '公测版'
+    dailyAllowance: number
+    dailyUsed: number
+    dailyRemaining: number
+    bonusBalance: number
+    totalRemaining: number
+    usedPercent: number
+    resetsAt: string
+    suspended: boolean
+  }>
+}
+
+export type AdminModelManagementPayload = {
+  models: Array<{
+    id: string
+    tier: string | null
+    provider: string
+    displayName: string
+    modelName: string
+    baseUrl: string | null
+    multiplier: number
+    enabled: boolean
+    selectable: boolean
+    isDefault: boolean
+    apiKeyConfigured: boolean
+    requestCount: number
+    requestTokens: number
+    responseTokens: number
+    reasoningEfforts: import('./credits.js').ModelReasoningEffort[]
+    defaultReasoningEffort: import('./credits.js').ModelReasoningEffort
+    visionEnabled: boolean
+    configurationReady: boolean
+    updatedAt: string
+  }>
+  trend: Array<{ date: string; requests: number; totalTokens: number }>
 }

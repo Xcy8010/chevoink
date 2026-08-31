@@ -65,6 +65,7 @@ export type RegisterRequest = {
   phone?: string
   password?: string
   nickname: string
+  referralCode?: string
 }
 
 export type LoginRequest = {
@@ -112,6 +113,7 @@ export type SmsRegisterRequest = {
   phone: string
   code: string
   password?: string
+  referralCode?: string
 }
 
 export type UpdateMyProfileRequest = {
@@ -495,7 +497,11 @@ export type CreateAgentSessionResponse = ApiSuccess<{
 }>
 
 export type UpdateAgentSessionRequest = {
-  title: string
+  title?: string
+  status?: 'active' | 'archived'
+  pinned?: boolean
+  toolPolicy?: import('./agent-productivity.js').AgentSessionToolPolicy
+  sandboxMode?: import('./agent-productivity.js').AgentSandboxMode
 }
 
 export type UpdateAgentSessionResponse = ApiSuccess<{
@@ -544,8 +550,8 @@ export type ListAgentSessionHistoryResponse = ApiSuccess<{
 export type AgentActionResponse = ApiSuccess<AgentActionResultPayload>
 
 export type GetAiConfigResponse = ApiSuccess<{
-  textModel: string
-  imageModel: string
+  textModelLabel: string
+  imageModelLabel: string
   providerMode: AiProviderMode
   contextWindow: {
     maxTokens: number
@@ -608,7 +614,7 @@ export const apiEndpointCatalog: ApiEndpointDefinition[] = [
   { method: 'GET', path: '/api/conversations', summary: '会话列表' },
   { method: 'GET', path: '/api/conversations/:conversationId/messages', summary: '消息列表' },
   { method: 'POST', path: '/api/conversations/:conversationId/messages', summary: '发送消息' },
-  { method: 'GET', path: '/api/ai/config', summary: 'AI 模型与上下文配置' },
+  { method: 'GET', path: '/api/ai/config', summary: 'AI 公开档位与上下文配置' },
   { method: 'POST', path: '/api/ai/novel-outline', summary: 'AI 大纲生成' },
   { method: 'POST', path: '/api/ai/chapter-assist', summary: 'AI 章节辅助' },
   { method: 'POST', path: '/api/ai/cover-prompt', summary: 'AI 封面提示词优化' },
