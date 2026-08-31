@@ -136,6 +136,11 @@ describe.skipIf(!dbAvailable)('P1 路由 400 文案对照（需 DB）', () => {
       message: '请提供会话标题。',
     },
     {
+      name: 'agent 改会话：没有可更新设置',
+      req: () => request(app).patch('/api/agent/sessions/s1').set('Cookie', cookie).send({}),
+      message: '请提供需要更新的会话设置。',
+    },
+    {
       name: 'agent 建计划：缺 novelId',
       req: () => request(app).post('/api/agent/plans').set('Cookie', cookie).send({}),
       message: '请提供作品 ID。',

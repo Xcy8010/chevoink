@@ -202,6 +202,12 @@ router.patch('/sessions/:sessionId', async (req: Request, res: Response): Promis
 
   try {
     const userId = requireSessionUserId(req)
+    const rawTitle = req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>).title
+      : undefined
+    if (rawTitle !== undefined && (typeof rawTitle !== 'string' || rawTitle.trim().length === 0)) {
+      throw new DataAccessError(400, 'VALIDATION_ERROR', '请提供会话标题。')
+    }
     const body = parseBody(updateAgentSessionSchema, req.body, '请提供需要更新的会话设置。')
 
     const payload = await updateAgentSessionData(userId, req.params.sessionId, {
