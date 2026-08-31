@@ -8,7 +8,7 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
 
 [![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-MIT-crimson)](#-license)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#-license)
 [![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#%EF%B8%8F-tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#%EF%B8%8F-tech-stack)
 [![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
@@ -172,7 +172,7 @@ Join the **Chevoink community group** (QQ group: `158443235`) to discuss the exp
 
 ## 📄 License
 
-This project is open-sourced under the [MIT License](LICENSE): free to use, modify and distribute, provided the copyright notice is retained.
+This project is open-sourced under the [GNU AGPL-3.0 License](LICENSE): free to use, modify and distribute. **If you provide it as an online service (SaaS / web server), you must offer the corresponding, modifiable source code to its users.** Closed-source commercial deployment requires a separate commercial license from the original author.
 
 ## 🙏 Special Thanks
 
