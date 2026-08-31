@@ -29,7 +29,9 @@ import MetaPanel from './components/MetaPanel'
 import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioCommandBar from './components/StudioCommandBar'
+import CreateNovelDialog from './components/CreateNovelDialog'
 import StudioWorkspaceSidebar from './components/StudioWorkspaceSidebar'
+import { AgentTaskRail } from './components/AgentTaskSidebar'
 import StudioSettingsDialog, { type StudioSettingsSection } from './components/StudioSettingsDialog'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
@@ -40,7 +42,7 @@ import StudioChapterViewer from './components/StudioChapterViewer'
 import MemoryGraph from './components/MemoryGraph'
 import SkillsPanel from './components/SkillsPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
-import { updateAgentSessionSettings } from './agent/agentApi'
+import { fetchAgentSessions, updateAgentSessionSettings } from './agent/agentApi'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import AgentContextPanel from './agent/components/AgentContextPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
@@ -51,7 +53,7 @@ import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterD
 
 
 import { buildArtifactsFromHistory, mergeRestoredArtifactsWithSnapshot, readStoredAgentWorkspace } from './lib/agent-persistence.js'
-import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession } from './lib/agent-session.js'
+import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession, shouldShowWorkspaceNovel } from './lib/agent-session.js'
 import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdatePayload, buildProjectNotes, createIdleAgentRunState, isNovelFormDirty } from './lib/form-state.js'
 import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
@@ -80,6 +82,12 @@ export default function StudioWorkspace() {
       })
       return Array.isArray(me?.authoredNovels) ? me.authoredNovels : []
     },
+    refetchOnWindowFocus: false,
+  })
+  const navigationSessionsQuery = useQuery({
+    queryKey: ['agent', 'sessions', 'workspace-navigation'],
+    queryFn: () => fetchAgentSessions(),
+    staleTime: 15_000,
     refetchOnWindowFocus: false,
   })
 
@@ -260,6 +268,7 @@ export default function StudioWorkspace() {
   } | null>(null)
   const [workspaceDialogBusy, setWorkspaceDialogBusy] = useState(false)
   const [publishDialogOpen, setPublishDialogOpen] = useState(false)
+  const [createNovelDialogOpen, setCreateNovelDialogOpen] = useState(false)
   const createChapterLockRef = useRef(false)
   const agentExecutionChapterTargetRef = useRef<string | null>(null)
 
@@ -349,9 +358,9 @@ export default function StudioWorkspace() {
     return () => window.clearTimeout(timeout)
   }, [coverGenerationBusy])
   const createNovelMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (requestedTitle: string) =>
       createNovelWorkspace({
-        title: BOOTSTRAP_NOVEL_TITLE,
+        title: requestedTitle.trim() || BOOTSTRAP_NOVEL_TITLE,
         summary: BOOTSTRAP_NOVEL_SUMMARY,
         tags: [],
         visibility: 'private',
@@ -361,6 +370,7 @@ export default function StudioWorkspace() {
       resetWorkspaceDraftState()
     },
     onSuccess: (novel) => {
+      setCreateNovelDialogOpen(false)
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(STUDIO_LAST_NOVEL_STORAGE_KEY, novel.id)
       }
@@ -1306,13 +1316,15 @@ export default function StudioWorkspace() {
     [coverAssets, selectedCoverId],
   )
   const novelOptions = useMemo(() => {
-    const source = (myNovelsQuery.data ?? []).filter((novel) => !isBootstrapNovel(novel))
+    const novelsWithSessions = new Set((navigationSessionsQuery.data?.items ?? []).map((session) => session.novelId))
+    // “未命名、0 章、0 字”不等于可以丢弃：只要已产生 Agent 会话，它就是用户的真实作品。
+    const source = (myNovelsQuery.data ?? []).filter((novel) => shouldShowWorkspaceNovel(novel, novelsWithSessions.has(novel.id)))
     const merged = currentNovel
       ? [currentNovel, ...source]
       : source
 
     return Array.from(new Map(merged.map((novel) => [novel.id, novel])).values())
-  }, [currentNovel, myNovelsQuery.data])
+  }, [currentNovel, myNovelsQuery.data, navigationSessionsQuery.data?.items])
 
   const activeChapterListItem = useMemo(
     () => chapters.find((item) => item.id === selectedChapterId) ?? null,
@@ -1604,8 +1616,7 @@ export default function StudioWorkspace() {
       return
     }
 
-    resetWorkspaceDraftState()
-    createNovelMutation.mutate()
+    setCreateNovelDialogOpen(true)
   }
 
   function resetWorkspaceDraftState() {
@@ -3783,6 +3794,9 @@ export default function StudioWorkspace() {
       activeNovelId,
       currentTaskWindow?.customNamed ? currentTaskWindow.title : undefined,
     )
+    // 未命名空白作品一旦产生会话就属于用户真实内容；立即刷新全局导航会话，
+    // 避免紧接着切换/新建作品时仍按“无会话引导作品”将它过滤掉。
+    void queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] })
     setAgentSessionId(createdSession.id)
     setActiveAgentTaskWindowId(createdSession.id)
     setAgentTaskWindows((current) =>
@@ -3817,7 +3831,8 @@ export default function StudioWorkspace() {
           novelId={activeNovelId}
           novelName={currentNovel?.displayTitle?.trim() || currentNovel?.title?.trim() || '未命名作品'}
           initializingNovel={currentNovel ? isBootstrapNovel(currentNovel) : false}
-          emptyStateSeed={activeAgentTaskWindowId ?? activeNovelId}
+          // 空态推荐只跟作品绑定；重复点击“新对话”不应让四张示例卡片反复换文案。
+          emptyStateSeed={activeNovelId}
           chapterId={
             selectedChapterId && !selectedChapterId.startsWith('local-') ? selectedChapterId : null
           }
@@ -3854,6 +3869,7 @@ export default function StudioWorkspace() {
           mobileIntegratedHeader={mobileIntegratedHeader}
           showCreditWarning={showCreditWarning}
           showEmptySuggestions={workspacePerspective === 'work'}
+          hideHeader={workspacePerspective === 'work' && !mobileIntegratedHeader}
           referenceOptions={composerReferenceOptions}
           onOpenStudioSettings={(section) => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
         />
@@ -4309,6 +4325,7 @@ export default function StudioWorkspace() {
             <div className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
+                taskRail={<AgentTaskRail taskWindows={agentTaskSidebarItems} activeTaskWindowId={activeAgentTaskWindowId} taskSwitchLocked={agentRunState.active} onExpand={() => setWorkspaceSidebarOpen(true)} onCreateTaskWindow={handleCreateAgentTaskWindow} onSelectTaskWindow={(taskId) => void handleSelectAgentTaskWindow(taskId)} />}
                 conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
                 activityDock={(workspaceActivities.length > 0 || agentTodos.length > 0 || pendingChapterReviews.length > 0 || Boolean(pendingPlanReview)) ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><AgentActivityBar
                   activities={workspaceActivities}
@@ -4628,6 +4645,17 @@ export default function StudioWorkspace() {
           setWorkspaceDialog(null)
         }}
         onConfirm={() => void handleWorkspaceDialogConfirm()}
+      />
+      <CreateNovelDialog
+        open={createNovelDialogOpen}
+        busy={createNovelMutation.isPending}
+        onCancel={() => { if (!createNovelMutation.isPending) setCreateNovelDialogOpen(false) }}
+        onCreate={(title) => {
+          if (!createNovelMutation.isPending) {
+            resetWorkspaceDraftState()
+            createNovelMutation.mutate(title)
+          }
+        }}
       />
       <PublishNovelDialog
         open={publishDialogOpen}

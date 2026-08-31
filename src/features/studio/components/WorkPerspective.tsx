@@ -8,6 +8,7 @@ import type { WorkInspectorTab } from './WorkInspector'
 import { shouldShowWorkActivityDock } from './work-layout'
 
 type Props = {
+  taskRail: ReactNode
   conversation: ReactNode
   activityDock?: ReactNode
   inspector: ReactNode
@@ -32,7 +33,7 @@ const inspectorRailItems = [
 const PANEL_MOTION_MS = 220
 
 /** Agent-first 工作台：默认只保留两条窄轨，需要时再展开任务、作品与证据。 */
-export default function WorkPerspective({ conversation, activityDock, inspector, viewer, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
+export default function WorkPerspective({ taskRail, conversation, activityDock, inspector, viewer, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
@@ -85,6 +86,7 @@ export default function WorkPerspective({ conversation, activityDock, inspector,
   }, [])
 
   return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
+    <aside className="h-full w-[54px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--app-bg)] motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{taskRail}</aside>
     <main
       className="min-w-0 flex-1 overflow-hidden bg-[var(--surface-default)] transition-[padding] duration-200 ease-out"
       style={{ paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0 }}

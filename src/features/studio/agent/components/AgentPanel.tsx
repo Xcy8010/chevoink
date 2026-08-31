@@ -102,6 +102,8 @@ type AgentPanelProps = {
   activityPresentation?: 'inline' | 'responsive'
   /** 手机工作台把 Agent 标题与任务按钮并入作品选择同一行。 */
   mobileIntegratedHeader?: boolean
+  /** Work 桌面端由全局任务顶栏承载标题与操作，避免重复出现第二条 Agent 顶栏。 */
+  hideHeader?: boolean
   /** “+”菜单可直接选择的目录/计划/章节；章节正文由输入框按需读取。 */
   referenceOptions?: Array<Omit<ComposerReference, 'offset'>>
   /** 桌面端由工作区左下角统一承载额度提醒；手机端没有该侧栏时在输入框上方展示。 */
@@ -132,6 +134,7 @@ export function AgentPanel({
   className,
   activityPresentation = 'inline',
   mobileIntegratedHeader = false,
+  hideHeader = false,
   showCreditWarning = false,
   showEmptySuggestions = true,
   onOpenStudioSettings,
@@ -826,7 +829,7 @@ export function AgentPanel({
   return (
     <div className={cn('relative flex h-full min-h-0 flex-col', className)}>
       {/* 状态栏 */}
-      <div className={cn(
+      {!hideHeader ? <div className={cn(
         'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
         mobileIntegratedHeader && 'absolute -top-[52px] left-[44%] right-0 z-30 h-[52px] gap-1 border-b-0 bg-[var(--app-bg)] px-1.5 py-1',
       )}>
@@ -979,7 +982,7 @@ export function AgentPanel({
             )}
           </div>
         ) : null}
-      </div>
+      </div> : null}
 
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">

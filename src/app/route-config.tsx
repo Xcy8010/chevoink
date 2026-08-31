@@ -40,6 +40,7 @@ function lazyPage(load: () => Promise<{ default: ComponentType }>) {
 // 首页/登录/404 保持同步导入保障首屏，其余页面按路由拆包懒加载
 const SettingsPage = lazyPage(() => import('@/app/routes/SettingsPage'))
 const AccountUsagePage = lazyPage(() => import('@/features/account/AccountUsagePage'))
+const AccountProfilePage = lazyPage(() => import('@/features/account/AccountProfilePage'))
 const AuthorPage = lazyPage(() => import('@/pages/AuthorPage'))
 const CommunityPage = lazyPage(() => import('@/pages/CommunityPage'))
 const DiscoverPage = lazyPage(() => import('@/pages/DiscoverPage'))
@@ -245,6 +246,24 @@ export const appRoutes: AppRouteDefinition[] = [
     description: '把常用偏好整理在一起，让阅读和创作始终保持熟悉的手感。',
     element: <SettingsPage />,
     fallback: <SettingsSkeleton />,
+  },
+  {
+    path: '/account',
+    title: '管理 ChevoInk 账户',
+    description: '查看个人信息、账户安全与创作入口。',
+    element: <Navigate to="/account/profile" replace />,
+    useShell: false,
+  },
+  {
+    path: '/account/profile',
+    title: '管理 ChevoInk 账户资料',
+    description: '查看个人资料、账户安全状态与创作入口。',
+    element: (
+      <RequireAuthRoute title="登录后管理账户" description="登录后即可查看个人资料与账户状态。">
+        <AccountProfilePage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
   },
   {
     path: '/account/usage',

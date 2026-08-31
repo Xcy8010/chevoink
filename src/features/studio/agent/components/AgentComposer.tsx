@@ -9,7 +9,8 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, ChevronDown, ChevronRight, Eye, FileText, Image, LoaderCircle, Plus, Settings2, Square, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Flame, Image, LoaderCircle, Plus, Scale, Settings2, Square, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 import {
   MAX_AGENT_FILE_COUNT,
@@ -79,47 +80,16 @@ type ParsedComposerContent = {
   references: ComposerReference[]
 }
 
-const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description: string }> = [
-  { value: 'stable', label: '平衡延续', description: '贴合既有走向，适合续写与轻量调整。' },
-  { value: 'balanced', label: '严谨创作', description: '默认；强化因果与人类感，并自动落实检查建议。' },
-  { value: 'bold', label: '大胆探索', description: '适合试新场景和新结构，报告只提示不自动改写。' },
+const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description: string; icon: typeof Feather }> = [
+  { value: 'stable', label: '平衡延续', description: '贴合既有走向，适合续写与轻量调整。', icon: Scale },
+  { value: 'balanced', label: '严谨创作', description: '默认；强化因果与人类感，并自动落实检查建议。', icon: Feather },
+  { value: 'bold', label: '大胆创作', description: '适合试新场景和新结构，报告只提示不自动改写。', icon: Flame },
 ]
 
-function ReasoningEffortControl({
-  modelKey,
-  efforts,
-  selected,
-  disabled,
-  onChange,
-}: {
-  modelKey: string
-  efforts: ModelReasoningEffort[]
-  selected: ModelReasoningEffort
-  disabled?: boolean
-  onChange: (modelKey: string, effort: ModelReasoningEffort) => void
-}) {
-  if (efforts.length === 0) return null
-  return <details className="group/effort relative mr-2 shrink-0" onClick={(event) => event.stopPropagation()}>
-    <summary
-      className="flex h-6 cursor-pointer list-none items-center gap-1 rounded-[6px] px-1.5 text-[9px] text-[var(--text-tertiary)] opacity-0 transition-[opacity,color,background] hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)] group-hover:opacity-100 group-open/effort:opacity-100 [&::-webkit-details-marker]:hidden"
-      title="调整这个模型的推理强度"
-      aria-label={`推理强度 ${selected}`}
-      onClick={(event) => { if (disabled) event.preventDefault() }}
-    >
-      <BrainCircuit className="h-3 w-3" />{selected}
-    </summary>
-    <div className="absolute bottom-0 left-[calc(100%+6px)] z-[60] w-28 overflow-hidden rounded-[10px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
-      {efforts.map((effort) => <button
-        key={effort}
-        type="button"
-        className={`flex h-8 w-full items-center justify-between px-3 text-left text-xs hover:bg-[var(--surface-muted)] ${effort === selected ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}
-        onClick={(event) => {
-          onChange(modelKey, effort)
-          event.currentTarget.closest('details')?.removeAttribute('open')
-        }}
-      ><span>{effort}</span>{effort === selected ? <span aria-hidden>✓</span> : null}</button>)}
-    </div>
-  </details>
+const REASONING_ORDER: ModelReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+function orderedReasoningEfforts(efforts: ModelReasoningEffort[]) {
+  return [...new Set(efforts)].sort((left, right) => REASONING_ORDER.indexOf(left) - REASONING_ORDER.indexOf(right))
 }
 
 function referenceLineLabel(reference: ComposerReference): string {
@@ -275,7 +245,7 @@ export function AgentComposer({
   const activeCustomModel = modelTier === 'custom' ? customModels.find((item) => item.id === customModelId) : undefined
   const activeModelKey = modelTier === 'custom' && activeCustomModel ? `custom:${activeCustomModel.id}` : `tier:${modelTier}`
   const activeModelLabel = activeCustomModel?.displayName ?? activeBuiltInModel?.label ?? '极速'
-  const activeReasoningEfforts = activeCustomModel?.reasoningEfforts ?? activeBuiltInModel?.reasoningEfforts ?? ['high']
+  const activeReasoningEfforts = orderedReasoningEfforts(activeCustomModel?.reasoningEfforts ?? activeBuiltInModel?.reasoningEfforts ?? ['high'])
   const storedActiveEffort = reasoningSelections[activeModelKey]
   const activeReasoningEffort = storedActiveEffort && activeReasoningEfforts.includes(storedActiveEffort)
     ? storedActiveEffort
@@ -653,12 +623,13 @@ export function AgentComposer({
               onClick={(event) => { if (running || disabled) event.preventDefault() }}
               aria-label="创作模式"
               title={CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.description}
-              className="flex h-7 cursor-pointer list-none items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] group-data-[disabled=true]/mode:pointer-events-none group-data-[disabled=true]/mode:opacity-45 [&::-webkit-details-marker]:hidden"
+              className={cn('flex h-7 cursor-pointer list-none items-center gap-1.5 px-1 text-[11px] transition-colors hover:text-[var(--text-primary)] group-data-[disabled=true]/mode:pointer-events-none group-data-[disabled=true]/mode:opacity-45 [&::-webkit-details-marker]:hidden', creativeFreedom === 'bold' ? 'text-orange-600 dark:text-orange-400' : 'text-[var(--text-secondary)]')}
             >
+              {(() => { const ActiveIcon = CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.icon ?? Feather; return <ActiveIcon className="h-3.5 w-3.5" /> })()}
               <span>{CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.label}</span>
               <ChevronDown className="h-3 w-3 transition-transform group-open/mode:rotate-180" />
             </summary>
-            <div className={`absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] shadow-[0_14px_34px_rgba(15,23,42,0.16)] ${creativeFreedom === 'bold' ? 'bg-[var(--surface-muted)]' : 'bg-[var(--surface-default)]'}`}>
+            <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_14px_34px_rgba(15,23,42,0.16)] motion-safe:origin-bottom-left motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
               {CREATIVE_MODES.map((mode) => (
                 <button
                   key={mode.value}
@@ -669,10 +640,10 @@ export function AgentComposer({
                     creativeModeRef.current?.removeAttribute('open')
                   }}
                   aria-pressed={mode.value === creativeFreedom}
-                  className={`block w-full px-3 py-2 text-left transition-colors first:rounded-t-[11px] last:rounded-b-[11px] ${mode.value === creativeFreedom ? 'bg-[var(--surface-muted)]' : 'bg-[var(--surface-default)] hover:bg-[var(--surface-muted)]'}`}
+                  className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors first:rounded-t-[11px] last:rounded-b-[11px] ${mode.value === creativeFreedom ? 'bg-[var(--surface-muted)]' : 'bg-[var(--surface-default)] hover:bg-[var(--surface-muted)]'}`}
                 >
-                  <span className="block text-xs font-medium text-[var(--text-primary)]">{mode.label}</span>
-                  <span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-tertiary)]">{mode.description}</span>
+                  <mode.icon className={cn('mt-0.5 h-4 w-4 shrink-0', mode.value === 'bold' ? 'text-orange-600 dark:text-orange-400' : 'text-[var(--text-secondary)]')} />
+                  <span className="min-w-0"><span className={cn('block text-xs font-medium', mode.value === 'bold' ? 'text-orange-600 dark:text-orange-400' : 'text-[var(--text-primary)]')}>{mode.label}</span><span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-tertiary)]">{mode.description}</span></span>
                 </button>
               ))}
             </div>
@@ -688,67 +659,29 @@ export function AgentComposer({
               <span className="text-[9px] text-[var(--text-tertiary)]">{activeReasoningEffort}</span>
               <ChevronDown className="h-3 w-3 transition-transform group-open/model:rotate-180" />
             </summary>
-            <div className="absolute bottom-full right-0 z-50 mb-2 w-[272px] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.18)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
-              <div className="px-2 pb-1">
-                <div className="flex items-center justify-between rounded-[9px] px-2 py-2 text-xs"><span className="font-medium text-[var(--text-primary)]">模型</span><span className="max-w-36 truncate text-[var(--text-secondary)]">{activeModelLabel} <ChevronRight className="ml-1 inline h-3 w-3" /></span></div>
-                <div className="mx-2 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)]/55 px-3 py-3">
-                  <div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-medium text-[var(--text-primary)]">推理强度</span><span className="text-[var(--text-secondary)]">{activeReasoningEffort}</span></div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, activeReasoningEfforts.length - 1)}
-                    step={1}
-                    value={activeReasoningIndex}
-                    disabled={activeReasoningEfforts.length <= 1}
-                    onChange={(event) => onReasoningEffortChange(activeModelKey, activeReasoningEfforts[Number(event.target.value)] ?? activeReasoningEffort)}
-                    aria-label="调整当前模型推理强度"
-                    className="agent-reasoning-slider h-7 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
-                    style={{ '--agent-slider-progress': `${activeReasoningEfforts.length <= 1 ? 100 : (activeReasoningIndex / (activeReasoningEfforts.length - 1)) * 100}%` } as CSSProperties}
-                  />
+            <div className="absolute bottom-full right-0 z-50 mb-2 w-[248px] overflow-visible rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.18)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
+              <div className="group/models relative">
+                <button type="button" className="flex h-9 w-full items-center justify-between rounded-[9px] px-2.5 text-xs hover:bg-[var(--surface-muted)]"><span className="font-medium text-[var(--text-primary)]">模型</span><span className="inline-flex max-w-36 items-center gap-1 truncate text-[var(--text-secondary)]">{activeModelLabel}<ChevronRight className="h-3 w-3" /></span></button>
+                <div className="invisible absolute bottom-0 right-[calc(100%-1px)] z-[70] w-60 translate-x-1 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 opacity-0 shadow-[0_18px_46px_rgba(15,23,42,0.2)] transition-[opacity,transform,visibility] duration-150 ease-out group-hover/models:visible group-hover/models:translate-x-0 group-hover/models:opacity-100 group-focus-within/models:visible group-focus-within/models:translate-x-0 group-focus-within/models:opacity-100">
+                  <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">可用内置模型</p>
+                  {modelOptions.filter((option) => option.available).map((option) => <button key={option.tier} type="button" onClick={() => { onModelTierChange(option.tier); modelMenuRef.current?.removeAttribute('open') }} className={cn('flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs hover:bg-[var(--surface-muted)]', option.tier === modelTier && 'bg-[var(--surface-muted)] font-medium')}><span className="min-w-0 flex-1 truncate">{option.label}</span><span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{option.multiplier.toFixed(1)}x</span>{option.tier === modelTier ? <Check className="h-3.5 w-3.5" /> : null}</button>)}
+                  {customModels.some((model) => model.enabled) ? <><div className="mx-2 my-1 border-t border-[var(--border-subtle)]" /><p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">自定义模型</p>{customModels.filter((model) => model.enabled).map((model) => <button key={model.id} type="button" onClick={() => { onCustomModelChange(model.id); onModelTierChange('custom'); modelMenuRef.current?.removeAttribute('open') }} className={cn('flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs hover:bg-[var(--surface-muted)]', modelTier === 'custom' && model.id === customModelId && 'bg-[var(--surface-muted)] font-medium')}><span className="min-w-0 flex-1 truncate">{model.displayName}</span><span className="text-[10px] text-[var(--text-tertiary)]">BYOK</span>{modelTier === 'custom' && model.id === customModelId ? <Check className="h-3.5 w-3.5" /> : null}</button>)}</> : null}
+                </div>
+              </div>
+              <div className="flex h-9 items-center justify-between rounded-[9px] px-2.5 text-xs"><span className="font-medium text-[var(--text-primary)]">速度</span><span className="text-[var(--text-secondary)]">标准</span></div>
+              <details className="group/advanced rounded-[10px] open:bg-[var(--surface-muted)]/65">
+                <summary className="flex h-9 cursor-pointer list-none items-center justify-between rounded-[9px] px-2.5 text-xs hover:bg-[var(--surface-muted)] [&::-webkit-details-marker]:hidden"><span className="font-medium text-[var(--text-primary)]">高级</span><ChevronDown className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform group-open/advanced:rotate-180" /></summary>
+                <div className="px-3 pb-3 pt-1">
+                  <div className="mb-1.5 flex items-center justify-between text-[11px]"><span className="inline-flex items-center gap-1.5 font-medium"><BrainCircuit className="h-3.5 w-3.5" />推理强度</span><span className="text-[var(--text-secondary)]">{activeReasoningEffort}</span></div>
+                  <input type="range" min={0} max={Math.max(0, activeReasoningEfforts.length - 1)} step={1} value={activeReasoningIndex} disabled={activeReasoningEfforts.length <= 1} onChange={(event) => onReasoningEffortChange(activeModelKey, activeReasoningEfforts[Number(event.target.value)] ?? activeReasoningEffort)} aria-label="调整当前模型推理强度" className="agent-reasoning-slider h-7 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-45" style={{ '--agent-slider-progress': `${activeReasoningEfforts.length <= 1 ? 100 : (activeReasoningIndex / (activeReasoningEfforts.length - 1)) * 100}%` } as CSSProperties} />
                   <div className="mt-0.5 flex justify-between text-[9px] text-[var(--text-tertiary)]">{activeReasoningEfforts.map((effort) => <span key={effort}>{effort}</span>)}</div>
                 </div>
-                <div className="flex items-center justify-between rounded-[9px] px-2 py-2 text-xs"><span className="font-medium text-[var(--text-primary)]">速度</span><span className="text-[var(--text-secondary)]">标准</span></div>
-              </div>
-              <div className="mx-3 border-t border-[var(--border-subtle)]" />
-              <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">内置模型</p>
-              {modelOptions.map((option) => {
-                const modelKey = `tier:${option.tier}`
-                const savedEffort = reasoningSelections[modelKey]
-                const selectedEffort = savedEffort && option.reasoningEfforts.includes(savedEffort) ? savedEffort : option.defaultReasoningEffort
-                return <div key={option.tier} className={`group relative flex items-center transition-colors hover:bg-[var(--surface-muted)] ${option.tier === modelTier ? 'bg-[var(--surface-muted)]' : ''} ${!option.available ? 'opacity-40' : ''}`}>
-                  <button
-                    type="button"
-                    disabled={!option.available}
-                    onClick={() => {
-                      onModelTierChange(option.tier)
-                      modelMenuRef.current?.removeAttribute('open')
-                    }}
-                    className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left disabled:cursor-not-allowed"
-                  >
-                    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-[var(--text-primary)]">{option.label}{option.visionEnabled ? <Eye className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="支持图片" /> : null}</span>
-                    <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-tertiary)]">{option.multiplier.toFixed(1)}x{!option.available ? ' · 待配置' : ''}</span>
-                  </button>
-                  {option.available ? <ReasoningEffortControl modelKey={modelKey} efforts={option.reasoningEfforts} selected={selectedEffort} onChange={onReasoningEffortChange} /> : null}
-                </div>
-              })}
-              {customModels.some((model) => model.enabled) ? <>
-                <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />
-                <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">自定义 · 自带密钥</p>
-                {customModels.filter((model) => model.enabled).map((model) => {
-                  const modelKey = `custom:${model.id}`
-                  const savedEffort = reasoningSelections[modelKey]
-                  const selectedEffort = savedEffort && model.reasoningEfforts.includes(savedEffort) ? savedEffort : model.defaultReasoningEffort
-                  return <div key={model.id} className={`group relative flex items-center transition-colors hover:bg-[var(--surface-muted)] ${modelTier === 'custom' && model.id === customModelId ? 'bg-[var(--surface-muted)]' : ''}`}>
-                    <button type="button" onClick={() => { onCustomModelChange(model.id); onModelTierChange('custom'); modelMenuRef.current?.removeAttribute('open') }} className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left"><span className="inline-flex min-w-0 items-center gap-1.5 truncate text-xs font-medium text-[var(--text-primary)]">{model.displayName}{model.visionEnabled ? <Eye className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="支持图片" /> : null}</span><span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">BYOK</span></button>
-                    <ReasoningEffortControl modelKey={modelKey} efforts={model.reasoningEfforts} selected={selectedEffort} onChange={onReasoningEffortChange} />
-                  </div>
-                })}
-              </> : null}
-              <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />
+              </details>
+              <div className="mx-2 my-1 border-t border-[var(--border-subtle)]" />
               <button
                 type="button"
                 onClick={() => { modelMenuRef.current?.removeAttribute('open'); onOpenModelSettings() }}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
+                className="flex h-9 w-full items-center gap-2 rounded-[9px] px-2.5 text-left text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
               >
                 <Settings2 className="h-4 w-4 text-[var(--text-tertiary)]" /> 配置自定义模型
               </button>

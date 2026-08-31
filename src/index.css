@@ -666,6 +666,16 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes mode-label-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes conversation-rail-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .agent-reasoning-slider {
   appearance: none;
   height: 6px;
@@ -736,6 +746,8 @@ html[data-studio-resizing='true'] .studio-resizable-grid {
   .agent-tool-running-label,
   .agent-tool-progress { animation: none; }
   .studio-perspective-enter { animation: none; }
+  [class*='conversation-rail-in'],
+  [class*='mode-label-in'] { animation: none; }
   .group\/model[open] > div { animation: none; }
   .studio-resizable-panel,
   .studio-resizable-grid { transition: none; }

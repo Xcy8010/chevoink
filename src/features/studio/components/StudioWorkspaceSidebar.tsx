@@ -54,7 +54,7 @@ type SidebarTask = { id: string; novelId: string; title: string; updatedAt: stri
 const MIN_WIDTH = 248
 const MAX_WIDTH = 392
 const DEFAULT_WIDTH = 304
-const COLLAPSE_AT = 218
+const COLLAPSE_AT = MIN_WIDTH
 
 function novelTitle(novel: Novel) {
   return novel.displayTitle?.trim() || novel.title?.trim() || '未命名作品'
@@ -69,7 +69,8 @@ function resetLabel(value?: string | null) {
 
 function initialWidth() {
   const value = Number(window.localStorage.getItem('chevoink:studio-sidebar-width'))
-  return Number.isFinite(value) ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, value)) : DEFAULT_WIDTH
+  if (!Number.isFinite(value) || value <= MIN_WIDTH + 16) return DEFAULT_WIDTH
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, value))
 }
 
 export default function StudioWorkspaceSidebar(props: Props) {
@@ -93,6 +94,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const [renameValue, setRenameValue] = useState('')
   const [busy, setBusy] = useState(false)
   const accountRef = useRef<HTMLDivElement | null>(null)
+  const peekCloseTimerRef = useRef<number | null>(null)
   const autoCopyRef = useRef(false)
   const dragRef = useRef<{ x: number; width: number; raw: number } | null>(null)
 
@@ -147,6 +149,9 @@ export default function StudioWorkspaceSidebar(props: Props) {
     }
     window.addEventListener('keydown', shortcut)
     return () => window.removeEventListener('keydown', shortcut)
+  }, [])
+  useEffect(() => () => {
+    if (peekCloseTimerRef.current !== null) window.clearTimeout(peekCloseTimerRef.current)
   }, [])
 
   const copyInvite = useCallback(async () => {
@@ -228,12 +233,34 @@ export default function StudioWorkspaceSidebar(props: Props) {
     if (!dragRef.current) return
     const raw = dragRef.current.width + event.clientX - dragRef.current.x
     dragRef.current.raw = raw
+    if (raw <= COLLAPSE_AT) {
+      dragRef.current = null
+      setWidth(DEFAULT_WIDTH)
+      window.localStorage.setItem('chevoink:studio-sidebar-width', String(DEFAULT_WIDTH))
+      props.onOpenChange(false)
+      return
+    }
     setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, raw)))
   }
   function finishResize() {
     const state = dragRef.current; dragRef.current = null
-    if (state?.raw && state.raw < COLLAPSE_AT) props.onOpenChange(false)
-    else window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(width)))
+    if (state) window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(Math.max(MIN_WIDTH + 17, width))))
+  }
+
+  function showPeek() {
+    if (peekCloseTimerRef.current !== null) window.clearTimeout(peekCloseTimerRef.current)
+    peekCloseTimerRef.current = null
+    setPeek(true)
+  }
+  function schedulePeekClose() {
+    if (peekCloseTimerRef.current !== null) window.clearTimeout(peekCloseTimerRef.current)
+    peekCloseTimerRef.current = window.setTimeout(() => {
+      setPeek(false)
+      setProductMenu(false)
+      setMoreMenu(false)
+      setAccountOpen(false)
+      peekCloseTimerRef.current = null
+    }, 180)
   }
 
   const projectTasks = (novelId: string): SidebarTask[] => {
@@ -254,7 +281,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
     return <div className="relative flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
       <div className="flex h-12 shrink-0 items-center gap-1.5 px-3">
         <div className="relative min-w-0 flex-1">
-          <button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={() => setProductMenu((value) => !value)} className="flex h-8 max-w-full items-center gap-2 rounded-[9px] px-2 text-sm font-semibold text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><ChevoinkAgentMark className="h-5 w-5 shrink-0" /><span className="truncate">Chevoink</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', productMenu && 'rotate-180')} /></button>
+          <button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={() => setProductMenu((value) => !value)} className="flex h-8 max-w-full items-center gap-2 rounded-[9px] px-2 text-sm font-semibold text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><ChevoinkAgentMark className="h-5 w-5 shrink-0" /><span key={props.perspective} className="truncate motion-safe:animate-[mode-label-in_180ms_cubic-bezier(.22,1,.36,1)]">{props.perspective === 'work' ? 'Work' : 'IDE'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', productMenu && 'rotate-180')} /></button>
           {productMenu ? <div onMouseDown={(event) => event.stopPropagation()} className="absolute left-0 top-[calc(100%+5px)] z-50 w-64 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.18)]">{([{ id: 'work' as const, title: 'Work', description: '协作、任务与创作' }, { id: 'ide' as const, title: 'IDE', description: '结构、正文与预览' }]).map((item) => <button key={item.id} type="button" onClick={() => { props.onPerspectiveChange(item.id); setProductMenu(false) }} disabled={!props.perspectiveSwitchEnabled} className="flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left hover:bg-[var(--surface-muted)] disabled:opacity-50"><div className="min-w-0 flex-1"><p className="text-xs font-semibold">{item.title}</p><p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">{item.description}</p></div>{props.perspective === item.id ? <Check className="h-4 w-4" /> : null}</button>)}</div> : null}
         </div>
         <button type="button" onClick={() => setSearchOpen(true)} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="搜索作品与任务" title="搜索（Ctrl+K）"><Search className="h-4 w-4" /></button>
@@ -270,7 +297,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
 
         {pinnedNovels.length || pinnedSessions.length ? <section className="pb-4"><p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">置顶</p>{pinnedNovels.map((novel) => <button key={novel.id} type="button" onClick={() => props.onSelectNovel(novel.id)} onContextMenu={(event) => openContext(event, { kind: 'novel', id: novel.id, title: novelTitle(novel), pinned: true })} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]"><BookOpenText className="h-3.5 w-3.5" /><span className="min-w-0 flex-1 truncate">{novelTitle(novel)}</span><Pin className="h-3 w-3" /></button>)}{pinnedSessions.map((session) => taskRow({ ...session, temporary: false }, true))}</section> : null}
 
-        <section><div className="flex items-center justify-between px-2 pb-1.5"><p className="text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">项目</p><button type="button" onClick={props.onCreateNovel} disabled={props.switchingNovel} className="inline-flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] disabled:opacity-40" aria-label="新建作品"><Plus className="h-3.5 w-3.5" /></button></div>
+        <section><div className="flex items-center justify-between px-2 pb-1.5"><p className="text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">作品</p><button type="button" onClick={props.onCreateNovel} disabled={props.switchingNovel} className="inline-flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)] disabled:opacity-40" aria-label="新建作品"><Plus className="h-3.5 w-3.5" /></button></div>
           {props.novelsLoading ? <p className="px-2 py-3 text-xs text-[var(--text-tertiary)]">正在读取作品…</p> : novels.map((novel) => {
             const title = novelTitle(novel); const tasks = projectTasks(novel.id); const expanded = expandedProjects.has(novel.id); const shown = expanded ? tasks : tasks.slice(0, 5)
             return <div key={novel.id} className="mb-1"><button type="button" onClick={() => { props.onSelectNovel(novel.id); setExpandedProjects((current) => new Set(current).add(novel.id)) }} onContextMenu={(event) => openContext(event, { kind: 'novel', id: novel.id, title, pinned: Boolean(novel.pinnedAt) })} className={cn('flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs', novel.id === props.currentNovelId ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]')}><BookOpenText className="h-3.5 w-3.5" /><span className="min-w-0 flex-1 truncate">{title}</span><span className="text-[9px] tabular-nums text-[var(--text-tertiary)]">{tasks.length || `${novel.chapterCount}章`}</span></button><div className="ml-5">{shown.map((task) => taskRow(task))}{tasks.length > 5 ? <button type="button" onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(novel.id)) next.delete(novel.id); else next.add(novel.id); return next })} className="flex h-8 items-center gap-1 px-2 text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">{expanded ? '收起' : `展开全部 ${tasks.length} 条`}<ChevronRight className={cn('h-3 w-3 transition-transform', expanded && 'rotate-90')} /></button> : null}</div></div>
@@ -280,9 +307,8 @@ export default function StudioWorkspaceSidebar(props: Props) {
 
       <div className="relative shrink-0 border-t border-[var(--border-subtle)]" ref={accountRef}>
         {warningThreshold && !warningDismissed ? <div className="mx-2 my-2 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-2.5 text-[10px]"><div className="flex items-center gap-2"><Gauge className="h-3.5 w-3.5 text-amber-500" /><span className="flex-1">剩余 {remainingPercent}% 使用量</span><button type="button" onClick={() => { if (summary?.resetsAt) window.localStorage.setItem(`chevoink:credit-warning:${summary.resetsAt}:${warningThreshold}`, 'dismissed'); setWarningDismissed(true) }} aria-label="关闭提醒"><X className="h-3 w-3" /></button></div></div> : null}
-        <div className="mx-2 mb-2 flex items-center gap-2 rounded-[10px] border border-emerald-700/15 bg-emerald-600 px-2.5 py-2 text-[11px] text-white shadow-[0_6px_18px_rgba(5,150,105,.16)]"><Gift className="h-3.5 w-3.5" /><span className="font-medium">公测期间，每日送 450 Credits！</span></div>
-        <button type="button" onClick={() => setAccountOpen((value) => !value)} className="flex h-12 w-full items-center gap-2.5 px-3 text-left hover:bg-[var(--surface-muted)]" aria-expanded={accountOpen}><Avatar name={sessionUser?.nickname ?? '创作者'} src={sessionUser?.avatarUrl} size="sm" className="h-7 w-7" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{sessionUser?.nickname ?? '创作者'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', accountOpen && 'rotate-180')} /></button>
-        {accountOpen ? <div className="absolute bottom-[calc(100%+8px)] left-2 right-2 z-[70] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_20px_55px_rgba(15,23,42,.22)]"><button type="button" onClick={() => setUsageExpanded((value) => !value)} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs font-medium hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" /><span className="flex-1">剩余用量</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', usageExpanded && 'rotate-180')} /></button>{usageExpanded ? <div className="mx-2 mb-1 rounded-[10px] bg-[var(--surface-muted)] px-3 py-2.5 text-[11px]"><div className="flex items-end justify-between"><div><p className="text-[var(--text-tertiary)]">当前可用</p><p className="mt-0.5 text-base font-semibold tabular-nums">{summary ? formatCreditAmount(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p></div><span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"><div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${remainingPercent}%` }} /></div><div className="mt-2 flex justify-between text-[10px] text-[var(--text-tertiary)]"><span>每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits</span><span>{resetLabel(summary?.resetsAt)}</span></div><button type="button" onClick={() => navigate('/account/usage')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button></div> : null}<button type="button" onClick={openInvite} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Gift className="h-3.5 w-3.5" />邀请好友</button><button type="button" onClick={() => { setAccountOpen(false); props.onOpenStudioSettings('general') }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />创作区设置</button><button type="button" onClick={() => navigate('/')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" />返回首页</button></div> : null}
+        <button type="button" onClick={() => setAccountOpen((value) => !value)} className="flex h-11 w-full items-center gap-2.5 px-3 text-left hover:bg-[var(--surface-muted)]" aria-expanded={accountOpen}><Avatar name={sessionUser?.nickname ?? '创作者'} src={sessionUser?.avatarUrl} size="sm" className="h-7 w-7" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{sessionUser?.nickname ?? '创作者'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', accountOpen && 'rotate-180')} /></button>
+        {accountOpen ? <div className="absolute bottom-[calc(100%-2px)] left-2 right-2 z-[70] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_20px_55px_rgba(15,23,42,.22)] motion-safe:origin-bottom motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(.2,.8,.2,1)]"><div className="mb-1 flex items-center gap-2 rounded-[10px] bg-emerald-600 px-3 py-2.5 text-[11px] text-white shadow-[0_5px_16px_rgba(5,150,105,.18)]"><Gift className="h-3.5 w-3.5" /><span className="font-medium">公测期间，每日送 450 Credits！</span></div><button type="button" onClick={() => setUsageExpanded((value) => !value)} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs font-medium hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" /><span className="flex-1">剩余用量</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', usageExpanded && 'rotate-180')} /></button>{usageExpanded ? <div className="mx-1 mb-1 rounded-[10px] bg-[var(--surface-muted)] px-3 py-2.5 text-[11px]"><div className="flex items-end justify-between"><div><p className="text-[var(--text-tertiary)]">当前可用</p><p className="mt-0.5 text-base font-semibold tabular-nums">{summary ? formatCreditAmount(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p></div><span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"><div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${remainingPercent}%` }} /></div><div className="mt-2 flex justify-between text-[10px] text-[var(--text-tertiary)]"><span>每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits</span><span>{resetLabel(summary?.resetsAt)}</span></div><button type="button" onClick={() => navigate('/account/usage')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button></div> : null}<button type="button" onClick={openInvite} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Gift className="h-3.5 w-3.5" />邀请好友</button><button type="button" onClick={() => { setAccountOpen(false); props.onOpenStudioSettings('general') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />创作区设置</button><button type="button" onClick={() => navigate('/')} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" />返回首页</button></div> : null}
       </div>
       {!preview ? <div role="separator" aria-label="调整左侧栏宽度" onPointerDown={beginResize} onPointerMove={resize} onPointerUp={finishResize} onPointerCancel={finishResize} className="absolute inset-y-0 -right-1 z-40 w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-transparent hover:before:bg-emerald-500/55" /> : null}
     </div>
@@ -293,9 +319,8 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const foundNovels = novels.filter((item) => !needle || novelTitle(item).toLocaleLowerCase().includes(needle))
 
   return <>
-    <aside className={cn('relative z-30 h-full min-h-0 shrink-0 overflow-visible border-r bg-[var(--app-bg)] transition-[width,border-color] duration-200', props.open ? 'border-[var(--border-subtle)]' : 'border-transparent')} style={{ width: props.open ? width : 0 }} data-workspace-sidebar={props.open ? 'open' : 'collapsed'}>{props.open ? body() : null}</aside>
-    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-30 w-3" onMouseEnter={() => setPeek(true)} aria-hidden /> : null}
-    {!props.open && peek ? <aside className="fixed bottom-0 left-0 top-12 z-50 border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] animate-in fade-in slide-in-from-left-2 duration-150" style={{ width }} onMouseLeave={() => setPeek(false)}>{body(true)}</aside> : null}
+    <aside className={cn('relative z-30 h-full min-h-0 shrink-0 overflow-visible border-r bg-[var(--app-bg)] transition-[width,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', props.open ? 'border-[var(--border-subtle)]' : 'border-transparent')} style={{ width: props.open ? width : 0 }} data-workspace-sidebar={props.open ? 'open' : 'collapsed'}>{props.open ? body() : null}</aside>
+    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-50 overflow-visible transition-[width] duration-200 ease-[cubic-bezier(.22,1,.36,1)]" style={{ width: peek ? width : 12 }} onMouseEnter={showPeek} onMouseLeave={schedulePeekClose}><aside className={cn('h-full border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] transition-[opacity,transform] duration-180 ease-out', peek ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-3 opacity-0')} style={{ width }}>{body(true)}</aside></div> : null}
 
     {searchOpen ? <div className="fixed inset-0 z-[180] flex items-start justify-center bg-black/25 px-4 pt-[10vh] backdrop-blur-[2px]" onMouseDown={() => setSearchOpen(false)}><section role="dialog" aria-modal="true" aria-label="搜索作品、任务与聊天记录" onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-2xl overflow-hidden rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_28px_90px_rgba(15,23,42,.24)]"><div className="flex h-14 items-center gap-3 border-b border-[var(--border-subtle)] px-4"><Search className="h-4 w-4 text-[var(--text-tertiary)]" /><input autoFocus value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索作品、任务或聊天记录" className="min-w-0 flex-1 bg-transparent text-sm outline-none" /><kbd className="rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)]">Esc</kbd></div><div className="max-h-[62vh] overflow-y-auto p-2"><p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">作品</p>{foundNovels.map((item) => <button key={item.id} type="button" onClick={() => { props.onSelectNovel(item.id); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><BookOpenText className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="flex-1 truncate">{novelTitle(item)}</span><span className="text-[10px] text-[var(--text-tertiary)]">作品</span></button>)}<p className="mt-2 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">任务与聊天记录</p>{foundSessions.map((session) => <button key={session.id} type="button" onClick={() => { props.onSelectTask(session.id, session.novelId); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Clock3 className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="min-w-0 flex-1 truncate">{session.title}</span><span className="max-w-36 truncate text-[10px] text-[var(--text-tertiary)]">{session.novelTitle ?? '任务'}</span></button>)}{needle && !foundNovels.length && !foundSessions.length ? <p className="px-3 py-10 text-center text-xs text-[var(--text-tertiary)]">没有找到相关作品、任务或聊天记录</p> : null}</div></section></div> : null}
 

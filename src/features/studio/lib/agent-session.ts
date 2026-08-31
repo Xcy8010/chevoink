@@ -91,6 +91,14 @@ export function isBootstrapNovel(novel: Pick<Novel, 'title' | 'displayTitle' | '
   )
 }
 
+/** 引导作品只有在完全没有真实会话时才可从导航隐藏。 */
+export function shouldShowWorkspaceNovel(
+  novel: Pick<Novel, 'title' | 'displayTitle' | 'summary' | 'chapterCount' | 'wordCount'>,
+  hasAgentSession: boolean,
+) {
+  return !isBootstrapNovel(novel) || hasAgentSession
+}
+
 
 
 export function getAgentWorkspaceStorageKey(novelId: string) {
