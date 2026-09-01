@@ -130,6 +130,13 @@ export default function StudioWorkspace() {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('chevoink:workspace-sidebar') !== 'collapsed'
   })
+  // 左侧创作栏宽度（首帧从持久化读，后续由侧栏稳定后上报）：
+  // 侧栏折叠后用它动态收窄聊天区最小宽度，给查看器让出更大的向左拉伸空间
+  const [workspaceSidebarWidth, setWorkspaceSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return 280
+    const value = Number(window.localStorage.getItem('chevoink:studio-sidebar-width'))
+    return Number.isFinite(value) && value >= 200 ? value : 280
+  })
   const [studioSettingsOpen, setStudioSettingsOpen] = useState(false)
   const [studioSettingsSection, setStudioSettingsSection] = useState<StudioSettingsSection>('general')
   const [workRightOpen, setWorkRightOpen] = useState(false)
@@ -152,11 +159,18 @@ export default function StudioWorkspace() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
+  // Agent 聊天区最小宽度：侧栏展开时保持 420；折叠后 = 420 - 侧栏宽度（保底 160），
+  // 重新展开时回弹到 420（main 的 min-width 带 300ms 过渡）
+  const conversationMinWidth = workspaceSidebarOpen ? 420 : Math.max(160, 420 - workspaceSidebarWidth)
   const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
     const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
     // Work 必须同时为最左创作栏（最大 392）、聊天轨（44）和可完整操作的 Agent 对话
     // 保留空间；IDE 没有外层创作栏，但仍保证正文/编辑器不会被两侧面板夹没。
-    const centerReserve = workspacePerspective === 'work' ? 856 : 520
+    // 侧栏折叠后保留收窄为「聊天轨 44 + 压缩后的聊天区最小宽度」，
+    // 查看器拖拽上限同步放大；侧栏展开后由 normalizeForViewport 自动回弹。
+    const centerReserve = workspacePerspective === 'work'
+      ? (workspaceSidebarOpen ? 856 : 44 + conversationMinWidth)
+      : 520
     if (panel === 'tree') {
       return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
     }
@@ -168,7 +182,7 @@ export default function StudioWorkspace() {
     if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
     if (panel === 'workInspector') return viewportWidth - centerReserve - viewerWidth
     return viewportWidth - centerReserve - inspectorWidth
-  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective])
+  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective, workspaceSidebarOpen, conversationMinWidth])
   const { panelWidths, beginPanelResize } = useStudioPanelWidths({
     onCollapse: (panel) => {
       if (panel === 'tree') setIdeTreeOpen(false)
@@ -898,6 +912,8 @@ export default function StudioWorkspace() {
   chapterDraftStateRef.current = chapterDraft
   const chapterDirtyRef = useRef(chapterDirty)
   chapterDirtyRef.current = chapterDirty
+  // 切章守卫与编辑器 blur flush 可能几乎同时触发保存，in-flight 期间直接跳过，避免并发写同一章节。
+  const chapterSavingRef = useRef(false)
   const selectedChapterIdStateRef = useRef(selectedChapterId)
   selectedChapterIdStateRef.current = selectedChapterId
 
@@ -2136,6 +2152,11 @@ export default function StudioWorkspace() {
         return
       }
 
+      if (chapterSavingRef.current) {
+        return
+      }
+      chapterSavingRef.current = true
+
       setChapterSaveState('saving')
       setChapterSaveMessage(reason === 'auto' ? '正在自动保存草稿...' : '正在保存章节...')
 
@@ -2167,6 +2188,9 @@ export default function StudioWorkspace() {
             latestDraft.visibility !== draft.visibility
           ),
         )
+        // 保存请求可能跨越切章动作才完成：只有章节仍处于打开状态才写回编辑器状态，
+        // 绝不把旧章内容盖到已切换的新章草稿上。
+        const chapterStillOpen = latestDraft?.id === draft.id
         if (localDraftId) setSelectedTreeItemId(`chapter:${savedChapter.id}`)
         if (localDraftId || selectedChapterIdStateRef.current === draft.id) setSelectedChapterId(savedChapter.id)
         if (editsArrivedDuringSave && latestDraft) {
@@ -2174,19 +2198,21 @@ export default function StudioWorkspace() {
           // 新输入；保留 dirty 让下一轮自动保存继续追上。
           setChapterDraft({ ...latestDraft, id: savedChapter.id, revision: savedChapter.revision, localOnly: false })
           setChapterDirty(true)
-        } else {
+        } else if (chapterStillOpen) {
           setChapterDraft(buildChapterDraft(savedChapter))
           setChapterDirty(false)
         }
-        setChapterSaveState('saved')
-        setChapterLastSavedAt(savedChapter.updatedAt)
-        setChapterSaveMessage(
-          editsArrivedDuringSave
-            ? '已保存上一批修改，正在继续保存新输入...'
-            : reason === 'auto'
-            ? `已自动保存于 ${formatDateTime(savedChapter.updatedAt)}`
-            : `已保存于 ${formatDateTime(savedChapter.updatedAt)}`,
-        )
+        if (chapterStillOpen) {
+          setChapterSaveState('saved')
+          setChapterLastSavedAt(savedChapter.updatedAt)
+          setChapterSaveMessage(
+            editsArrivedDuringSave
+              ? '已保存上一批修改，正在继续保存新输入...'
+              : reason === 'auto'
+              ? `已自动保存于 ${formatDateTime(savedChapter.updatedAt)}`
+              : `已保存于 ${formatDateTime(savedChapter.updatedAt)}`,
+          )
+        }
         setCurrentNovel((current) =>
           current
             ? {
@@ -2227,6 +2253,8 @@ export default function StudioWorkspace() {
       } catch (error) {
         setChapterSaveState('error')
         setChapterSaveMessage(error instanceof Error ? error.message : '章节保存失败，请稍后重试。')
+      } finally {
+        chapterSavingRef.current = false
       }
     },
     [activeNovelId, syncStudioPayload],
@@ -2444,10 +2472,16 @@ export default function StudioWorkspace() {
   }
 
   function guardUnsavedChanges(callback: () => void) {
-    if (chapterDirty) {
+    const draft = chapterDraftStateRef.current
+    // 待审查章节被禁止保存（须先通过审查），切走会丢失未保存输入，这里保留一次确认。
+    if (
+      draft &&
+      chapterDirtyRef.current &&
+      pendingChapterReviewsRef.current.some((item) => item.chapterId === draft.id)
+    ) {
       setWorkspaceDialog({
         title: '切换章节前确认',
-        description: '当前章节还有未保存的修改，切换后刚才的内容可能不会保留。确定继续吗？',
+        description: '当前章节正在等待审查确认，期间无法自动保存，切换后刚才的修改可能不会保留。确定继续吗？',
         confirmLabel: '继续切换',
         cancelLabel: '先留在这里',
         onConfirm: () => {
@@ -2457,6 +2491,11 @@ export default function StudioWorkspace() {
       return
     }
 
+    // 普通章节依托自动保存：先把未落盘修改排队落盘（与 blur flush 共用 in-flight 锁），
+    // 再直接切换，不再弹窗打断。
+    if (chapterDirtyRef.current) {
+      void persistChapter('auto')
+    }
     callback()
   }
 
@@ -2467,6 +2506,12 @@ export default function StudioWorkspace() {
     if (nextChapterId === selectedChapterId) {
       setEditorChapterSettingsOpen(openSettings)
       setMobileView('editor')
+
+      // 同章点击不再用缓存覆盖草稿，避免丢掉未保存输入：有改动先落盘，干净时才同步缓存。
+      if (chapterDirtyRef.current) {
+        void persistChapter('auto')
+        return
+      }
 
       const cachedChapter = queryClient.getQueryData<Chapter>(['studio-chapter', activeNovelId, nextChapterId])
       if (cachedChapter) {
@@ -3750,6 +3795,96 @@ export default function StudioWorkspace() {
     })
   }
 
+  /** 作品树右键删除任意章节：当前打开的章沿用编辑器删除流程（含待审查拦截），其余直接确认后删除 */
+  function handleRequestDeleteChapterById(chapterId: string) {
+    const target = chapters.find((chapter) => chapter.id === chapterId)
+    if (!target) {
+      return
+    }
+
+    if (chapterDraft?.id === chapterId) {
+      handleRequestDeleteChapterFromEditor()
+      return
+    }
+
+    if (target.status === 'published') {
+      setWorkspaceDialog({
+        title: '当前章节暂不可删除',
+        description: '请先将章节下架后才可删除。',
+        confirmLabel: '知道了',
+        cancelLabel: '关闭',
+        onConfirm: () => undefined,
+      })
+      return
+    }
+
+    if (pendingChapterReviews.some((item) => item.chapterId === chapterId)) {
+      promptConfirmPendingChapterReview('删除章节')
+      return
+    }
+
+    const targetTitle = target.title.trim() || `第 ${target.orderInVolume} 章`
+    setWorkspaceDialog({
+      title: '确认删除章节',
+      description: `「${targetTitle}」删除后内容将会丢失，您真的确定要删除吗？`,
+      confirmLabel: '确定删除',
+      cancelLabel: '取消',
+      tone: 'danger',
+      onConfirm: async () => {
+        await handleDeleteChapterById(chapterId)
+      },
+    })
+  }
+
+  async function handleDeleteChapterById(chapterId: string) {
+    const currentIndex = chapters.findIndex((chapter) => chapter.id === chapterId)
+    if (currentIndex < 0) {
+      return
+    }
+
+    const remainingChapters = removeChapterAndCompact(chapters, chapterId)
+    const fallbackChapter =
+      remainingChapters[Math.min(currentIndex, remainingChapters.length - 1)] ??
+      remainingChapters[remainingChapters.length - 1] ??
+      null
+
+    await deleteChapterDraft(activeNovelId, chapterId, chapters[currentIndex].revision)
+    setChapters((current) => removeChapterAndCompact(current, chapterId))
+    if (selectedChapterId === chapterId || chapterDraft?.id === chapterId) {
+      setSelectedChapterId(fallbackChapter?.id ?? null)
+    }
+    toast.success('章节已删除。')
+  }
+
+  /** 作品树右键重命名章节：当前章改草稿走自动保存，其它章直接 PATCH 并同步列表 */
+  async function handleRenameChapterById(chapterId: string, nextTitle: string) {
+    const trimmed = nextTitle.trim()
+    if (!trimmed) {
+      return
+    }
+
+    if (chapterDraft?.id === chapterId) {
+      handleChapterDraftChange({ ...chapterDraft, title: trimmed })
+      return
+    }
+
+    const target = chapters.find((chapter) => chapter.id === chapterId)
+    if (!target) {
+      return
+    }
+
+    try {
+      const updated = await updateChapterDraft(activeNovelId, chapterId, {
+        title: trimmed,
+        expectedRevision: target.revision,
+      })
+      setChapters((current) => current.map((chapter) => chapter.id === chapterId ? { ...chapter, title: updated.title, revision: updated.revision } : chapter))
+      toast.success('章节标题已更新。')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '章节重命名失败，请重试。')
+    }
+  }
+
   if (studioQuery.isError) {
     return (
       <Surface as="section" padding="lg" className="space-y-4">
@@ -4308,6 +4443,7 @@ export default function StudioWorkspace() {
           {workspacePerspective === 'work' ? <StudioWorkspaceSidebar
             open={workspaceSidebarOpen}
             onOpenChange={setWorkspaceSidebarOpen}
+            onWidthChange={setWorkspaceSidebarWidth}
             perspective={workspacePerspective}
             perspectiveSwitchEnabled={featureFlags.dualWorkspace}
             onPerspectiveChange={setWorkspacePerspective}
@@ -4351,6 +4487,9 @@ export default function StudioWorkspace() {
             onOpenMeta={() => setActiveToolPanel('meta')}
             onExport={() => setExportDialogOpen(true)}
             onDeleteNovel={handleRequestDeleteNovel}
+            onCreateVolume={handleRequestCreateVolume}
+            onCreateChapter={handleRequestCreateChapter}
+            onCreatePlan={handleRequestCreatePlan}
             previewHref={previewHref}
             detailPreviewHref={detailPreviewHref}
             published={novelForm?.status === 'published'}
@@ -4396,6 +4535,9 @@ export default function StudioWorkspace() {
                     onOpenChapterSettings={(chapterId) => handleSelectChapter(chapterId, { openSettings: true })}
                     onOpenPlanSettings={setPlanSettingsPlanId} onSelectCatalog={handleSelectCatalogFromTree}
                     onCreateVolume={handleRequestCreateVolume} onCreateChapter={handleRequestCreateChapter} onCreatePlan={handleRequestCreatePlan}
+                    onRequestDeleteChapter={handleRequestDeleteChapterById} onRequestDeletePlan={handleRequestDeletePlan}
+                    onRenameChapterTitle={(chapterId, title) => void handleRenameChapterById(chapterId, title)}
+                    onRenamePlanTitle={handleRenamePlan}
                     onMoveChapter={handleMoveChapterInTree} onMovePlan={handleMovePlanInTree}
                   />}
                   novelTitle={novelTitle} volumeTitle={activeVolumeTitle} chapterTitle={chapterTitle} chapterCount={chapters.length}
@@ -4429,6 +4571,7 @@ export default function StudioWorkspace() {
                   writeLocked={workViewer === 'chapter' ? chapterStreamingPreview !== undefined : documentStreamingPreview !== undefined}
                 /> : undefined}
                 rightOpen={workRightOpen}
+                conversationMinWidth={conversationMinWidth}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
                 onToggleRight={() => {
@@ -4484,6 +4627,9 @@ export default function StudioWorkspace() {
                     onCreateChapter={handleRequestCreateChapter}
                     onCreateVolume={handleRequestCreateVolume}
                     onCreatePlan={handleRequestCreatePlan}
+                    onRequestDeleteChapter={handleRequestDeleteChapterById} onRequestDeletePlan={handleRequestDeletePlan}
+                    onRenameChapterTitle={(chapterId, title) => void handleRenameChapterById(chapterId, title)}
+                    onRenamePlanTitle={handleRenamePlan}
                     onMoveChapter={handleMoveChapterInTree}
                     onMovePlan={handleMovePlanInTree}
                   /> : ideSidebarTab === 'memory' && featureFlags.memory2 ? <MemoryGraph

@@ -22,6 +22,8 @@ type SettingsSection = 'general' | 'models' | 'operations' | 'archives'
 type Props = {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** 宽度最终确定（拖拽结束/折叠/首帧）时上报，供 Work 布局动态计算聊天区最小宽度 */
+  onWidthChange?: (width: number) => void
   perspective: 'work' | 'ide'
   perspectiveSwitchEnabled: boolean
   onPerspectiveChange: (value: 'work' | 'ide') => void
@@ -51,10 +53,14 @@ type ContextTargetInput =
 type RenameTarget = { kind: 'novel' | 'task'; id: string; title: string }
 type SidebarTask = { id: string; novelId: string; title: string; updatedAt: string; pinnedAt: string | null; temporary: boolean }
 
-const MIN_WIDTH = 248
+const MIN_WIDTH = 216
 const MAX_WIDTH = 392
-const DEFAULT_WIDTH = 304
+const DEFAULT_WIDTH = 280
 const COLLAPSE_AT = MIN_WIDTH
+/** 折叠态悬停peek的横向宽度上限：悬浮预览不需要展开态那么宽 */
+const PEEK_MAX_WIDTH = 288
+/** 旧版默认宽度，仅精确匹配时迁移到新默认，保留用户主动拖拽的值 */
+const LEGACY_DEFAULT_WIDTH = 304
 
 function novelTitle(novel: Novel) {
   return novel.displayTitle?.trim() || novel.title?.trim() || '未命名作品'
@@ -78,6 +84,7 @@ function resetLabel(value?: string | null) {
 function initialWidth() {
   const value = Number(window.localStorage.getItem('chevoink:studio-sidebar-width'))
   if (!Number.isFinite(value) || value <= MIN_WIDTH + 16) return DEFAULT_WIDTH
+  if (value === LEGACY_DEFAULT_WIDTH) return DEFAULT_WIDTH
   return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, value))
 }
 
@@ -86,6 +93,12 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const queryClient = useQueryClient()
   const sessionUser = useShellStore((state) => state.sessionUser)
   const [width, setWidth] = useState(initialWidth)
+  const onWidthChangeRef = useRef(props.onWidthChange)
+  onWidthChangeRef.current = props.onWidthChange
+  // 宽度稳定后上报（拖拽中不逐帧上报，避免父级大组件高频重渲染）
+  useEffect(() => {
+    onWidthChangeRef.current?.(width)
+  }, [width])
   const [peek, setPeek] = useState(false)
   const [productMenu, setProductMenu] = useState(false)
   const [moreMenu, setMoreMenu] = useState(false)
@@ -247,8 +260,9 @@ export default function StudioWorkspaceSidebar(props: Props) {
     dragRef.current.raw = raw
     if (raw <= COLLAPSE_AT) {
       dragRef.current = null
-      setWidth(DEFAULT_WIDTH)
-      window.localStorage.setItem('chevoink:studio-sidebar-width', String(DEFAULT_WIDTH))
+      // 折叠时保留用户当前宽度（不重置默认）：重新展开与 peek 都沿用这个宽度
+      window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(width)))
+      onWidthChangeRef.current?.(width)
       props.onOpenChange(false)
       return
     }
@@ -256,7 +270,10 @@ export default function StudioWorkspaceSidebar(props: Props) {
   }
   function finishResize() {
     const state = dragRef.current; dragRef.current = null
-    if (state) window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(Math.max(MIN_WIDTH + 17, width))))
+    if (state) {
+      window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(Math.max(MIN_WIDTH + 17, width))))
+      onWidthChangeRef.current?.(width)
+    }
   }
 
   function showPeek() {
@@ -326,13 +343,15 @@ export default function StudioWorkspaceSidebar(props: Props) {
     </div>
   }
 
+  const peekWidth = Math.min(width, PEEK_MAX_WIDTH)
+
   const foundSessions = searchText.trim() ? (searchQuery.data?.items ?? []) : sessions.slice(0, 10)
   const needle = searchText.trim().toLocaleLowerCase()
   const foundNovels = novels.filter((item) => !needle || novelTitle(item).toLocaleLowerCase().includes(needle))
 
   return <>
     <aside className={cn('relative z-30 h-full min-h-0 shrink-0 overflow-visible border-r bg-[var(--app-bg)] transition-[width,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', props.open ? 'border-[var(--border-subtle)]' : 'border-transparent')} style={{ width: props.open ? width : 0 }} data-workspace-sidebar={props.open ? 'open' : 'collapsed'}>{props.open ? body() : null}</aside>
-    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-50 overflow-visible transition-[width] duration-200 ease-[cubic-bezier(.22,1,.36,1)]" style={{ width: peek ? width : 12 }} onMouseEnter={showPeek} onMouseLeave={schedulePeekClose}><aside className={cn('h-full border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] transition-[opacity,transform] duration-180 ease-out', peek ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-3 opacity-0')} style={{ width }}>{body(true)}</aside></div> : null}
+    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-50 overflow-visible transition-[width] duration-200 ease-[cubic-bezier(.22,1,.36,1)]" style={{ width: peek ? peekWidth : 12 }} onMouseEnter={showPeek} onMouseLeave={schedulePeekClose}><aside className={cn('h-full border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] transition-[opacity,transform] duration-180 ease-out', peek ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-3 opacity-0')} style={{ width: peekWidth }}>{body(true)}</aside></div> : null}
 
     {searchOpen ? <div className="fixed inset-0 z-[180] flex items-start justify-center bg-black/25 px-4 pt-[10vh] backdrop-blur-[2px]" onMouseDown={() => setSearchOpen(false)}><section role="dialog" aria-modal="true" aria-label="搜索作品、任务与聊天记录" onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-2xl overflow-hidden rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_28px_90px_rgba(15,23,42,.24)]"><div className="flex h-14 items-center gap-3 border-b border-[var(--border-subtle)] px-4"><Search className="h-4 w-4 text-[var(--text-tertiary)]" /><input autoFocus value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索作品、任务或聊天记录" className="min-w-0 flex-1 bg-transparent text-sm outline-none" /><kbd className="rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)]">Esc</kbd></div><div className="max-h-[62vh] overflow-y-auto p-2"><p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">作品</p>{foundNovels.map((item) => <button key={item.id} type="button" onClick={() => { props.onSelectNovel(item.id); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><BookOpenText className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="flex-1 truncate">{novelTitle(item)}</span><span className="text-[10px] text-[var(--text-tertiary)]">作品</span></button>)}<p className="mt-2 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">任务与聊天记录</p>{foundSessions.map((session) => <button key={session.id} type="button" onClick={() => { props.onSelectTask(session.id, session.novelId); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Clock3 className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="min-w-0 flex-1 truncate">{session.title}</span><span className="max-w-36 truncate text-[10px] text-[var(--text-tertiary)]">{session.novelTitle ?? '任务'}</span></button>)}{needle && !foundNovels.length && !foundSessions.length ? <p className="px-3 py-10 text-center text-xs text-[var(--text-tertiary)]">没有找到相关作品、任务或聊天记录</p> : null}</div></section></div> : null}
 

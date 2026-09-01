@@ -13,6 +13,8 @@ type Props = {
   activityDock?: ReactNode
   inspector: ReactNode
   viewer?: ReactNode
+  /** Agent 聊天区最小宽度：左侧栏折叠后变小（保底 160），展开后回420，变化带过渡动画 */
+  conversationMinWidth?: number
   rightOpen: boolean
   inspectorWidth: number
   viewerWidth: number
@@ -33,7 +35,7 @@ const inspectorRailItems = [
 const PANEL_MOTION_MS = 220
 
 /** Agent-first 工作台：左侧窄轨对应当前任务的逐轮聊天，右侧窄轨按需展开作品与证据。 */
-export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
+export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
@@ -88,8 +90,11 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
     <aside className="h-full w-11 shrink-0 bg-transparent motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{conversationRail}</aside>
     <main
-      className="relative z-40 min-w-[420px] flex-1 overflow-visible bg-[var(--surface-default)] transition-[padding] duration-200 ease-out"
-      style={{ paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0 }}
+      className="relative z-40 flex-1 overflow-visible bg-[var(--surface-default)] transition-[padding,min-width] duration-300 ease-out"
+      style={{
+        paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0,
+        minWidth: conversationMinWidth,
+      }}
     >{conversation}</main>
     {showActivityDock ? <aside className="h-full min-h-0 w-[296px] shrink-0 bg-[var(--surface-default)] px-3 py-4">{activityDock}</aside> : null}
     <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} className="studio-resizable-panel relative h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)]" style={{ width: viewerOpen ? resolvedViewerWidth : 0 }}>

@@ -66,8 +66,9 @@ export function AgentConversationRail({
   }
 
   return (
-    <nav ref={rootRef} className="relative flex h-full w-11 flex-col items-center overflow-visible bg-transparent" aria-label="当前任务聊天记录">
-      <div className="flex h-full w-full flex-col items-center justify-center gap-[7px] py-5">
+    <nav ref={rootRef} className="relative h-full w-11 overflow-visible bg-transparent" aria-label="当前任务聊天记录">
+      {/* 绝对定位锚定整条轨道的几何中心：不依赖父级 flex 链条，保证横线组永远整体居中 */}
+      <div className="absolute left-0 top-1/2 flex w-full -translate-y-1/2 flex-col items-center gap-[7px]">
         {visibleConversations.map((conversation, visibleIndex) => {
           const originalIndex = conversations.length - visibleConversations.length + visibleIndex
           const latest = originalIndex === conversations.length - 1
