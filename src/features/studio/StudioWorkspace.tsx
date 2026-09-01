@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, ChevronLeft, FileText, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
+import { BookOpen, BookOpenText, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -1805,6 +1805,29 @@ export default function StudioWorkspace() {
     },
   })
 
+  // 完结/恢复连载：仅切换作品状态，不触碰表单其它字段；completed ↔ published 双向可逆
+  const novelCompletionMutation = useMutation({
+    mutationFn: async ({ status }: { status: 'completed' | 'published' }) => {
+      if (!currentNovel) {
+        throw new Error('作品信息尚未加载完成')
+      }
+
+      return updateNovelMeta(currentNovel.id, { status })
+    },
+    onSuccess: (updatedNovel) => {
+      syncUpdatedNovelState(
+        updatedNovel,
+        updatedNovel.status === 'completed' ? '作品已标记完结。' : '作品已恢复连载。',
+      )
+      toast.success(updatedNovel.status === 'completed' ? '作品已完结' : '已恢复连载')
+    },
+    onError: (error: Error) => {
+      setNovelSaveState('error')
+      setNovelMessage(error.message)
+      toast.error(error.message)
+    },
+  })
+
   const publishNovelMutation = useMutation({
     mutationFn: async ({ chapterIds, visibility }: { chapterIds: string[]; visibility: Visibility }) => {
       return publishNovelWorkspace(activeNovelId, { chapterIds, visibility })
@@ -2057,18 +2080,32 @@ export default function StudioWorkspace() {
       return
     }
 
-    // 上架前置校验：0 章节的作品不允许发布，先引导去写第一章
-    if (chapters.length === 0) {
-      setWorkspaceDialog({
-        title: '还不能发布这部作品',
-        description: '发布前需要至少写好一个章节，并在发布时选择公开，读者才能看到这部作品。',
-        confirmLabel: '我知道了',
-        onConfirm: () => undefined,
-      })
+    if (!ensureNovelPublishable('发布')) {
       return
     }
 
-    // 上架前置校验：没有标签的作品先引导去作品设置选标签
+    // 打开发布弹窗：支持勾选需要一起发布的章节并选择可见范围（默认公开）
+    setPublishDialogOpen(true)
+  }
+
+  /** 发布/完结共用的上架前置校验：0 章节先引导写作、无标签先引导设置；返回是否通过 */
+  function ensureNovelPublishable(action: '发布' | '完结') {
+    if (!novelForm) {
+      return false
+    }
+
+    // 0 章节的作品不允许上架，先引导去写第一章
+    if (chapters.length === 0) {
+      setWorkspaceDialog({
+        title: `还不能${action}这部作品`,
+        description: `${action}前需要至少写好一个章节，并在发布时选择公开，读者才能看到这部作品。`,
+        confirmLabel: '我知道了',
+        onConfirm: () => undefined,
+      })
+      return false
+    }
+
+    // 没有标签的作品先引导去作品设置选标签
     const tags = novelForm.tagsText
       .split(/[、/\s]+/)
       .map((item) => item.trim())
@@ -2076,18 +2113,82 @@ export default function StudioWorkspace() {
     if (tags.length === 0) {
       setWorkspaceDialog({
         title: '请先设置作品标签',
-        description: '上架前需要为作品选择标签，读者才能在分类频道和搜索中找到这部作品。',
+        description: `${action}前需要为作品选择标签，读者才能在分类频道和搜索中找到这部作品。`,
         confirmLabel: '展开作品设置',
         onConfirm: () => {
           setActiveToolPanel('meta')
           setMobileView('meta')
         },
       })
+      return false
+    }
+
+    return true
+  }
+
+  /** 完结 ↔ 继续连载：已完结恢复连载；连载中标记完结；草稿直接发布并完结（均弹确认框） */
+  function handleToggleNovelCompletion() {
+    if (!novelForm || novelCompletionMutation.isPending || publishNovelMutation.isPending) {
       return
     }
 
-    // 打开发布弹窗：支持勾选需要一起发布的章节并选择可见范围（默认公开）
-    setPublishDialogOpen(true)
+    const displayTitle = novelForm.title.trim() || currentNovel?.title || '当前作品'
+
+    if (novelForm.status === 'completed') {
+      setWorkspaceDialog({
+        title: '继续连载这部作品？',
+        description: `《${displayTitle}》将恢复为连载中，作品页的完结标识会移除，你可以继续写作并发布新章节。`,
+        confirmLabel: '继续连载',
+        cancelLabel: '取消',
+        tone: 'default',
+        onConfirm: async () => {
+          try {
+            await novelCompletionMutation.mutateAsync({ status: 'published' })
+          } catch {
+            // 失败原因已由 mutation onError 提示
+          }
+        },
+      })
+      return
+    }
+
+    if (novelForm.status === 'draft') {
+      // 草稿完结 = 直接发布并完结：沿用发布前置校验，确认后全量发布再标记完结
+      if (!ensureNovelPublishable('完结')) {
+        return
+      }
+      setWorkspaceDialog({
+        title: '发布并完结这部作品？',
+        description: `《${displayTitle}》的全部章节将随完结一并发布公开，作品同时标记为完结；完结后仍可继续连载。`,
+        confirmLabel: '发布并完结',
+        cancelLabel: '取消',
+        tone: 'default',
+        onConfirm: async () => {
+          try {
+            await publishNovelMutation.mutateAsync({ chapterIds: chapters.map((item) => item.id), visibility: 'public' })
+            await novelCompletionMutation.mutateAsync({ status: 'completed' })
+          } catch {
+            // 失败原因已由 mutation onError 提示
+          }
+        },
+      })
+      return
+    }
+
+    setWorkspaceDialog({
+      title: '完结这部作品？',
+      description: `《${displayTitle}》将标记为完结，作品页会展示完结标识；已发布章节不受影响，随时可以继续连载。`,
+      confirmLabel: '标记完结',
+      cancelLabel: '取消',
+      tone: 'default',
+      onConfirm: async () => {
+        try {
+          await novelCompletionMutation.mutateAsync({ status: 'completed' })
+        } catch {
+          // 失败原因已由 mutation onError 提示
+        }
+      },
+    })
   }
 
   function handleRequestDeleteNovel() {
@@ -4396,6 +4497,7 @@ export default function StudioWorkspace() {
                   { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
                   { key: 'skills', label: '作品技能', icon: Wrench, action: () => setMobileView('skills') },
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
+                  ...(novelForm?.status && novelForm.status !== 'archived' ? [{ key: 'completion', label: novelForm.status === 'completed' ? '继续连载' : '完结作品', icon: Flag, action: () => handleToggleNovelCompletion() }] : []),
                   { key: 'detail', label: '作品页', icon: BookOpenText, action: () => navigate(detailPreviewHref) },
                   { key: 'export', label: '一键导出', icon: FolderDown, action: () => setExportDialogOpen(true) },
                   ...(previewHref
@@ -4504,6 +4606,8 @@ export default function StudioWorkspace() {
             previewHref={previewHref}
             detailPreviewHref={detailPreviewHref}
             published={novelForm?.status === 'published'}
+            novelStatus={novelForm?.status}
+            onToggleNovelCompletion={handleToggleNovelCompletion}
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">
@@ -4572,6 +4676,7 @@ export default function StudioWorkspace() {
                   writeLocked={workViewer === 'chapter' ? chapterStreamingPreview !== undefined : documentStreamingPreview !== undefined}
                 /> : undefined}
                 rightOpen={workRightOpen}
+                outerSidebarOpen={workspaceSidebarOpen}
                 conversationMinWidth={conversationMinWidth}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}

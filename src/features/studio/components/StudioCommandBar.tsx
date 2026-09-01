@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BookOpenText, Crosshair, ExternalLink, FilePlus2, FolderDown, FolderPlus, Home, ImagePlus, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, Settings2, Trash2, Upload } from 'lucide-react'
+import { BookOpenText, Crosshair, ExternalLink, FilePlus2, Flag, FolderDown, FolderPlus, Home, ImagePlus, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, RotateCcw, Settings2, Trash2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -33,6 +33,10 @@ type Props = {
   previewHref?: string
   detailPreviewHref?: string
   published?: boolean
+  /** 作品状态：驱动「完结作品/继续连载」按钮文案与图标 */
+  novelStatus?: Novel['status']
+  /** 完结 ↔ 继续连载切换（确认弹窗由宿主处理） */
+  onToggleNovelCompletion?: () => void
 }
 
 type StudioMenuKey = 'novel' | 'view' | 'design' | 'publish' | 'export'
@@ -67,6 +71,14 @@ export default function StudioCommandBar(props: Props) {
     openMenu === key ? <div className={cn(dropdownClass, widthClass)}>{children}</div> : null
   )
   const publishLabel = props.published ? '更新发布' : '发布'
+  const novelCompleted = props.novelStatus === 'completed'
+  const completionLabel = novelCompleted ? '继续连载' : '完结作品'
+  const completionButton = props.onToggleNovelCompletion && props.novelStatus ? (
+    <button type="button" className={item} onClick={() => { closeMenu(); props.onToggleNovelCompletion?.() }}>
+      {novelCompleted ? <RotateCcw className="h-3.5 w-3.5" /> : <Flag className="h-3.5 w-3.5" />}
+      {completionLabel}
+    </button>
+  ) : null
 
   function renderStudioMenuBody(key: StudioMenuKey) {
     switch (key) {
@@ -78,6 +90,7 @@ export default function StudioCommandBar(props: Props) {
           <div className="mx-2 my-1 border-t border-[var(--border-subtle)]" />
           <button type="button" className={item} onClick={() => { closeMenu(); props.onOpenMeta() }}><Settings2 className="h-3.5 w-3.5" />作品设置</button>
           <button type="button" className={item} onClick={() => { closeMenu(); props.onPublish() }}><Upload className="h-3.5 w-3.5" />{publishLabel}</button>
+          {completionButton}
           <button type="button" className={item} onClick={() => { closeMenu(); props.onExport() }}><FolderDown className="h-3.5 w-3.5" />一键导出</button>
           <div className="mx-2 my-1 border-t border-[var(--border-subtle)]" />
           <button type="button" className={cn(item, 'text-rose-600')} onClick={() => { closeMenu(); props.onDeleteNovel() }}><Trash2 className="h-3.5 w-3.5" />删除作品</button>
@@ -90,7 +103,10 @@ export default function StudioCommandBar(props: Props) {
       case 'design':
         return <button type="button" className={item} onClick={() => { closeMenu(); props.onOpenCover() }}><ImagePlus className="h-3.5 w-3.5" />封面工坊</button>
       case 'publish':
-        return <button type="button" className={item} onClick={() => { closeMenu(); props.onPublish() }}><Upload className="h-3.5 w-3.5" />{publishLabel}</button>
+        return <>
+          <button type="button" className={item} onClick={() => { closeMenu(); props.onPublish() }}><Upload className="h-3.5 w-3.5" />{publishLabel}</button>
+          {completionButton}
+        </>
       case 'export':
         return <button type="button" className={item} onClick={() => { closeMenu(); props.onExport() }}><FolderDown className="h-3.5 w-3.5" />一键导出</button>
       default:

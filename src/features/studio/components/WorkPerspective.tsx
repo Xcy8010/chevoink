@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import type { ResizablePanel } from '../panel-widths'
 import { PanelResizeHandle } from '../panel-resize'
 import type { WorkInspectorTab } from './WorkInspector'
-import { shouldShowWorkActivityDock } from './work-layout'
+import { FLOATING_DOCK_MIN_CLEARANCE, shouldShowWorkActivityDock } from './work-layout'
 
 type Props = {
   conversationRail: ReactNode
@@ -15,6 +15,8 @@ type Props = {
   viewer?: ReactNode
   /** Agent 聊天区最小宽度：左侧栏折叠后变小（保底 160），展开后回420，变化带过渡动画 */
   conversationMinWidth?: number
+  /** 外层创作侧栏是否展开：折叠后对话区在整个视口居中（任务状态卡改悬浮，不再挤压对话列） */
+  outerSidebarOpen?: boolean
   rightOpen: boolean
   inspectorWidth: number
   viewerWidth: number
@@ -35,7 +37,7 @@ const inspectorRailItems = [
 const PANEL_MOTION_MS = 220
 
 /** Agent-first 工作台：左侧窄轨对应当前任务的逐轮聊天，右侧窄轨按需展开作品与证据。 */
-export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
+export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
@@ -62,6 +64,9 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     hasActivity: Boolean(activityDock),
     hasViewer: viewerPresent,
   })
+  // 外层侧栏折叠时对话列需在整个视口居中：任务状态卡改为悬浮定位（不再占据 main 右侧流空间），
+  // 对话列 mx-auto 即落在视口中心；外层侧栏展开或窗口不够宽时保持流内布局不变。
+  const floatDock = !outerSidebarOpen && showActivityDock && containerWidth - rightWidth >= FLOATING_DOCK_MIN_CLEARANCE
 
   useEffect(() => {
     if (viewer) {
@@ -87,7 +92,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     return () => observer.disconnect()
   }, [])
 
-  return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
+  return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective relative flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
     <aside className="h-full w-11 shrink-0 bg-transparent motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{conversationRail}</aside>
     <main
       className="relative z-40 flex-1 overflow-visible bg-[var(--surface-default)] transition-[min-width] duration-300 ease-out"
@@ -95,7 +100,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
         minWidth: conversationMinWidth,
       }}
     >{conversation}</main>
-    {showActivityDock ? <aside className="h-full min-h-0 w-[296px] shrink-0 bg-[var(--surface-default)] px-3 py-4">{activityDock}</aside> : null}
+    {showActivityDock ? <aside className={cn('h-full min-h-0 w-[296px] shrink-0 px-3 py-4', floatDock ? 'absolute top-0 z-30 bg-transparent' : 'bg-[var(--surface-default)]')} style={floatDock ? { right: rightWidth } : undefined}>{activityDock}</aside> : null}
     <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} className="studio-resizable-panel relative h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)]" style={{ width: viewerOpen ? resolvedViewerWidth : 0 }}>
       {viewerOpen ? <PanelResizeHandle panel="workViewer" side="left" label="调整查看器宽度" onBegin={onBeginResize} /> : null}
       <div className={cn('h-full min-w-[320px] transition-[opacity,transform] duration-200 ease-out', viewerOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0')}>{renderedViewer}</div>
