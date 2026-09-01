@@ -23,6 +23,8 @@ import type { ToolContext } from './tools/types.js'
 const SUBAGENT_MAX_TURNS = Math.min(env.agentMaxTurns, 24)
 /** 全局并发上限：所有用户同时内嵌执行的子 Agent 数（主 Agent 本身也可以并行跑多个 run） */
 const SUBAGENT_CONCURRENCY_LIMIT = 8
+/** 单个子 Agent 的固定 token 上限（防死循环兑底）：不再暴露给模型/用户配置，避免无限轮询烧 token */
+const SUBAGENT_TOKEN_CEILING = 16_000
 
 export type SubagentInlineParams = {
   /** 归属标记：所属 subagent_run 工具调用的 callId */
@@ -36,7 +38,6 @@ export type SubagentInlineParams = {
   prompt: string
   /** 本次交给子 Agent 的具体任务 */
   task: string
-  tokenBudget: number
   mode: AgentExecutionMode
   /** 父 run 上下文：审批、额度、事件总线都挂在父 run 上 */
   parentRunId: string
@@ -107,7 +108,9 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
   const messages = buildSubagentMessages(params)
   const usage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
   const extraParts: AgentMessagePart[] = []
-  const budget = Math.min(env.agentRunTokenBudget, Math.max(500, params.tokenBudget))
+  // 防死循环兑底：单个子 Agent 的 token 消耗固定钳在 ceiling 内（轮次上限 + 并发闸之外再加一道总量闸），
+  // 超过后强制无工具总结收尾，避免反复调用工具持续消耗用户 credits/自定义模型 token
+  const budget = Math.min(env.agentRunTokenBudget, SUBAGENT_TOKEN_CEILING)
   let turns = 0
   let toolCallCount = 0
   let report = ''

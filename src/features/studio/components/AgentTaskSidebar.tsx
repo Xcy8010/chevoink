@@ -36,6 +36,9 @@ export function AgentConversationRail({
   // 淡出期间保留最后一次的定位与内容：若让 top 随 preview 置空回落到顶部，
   // 卡片会先瞬移到顶部再淡出，看起来像“往上飞出去”。
   const lastPreviewRef = useRef<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  // 跟随滚动：高亮当前视口所在的轮次（贴底=最新轮），而不是固定高亮最后一条
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const scrollFrameRef = useRef(0)
   useEffect(() => {
     if (preview) lastPreviewRef.current = preview
   }, [preview])
@@ -56,6 +59,53 @@ export function AgentConversationRail({
     return () => observer.disconnect()
   }, [])
 
+  useEffect(() => {
+    if (conversations.length === 0) {
+      setActiveIndex(null)
+      return
+    }
+    // 轨道与消息流是兄弟列，不能从轨道自身向上找：用第一轮 user 消息元素定位消息滚动容器
+    let candidate: HTMLElement | null = document.getElementById(`agent-message-${conversations[0].userMessageId}`)
+    while (candidate && !/(auto|scroll)/.test(window.getComputedStyle(candidate).overflowY)) {
+      candidate = candidate.parentElement
+    }
+    if (!candidate) {
+      setActiveIndex(null)
+      return
+    }
+    const container = candidate
+
+    const measure = () => {
+      scrollFrameRef.current = 0
+      // 贴底时跟随最新轮；否则以视口 35% 高度处的探针线定位当前轮次（消息在文档流中单调递增，可提前 break）
+      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 4) {
+        setActiveIndex(conversations.length - 1)
+        return
+      }
+      const probe = container.getBoundingClientRect().top + container.clientHeight * 0.35
+      let current: number | null = null
+      for (let index = 0; index < conversations.length; index += 1) {
+        const element = document.getElementById(`agent-message-${conversations[index].userMessageId}`)
+        if (!element) continue
+        if (element.getBoundingClientRect().top > probe) break
+        current = index
+      }
+      setActiveIndex(current)
+    }
+
+    const onScroll = () => {
+      if (scrollFrameRef.current) return
+      scrollFrameRef.current = window.requestAnimationFrame(measure)
+    }
+
+    measure()
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      container.removeEventListener('scroll', onScroll)
+      if (scrollFrameRef.current) window.cancelAnimationFrame(scrollFrameRef.current)
+    }
+  }, [conversations])
+
   const showPreview = (conversation: AgentConversationRailItem, element: HTMLButtonElement) => {
     const root = rootRef.current
     if (!root) return
@@ -72,9 +122,10 @@ export function AgentConversationRail({
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-[7px] py-4">
         {visibleConversations.map((conversation, visibleIndex) => {
           const originalIndex = conversations.length - visibleConversations.length + visibleIndex
-          const latest = originalIndex === conversations.length - 1
-          return <button key={conversation.id} type="button" onClick={() => onSelectConversation(conversation.userMessageId)} onMouseEnter={(event) => showPreview(conversation, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(conversation, event.currentTarget)} onBlur={() => setPreview(null)} className="group flex h-[7px] w-full shrink-0 items-center justify-center" aria-label={`第 ${originalIndex + 1} 轮聊天`} aria-current={latest ? 'location' : undefined}>
-            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', latest ? 'w-4 bg-[var(--text-primary)] opacity-90' : 'w-2.5 bg-[var(--text-tertiary)] opacity-40 group-hover:w-6 group-hover:bg-[var(--text-secondary)] group-hover:opacity-95 group-focus-visible:w-6 group-focus-visible:opacity-95')} aria-hidden />
+          // 定位失败（空对话/元素未挂载）时回退高亮最新轮，保持轨道始终有落点
+          const active = originalIndex === (activeIndex ?? conversations.length - 1)
+          return <button key={conversation.id} type="button" onClick={() => onSelectConversation(conversation.userMessageId)} onMouseEnter={(event) => showPreview(conversation, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(conversation, event.currentTarget)} onBlur={() => setPreview(null)} className="group flex h-[7px] w-full shrink-0 items-center justify-center" aria-label={`第 ${originalIndex + 1} 轮聊天`} aria-current={active ? 'location' : undefined}>
+            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', active ? 'w-4 bg-[var(--text-primary)] opacity-90' : 'w-2.5 bg-[var(--text-tertiary)] opacity-40 group-hover:w-6 group-hover:bg-[var(--text-secondary)] group-hover:opacity-95 group-focus-visible:w-6 group-focus-visible:opacity-95')} aria-hidden />
           </button>
         })}
       </div>

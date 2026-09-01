@@ -120,9 +120,7 @@ export default function StudioCommandBar(props: Props) {
         {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('relative inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-200', props.perspective === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
       </div> : null}
       {props.workspaceControls !== false && props.perspectiveSwitchEnabled ? <div className="h-5 w-px bg-[var(--border-subtle)]" /> : null}
-      {/* 触发器按内容收缩；旧的 min-width:170px 会在短书名右侧留下约 40-50px 隐形空白，
-          视觉上把分隔线和「追踪」推远。 */}
-      <div className="min-w-0 max-w-[360px] border-l-2 border-[var(--text-primary)] pl-2.5"><p className="truncate text-[13px] font-medium leading-4 text-[var(--text-primary)]">{props.activeTaskTitle?.trim() || '新任务'}</p><p className="mt-0.5 truncate text-[10px] leading-3 text-[var(--text-tertiary)]">{props.novelTitle} · {props.perspective === 'work' ? 'Work 创作' : 'IDE 写作'}</p></div>
+      {/* 任务标题展示已移至 Agent 面板顶栏；菜单区随之左移补位 */}
       {/* 菜单区：任务三点 + 顶栏菜单（参考 Codex 的文件/视图/帮助）；菜单名最多两个字 */}
       <div ref={menuRef} className="flex shrink-0 items-center gap-0.5">
         <div className="relative">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, FolderDown, LoaderCircle, X } from 'lucide-react'
+import { Check, CircleAlert, FolderDown, LoaderCircle, X } from 'lucide-react'
 
 import { useToast } from '@/components/ui/toast-context'
 import { isNativeApp } from '@/lib/native-app'
@@ -79,6 +79,8 @@ export default function ExportDialog({ open, novelId, novelTitle, chapters, onCl
   const [chapterMode, setChapterMode] = useState<'all' | 'custom'>('all')
   const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
+  // 额度用尽兑底提示：导出本身成功，仅作品建议未包含（用户要求自定义弹窗而非 toast）
+  const [creditsNoticeOpen, setCreditsNoticeOpen] = useState(false)
 
   // 每次打开重置为「全部导出」，避免沿用上次勾选造成意外裁剪
   useEffect(() => {
@@ -87,6 +89,7 @@ export default function ExportDialog({ open, novelId, novelTitle, chapters, onCl
       setChapterMode('all')
       setSelectedChapterIds([])
       setExporting(false)
+      setCreditsNoticeOpen(false)
     }
   }, [open])
 
@@ -124,9 +127,19 @@ export default function ExportDialog({ open, novelId, novelTitle, chapters, onCl
         const link = await requestNovelExportLink(novelId, options)
         openExportDownloadInBrowser(link.downloadUrl)
         toast.success('导出打包完成，已跳转系统浏览器下载，完成后请查看手机「下载」文件夹。')
+        if (link.adviceCreditsExhausted) {
+          setExporting(false)
+          setCreditsNoticeOpen(true)
+          return
+        }
       } else {
-        await downloadNovelExportZip(novelId, options)
+        const adviceCreditsExhausted = await downloadNovelExportZip(novelId, options)
         toast.success('导出完成，文件已开始下载。')
+        if (adviceCreditsExhausted) {
+          setExporting(false)
+          setCreditsNoticeOpen(true)
+          return
+        }
       }
 
       onClose()
@@ -249,6 +262,36 @@ export default function ExportDialog({ open, novelId, novelTitle, chapters, onCl
           </button>
         </div>
       </div>
+
+      {creditsNoticeOpen ? (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-6" onClick={() => { setCreditsNoticeOpen(false); onClose() }}>
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="额度提示"
+            className="w-full max-w-sm rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.24)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center gap-2.5">
+              <CircleAlert className="h-5 w-5 shrink-0 text-amber-500" />
+              <h4 className="text-sm font-semibold text-[var(--text-primary)]">当前额度已用尽</h4>
+            </div>
+            <p className="mt-3 text-xs leading-6 text-[var(--text-secondary)]">
+              当前额度已用尽，一键导出内无法包含作品建议；其它内容（规划、目录、章节等）已正常导出下载。
+              额度恢复或充值后可重新导出，即可包含 AI 生成的作品建议。
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => { setCreditsNoticeOpen(false); onClose() }}
+                className="inline-flex h-9 items-center rounded-full bg-[var(--surface-contrast)] px-5 text-xs font-medium text-[var(--text-contrast)] transition hover:bg-[var(--surface-contrast-hover)]"
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

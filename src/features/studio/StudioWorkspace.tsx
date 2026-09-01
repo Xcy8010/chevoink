@@ -4047,6 +4047,8 @@ export default function StudioWorkspace() {
           onClose={showCloseAction ? close : undefined}
           activityPresentation={activityPresentation}
           mobileIntegratedHeader={mobileIntegratedHeader}
+          taskTitle={activeAgentTaskWindow?.title ?? null}
+          taskSubtitle={`${novelTitle} · ${workspacePerspective === 'work' ? 'Work 创作' : 'IDE 写作'}`}
           showCreditWarning={showCreditWarning}
           showEmptySuggestions={workspacePerspective === 'work'}
           hideHeader={false}

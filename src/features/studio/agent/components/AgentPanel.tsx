@@ -102,6 +102,10 @@ type AgentPanelProps = {
   activityPresentation?: 'inline' | 'responsive'
   /** 手机工作台把 Agent 标题与任务按钮并入作品选择同一行。 */
   mobileIntegratedHeader?: boolean
+  /** 桌面端顶栏展示当前任务标题（替代 Chevoink Agent 标识位），空则回退「新任务」。 */
+  taskTitle?: string | null
+  /** 任务标题下方副标题：作品名 · 视角，与原顶栏任务展示一致。 */
+  taskSubtitle?: string | null
   /** Work 桌面端由全局任务顶栏承载标题与操作，避免重复出现第二条 Agent 顶栏。 */
   hideHeader?: boolean
   /** “+”菜单可直接选择的目录/计划/章节；章节正文由输入框按需读取。 */
@@ -134,6 +138,8 @@ export function AgentPanel({
   className,
   activityPresentation = 'inline',
   mobileIntegratedHeader = false,
+  taskTitle,
+  taskSubtitle,
   hideHeader = false,
   showCreditWarning = false,
   showEmptySuggestions = true,
@@ -858,8 +864,18 @@ export function AgentPanel({
         'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
         mobileIntegratedHeader && 'absolute -top-[52px] left-[44%] right-0 z-30 h-[52px] gap-1 border-b-0 bg-[var(--app-bg)] px-1.5 py-1',
       )}>
-        <ChevoinkAgentMark className={cn('h-6 w-6 shrink-0', mobileIntegratedHeader && 'h-5 w-5')} />
-        <span className={cn('min-w-0 truncate text-sm font-medium text-[var(--text-primary)]', mobileIntegratedHeader && 'text-xs')}>Chevoink Agent</span>
+        {mobileIntegratedHeader ? (
+          <>
+            <ChevoinkAgentMark className="h-5 w-5 shrink-0" />
+            <span className="min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">Chevoink Agent</span>
+          </>
+        ) : (
+          // 桌面端顶栏承接原 StudioCommandBar 的任务标题展示（border-l 样式保持一致）
+          <div className="min-w-0 max-w-[360px] border-l-2 border-[var(--text-primary)] pl-2.5">
+            <p className="truncate text-[13px] font-medium leading-4 text-[var(--text-primary)]">{taskTitle?.trim() || '新任务'}</p>
+            {taskSubtitle ? <p className="mt-0.5 truncate text-[10px] leading-3 text-[var(--text-tertiary)]">{taskSubtitle}</p> : null}
+          </div>
+        )}
         {phase !== 'idle' ? (
           <span
             className={cn(

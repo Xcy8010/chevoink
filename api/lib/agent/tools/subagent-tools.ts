@@ -12,6 +12,9 @@ import { defineTool, type ToolContext } from './types.js'
  * 两者都不新开任务窗口：子 Agent 在父 run 上下文内嵌执行，报告交回主 Agent 审查整合。
  */
 
+/** 子 Agent 定义落库时的 token 预算占位（仅供统计参考；实际执行上限由 runner 固定 ceiling 决定） */
+const SUBAGENT_DEFAULT_TOKEN_BUDGET = 16_000
+
 const roleEnum = z.enum(['research', 'continuity', 'quality', 'lore'])
 
 const subagentRunSchema = z.object({
@@ -25,13 +28,12 @@ const subagentDelegateSchema = z.object({
   triggerCondition: z.string().trim().min(1).max(1_000).describe('什么情况下应该调用这个子 Agent（会写入定义，供后续主控参考）'),
   prompt: z.string().trim().min(1).max(12_000).describe('子 Agent 的职责边界与工作要求（会写入定义）'),
   task: z.string().trim().min(1).max(12_000).describe('本次交给它的具体任务目标与必要上下文'),
-  tokenBudget: z.number().int().min(500).max(32_000).default(4_000).describe('本次执行的 token 预算'),
 })
 
 /** 子 Agent 执行模式映射（与旧独立会话架构一致：调研走规划模式，其余走审查模式） */
 const roleMode: Record<AgentSubtaskRole, 'plan' | 'review'> = { research: 'plan', continuity: 'review', quality: 'review', lore: 'review' }
 
-type SubagentDefinition = { id: string; name: string; role: string; triggerCondition: string; prompt: string; tokenBudget: number; enabled: boolean }
+type SubagentDefinition = { id: string; name: string; role: string; triggerCondition: string; prompt: string; enabled: boolean }
 
 /** 内嵌执行一个子 Agent 定义：落调用记录 → 跑精简循环 → 回写结果 → 组装观察与展示载荷 */
 async function executeSubagentDefinition(
@@ -69,7 +71,9 @@ async function executeSubagentDefinition(
   })
 
   try {
-    const modelRuntime = await getModelTierRuntime('speed', ctx.userId, null, 'high')
+    // 模型与计费跟随主 run：主 run 用什么模型（含自定义模型），子 Agent 就用什么模型；
+    // 内置档按倍率扣 credits，custom 档消耗用户自己的模型 token。主 run 未注入时回退内置极速档。
+    const modelRuntime = ctx.modelRuntime ?? await getModelTierRuntime('speed', ctx.userId, null, 'high')
     const sessionPolicy = await prisma.agentSession.findUnique({ where: { id: ctx.sessionId }, select: { toolPolicy: true, sandboxMode: true } })
     const result = await runSubagentInline({
       // 归属标记：所属 subagent_run 工具调用的 callId，前端据此把内部工具卡片分组进子 Agent 容器
@@ -80,7 +84,6 @@ async function executeSubagentDefinition(
       triggerCondition: definition.triggerCondition,
       prompt: definition.prompt,
       task,
-      tokenBudget: definition.tokenBudget,
       mode: roleMode[definition.role as AgentSubtaskRole] ?? 'review',
       parentRunId: ctx.runId,
       sessionId: ctx.sessionId,
@@ -171,7 +174,7 @@ export const subAgentRunTool = defineTool({
   async execute(ctx, args) {
     const subtask = await prisma.agentSubtask.findFirst({
       where: { id: args.subagentId, userId: ctx.userId, novelId: ctx.novelId },
-      select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, tokenBudget: true, enabled: true },
+      select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, enabled: true },
     })
     if (!subtask) {
       return { output: `子 Agent 定义 ${args.subagentId} 不存在或不属于当前作品。请核对系统提示中的子 Agent 目录后重试。`, summary: '子 Agent 不存在' }
@@ -200,7 +203,7 @@ export const subAgentDelegateTool = defineTool({
     // 同名同作品复用：避免模型多轮委派产生重复定义
     const existing = await prisma.agentSubtask.findFirst({
       where: { userId: ctx.userId, novelId: ctx.novelId, name: args.name.trim().slice(0, 160) },
-      select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, tokenBudget: true, enabled: true },
+      select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, enabled: true },
     })
     let definition: SubagentDefinition
     let created = false
@@ -216,11 +219,11 @@ export const subAgentDelegateTool = defineTool({
           triggerCondition: args.triggerCondition.trim(),
           callableBy: 'main_and_subagents',
           prompt: args.prompt.trim(),
-          tokenBudget: args.tokenBudget,
+          tokenBudget: SUBAGENT_DEFAULT_TOKEN_BUDGET,
           status: 'ready',
           enabled: true,
         },
-        select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, tokenBudget: true, enabled: true },
+        select: { id: true, name: true, role: true, triggerCondition: true, prompt: true, enabled: true },
       })
       definition = record
       created = true

@@ -150,7 +150,7 @@ export async function listAgentSubtasks(userId: string, novelId: string) {
   return { items: items.map((item) => subtaskView(item, stats.get(item.id) ?? { runCount: 0, lastRunAt: null })) }
 }
 
-export async function createAgentSubtask(userId: string, input: { novelId: string; parentSessionId?: string | null; name: string; role: AgentSubtaskRole; triggerCondition: string; prompt: string; tokenBudget: number }) {
+export async function createAgentSubtask(userId: string, input: { novelId: string; parentSessionId?: string | null; name: string; role: AgentSubtaskRole; triggerCondition: string; prompt: string; tokenBudget?: number }) {
   await requireNovel(userId, input.novelId)
   if (input.parentSessionId) {
     const parent = await requireSession(userId, input.parentSessionId)
@@ -158,11 +158,11 @@ export async function createAgentSubtask(userId: string, input: { novelId: strin
   }
   const name = input.name.trim().slice(0, 160)
   // 只落定义（模板）：执行由主 run 通过 subagent_run 内嵌发起，不再新建会话与独立 run
-  const record = await prisma.agentSubtask.create({ data: { userId, novelId: input.novelId, parentSessionId: input.parentSessionId ?? null, name, role: input.role, triggerCondition: input.triggerCondition.trim(), callableBy: 'main_and_subagents', prompt: input.prompt.trim(), tokenBudget: input.tokenBudget, status: 'ready', enabled: true } })
+  const record = await prisma.agentSubtask.create({ data: { userId, novelId: input.novelId, parentSessionId: input.parentSessionId ?? null, name, role: input.role, triggerCondition: input.triggerCondition.trim(), callableBy: 'main_and_subagents', prompt: input.prompt.trim(), tokenBudget: input.tokenBudget ?? 16_000, status: 'ready', enabled: true } })
   return { item: subtaskView(record, { runCount: 0, lastRunAt: null }) }
 }
 
-export async function updateAgentSubtask(userId: string, subtaskId: string, input: { name?: string; role?: AgentSubtaskRole; triggerCondition?: string; prompt?: string; tokenBudget?: number; enabled?: boolean }) {
+export async function updateAgentSubtask(userId: string, subtaskId: string, input: { name?: string; role?: AgentSubtaskRole; triggerCondition?: string; prompt?: string; enabled?: boolean }) {
   const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId } })
   if (!item) throw new DataAccessError(404, 'SUBTASK_NOT_FOUND', '子 Agent 不存在。')
   const name = input.name?.trim().slice(0, 160)
@@ -173,7 +173,6 @@ export async function updateAgentSubtask(userId: string, subtaskId: string, inpu
       role: input.role,
       triggerCondition: input.triggerCondition?.trim(),
       prompt: input.prompt?.trim(),
-      tokenBudget: input.tokenBudget,
       ...(input.enabled === undefined ? {} : input.enabled
         ? { enabled: true, status: 'ready' }
         : { enabled: false, status: 'cancelled', cancelledAt: new Date() }),

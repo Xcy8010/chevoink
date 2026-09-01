@@ -85,7 +85,6 @@ export default function ChapterSidebar({
   savedPlans,
   selectedChapterId,
   selectedTreeItemId,
-  chapterCountLabel,
   novelTitle,
   onCreateChapter,
   onCreateVolume,
@@ -143,40 +142,34 @@ export default function ChapterSidebar({
       className={cn(
         'group/tree flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-default)]',
         embedded
-          ? 'px-4 py-4 xl:px-5'
-          : 'rounded-[var(--radius-lg)] border border-[var(--border-subtle)] p-3 pb-4 shadow-[var(--shadow-soft)]',
+          ? 'px-2 py-3'
+          : 'rounded-[var(--radius-lg)] border border-[var(--border-subtle)] p-2 pb-4 shadow-[var(--shadow-soft)]',
       )}
     >
-      <div className="border-b border-[var(--border-subtle)] px-1 pb-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[13px] font-semibold leading-5 text-[var(--text-primary)]">作品树</p>
-            <span className="text-[10px] text-[var(--text-tertiary)]">{chapterCountLabel}</span>
-          </div>
-          {/* 参考 IDE 资源管理器：悬停树区域时浮出图标按钮组，悬停按钮有提示字；手机端无 hover 常驻 */}
-          <div className="flex shrink-0 items-center gap-0.5 opacity-100 md:opacity-0 md:transition-opacity md:group-hover/tree:opacity-100">
-            {onCreateVolume ? <TreeHeaderButton label="新建卷" onClick={onCreateVolume}><FolderPlus className="h-3.5 w-3.5" /></TreeHeaderButton> : null}
-            <TreeHeaderButton label="新建章节" onClick={onCreateChapter}><FilePlus2 className="h-3.5 w-3.5" /></TreeHeaderButton>
-            <TreeHeaderButton label="新建计划" onClick={onCreatePlan}><NotebookPen className="h-3.5 w-3.5" /></TreeHeaderButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-2.5 pb-2">
+      {/* 参考 IDE 资源管理器的顶栏结构：标题区移除，新建按钮浮在根节点行右侧；树整体贴近左侧边框 */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-1 pb-2">
         <div className="space-y-0.5">
-          <button
-            type="button"
-            onClick={() => setNovelExpanded((current) => !current)}
-            className="flex w-full items-center gap-1.5 rounded-[10px] px-2 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]"
-          >
-            {novelExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-            )}
-            <FolderTree className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-            <span className="truncate">{novelTitle}</span>
-          </button>
+          <div className="group/novel-row flex w-full items-center gap-1.5 rounded-[10px] px-2 py-1.5 transition hover:bg-[var(--surface-muted)]">
+            <button
+              type="button"
+              onClick={() => setNovelExpanded((current) => !current)}
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[13px] text-[var(--text-primary)]"
+            >
+              {novelExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+              )}
+              <FolderTree className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+              <span className="truncate">{novelTitle}</span>
+            </button>
+            {/* 参考 IDE 资源管理器：悬停树区域时浮出图标按钮组，悬停按钮有提示字；手机端无 hover 常驻 */}
+            <div className="flex shrink-0 items-center gap-0.5 opacity-100 md:opacity-0 md:transition-opacity md:group-hover/tree:opacity-100">
+              {onCreateVolume ? <TreeHeaderButton label="新建卷" onClick={onCreateVolume}><FolderPlus className="h-3.5 w-3.5" /></TreeHeaderButton> : null}
+              <TreeHeaderButton label="新建章节" onClick={onCreateChapter}><FilePlus2 className="h-3.5 w-3.5" /></TreeHeaderButton>
+              <TreeHeaderButton label="新建计划" onClick={onCreatePlan}><NotebookPen className="h-3.5 w-3.5" /></TreeHeaderButton>
+            </div>
+          </div>
 
           {novelExpanded ? (
             <div className="ml-3.5 border-l border-[var(--border-subtle)] pl-1.5 md:border-transparent md:transition-colors md:group-hover/tree:border-[var(--border-subtle)]">
@@ -206,6 +199,7 @@ export default function ChapterSidebar({
                 )}
                 <NotebookText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
                 <span className="truncate">计划</span>
+                <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">共{savedPlans.length}个</span>
               </button>
 
               {planFolderExpanded ? (
@@ -301,6 +295,7 @@ export default function ChapterSidebar({
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
                 )}
                 <span className="truncate">全部章节</span>
+                <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">共{volumes.length}卷{chapters.length}章</span>
               </button>
 
               {chapterFolderExpanded ? (
@@ -328,7 +323,7 @@ export default function ChapterSidebar({
                       >
                         <NotebookText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                         <span className="truncate">第 {volume.orderIndex} 卷 · {volume.title}</span>
-                        <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">{volumeChapters.length} 章</span>
+                        <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">共{volumeChapters.length}章</span>
                       </div>
                       <div className="ml-2.5 border-l border-[var(--border-subtle)] pl-1 md:border-transparent md:transition-colors md:group-hover/tree:border-[var(--border-subtle)]">
                   {volumeChapters.map((chapter) => {

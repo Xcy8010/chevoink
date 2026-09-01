@@ -16,6 +16,8 @@ export type NovelExportLink = {
   exportId: string
   downloadUrl: string
   fileName: string
+  /** 发布建议因今日额度用尽未生成：导出本身成功，前端据此弹兑底提示 */
+  adviceCreditsExhausted?: boolean
 }
 
 /** 从 Content-Disposition 解析下载文件名（优先 RFC5987 UTF-8 编码） */
@@ -49,8 +51,8 @@ export function triggerBlobDownload(blob: Blob, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** 请求服务端组装 zip 并直接触发下载；错误体解析后端中文文案抛出 */
-export async function downloadNovelExportZip(novelId: string, options: NovelExportRequest): Promise<void> {
+/** 请求服务端组装 zip 并直接触发下载；返回是否因额度用尽跳过了发布建议；错误体解析后端中文文案抛出 */
+export async function downloadNovelExportZip(novelId: string, options: NovelExportRequest): Promise<boolean> {
   const response = await fetch(buildApiUrl(`/api/novels/${novelId}/export`), {
     method: 'POST',
     credentials: 'include',
@@ -80,6 +82,7 @@ export async function downloadNovelExportZip(novelId: string, options: NovelExpo
   const fileName = parseDownloadFileName(response.headers.get('Content-Disposition')) ?? '作品一键导出.zip'
 
   triggerBlobDownload(blob, fileName)
+  return response.headers.get('X-Advice-Credits-Exhausted') === '1'
 }
 
 /** APP 壳专用：服务端打包并暂存后返回一次性下载链接（链接 15 分钟内有效） */

@@ -9,6 +9,7 @@ import type {
   StoryCompilerMode,
 } from '../../../../shared/contracts/index.js'
 import type { AgentStreamEventBody } from '../../../../shared/contracts/index.js'
+import type { getModelTierRuntime } from '../../credits.js'
 
 /** 工具执行上下文：身份与作用域由服务端注入，绝不信任模型给出的 ID */
 export type ToolContext = {
@@ -26,6 +27,8 @@ export type ToolContext = {
   mode: AgentExecutionMode
   creativeFreedom: CreativeFreedom
   qualityMode: StoryCompilerMode
+  /** 主 run 解析好的模型运行时：子 Agent 跟随主 run 的模型与额度计费（未注入时工具自行回退） */
+  modelRuntime?: Awaited<ReturnType<typeof getModelTierRuntime>>
   /** 工具内部可发进度事件（进入统一事件总线） */
   emit: (event: AgentStreamEventBody) => void
   signal: AbortSignal

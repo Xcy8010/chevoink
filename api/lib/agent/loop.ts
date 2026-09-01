@@ -880,6 +880,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       mode: params.mode,
       creativeFreedom: taskSpec.creativeFreedom,
       qualityMode: taskSpec.qualityMode,
+      // 子 Agent 跟随主 run 的模型与额度计费：custom 档直接消耗用户自己的 token，内置档按倍率扣 credits
+      modelRuntime,
       emit: (event) => bus.emit(event),
       signal: controller.signal,
     }

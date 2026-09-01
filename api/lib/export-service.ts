@@ -19,6 +19,8 @@ export type NovelExportResult = {
   fileName: string
   /** 人类可读的导出摘要（toast / Agent 回填共用） */
   summary: string
+  /** 发布建议因今日额度用尽未生成：导出本身不受影响，前端据此弹兑底提示 */
+  adviceCreditsExhausted?: boolean
 }
 
 /** zip 内目录/文件名清洗：去掉路径与 Windows 非法字符，限长防膨胀 */
@@ -212,6 +214,7 @@ export async function buildNovelExportZip(
   const entries: ZipEntry[] = []
   const text = (value: string) => Buffer.from(value, 'utf8')
   const summaryParts: string[] = []
+  let adviceCreditsExhausted = false
 
   if (includePlans) {
     const { items } = await listNovelPlanArtifacts(userId, novelId)
@@ -301,8 +304,12 @@ export async function buildNovelExportZip(
           advice.summary || '（无）',
         ].join('\n')
       }
-    } catch {
-      // AI 不可用不阻断导出，降级文案已就位
+    } catch (error) {
+      // AI 不可用不阻断导出；额度用尽时换专门文案并在响应里标记，让前端弹兑底提示
+      if (error instanceof DataAccessError && error.code === 'CREDITS_EXHAUSTED') {
+        adviceCreditsExhausted = true
+        adviceText = '发布建议本次未生成（当前额度已用尽），其它内容已正常导出。'
+      }
     }
 
     entries.push({ path: `${root}/作品信息以及发布建议/发布建议.txt`, data: text(`${adviceText}\n`) })
@@ -316,5 +323,5 @@ export async function buildNovelExportZip(
   const buffer = buildZipBuffer(entries)
   const fileName = `${root}-一键导出.zip`
 
-  return { buffer, fileName, summary: summaryParts.join('、') }
+  return { buffer, fileName, summary: summaryParts.join('、'), adviceCreditsExhausted: adviceCreditsExhausted || undefined }
 }

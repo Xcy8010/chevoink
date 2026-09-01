@@ -265,6 +265,11 @@ router.post('/:novelId/export', async (req: Request, res: Response): Promise<voi
     const body = parseBody(exportNovelSchema, req.body, '导出选项格式不正确。')
     const result = await buildNovelExportZip(userId, req.params.novelId, body)
 
+    // 发布建议因额度用尽未生成时用响应头告知前端（二进制流无法携带 JSON 说明），前端据此弹兑底提示
+    if (result.adviceCreditsExhausted) {
+      res.setHeader('X-Advice-Credits-Exhausted', '1')
+    }
+
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(result.fileName)}`)
     res.status(200).send(result.buffer)
@@ -289,6 +294,7 @@ router.post('/:novelId/export-link', async (req: Request, res: Response): Promis
         exportId,
         downloadUrl: `/api/novels/exports/${exportId}`,
         fileName: result.fileName,
+        adviceCreditsExhausted: result.adviceCreditsExhausted ?? false,
       }),
     )
   } catch (error) {
