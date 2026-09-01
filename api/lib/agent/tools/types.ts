@@ -21,6 +21,8 @@ export type ToolContext = {
   protectedChapterIds?: ReadonlySet<string>
   /** 当前工具调用的 callId：供 ask_user 等需要挂起等待前端回应的工具使用 */
   callId: string
+  /** 当前轮 assistant 消息 id：子 Agent 等需要发进度事件的工具用它锚定直播位置 */
+  messageId?: string
   mode: AgentExecutionMode
   creativeFreedom: CreativeFreedom
   qualityMode: StoryCompilerMode
@@ -38,6 +40,8 @@ export type ToolResult = {
   snapshot?: AgentRollbackSnapshot
   /** 人类可读的一行执行摘要（工具卡片展示） */
   summary?: string
+  /** 附属分部：子 Agent 内嵌执行产生的内部工具调用卡片，随父消息一并落库与直播 */
+  extraParts?: import('../../../../shared/contracts/index.js').AgentMessagePart[]
 }
 
 export type AgentTool<Args = unknown> = {

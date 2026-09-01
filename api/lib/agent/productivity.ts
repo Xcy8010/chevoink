@@ -4,6 +4,7 @@ import type {
   AgentEvalComparisonView,
   AgentEvalRunMetric,
   AgentScheduleView,
+  AgentSubtaskLogEntry,
   AgentSubtaskLogsView,
   AgentSubtaskRole,
   AgentSubtaskView,
@@ -28,15 +29,35 @@ function branchView(item: { id: string; novelId: string; chapterId: string; sour
   return { ...item, mergedAt: item.mergedAt?.toISOString() ?? null, createdAt: item.createdAt.toISOString(), updatedAt: item.updatedAt.toISOString() }
 }
 
-function subtaskView(item: { id: string; novelId: string; parentSessionId: string; childSessionId: string; childRunId: string | null; name: string; role: string; triggerCondition: string; callableBy: string; prompt: string; tokenBudget: number; status: string; createdAt: Date; updatedAt: Date }): AgentSubtaskView {
+function subtaskView(item: { id: string; novelId: string; parentSessionId: string | null; childSessionId: string | null; childRunId: string | null; name: string; role: string; triggerCondition: string; callableBy: string; prompt: string; tokenBudget: number; status: string; enabled: boolean; createdAt: Date; updatedAt: Date }, stats: { runCount: number; lastRunAt: Date | null }): AgentSubtaskView {
+  // 状态归一：定义层只有 ready（启用）与 cancelled（停用）两种展示态
+  const status = item.status === 'cancelled' || !item.enabled ? 'cancelled' : 'ready'
   return {
-    ...item,
+    id: item.id,
+    novelId: item.novelId,
+    parentSessionId: item.parentSessionId,
+    childSessionId: item.childSessionId,
+    childRunId: item.childRunId,
+    name: item.name,
     role: item.role as AgentSubtaskRole,
+    triggerCondition: item.triggerCondition,
     callableBy: 'main_and_subagents',
-    traceUrl: item.childRunId ? `/api/agent/runs/${item.childRunId}/stream` : null,
+    prompt: item.prompt,
+    tokenBudget: item.tokenBudget,
+    status,
+    enabled: item.enabled,
+    runCount: stats.runCount,
+    lastRunAt: stats.lastRunAt?.toISOString() ?? null,
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
   }
+}
+
+/** 内嵌调用统计：每个定义的累计调用次数与最近调用时间 */
+async function loadSubtaskStats(ids: string[]): Promise<Map<string, { runCount: number; lastRunAt: Date | null }>> {
+  if (!ids.length) return new Map()
+  const grouped = await prisma.agentSubtaskRun.groupBy({ by: ['subtaskId'], where: { subtaskId: { in: ids } }, _count: { _all: true }, _max: { createdAt: true } })
+  return new Map(grouped.map((row) => [row.subtaskId, { runCount: row._count._all, lastRunAt: row._max.createdAt }]))
 }
 
 function scheduleView(item: { id: string; novelId: string; sessionId: string; name: string; prompt: string; cadenceMinutes: number; nextRunAt: Date; lastRunId: string | null; status: string; createdAt: Date; updatedAt: Date }): AgentScheduleView {
@@ -125,50 +146,53 @@ export async function mergeStoryBranch(userId: string, branchId: string) {
 export async function listAgentSubtasks(userId: string, novelId: string) {
   await requireNovel(userId, novelId)
   const items = await prisma.agentSubtask.findMany({ where: { userId, novelId }, orderBy: { createdAt: 'desc' }, take: 100 })
-  const runIds = items.flatMap((item) => item.childRunId ? [item.childRunId] : [])
-  const runs = runIds.length ? await prisma.agentRun.findMany({ where: { id: { in: runIds }, userId }, select: { id: true, status: true } }) : []
-  const status = new Map(runs.map((run) => [run.id, run.status]))
-  return { items: items.map((item) => subtaskView({ ...item, status: item.status === 'cancelled' ? item.status : item.childRunId ? status.get(item.childRunId) ?? item.status : item.status })) }
+  const stats = await loadSubtaskStats(items.map((item) => item.id))
+  return { items: items.map((item) => subtaskView(item, stats.get(item.id) ?? { runCount: 0, lastRunAt: null })) }
 }
 
-const roleMode: Record<AgentSubtaskRole, 'plan' | 'review'> = { research: 'plan', continuity: 'review', quality: 'review', lore: 'review' }
-export async function createAgentSubtask(userId: string, input: { novelId: string; parentSessionId: string; chapterId?: string | null; name: string; role: AgentSubtaskRole; triggerCondition: string; prompt: string; tokenBudget: number }) {
-  const parent = await requireSession(userId, input.parentSessionId)
-  if (parent.novelId !== input.novelId) throw new DataAccessError(400, 'SESSION_NOVEL_MISMATCH', '任务与作品不匹配。')
-  const activeChildren = await prisma.agentSubtask.count({ where: { userId, parentSessionId: parent.id, status: { in: ['queued', 'running', 'awaiting_approval'] } } })
-  if (activeChildren >= 4) throw new DataAccessError(409, 'SUBTASK_LIMIT_REACHED', '当前 Agent 已有 4 个进行中的子任务，请等待完成或先取消一个。')
-  const name = input.name.trim().slice(0, 160)
-  const child = await prisma.agentSession.create({ data: { userId, novelId: input.novelId, title: name } })
-  const record = await prisma.agentSubtask.create({ data: { userId, novelId: input.novelId, parentSessionId: parent.id, childSessionId: child.id, name, role: input.role, triggerCondition: input.triggerCondition.trim(), callableBy: 'main_and_subagents', prompt: input.prompt.trim(), tokenBudget: input.tokenBudget, status: 'queued' } })
-  try {
-    const run = await startLoopRun(userId, { sessionId: child.id, novelId: input.novelId, chapterId: input.chapterId ?? null, mode: roleMode[input.role], prompt: input.prompt.trim(), creativeFreedom: 'balanced', qualityMode: 'premium', modelTier: 'speed', reasoningEffort: 'high', agentProfile: input.role, tokenBudget: input.tokenBudget })
-    const item = await prisma.agentSubtask.update({ where: { id: record.id }, data: { childRunId: run.runId, status: 'running' } })
-    return { item: subtaskView(item) }
-  } catch (error) {
-    await prisma.agentSubtask.update({ where: { id: record.id }, data: { status: 'failed' } }).catch(() => {})
-    throw error
+export async function createAgentSubtask(userId: string, input: { novelId: string; parentSessionId?: string | null; name: string; role: AgentSubtaskRole; triggerCondition: string; prompt: string; tokenBudget: number }) {
+  await requireNovel(userId, input.novelId)
+  if (input.parentSessionId) {
+    const parent = await requireSession(userId, input.parentSessionId)
+    if (parent.novelId !== input.novelId) throw new DataAccessError(400, 'SESSION_NOVEL_MISMATCH', '任务与作品不匹配。')
   }
+  const name = input.name.trim().slice(0, 160)
+  // 只落定义（模板）：执行由主 run 通过 subagent_run 内嵌发起，不再新建会话与独立 run
+  const record = await prisma.agentSubtask.create({ data: { userId, novelId: input.novelId, parentSessionId: input.parentSessionId ?? null, name, role: input.role, triggerCondition: input.triggerCondition.trim(), callableBy: 'main_and_subagents', prompt: input.prompt.trim(), tokenBudget: input.tokenBudget, status: 'ready', enabled: true } })
+  return { item: subtaskView(record, { runCount: 0, lastRunAt: null }) }
 }
 
-export async function updateAgentSubtask(userId: string, subtaskId: string, input: { name?: string; role?: AgentSubtaskRole; triggerCondition?: string; prompt?: string; tokenBudget?: number }) {
+export async function updateAgentSubtask(userId: string, subtaskId: string, input: { name?: string; role?: AgentSubtaskRole; triggerCondition?: string; prompt?: string; tokenBudget?: number; enabled?: boolean }) {
   const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId } })
   if (!item) throw new DataAccessError(404, 'SUBTASK_NOT_FOUND', '子 Agent 不存在。')
   const name = input.name?.trim().slice(0, 160)
-  const updated = await prisma.$transaction(async (tx) => {
-    if (name) await tx.agentSession.update({ where: { id: item.childSessionId }, data: { title: name } })
-    return tx.agentSubtask.update({ where: { id: item.id }, data: { name, role: input.role, triggerCondition: input.triggerCondition?.trim(), prompt: input.prompt?.trim(), tokenBudget: input.tokenBudget } })
+  const updated = await prisma.agentSubtask.update({
+    where: { id: item.id },
+    data: {
+      name,
+      role: input.role,
+      triggerCondition: input.triggerCondition?.trim(),
+      prompt: input.prompt?.trim(),
+      tokenBudget: input.tokenBudget,
+      ...(input.enabled === undefined ? {} : input.enabled
+        ? { enabled: true, status: 'ready' }
+        : { enabled: false, status: 'cancelled', cancelledAt: new Date() }),
+    },
   })
-  return { item: subtaskView(updated) }
+  // 停用时兼容旧架构：旧数据可能仍挂着独立子 run，一并停止
+  if (input.enabled === false && item.childRunId) await stopLoopRun(userId, item.childRunId).catch(() => {})
+  const stats = await loadSubtaskStats([item.id])
+  return { item: subtaskView(updated, stats.get(item.id) ?? { runCount: 0, lastRunAt: null }) }
 }
 
 export async function deleteAgentSubtask(userId: string, subtaskId: string) {
   const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId } })
   if (!item) throw new DataAccessError(404, 'SUBTASK_NOT_FOUND', '子 Agent 不存在。')
   if (item.childRunId) await stopLoopRun(userId, item.childRunId).catch(() => {})
-  // 运行、消息与审计记录继续保留；从子 Agent 管理列表删除，并把独立会话归档，避免外键阻断或历史丢失。
+  // 调用记录随定义级联删除；旧架构的独立会话归档保留历史，避免外键阻断或历史丢失
   await prisma.$transaction([
     prisma.agentSubtask.delete({ where: { id: item.id } }),
-    prisma.agentSession.update({ where: { id: item.childSessionId }, data: { status: 'archived' } }),
+    ...(item.childSessionId ? [prisma.agentSession.update({ where: { id: item.childSessionId }, data: { status: 'archived' } })] : []),
   ])
   return { deleted: true }
 }
@@ -200,20 +224,49 @@ function eventLog(record: { id: string; type: string; payload: Prisma.JsonValue;
 }
 
 export async function getAgentSubtaskLogs(userId: string, subtaskId: string): Promise<AgentSubtaskLogsView> {
-  const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId }, include: { childRun: true } })
+  const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId } })
   if (!item) throw new DataAccessError(404, 'SUBTASK_NOT_FOUND', '子 Agent 不存在。')
-  const events = item.childRunId ? await prisma.agentRunEvent.findMany({ where: { runId: item.childRunId }, orderBy: { seq: 'asc' }, take: 300 }) : []
-  const entries = events.filter((event) => !['text.delta', 'reasoning.delta', 'tool.delta', 'step.finish'].includes(event.type)).map(eventLog)
+  const entries: AgentSubtaskLogEntry[] = []
+  // 新架构：内嵌调用记录（最近 20 次）
+  const runs = await prisma.agentSubtaskRun.findMany({ where: { subtaskId: item.id }, orderBy: { createdAt: 'desc' }, take: 20 })
+  for (const run of runs) {
+    const running = run.status === 'running'
+    const ok = run.status === 'succeeded'
+    entries.push({
+      id: run.id,
+      time: run.createdAt.toISOString(),
+      title: running ? '正在内嵌执行' : ok ? '内嵌调用完成' : '内嵌调用未完成',
+      detail: shortText(run.resultSummary ?? run.task, '本次调用已结束。'),
+      tone: ok ? 'success' : running ? 'neutral' : 'warning',
+    })
+  }
+  // 旧架构兑底：历史独立 child run 的事件流
+  if (item.childRunId) {
+    const events = await prisma.agentRunEvent.findMany({ where: { runId: item.childRunId }, orderBy: { seq: 'asc' }, take: 300 })
+    entries.push(...events.filter((event) => !['text.delta', 'reasoning.delta', 'tool.delta', 'step.finish', 'message.start'].includes(event.type)).map(eventLog))
+  }
   if (entries.length === 0) entries.push({ id: `${item.id}-created`, time: item.createdAt.toISOString(), title: '已创建子 Agent', detail: `触发条件：${item.triggerCondition}`, tone: 'neutral' })
-  return { subtaskId: item.id, name: item.name, status: item.childRun?.status ?? item.status, entries }
+  return { subtaskId: item.id, name: item.name, status: item.enabled ? 'ready' : item.status, entries }
 }
 
 export async function cancelAgentSubtask(userId: string, subtaskId: string) {
   const item = await prisma.agentSubtask.findFirst({ where: { id: subtaskId, userId } })
   if (!item) throw new DataAccessError(404, 'SUBTASK_NOT_FOUND', '子 Agent 任务不存在。')
+  // 停用语义：定义保留但不再出现在主 Agent 目录；旧架构的独立子 run 一并停止
   if (item.childRunId) await stopLoopRun(userId, item.childRunId).catch(() => {})
-  const updated = await prisma.agentSubtask.update({ where: { id: item.id }, data: { status: 'cancelled', cancelledAt: new Date() } })
-  return { item: subtaskView(updated) }
+  const updated = await prisma.agentSubtask.update({ where: { id: item.id }, data: { enabled: false, status: 'cancelled', cancelledAt: new Date() } })
+  const stats = await loadSubtaskStats([item.id])
+  return { item: subtaskView(updated, stats.get(item.id) ?? { runCount: 0, lastRunAt: null }) }
+}
+
+/** 主 run 系统提示里的子 Agent 目录：主控据此按触发条件用 subagent_run 内嵌调用（codex/Zcode 模式） */
+export async function renderSubagentCatalog(userId: string, novelId: string): Promise<string> {
+  const items = await prisma.agentSubtask.findMany({ where: { userId, novelId, enabled: true }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, name: true, role: true, triggerCondition: true, prompt: true } })
+  if (!items.length) return ''
+  return [
+    '[子 Agent 目录] 你可以像调用工具一样，用 subagent_run 把命中触发条件的任务交给以下具名子 Agent 内嵌执行（不新开任务窗口；它会自主使用工具完成任务并返回报告，你必须审查其报告后再向作者汇报；调用时传 subagentId 与自包含的 task）：',
+    ...items.map((item) => `- 「${item.name}」（subagentId=${item.id}，角色=${item.role}）\n  触发条件：${item.triggerCondition}\n  职责：${item.prompt}`),
+  ].join('\n')
 }
 
 export async function listAgentSchedules(userId: string, novelId: string) {

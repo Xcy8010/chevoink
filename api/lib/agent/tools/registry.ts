@@ -33,7 +33,7 @@ import {
 import { webReadTool, webSearchTool } from './search-tools.js'
 import type { AgentTool } from './types.js'
 import { todoWriteTool } from './todo-tools.js'
-import { subAgentDelegateTool } from './subagent-tools.js'
+import { subAgentDelegateTool, subAgentRunTool } from './subagent-tools.js'
 import {
   chapterMergeTool,
   chapterMoveTool,
@@ -210,6 +210,7 @@ export const allTools: AgentTool<any>[] = [
   styleProfileExtractTool,
   researchDossierBuildTool,
   firstThreePrototypeBuildTool,
+  subAgentRunTool,
   subAgentDelegateTool,
   // 交互
   askUserTool,

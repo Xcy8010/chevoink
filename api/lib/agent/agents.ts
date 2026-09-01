@@ -16,7 +16,10 @@ export type AgentDefinition = {
 }
 
 /**
- * 主控与四种专业子 Agent。子 Agent 使用显式工具白名单，避免继承主控的写入权限。
+ * 主控与四种专业子 Agent。子 Agent 使用显式工具白名单：
+ * - 不含 todo_write（子 Agent 内嵌执行复用父 run 消息空间，避免污染主 run 待办清单）
+ * - 不含 subagent_delegate / subagent_run（禁止嵌套递归，只有主控可调子 Agent）
+ * - 写工具按需白名单化，写操作仍走会话工具策略 + 审批闸（子 Agent 审批透传到主 run）
  */
 export const agentRegistry: AgentDefinition[] = [
   {
@@ -30,28 +33,28 @@ export const agentRegistry: AgentDefinition[] = [
     type: 'research',
     title: '调研 Agent',
     model: env.agentModel,
-    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'plan_read', 'web_search', 'web_read', 'platform_novel_search', 'platform_novel_read', 'research_dossier_get', 'research_dossier_build', 'craft_search', 'todo_write', 'subagent_delegate'],
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'plan_read', 'web_search', 'web_read', 'platform_novel_search', 'platform_novel_read', 'research_dossier_get', 'research_dossier_build', 'craft_search'],
     modes: ['plan', 'review'],
   },
   {
     type: 'continuity',
     title: '一致性 Agent',
     model: env.agentModel,
-    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'story_charter_get', 'chapter_bridge_get', 'continuity_validate', 'quality_report_get', 'project_search', 'structure_validate', 'todo_write', 'subagent_delegate'],
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'story_charter_get', 'chapter_bridge_get', 'continuity_validate', 'quality_report_get', 'project_search', 'structure_validate', 'chapter_write', 'chapter_append', 'chapter_edit_range', 'plan_save'],
     modes: ['review'],
   },
   {
     type: 'quality',
     title: '质量 Agent',
     model: env.agentModel,
-    tools: ['novel_get_context', 'chapter_read', 'quality_analyze', 'quality_report_get', 'quality_findings_select', 'creative_critique', 'style_profile_get', 'style_leakage_check', 'todo_write', 'subagent_delegate'],
+    tools: ['novel_get_context', 'chapter_read', 'quality_analyze', 'quality_report_get', 'quality_findings_select', 'creative_critique', 'style_profile_get', 'style_leakage_check', 'chapter_edit_range', 'chapter_write', 'chapter_append'],
     modes: ['review'],
   },
   {
     type: 'lore',
     title: '设定 Agent',
     model: env.agentModel,
-    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'memory_review_list', 'memory_relation_save', 'memory_event_save', 'story_charter_get', 'character_voice_get', 'experience_anchor_get', 'todo_write', 'subagent_delegate'],
+    tools: ['novel_get_context', 'chapter_read', 'chapter_list_summaries', 'memory_search', 'memory_review_list', 'memory_relation_save', 'memory_event_save', 'memory_save', 'story_charter_get', 'character_voice_get', 'experience_anchor_get'],
     modes: ['plan', 'review'],
   },
 ]

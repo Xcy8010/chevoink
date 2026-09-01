@@ -45,11 +45,12 @@ export interface StoryBranchDiffView {
   removedLines: number
 }
 
+/** 子 Agent 定义（模板）：主 run 通过 subagent_run 工具像调工具一样内嵌调用，不再新开任务窗口 */
 export interface AgentSubtaskView {
   id: string
   novelId: string
-  parentSessionId: string
-  childSessionId: string
+  parentSessionId: string | null
+  childSessionId: string | null
   childRunId: string | null
   name: string
   role: AgentSubtaskRole
@@ -58,7 +59,11 @@ export interface AgentSubtaskView {
   prompt: string
   tokenBudget: number
   status: string
-  traceUrl: string | null
+  /** 停用的定义不出现在主 Agent 的可调用目录里（历史取消的旧数据迁移为 false） */
+  enabled: boolean
+  /** 内嵌调用统计 */
+  runCount: number
+  lastRunAt: string | null
   createdAt: string
   updatedAt: string
 }

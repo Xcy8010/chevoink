@@ -195,6 +195,7 @@ export default function EditorCanvas({
           ) : workspaceDocument.editableContent ? (
             <LocalFirstTextarea
               autoGrow
+              data-kb-reveal="off"
               value={workspaceDocument.content}
               resetKey={workspaceDocument.id}
               onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
@@ -285,6 +286,7 @@ export default function EditorCanvas({
               <LocalFirstTextarea
                 ref={streamingTextarea.ref}
                 onScroll={streamingTextarea.onScroll}
+                data-kb-reveal="off"
                 value={workspaceDocument.content}
                 resetKey={workspaceDocument.id}
                 onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
@@ -421,6 +423,7 @@ export default function EditorCanvas({
               </p>
               <LocalFirstTextarea
                 autoGrow
+                data-kb-reveal="off"
                 value={chapterDraft.content}
                 resetKey={chapterDraft.id}
                 onCommit={(content) => onChange({ ...chapterDraft, content })}
@@ -499,6 +502,7 @@ export default function EditorCanvas({
             <LocalFirstTextarea
               ref={streamingTextarea.ref}
               onScroll={streamingTextarea.onScroll}
+              data-kb-reveal="off"
               value={chapterDraft.content}
               resetKey={chapterDraft.id}
               onCommit={(content) => onChange({ ...chapterDraft, content })}

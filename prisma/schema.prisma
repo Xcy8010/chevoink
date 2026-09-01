@@ -429,6 +429,7 @@ model User {
   receivedSkillShareInvites  SkillShareInvite[]      @relation("SkillShareInviteRecipient")
   storyBranches              StoryBranch[]
   agentSubtasks              AgentSubtask[]
+  agentSubtaskRuns           AgentSubtaskRun[]
   agentSchedules             AgentSchedule[]
   agentEvalComparisons       AgentEvalComparison[]
   following                  UserFollow[]            @relation("UserFollowFollower")
@@ -529,6 +530,7 @@ model Novel {
   skillShareInvites      SkillShareInvite[]
   storyBranches          StoryBranch[]
   agentSubtasks          AgentSubtask[]
+  agentSubtaskRuns       AgentSubtaskRun[]
   agentSchedules         AgentSchedule[]
   agentEvalComparisons   AgentEvalComparison[]
 
@@ -1149,8 +1151,8 @@ model AgentSubtask {
   id             String   @id @default(cuid()) @db.VarChar(64)
   userId         String   @map("user_id") @db.VarChar(64)
   novelId        String   @map("novel_id") @db.VarChar(64)
-  parentSessionId String  @map("parent_session_id") @db.VarChar(64)
-  childSessionId String   @map("child_session_id") @db.VarChar(64)
+  parentSessionId String? @map("parent_session_id") @db.VarChar(64)
+  childSessionId String?  @map("child_session_id") @db.VarChar(64)
   childRunId     String?  @map("child_run_id") @db.VarChar(64)
   name           String   @default("未命名子 Agent") @db.VarChar(160)
   role           String   @db.VarChar(32)
@@ -1158,19 +1160,47 @@ model AgentSubtask {
   callableBy     String   @default("main_and_subagents") @map("callable_by") @db.VarChar(32)
   prompt         String
   tokenBudget    Int      @default(4000) @map("token_budget")
-  status         String   @default("queued") @db.VarChar(24)
+  status         String   @default("ready") @db.VarChar(24)
+  enabled        Boolean  @default(true) @map("enabled")
   cancelledAt    DateTime? @map("cancelled_at")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   novel          Novel        @relation(fields: [novelId], references: [id], onDelete: Cascade)
-  parentSession  AgentSession @relation("ParentAgentSubtask", fields: [parentSessionId], references: [id], onDelete: Cascade)
-  childSession   AgentSession @relation("ChildAgentSubtask", fields: [childSessionId], references: [id], onDelete: Cascade)
+  parentSession  AgentSession? @relation("ParentAgentSubtask", fields: [parentSessionId], references: [id], onDelete: SetNull)
+  childSession   AgentSession? @relation("ChildAgentSubtask", fields: [childSessionId], references: [id], onDelete: SetNull)
   childRun       AgentRun?    @relation(fields: [childRunId], references: [id], onDelete: SetNull)
+  runs           AgentSubtaskRun[]
 
   @@index([userId, novelId, createdAt])
   @@index([parentSessionId, createdAt])
   @@map("agent_subtasks")
+}
+
+/// 子 Agent 内嵌调用记录：主 run 像调工具一样同步执行子 Agent 时落一条，不再新开任务窗口
+model AgentSubtaskRun {
+  id            String   @id @default(cuid()) @db.VarChar(64)
+  subtaskId     String   @map("subtask_id") @db.VarChar(64)
+  parentRunId   String?  @map("parent_run_id") @db.VarChar(64)
+  userId        String   @map("user_id") @db.VarChar(64)
+  novelId       String   @map("novel_id") @db.VarChar(64)
+  chapterId     String?  @map("chapter_id") @db.VarChar(64)
+  task          String
+  status        String   @default("running") @db.VarChar(24)
+  resultSummary String?  @map("result_summary")
+  steps         Json?
+  usage         Json?
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  subtask    AgentSubtask @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  parentRun  AgentRun?    @relation(fields: [parentRunId], references: [id], onDelete: SetNull)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novel      Novel        @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([subtaskId, createdAt])
+  @@index([userId, status])
+  @@map("agent_subtask_runs")
 }
 
 model AgentSchedule {
@@ -1252,6 +1282,7 @@ model AgentRun {
   leakageChecks      LeakageCheck[]
   sourceBranches     StoryBranch[]
   childSubtasks      AgentSubtask[]
+  subtaskRuns        AgentSubtaskRun[]
   scheduleRuns       AgentSchedule[]
 
   @@index([sessionId, createdAt])

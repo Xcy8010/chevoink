@@ -4,6 +4,7 @@ import { containsAgentProtocolInvocation, recoverAgentProtocolToolCalls, stripAg
 import type {
   AgentExecutionMode,
   AgentMessagePart,
+  AgentStreamEventBody,
   AgentAttachmentMeta,
   AgentTodoItem,
   AgentTokenUsage,
@@ -188,6 +189,8 @@ function slimEarlyToolOutputs(messages: ChatMessage[]) {
 type ToolCallOutcome = {
   observation: string
   part: Extract<AgentMessagePart, { type: 'tool-call' }>
+  /** 附属分部：子 Agent 内嵌执行产生的内部工具调用卡片，随父消息一并落库与直播 */
+  extraParts?: AgentMessagePart[]
 }
 
 /** 容错 JSON 解析：模型生成长正文参数时最常见的三类毛病可自动修复，
@@ -418,21 +421,27 @@ function extractStreamingToolDraft(toolName: string, raw: string): AgentToolDraf
   return undefined
 }
 
-async function handleToolCall(
+export async function handleToolCall(
   call: ToolCallRequest,
   tools: AgentTool[],
   ctx: ToolContext,
-  bus: RunEventBus,
+  /** 最小事件接口：主 run 传 RunEventBus，子 Agent 内嵌执行传 ToolContext.emit 包装（结构兼容） */
+  bus: { emit: (event: AgentStreamEventBody) => void },
   messageId: string,
   runId: string,
+  /** 非 undefined 表示本次调用发生在子 Agent 内嵌执行内部：事件与卡片带 subagentCallId 归属标记，审批透传到父 run */
+  subagent?: { callId: string },
 ): Promise<ToolCallOutcome> {
   const startedAt = Date.now()
   const tool = tools.find((candidate) => candidate.name === call.name) ?? getToolByName(call.name)
+  // 子 Agent 归属标记：随事件与持久化分部下发，前端据此把卡片分组到所属子 Agent 容器内
+  const subagentMark = subagent ? { subagentCallId: subagent.callId } : {}
   const basePart = {
     type: 'tool-call' as const,
     callId: call.id,
     toolName: call.name,
     title: tool?.title ?? call.name,
+    ...subagentMark,
   }
 
   // 参数解析与校验：先容错修复常见格式毛病，实在修不好再作为观察回填让模型自行修正
@@ -441,7 +450,7 @@ async function handleToolCall(
     parsedArgs = call.arguments ? parseToolArgsTolerant(call.arguments) : {}
   } catch {
     const observation = `工具 ${call.name} 的参数不是合法 JSON，本次调用完全没有执行。请立即重新发起同一个工具调用：字符串内的换行必须写成 \\n，不要用 Markdown 围栏包裹参数；如果正文很长，改用 chapter_write 写开头部分，再用 chapter_append 分 2-3 次追加剩余段落，避免单次参数过长被截断。绝对禁止放弃重试或改在回复正文里完成该操作。原始参数：${call.arguments.slice(0, 400)}`
-    bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null })
+    bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null, ...subagentMark })
     bus.emit({
       type: 'tool.result',
       messageId,
@@ -450,6 +459,7 @@ async function handleToolCall(
       ok: false,
       summary: '参数解析失败',
       durationMs: Date.now() - startedAt,
+      ...subagentMark,
     })
     return { observation, part: { ...basePart, args: null, status: 'failed', summary: '参数解析失败' } }
   }
@@ -468,7 +478,7 @@ async function handleToolCall(
     tool.permission[ctx.mode] !== 'ask' ||
     (hasAlwaysAllow(ctx.sessionId, tool.name) && !tool.dangerous)
 
-  bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: parsedArgs, autoApproved })
+  bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: parsedArgs, autoApproved, ...subagentMark })
 
   const fail = (summary: string, observation: string, status: 'failed' | 'denied'): ToolCallOutcome => {
     bus.emit({
@@ -479,6 +489,7 @@ async function handleToolCall(
       ok: false,
       summary,
       durationMs: Date.now() - startedAt,
+      ...subagentMark,
     })
     return { observation, part: { ...basePart, args: parsedArgs, status, summary } }
   }
@@ -561,6 +572,7 @@ async function handleToolCall(
       summary,
       display: result.display,
       durationMs,
+      ...subagentMark,
     })
 
     return {
@@ -766,6 +778,19 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       modelTier: modelRuntime.tier,
     })
     const messages: ChatMessage[] = assembledContext.messages
+    // 子 Agent 目录注入：主控据此按触发条件用 subagent_run 像调工具一样内嵌调用子 Agent（codex/Zcode 模式）
+    if (agent.type === 'orchestrator') {
+      const { renderSubagentCatalog } = await import('./productivity.js')
+      const catalog = await renderSubagentCatalog(params.userId, params.novelId)
+      if (catalog) {
+        const firstSystem = messages.find((message) => message.role === 'system')
+        if (firstSystem && typeof firstSystem.content === 'string') {
+          firstSystem.content = `${firstSystem.content}\n\n${catalog}`
+        } else {
+          messages.unshift({ role: 'system', content: catalog })
+        }
+      }
+    }
     if (directVisionEnabled) {
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index]
@@ -1074,7 +1099,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         if (controller.signal.aborted) {
           throw new DOMException('run aborted', 'AbortError')
         }
-        const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id }, bus, messageId, runId)
+        const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
         if (call.name === 'plan_save' && outcome.part.status === 'success') {
           planSavePerformed = true
         }
@@ -1093,6 +1118,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           }
         }
         parts.push(outcome.part)
+        // 子 Agent 内嵌执行产生的内部工具卡片随父消息一并直播与落库，刷新后仍可展开查看
+        if (outcome.extraParts?.length) parts.push(...outcome.extraParts)
         messages.push({ role: 'tool', toolCallId: call.id, content: outcome.observation })
         if (structureCircuitTripped) {
           break

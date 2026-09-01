@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpenText,
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -821,6 +822,82 @@ const ToolCallCard = memo(function ToolCallCard({
   )
 })
 
+const SUBAGENT_ROLE_LABELS: Record<string, string> = {
+  research: '调研',
+  continuity: '一致性',
+  quality: '质量',
+  lore: '设定',
+}
+
+const EMPTY_SUBAGENT_CHILDREN: Array<Extract<AgentMessagePart, { type: 'tool-call' }>> = []
+
+/**
+ * 子 Agent 内嵌调用容器卡片（codex/Zcode 模式）：
+ * 主 Agent 用 subagent_run 像调工具一样调用子 Agent，子 Agent 的内部工具调用与最终报告
+ * 全部嵌套在这张卡片内展示，不再新开任务窗口。
+ */
+const SubAgentCallCard = memo(function SubAgentCallCard({
+  part,
+  children,
+}: {
+  part: Extract<AgentMessagePart, { type: 'tool-call' }>
+  children: Array<Extract<AgentMessagePart, { type: 'tool-call' }>>
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const report = part.display?.kind === 'subagentReport' ? part.display : null
+  const running = part.status === 'running'
+  const durationLabel = formatToolDuration(report?.durationMs ?? part.durationMs)
+  const roleLabel = report?.role ? SUBAGENT_ROLE_LABELS[report.role] ?? report.role : null
+  const subagentName = report?.subagentName ?? '子 Agent'
+  const progress = part.subagentProgress
+
+  return (
+    <div
+      className={cn(
+        'relative overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)]/40',
+        running && 'agent-tool-running',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-2 py-2 text-left"
+        aria-label={expanded ? '收起子 Agent 详情' : '展开子 Agent 详情'}
+      >
+        <Bot className={cn('h-3.5 w-3.5 shrink-0', running ? 'animate-pulse text-sky-500' : 'text-[var(--text-secondary)]')} />
+        <span className="min-w-0 shrink-0 text-xs font-medium text-[var(--text-primary)]">{subagentName}</span>
+        {roleLabel ? <span className="shrink-0 rounded bg-[var(--surface-muted)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)]">{roleLabel}</span> : null}
+        <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--text-tertiary)]">
+          {running ? (progress?.message ?? '准备中…') : report?.triggerCondition ?? ''}
+        </span>
+        {durationLabel ? <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">{durationLabel}</span> : null}
+        {report && report.steps > 0 ? <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">{report.steps} 次调用</span> : null}
+        <span className="shrink-0">{toolStatusIcon[part.status]}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', expanded && 'rotate-180')} />
+      </button>
+      {running ? <span aria-hidden className="agent-tool-progress pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[var(--text-secondary)]/55" /> : null}
+      {expanded ? (
+        <div className="border-t border-[var(--border-subtle)]">
+          {children.length > 0 ? (
+            <div className="pl-2">
+              {children.map((child) => <ToolCallCard key={child.callId} part={child} />)}
+            </div>
+          ) : null}
+          {report?.report ? (
+            <div className="border-t border-[var(--border-subtle)] px-2 py-2">
+              <p className="mb-1 text-[10px] font-medium text-[var(--text-secondary)]">工作报告 · 待主 Agent 审查</p>
+              <p className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-[var(--text-secondary)]">{report.report}</p>
+            </div>
+          ) : null}
+          {part.status !== 'running' && !report?.report && part.summary ? (
+            <p className="border-t border-[var(--border-subtle)] px-2 py-2 text-[11px] leading-5 text-[var(--text-secondary)]">{part.summary}</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
 const ReasoningPart = memo(function ReasoningPart({
   part,
   streaming,
@@ -974,6 +1051,18 @@ export const AgentMessageParts = memo(function AgentMessageParts({
 }) {
   const showSummary = !runActive && (summaryCount ?? 0) > 0
   const collapsed = !runActive && !summaryExpanded
+  // 子 Agent 内部工具卡片归组：嵌套渲染进所属的 subagent_run 容器（codex/Zcode 模式）
+  const subagentChildren = useMemo(() => {
+    const grouped = new Map<string, Array<Extract<AgentMessagePart, { type: 'tool-call' }>>>()
+    for (const part of parts) {
+      if (part.type === 'tool-call' && part.subagentCallId) {
+        const list = grouped.get(part.subagentCallId)
+        if (list) list.push(part)
+        else grouped.set(part.subagentCallId, [part])
+      }
+    }
+    return grouped
+  }, [parts])
 
   return (
     <div className="space-y-2">
@@ -1012,6 +1101,17 @@ export const AgentMessageParts = memo(function AgentMessageParts({
         }
 
         if (part.type === 'tool-call') {
+          // 子 Agent 内部工具卡片已嵌套进容器渲染，平铺处跳过
+          if (part.subagentCallId) return null
+          if (part.toolName === 'subagent_run' || part.toolName === 'subagent_delegate') {
+            return (
+              <SubAgentCallCard
+                key={`${part.callId}-${index}`}
+                part={part}
+                children={subagentChildren.get(part.callId) ?? EMPTY_SUBAGENT_CHILDREN}
+              />
+            )
+          }
           return <ToolCallCard key={`${part.callId}-${index}`} part={part} />
         }
 

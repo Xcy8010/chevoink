@@ -660,13 +660,15 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
 
         case 'tool.call': {
           const isWrite = WORKSPACE_WRITE_TOOLS.has(event.toolName)
+          // 子 Agent 内嵌执行内部的写工具不进主活动区（卡片已嵌套在子 Agent 容器内展示）
+          const isSubagentInternal = Boolean(event.subagentCallId)
           const question = event.toolName === 'ask_user' ? parseQuestionArgs(event.callId, event.args) : null
           // 同一 callId 可能先收到参数生成中的预告事件（args 为 null），再收到执行时的正式事件：按 callId upsert 保证只有一张卡片
           const existingActivity = state.workspaceActivities.some((activity) => activity.callId === event.callId)
           return {
             ...base,
             ...(question ? { phase: 'awaiting_input' as const, pendingQuestion: question } : {}),
-            ...(isWrite && !existingActivity
+            ...(isWrite && !isSubagentInternal && !existingActivity
               ? {
                   activitiesVersion: state.activitiesVersion + 1,
                   workspaceActivities: [
@@ -692,6 +694,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
                         toolName: event.toolName,
                         title: event.title,
                         args: event.args ?? part.args,
+                        ...(event.subagentCallId && !part.subagentCallId ? { subagentCallId: event.subagentCallId } : {}),
                       }
                     : part,
                 )
@@ -705,6 +708,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
                   title: event.title,
                   args: event.args,
                   status: 'running',
+                  ...(event.subagentCallId ? { subagentCallId: event.subagentCallId } : {}),
                 },
               ]
             }),
@@ -720,6 +724,19 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
               parts.map((part) =>
                 part.type === 'tool-call' && part.callId === event.callId && part.status === 'running'
                   ? { ...part, progressChars: event.argsChars }
+                  : part,
+              ),
+            ),
+          }
+
+        case 'subagent.progress':
+          // 子 Agent 内嵌执行进度：更新到对应的 subagent_run 容器卡片
+          return {
+            ...base,
+            messages: updateMessageParts(state.messages, event.messageId, (parts) =>
+              parts.map((part) =>
+                part.type === 'tool-call' && part.callId === event.callId
+                  ? { ...part, subagentProgress: { step: event.step, message: event.message } }
                   : part,
               ),
             ),

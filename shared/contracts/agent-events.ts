@@ -75,6 +75,19 @@ export type AgentToolDisplayPayload =
     }
   | { kind: 'todoList'; items: AgentTodoItem[] }
   | {
+      /** 子 Agent 内嵌执行报告：subagent_run 工具卡片内嵌展示（无独立任务窗口） */
+      kind: 'subagentReport'
+      subagentRunId: EntityId
+      subagentName: string
+      role: string
+      triggerCondition?: string
+      status: 'running' | 'success' | 'failed' | 'denied'
+      report: string
+      steps: number
+      durationMs?: number
+      usage?: AgentTokenUsage
+    }
+  | {
       kind: 'storyCompiler'
       compilationId?: EntityId
       phase: 'charter' | 'prepare' | 'beat' | 'write' | 'check' | 'repair' | 'commit'
@@ -216,6 +229,17 @@ export type AgentStreamEventBody =
       args: unknown
       /** 该调用是否未经用户挂起审批即自动批准（AGENT_AUTO_APPROVE 或白名单短路时为 true）；旧事件无此字段 */
       autoApproved?: boolean
+      /** 非 undefined 表示这是子 Agent 内嵌执行内部的工具调用，值为所属 subagent_run 调用的 callId */
+      subagentCallId?: string
+    }
+  | {
+      /** 子 Agent 内嵌执行进度：实时展示当前步骤（模型正在做什么） */
+      type: 'subagent.progress'
+      messageId: string
+      /** 所属 subagent_run 调用的 callId */
+      callId: string
+      step: number
+      message: string
     }
   | {
       /** 工具参数流式生成中的进度：模型仍在产出参数（如章节正文），argsChars 为已生成的参数字符数 */
@@ -235,6 +259,8 @@ export type AgentStreamEventBody =
       summary: string
       display?: AgentToolDisplayPayload
       durationMs: number
+      /** 非 undefined 表示这是子 Agent 内嵌执行内部的工具调用，值为所属 subagent_run 调用的 callId */
+      subagentCallId?: string
     }
   | {
       type: 'permission.ask'
@@ -284,6 +310,10 @@ export type AgentMessagePart =
       progressChars?: number
       /** 写操作的回滚快照：仅服务端持久化使用，消息列表接口返回前会剥离 */
       snapshot?: AgentRollbackSnapshot
+      /** 非 undefined 表示该工具调用属于某个子 Agent 内嵌执行，值为所属 subagent_run 调用的 callId */
+      subagentCallId?: string
+      /** 子 Agent 内嵌执行实时进度（仅 subagent_run 容器卡片持有，来自 subagent.progress 事件） */
+      subagentProgress?: { step: number; message: string }
     }
   | {
       /** 用户消息附件（图片/文件）：additive union，旧消息不含该成员时所有分发点安全跳过 */
