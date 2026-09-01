@@ -66,6 +66,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   })
   // 外层侧栏折叠时对话列需在整个视口居中：任务状态卡改为悬浮定位（不再占据 main 右侧流空间），
   // 对话列 mx-auto 即落在视口中心；外层侧栏展开或窗口不够宽时保持流内布局不变。
+  // 悬浮层级必须高于 main（z-40）：悬浮后 main 的 flex-1 占满全宽，其不透明背景会盖住低层级的卡片。
   const floatDock = !outerSidebarOpen && showActivityDock && containerWidth - rightWidth >= FLOATING_DOCK_MIN_CLEARANCE
 
   useEffect(() => {
@@ -100,7 +101,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
         minWidth: conversationMinWidth,
       }}
     >{conversation}</main>
-    {showActivityDock ? <aside className={cn('h-full min-h-0 w-[296px] shrink-0 px-3 py-4', floatDock ? 'absolute top-0 z-30 bg-transparent' : 'bg-[var(--surface-default)]')} style={floatDock ? { right: rightWidth } : undefined}>{activityDock}</aside> : null}
+    {showActivityDock ? <aside className={cn('h-full min-h-0 w-[296px] shrink-0 px-3 py-4', floatDock ? 'absolute top-0 z-50 bg-transparent' : 'bg-[var(--surface-default)]')} style={floatDock ? { right: rightWidth } : undefined}>{activityDock}</aside> : null}
     <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} className="studio-resizable-panel relative h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)]" style={{ width: viewerOpen ? resolvedViewerWidth : 0 }}>
       {viewerOpen ? <PanelResizeHandle panel="workViewer" side="left" label="调整查看器宽度" onBegin={onBeginResize} /> : null}
       <div className={cn('h-full min-w-[320px] transition-[opacity,transform] duration-200 ease-out', viewerOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0')}>{renderedViewer}</div>
