@@ -51,13 +51,31 @@ export interface AgentSubtaskView {
   parentSessionId: string
   childSessionId: string
   childRunId: string | null
+  name: string
   role: AgentSubtaskRole
+  triggerCondition: string
+  callableBy: 'main_and_subagents'
   prompt: string
   tokenBudget: number
   status: string
   traceUrl: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface AgentSubtaskLogEntry {
+  id: string
+  time: string
+  title: string
+  detail: string
+  tone: 'neutral' | 'success' | 'warning' | 'danger'
+}
+
+export interface AgentSubtaskLogsView {
+  subtaskId: string
+  name: string
+  status: string
+  entries: AgentSubtaskLogEntry[]
 }
 
 export interface AgentScheduleView {

@@ -60,6 +60,14 @@ function novelTitle(novel: Novel) {
   return novel.displayTitle?.trim() || novel.title?.trim() || '未命名作品'
 }
 
+function sortWorkspaceItemsByLatest<T extends { updatedAt: string }>(items: T[]): T[] {
+  const timestamp = (value: string) => {
+    const parsed = new Date(value).getTime()
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return [...items].sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt))
+}
+
 function resetLabel(value?: string | null) {
   if (!value) return '稍后自动重置'
   const date = new Date(value)
@@ -98,7 +106,10 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const autoCopyRef = useRef(false)
   const dragRef = useRef<{ x: number; width: number; raw: number } | null>(null)
 
-  const novels = useMemo(() => props.novels.filter((item) => item.status !== 'archived'), [props.novels])
+  const novels = useMemo(
+    () => sortWorkspaceItemsByLatest(props.novels.filter((item) => item.status !== 'archived')),
+    [props.novels],
+  )
   const sessionsQuery = useQuery({
     queryKey: ['agent', 'sessions', 'workspace-sidebar'],
     queryFn: () => fetchAgentSessions(),
@@ -117,6 +128,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const sessionsByNovel = useMemo(() => {
     const result = new Map<string, AgentSession[]>()
     sessions.forEach((session) => result.set(session.novelId, [...(result.get(session.novelId) ?? []), session]))
+    result.forEach((items, novelId) => result.set(novelId, sortWorkspaceItemsByLatest(items)))
     return result
   }, [sessions])
   const localTasks = useMemo<SidebarTask[]>(() => props.currentTasks.map((task) => ({
@@ -265,12 +277,12 @@ export default function StudioWorkspaceSidebar(props: Props) {
 
   const projectTasks = (novelId: string): SidebarTask[] => {
     const remote = (sessionsByNovel.get(novelId) ?? []).map((session) => ({ ...session, temporary: false }))
-    if (novelId !== props.currentNovelId) return remote
+    if (novelId !== props.currentNovelId) return sortWorkspaceItemsByLatest(remote)
     const localIds = new Set(localTasks.map((task) => task.id))
-    return [...localTasks, ...remote.filter((task) => !localIds.has(task.id))]
+    return sortWorkspaceItemsByLatest([...localTasks, ...remote.filter((task) => !localIds.has(task.id))])
   }
-  const pinnedNovels = novels.filter((item) => item.pinnedAt)
-  const pinnedSessions = sessions.filter((item) => item.pinnedAt)
+  const pinnedNovels = sortWorkspaceItemsByLatest(novels.filter((item) => item.pinnedAt))
+  const pinnedSessions = sortWorkspaceItemsByLatest(sessions.filter((item) => item.pinnedAt))
 
   function taskRow(task: SidebarTask, compact = false) {
     const active = task.id === props.activeTaskId

@@ -72,7 +72,9 @@ export function buildWorkspacePlanFiles(artifacts: AgentArtifact[]): WorkspacePl
     .map((artifact) => ({
       id: artifact.id,
       title: artifact.title?.trim() || '创作计划',
-      content: (artifact.rawContent ?? artifact.content).trim(),
+      // 正文必须逐字保留；trim 会在每次受控编辑回写后移除首尾换行，触发富文本编辑器
+      // replaceAll，导致光标跳回其他位置。
+      content: artifact.rawContent ?? artifact.content,
       createdAt: artifact.createdAt,
       artifactId: artifact.id,
       backendArtifactId: artifact.backendArtifactId ?? null,
@@ -87,7 +89,7 @@ export function buildServerPlanFile(item: NovelPlanFileItem): WorkspacePlanFile 
   return {
     id: `server-${item.id}`,
     title: item.title.trim() || '创作计划',
-    content: item.content.trim(),
+    content: item.content,
     createdAt: item.createdAt,
     artifactId: `server-${item.id}`,
     backendArtifactId: item.id,

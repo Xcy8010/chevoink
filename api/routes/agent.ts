@@ -65,9 +65,10 @@ import { acceptSkillShareInviteSchema, createSkillShareInviteSchema } from '../.
 import { getResearchWorkbench, updateAgentDataControl } from '../lib/agent/research-dossier.js'
 import { acceptSkillShareInvite, createSkillShareInvite, declineSkillShareInvite, listSkillShareInvites } from '../lib/agent/skills/sharing.js'
 import {
-  cancelAgentSubtask, createAgentSchedule, createAgentSubtask, createEvalComparison, createStoryBranch,
+  cancelAgentSubtask, createAgentSchedule, createAgentSubtask, createEvalComparison, createStoryBranch, deleteAgentSubtask,
+  getAgentSubtaskLogs,
   getStoryBranchDiff, listAgentSchedules, listAgentSubtasks, listEvalComparisons, listStoryBranches,
-  mergeStoryBranch, updateAgentSchedule, updateStoryBranch,
+  mergeStoryBranch, updateAgentSchedule, updateAgentSubtask, updateStoryBranch,
 } from '../lib/agent/productivity.js'
 
 const router = Router()
@@ -160,7 +161,8 @@ const qualityFindingFeedbackSchema = z.object({ accepted: z.boolean(), reason: z
 const revokePrivateStyleSourceSchema = z.object({ reason: z.string().trim().min(1).max(500) })
 const storyBranchCreateSchema = z.object({ novelId: z.string().min(1), chapterId: z.string().min(1), sourceRunId: z.string().min(1).nullable().optional(), name: z.string().trim().min(1).max(160) })
 const storyBranchUpdateSchema = z.object({ name: z.string().trim().min(1).max(160).optional(), content: z.string().optional() }).refine((value) => value.name !== undefined || value.content !== undefined)
-const subtaskCreateSchema = z.object({ novelId: z.string().min(1), parentSessionId: z.string().min(1), chapterId: z.string().min(1).nullable().optional(), role: z.enum(['research', 'continuity', 'quality', 'lore']), prompt: z.string().trim().min(1).max(12_000), tokenBudget: z.number().int().min(500).max(32_000).default(4_000) })
+const subtaskCreateSchema = z.object({ novelId: z.string().min(1), parentSessionId: z.string().min(1), chapterId: z.string().min(1).nullable().optional(), name: z.string().trim().min(1).max(160), role: z.enum(['research', 'continuity', 'quality', 'lore']), triggerCondition: z.string().trim().min(1).max(1_000), prompt: z.string().trim().min(1).max(12_000), tokenBudget: z.number().int().min(500).max(32_000).default(4_000) })
+const subtaskUpdateSchema = z.object({ name: z.string().trim().min(1).max(160).optional(), role: z.enum(['research', 'continuity', 'quality', 'lore']).optional(), triggerCondition: z.string().trim().min(1).max(1_000).optional(), prompt: z.string().trim().min(1).max(12_000).optional(), tokenBudget: z.number().int().min(500).max(32_000).optional() }).refine((value) => Object.values(value).some((entry) => entry !== undefined))
 const scheduleCreateSchema = z.object({ novelId: z.string().min(1), sessionId: z.string().min(1), name: z.string().trim().min(1).max(160), prompt: z.string().trim().min(1).max(12_000), cadenceMinutes: z.number().int().min(30).max(43_200), nextRunAt: z.string().datetime().optional() })
 const scheduleUpdateSchema = z.object({ status: z.enum(['active', 'paused']).optional(), nextRunAt: z.string().datetime().optional() }).refine((value) => value.status !== undefined || value.nextRunAt !== undefined)
 const evalComparisonCreateSchema = z.object({ novelId: z.string().min(1), name: z.string().trim().min(1).max(160), runIds: z.array(z.string().min(1)).min(2).max(4).refine((value) => new Set(value).size === value.length) })
@@ -895,6 +897,18 @@ router.get('/subtasks', async (req, res) => {
 router.post('/subtasks', async (req, res) => {
   const requestId = createRequestId()
   try { res.status(201).json(buildSuccess(requestId, await createAgentSubtask(requireSessionUserId(req), parseBody(subtaskCreateSchema, req.body, '请提供子 Agent 参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.patch('/subtasks/:subtaskId', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await updateAgentSubtask(requireSessionUserId(req), req.params.subtaskId, parseBody(subtaskUpdateSchema, req.body, '请提供要更新的子 Agent 参数。')))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.delete('/subtasks/:subtaskId', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await deleteAgentSubtask(requireSessionUserId(req), req.params.subtaskId))) } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.get('/subtasks/:subtaskId/logs', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.status(200).json(buildSuccess(requestId, await getAgentSubtaskLogs(requireSessionUserId(req), req.params.subtaskId))) } catch (error) { sendRouteError(res, requestId, error) }
 })
 router.post('/subtasks/:subtaskId/cancel', async (req, res) => {
   const requestId = createRequestId()

@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { AgentTaskRail } from '../../src/features/studio/components/AgentTaskSidebar'
+import { AgentConversationRail } from '../../src/features/studio/components/AgentTaskSidebar'
 import WorkInspector from '../../src/features/studio/components/WorkInspector'
 import { formatContextTokenCount } from '../../src/features/studio/agent/lib/context-format'
 
@@ -13,22 +13,21 @@ describe('Work workspace navigation and context', () => {
     expect(formatContextTokenCount(11_500)).toBe('11.5k')
   })
 
-  it('renders one rail marker per task and marks the active task', () => {
-    const markup = renderToStaticMarkup(createElement(AgentTaskRail, {
-      taskWindows: [
-        { id: 'task-a', title: '任务 A', updatedAt: '', temporary: false, prompt: '', artifactsCount: 0 },
-        { id: 'task-b', title: '任务 B', updatedAt: '', temporary: false, prompt: '', artifactsCount: 0 },
-        { id: 'task-c', title: '任务 C', updatedAt: '', temporary: false, prompt: '', artifactsCount: 0 },
+  it('renders one rail marker per chat turn without task controls', () => {
+    const markup = renderToStaticMarkup(createElement(AgentConversationRail, {
+      conversations: [
+        { id: 'turn-a', userMessageId: 'user-a', userText: '检查第一章', assistantText: '已经完成检查' },
+        { id: 'turn-b', userMessageId: 'user-b', userText: '继续润色', assistantText: '已保留原有语气' },
+        { id: 'turn-c', userMessageId: 'user-c', userText: '生成摘要', assistantText: '摘要已生成' },
       ],
-      activeTaskWindowId: 'task-b',
-      taskSwitchLocked: false,
-      onExpand: () => undefined,
-      onCreateTaskWindow: () => undefined,
-      onSelectTaskWindow: () => undefined,
+      onSelectConversation: () => undefined,
     }))
 
-    expect(markup.match(/aria-label="任务 [ABC]"/g)).toHaveLength(3)
-    expect(markup).toMatch(/aria-label="任务 B"[^>]*aria-current="page"/)
+    expect(markup.match(/aria-label="第 [123] 轮聊天"/g)).toHaveLength(3)
+    expect(markup).toMatch(/aria-label="第 3 轮聊天"[^>]*aria-current="location"/)
+    expect(markup).toContain('当前任务聊天记录')
+    expect(markup).not.toContain('新建任务')
+    expect(markup).not.toContain('展开任务区')
   })
 
   it('renders the conversation context panel instead of duplicating project structure', () => {

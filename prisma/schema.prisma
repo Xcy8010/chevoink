@@ -1152,7 +1152,10 @@ model AgentSubtask {
   parentSessionId String  @map("parent_session_id") @db.VarChar(64)
   childSessionId String   @map("child_session_id") @db.VarChar(64)
   childRunId     String?  @map("child_run_id") @db.VarChar(64)
+  name           String   @default("未命名子 Agent") @db.VarChar(160)
   role           String   @db.VarChar(32)
+  triggerCondition String @default("由主 Agent 或其他子 Agent 在任务匹配时调用") @map("trigger_condition")
+  callableBy     String   @default("main_and_subagents") @map("callable_by") @db.VarChar(32)
   prompt         String
   tokenBudget    Int      @default(4000) @map("token_budget")
   status         String   @default("queued") @db.VarChar(24)

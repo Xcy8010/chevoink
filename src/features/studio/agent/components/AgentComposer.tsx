@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Flame, Image, LoaderCircle, Pencil, Plus, Scale, Settings2, Square, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Pencil, Plus, Rocket, Scale, Settings2, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 import {
@@ -83,7 +83,7 @@ type ParsedComposerContent = {
 const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description: string; icon: typeof Feather }> = [
   { value: 'stable', label: '平衡延续', description: '贴合既有走向，适合续写与轻量调整。', icon: Scale },
   { value: 'balanced', label: '严谨创作', description: '默认；强化因果与人类感，并自动落实检查建议。', icon: Feather },
-  { value: 'bold', label: '大胆创作', description: '适合试新场景和新结构，报告只提示不自动改写。', icon: Flame },
+  { value: 'bold', label: '大胆创作', description: '适合试新场景和新结构，报告只提示不自动改写。', icon: Rocket },
 ]
 
 const REASONING_ORDER: ModelReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']

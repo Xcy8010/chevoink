@@ -308,7 +308,7 @@ describe('plan-review：计划文件与待审持久化', () => {
     ] as unknown as AgentArtifact[]
     const files = buildWorkspacePlanFiles(artifacts)
     expect(files.map((f) => f.id)).toEqual(['a3', 'a1'])
-    expect(files[0].content).toBe('新')
+    expect(files[0].content).toBe('新 ')
     expect(files[1].title).toBe('创作计划')
   })
 
@@ -317,7 +317,7 @@ describe('plan-review：计划文件与待审持久化', () => {
     expect(file.id).toBe('server-p1')
     expect(file.backendArtifactId).toBe('p1')
     expect(file.title).toBe('创作计划')
-    expect(file.content).toBe('内容')
+    expect(file.content).toBe(' 内容 ')
   })
 
   it('待审持久化：兼容历史单对象格式，写入空值即删除', () => {

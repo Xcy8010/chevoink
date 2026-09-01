@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, PencilLine, SquarePlus, Trash2 } from 'lucide-react'
+import { PencilLine, SquarePlus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -12,57 +12,56 @@ export type AgentTaskSidebarItem = {
   artifactsCount: number
 }
 
-export function AgentTaskRail({
-  taskWindows,
-  activeTaskWindowId,
-  taskSwitchLocked,
-  onExpand,
-  onCreateTaskWindow,
-  onSelectTaskWindow,
-}: Pick<AgentTaskSidebarProps, 'taskWindows' | 'activeTaskWindowId' | 'taskSwitchLocked' | 'onCreateTaskWindow' | 'onSelectTaskWindow'> & { onExpand: () => void }) {
-  const rootRef = useRef<HTMLElement | null>(null)
-  const [preview, setPreview] = useState<{ task: AgentTaskSidebarItem; top: number } | null>(null)
-  const dense = taskWindows.length > 28
-  const veryDense = taskWindows.length > 56
+export type AgentConversationRailItem = {
+  id: string
+  userMessageId: string
+  userText: string
+  assistantText: string
+}
 
-  const showPreview = (task: AgentTaskSidebarItem, element: HTMLButtonElement) => {
+export function AgentConversationRail({
+  conversations,
+  onSelectConversation,
+}: {
+  conversations: AgentConversationRailItem[]
+  onSelectConversation: (messageId: string) => void
+}) {
+  const rootRef = useRef<HTMLElement | null>(null)
+  const [preview, setPreview] = useState<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  const dense = conversations.length > 34
+  const veryDense = conversations.length > 68
+
+  const showPreview = (conversation: AgentConversationRailItem, element: HTMLButtonElement) => {
     const root = rootRef.current
     if (!root) return
     const rootRect = root.getBoundingClientRect()
     const itemRect = element.getBoundingClientRect()
-    const top = Math.max(8, Math.min(rootRect.height - 94, itemRect.top - rootRect.top - 18))
-    setPreview({ task, top })
+    const top = Math.max(10, Math.min(rootRect.height - 126, itemRect.top - rootRect.top - 42))
+    setPreview({ conversation, top })
   }
 
   return (
-    <nav ref={rootRef} className="relative flex h-full w-[54px] flex-col items-center gap-1 overflow-visible py-2" aria-label="任务快捷栏">
-      <button type="button" onClick={onExpand} className="mb-1 inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="展开任务区" title="展开任务区">
-        <ChevronRight className="h-4 w-4" />
-      </button>
-      <button type="button" onClick={onCreateTaskWindow} disabled={taskSwitchLocked} className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-40" aria-label="新建任务" title="新建任务">
-        <SquarePlus className="h-4 w-4" />
-      </button>
-      <div className="my-1 h-px w-6 shrink-0 bg-[var(--border-subtle)]" />
-      <div className={cn('flex min-h-0 flex-1 flex-col items-center overflow-y-auto py-2 [scrollbar-width:none]', veryDense ? 'gap-0.5' : dense ? 'gap-1' : 'gap-[7px]')}>
-        {taskWindows.map((taskWindow) => {
-          const active = taskWindow.id === activeTaskWindowId
-          return <button key={taskWindow.id} type="button" onClick={() => onSelectTaskWindow(taskWindow.id)} onMouseEnter={(event) => showPreview(taskWindow, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(taskWindow, event.currentTarget)} onBlur={() => setPreview(null)} disabled={taskSwitchLocked} className={cn('group flex w-9 shrink-0 items-center justify-center disabled:opacity-55', veryDense ? 'h-[3px]' : dense ? 'h-[5px]' : 'h-[7px]')} aria-label={taskWindow.title} aria-current={active ? 'page' : undefined}>
-            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-out', active ? 'w-4 bg-[var(--text-primary)] opacity-95' : 'w-2.5 bg-[var(--text-tertiary)] opacity-45 group-hover:w-3.5 group-hover:opacity-80')} aria-hidden />
+    <nav ref={rootRef} className="relative flex h-full w-11 flex-col items-center overflow-visible bg-[var(--app-bg)]" aria-label="当前任务聊天记录">
+      <div className={cn('flex min-h-0 w-full flex-1 flex-col items-center overflow-y-auto pb-4 pt-7 [scrollbar-width:none]', veryDense ? 'gap-0.5' : dense ? 'gap-1' : 'gap-[7px]')}>
+        {conversations.map((conversation, index) => {
+          const latest = index === conversations.length - 1
+          return <button key={conversation.id} type="button" onClick={() => onSelectConversation(conversation.userMessageId)} onMouseEnter={(event) => showPreview(conversation, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(conversation, event.currentTarget)} onBlur={() => setPreview(null)} className={cn('group flex w-full shrink-0 items-center justify-center', veryDense ? 'h-[3px]' : dense ? 'h-[5px]' : 'h-[7px]')} aria-label={`第 ${index + 1} 轮聊天`} aria-current={latest ? 'location' : undefined}>
+            <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', latest ? 'w-4 bg-[var(--text-primary)] opacity-90' : 'w-2.5 bg-[var(--text-tertiary)] opacity-40 group-hover:w-6 group-hover:bg-[var(--text-secondary)] group-hover:opacity-95 group-focus-visible:w-6 group-focus-visible:opacity-95')} aria-hidden />
           </button>
         })}
       </div>
       <div
         className={cn(
-          'pointer-events-none absolute left-[calc(100%+8px)] z-50 w-64 border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2.5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 ease-out',
-          preview ? 'translate-x-0 opacity-100' : '-translate-x-1 opacity-0',
+          'pointer-events-none absolute left-[calc(100%+10px)] z-50 h-[112px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-[opacity,transform] duration-180 ease-[cubic-bezier(.22,1,.36,1)]',
+          preview ? 'translate-x-0 scale-100 opacity-100' : '-translate-x-1 scale-[.98] opacity-0',
         )}
         style={{ top: preview?.top ?? 8 }}
         aria-hidden={!preview}
       >
-        <p className="truncate text-xs font-medium text-[var(--text-primary)]">{preview?.task.title}</p>
-        <p className="mt-1 line-clamp-3 text-[11px] leading-5 text-[var(--text-secondary)]">
-          {preview?.task.prompt.trim() || (preview?.task.temporary ? '等待开始第一轮对话。' : '打开这轮任务的完整上下文。')}
-        </p>
+        <div className="grid h-full grid-rows-2 gap-2">
+          <div className="min-h-0"><p className="text-[10px] font-medium text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-[17px] text-white/90">{preview?.conversation.userText || '（附件或引用）'}</p></div>
+          <div className="min-h-0 border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-[17px] text-white/80">{preview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
+        </div>
       </div>
     </nav>
   )

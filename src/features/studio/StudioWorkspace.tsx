@@ -31,7 +31,7 @@ import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioCommandBar from './components/StudioCommandBar'
 import CreateNovelDialog from './components/CreateNovelDialog'
 import StudioWorkspaceSidebar from './components/StudioWorkspaceSidebar'
-import { AgentTaskRail } from './components/AgentTaskSidebar'
+import { AgentConversationRail } from './components/AgentTaskSidebar'
 import StudioSettingsDialog, { type StudioSettingsSection } from './components/StudioSettingsDialog'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
@@ -46,6 +46,7 @@ import { fetchAgentSessions, updateAgentSessionSettings } from './agent/agentApi
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
 import AgentContextPanel from './agent/components/AgentContextPanel'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
+import { getMessageText } from './agent/lib/panel-helpers'
 import { PanelResizeHandle } from './panel-resize'
 import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
@@ -142,6 +143,7 @@ export default function StudioWorkspace() {
   const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const agentTodos = useAgentStore((state) => state.todos)
   const agentTodosVersion = useAgentStore((state) => state.todosVersion)
+  const agentMessages = useAgentStore((state) => state.messages)
   const liveToolDrafts = useAgentStore((state) => state.liveToolDrafts)
   const autoFollow = useAgentStore((state) => state.autoFollow)
   const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
@@ -152,9 +154,9 @@ export default function StudioWorkspace() {
   useAutoHideScrollbars()
   const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
     const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
-    // Work 必须同时为最左创作栏（最大 392）、任务轨（54）和可完整操作的 Agent 对话
+    // Work 必须同时为最左创作栏（最大 392）、聊天轨（44）和可完整操作的 Agent 对话
     // 保留空间；IDE 没有外层创作栏，但仍保证正文/编辑器不会被两侧面板夹没。
-    const centerReserve = workspacePerspective === 'work' ? 866 : 520
+    const centerReserve = workspacePerspective === 'work' ? 856 : 520
     if (panel === 'tree') {
       return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
     }
@@ -454,7 +456,8 @@ export default function StudioWorkspace() {
       activeArtifactId: restoredArtifacts[0]?.id ?? null,
       loaded: true,
       temporary: false,
-      updatedAt: new Date().toISOString(),
+      // 读取历史不是新活动；保留真实更新时间，避免仅点击任务就把它顶到列表首位。
+      updatedAt: taskWindow.updatedAt,
     }
   }
 
@@ -496,24 +499,23 @@ export default function StudioWorkspace() {
       return
     }
 
-    setAgentTaskWindows((current) =>
-      current.map((taskWindow) =>
-        taskWindow.id === activeAgentTaskWindowId
-          ? {
-              ...taskWindow,
-              sessionId: agentSessionId,
-              prompt: agentPrompt,
-              artifacts: agentArtifacts,
-              activeArtifactId: activeAgentArtifactId,
-              loaded: taskWindow.loaded || agentArtifacts.length > 0 || Boolean(agentSessionId),
-              temporary: taskWindow.temporary && !agentSessionId,
-              firstPromptSubmitted:
-                taskWindow.firstPromptSubmitted || Boolean(agentArtifacts.some((artifact) => artifact.promptText?.trim())),
-              updatedAt: new Date().toISOString(),
-            }
-          : taskWindow,
-      ),
-    )
+    setAgentTaskWindows((current) => current.map((taskWindow) => {
+      if (taskWindow.id !== activeAgentTaskWindowId) return taskWindow
+      const contentChanged = taskWindow.prompt !== agentPrompt || taskWindow.artifacts !== agentArtifacts
+      return {
+        ...taskWindow,
+        sessionId: agentSessionId,
+        prompt: agentPrompt,
+        artifacts: agentArtifacts,
+        activeArtifactId: activeAgentArtifactId,
+        loaded: taskWindow.loaded || agentArtifacts.length > 0 || Boolean(agentSessionId),
+        temporary: taskWindow.temporary && !agentSessionId,
+        firstPromptSubmitted:
+          taskWindow.firstPromptSubmitted || Boolean(agentArtifacts.some((artifact) => artifact.promptText?.trim())),
+        // 只在提示词或产物真正变化时更新排序时间；选择/水合任务不能改变其位置。
+        updatedAt: contentChanged ? new Date().toISOString() : taskWindow.updatedAt,
+      }
+    }))
   }, [activeAgentArtifactId, activeAgentTaskWindowId, agentArtifacts, agentPrompt, agentSessionId])
 
   useEffect(() => {
@@ -854,14 +856,14 @@ export default function StudioWorkspace() {
     setChapterSaveMessage(`已同步到 ${formatDateTime(chapterQuery.data.updatedAt)}`)
   }, [chapterQuery.data, selectedChapterId])
 
+  const selectionChapterRef = useRef<string | null>(null)
   useEffect(() => {
+    const chapterId = chapterDraft?.id ?? null
+    if (selectionChapterRef.current === chapterId) return
+    selectionChapterRef.current = chapterId
     const contentLength = chapterDraft?.content.length ?? 0
-    setEditorSelection({
-      start: contentLength,
-      end: contentLength,
-      text: '',
-    })
-  }, [chapterDraft?.id, chapterDraft?.content.length])
+    setEditorSelection({ start: contentLength, end: contentLength, text: '' })
+  }, [chapterDraft])
 
   useEffect(() => {
     if (!chapterQuery.isError) {
@@ -1321,11 +1323,12 @@ export default function StudioWorkspace() {
     const novelsWithSessions = new Set((navigationSessionsQuery.data?.items ?? []).map((session) => session.novelId))
     // “未命名、0 章、0 字”不等于可以丢弃：只要已产生 Agent 会话，它就是用户的真实作品。
     const source = (myNovelsQuery.data ?? []).filter((novel) => shouldShowWorkspaceNovel(novel, novelsWithSessions.has(novel.id)))
-    const merged = currentNovel
-      ? [currentNovel, ...source]
-      : source
-
-    return Array.from(new Map(merged.map((novel) => [novel.id, novel])).values())
+    const byId = new Map(source.map((novel) => [novel.id, novel]))
+    if (currentNovel && !byId.has(currentNovel.id)) byId.set(currentNovel.id, currentNovel)
+    return [...byId.values()].sort((left, right) => {
+      const latest = new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      return latest || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    })
   }, [currentNovel, myNovelsQuery.data, navigationSessionsQuery.data?.items])
 
   const activeChapterListItem = useMemo(
@@ -1555,9 +1558,29 @@ export default function StudioWorkspace() {
       temporary: taskWindow.temporary,
       prompt: taskWindow.prompt,
       artifactsCount: taskWindow.artifacts.length,
-    })),
+    })).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
     [agentTaskWindows],
   )
+  const agentConversationRailItems = useMemo(() => {
+    const items: Array<{ id: string; userMessageId: string; userText: string; assistantText: string }> = []
+    for (let index = 0; index < agentMessages.length; index += 1) {
+      const message = agentMessages[index]
+      if (message.role !== 'user') continue
+      let assistantText = ''
+      for (let replyIndex = index + 1; replyIndex < agentMessages.length; replyIndex += 1) {
+        const reply = agentMessages[replyIndex]
+        if (reply.role === 'user') break
+        if (reply.role === 'assistant') assistantText += `${assistantText ? '\n' : ''}${getMessageText(reply.parts)}`
+      }
+      items.push({
+        id: message.id,
+        userMessageId: message.id,
+        userText: getMessageText(message.parts),
+        assistantText: assistantText.trim(),
+      })
+    }
+    return items
+  }, [agentMessages])
 
   useEffect(() => {
     if (!selectedTreeItemId && selectedChapterId) {
@@ -2138,13 +2161,33 @@ export default function StudioWorkspace() {
         setChapters((current) =>
           replaceChapterItem(current, localDraftId, toChapterListItem(savedChapter)),
         )
-        setSelectedChapterId(savedChapter.id)
-        setChapterDraft(buildChapterDraft(savedChapter))
-        setChapterDirty(false)
+        const latestDraft = chapterDraftStateRef.current
+        const editsArrivedDuringSave = Boolean(
+          latestDraft && latestDraft.id === chapterDraft.id && (
+            latestDraft.title !== chapterDraft.title ||
+            latestDraft.summary !== chapterDraft.summary ||
+            latestDraft.content !== chapterDraft.content ||
+            latestDraft.status !== chapterDraft.status ||
+            latestDraft.visibility !== chapterDraft.visibility
+          ),
+        )
+        if (localDraftId) setSelectedTreeItemId(`chapter:${savedChapter.id}`)
+        if (localDraftId || selectedChapterIdStateRef.current === chapterDraft.id) setSelectedChapterId(savedChapter.id)
+        if (editsArrivedDuringSave && latestDraft) {
+          // 网络请求期间用户仍可能继续输入。只接收服务端 revision/真实 id，绝不拿旧响应覆盖
+          // 新输入；保留 dirty 让下一轮自动保存继续追上。
+          setChapterDraft({ ...latestDraft, id: savedChapter.id, revision: savedChapter.revision, localOnly: false })
+          setChapterDirty(true)
+        } else {
+          setChapterDraft(buildChapterDraft(savedChapter))
+          setChapterDirty(false)
+        }
         setChapterSaveState('saved')
         setChapterLastSavedAt(savedChapter.updatedAt)
         setChapterSaveMessage(
-          reason === 'auto'
+          editsArrivedDuringSave
+            ? '已保存上一批修改，正在继续保存新输入...'
+            : reason === 'auto'
             ? `已自动保存于 ${formatDateTime(savedChapter.updatedAt)}`
             : `已保存于 ${formatDateTime(savedChapter.updatedAt)}`,
         )
@@ -3871,7 +3914,7 @@ export default function StudioWorkspace() {
           mobileIntegratedHeader={mobileIntegratedHeader}
           showCreditWarning={showCreditWarning}
           showEmptySuggestions={workspacePerspective === 'work'}
-          hideHeader={workspacePerspective === 'work' && !mobileIntegratedHeader}
+          hideHeader={false}
           referenceOptions={composerReferenceOptions}
           onOpenStudioSettings={(section) => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
         />
@@ -4327,7 +4370,7 @@ export default function StudioWorkspace() {
             <div className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
-                taskRail={<AgentTaskRail taskWindows={agentTaskSidebarItems} activeTaskWindowId={activeAgentTaskWindowId} taskSwitchLocked={agentRunState.active} onExpand={() => setWorkspaceSidebarOpen(true)} onCreateTaskWindow={handleCreateAgentTaskWindow} onSelectTaskWindow={(taskId) => void handleSelectAgentTaskWindow(taskId)} />}
+                conversationRail={<AgentConversationRail conversations={agentConversationRailItems} onSelectConversation={(messageId) => document.getElementById(`agent-message-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />}
                 conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
                 activityDock={(workspaceActivities.length > 0 || agentTodos.length > 0 || pendingChapterReviews.length > 0 || Boolean(pendingPlanReview)) ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><AgentActivityBar
                   activities={workspaceActivities}

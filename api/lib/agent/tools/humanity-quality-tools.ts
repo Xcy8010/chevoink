@@ -32,6 +32,7 @@ import { enqueueChapterMemoryExtraction } from '../story-memory.js'
 import { recordStoryCompilerWrite } from '../story-compiler.js'
 import { recalcNovelStats } from './novel-tools.js'
 import { defineTool, type ToolContext } from './types.js'
+import { coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js'
 
 const READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const WRITE = { plan: 'deny', build: 'allow', review: 'allow' } as const
@@ -173,6 +174,15 @@ export const qualityAnalyzeTool = defineTool({
   }),
   permission: CONTENT_WRITE,
   readOnly: false,
+  coerceArgs(raw) {
+    const unwrapped = coerceToolArgumentEnvelope(raw)
+    if (!unwrapped || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) return unwrapped
+    const record = unwrapped as Record<string, unknown>
+    return {
+      chapterId: firstDefined(record, ['chapterId', 'chapter_id', 'chapter']),
+      compilationId: firstDefined(record, ['compilationId', 'compilation_id', 'compilation']),
+    }
+  },
   async execute(ctx, args) {
     const chapterId = args.chapterId ?? ctx.chapterId
     if (!chapterId) return { output: '请先指定要检查的章节，或在章节查看器中打开目标章节。' }
@@ -181,23 +191,7 @@ export const qualityAnalyzeTool = defineTool({
     const existing = await getLatestQualityReport(ctx.userId, ctx.novelId, chapterId)
     if (existing?.chapterRevision === bundle.chapter.revision && existing.criticVersion === HUMANITY_CRITIC_VERSION) {
       const hydrated = await getQualityReport(ctx.userId, ctx.novelId, existing.id)
-      const reusableRepairs = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(hydrated.chapterId)
-        ? automaticRepairFindings(hydrated, true)
-        : []
-      if (reusableRepairs.length > 0 && hydrated.repairRound === 0) {
-        await selectQualityFindings(ctx.userId, ctx.novelId, hydrated.id, reusableRepairs.map((finding) => finding.id))
-        const repaired = await applySelectedQualityRepairs(ctx, hydrated, reusableRepairs)
-        if (repaired) {
-          return {
-            output: `复用当前质量报告并落实修订：已原子修改 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定 r${repaired.result.updated.revision}，无需再次检查。`,
-            summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
-            display: reportDisplay(repaired.report),
-            snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
-          }
-        }
-        return { output: '当前 revision 的质量报告已复用；局部修订器本次未返回可验证补丁，正文保持不变，可稍后重试。', summary: '复用质量报告 · 正文未改动', display: reportDisplay(hydrated) }
-      }
-      return { output: `当前 revision 已有质量报告 ${hydrated.id}，无需重复消耗 Critic。`, summary: '复用当前质量报告', display: reportDisplay(hydrated) }
+      return { output: `当前 revision 已有质量报告 ${hydrated.id}，已直接复用；不会再次调用 Critic 或自动重试修订。`, summary: '复用当前质量报告', display: reportDisplay(hydrated) }
     }
     const deterministic = analyzeDeterministicQuality(bundle.chapter.content, bundle.recentChapters.map((chapter) => chapter.content))
     const charterContext = bundle.charter
@@ -256,6 +250,11 @@ ${bundle.chapter.content}
           display: reportDisplay(repaired.report),
           snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
         }
+      }
+      return {
+        output: `质量检查已完成并保留报告：发现 ${warningCount} 个需关注问题、${advisoryCount} 个审美建议；局部修订器本次未返回可安全验证的补丁，正文保持不变。后续再次检查会直接复用本报告，不会循环重试。`,
+        summary: `人类感质量检查${criticFallback ? '（确定性兜底）' : ''} · 修订未应用`,
+        display: reportDisplay(report),
       }
     }
     return {

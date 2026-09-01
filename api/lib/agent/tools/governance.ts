@@ -98,6 +98,7 @@ export const AGENT_TOOL_GOVERNANCE = {
   memory_save: { category: 'write', risk: 'medium', postconditions: ['novel_scope_verified', 'memory_source_recorded'] },
   plan_exit: { category: 'workflow', risk: 'low', postconditions: ['execution_mode_updated'] },
   todo_write: { category: 'workflow', risk: 'low', postconditions: ['todo_state_replaced'] },
+  subagent_delegate: { category: 'workflow', risk: 'medium', postconditions: ['explicit_name_recorded', 'parent_scope_verified', 'active_child_limit_enforced', 'independent_session_created'] },
   directive_save: { category: 'workflow', risk: 'medium', postconditions: ['directive_source_recorded'] },
   directive_supersede: { category: 'workflow', risk: 'medium', postconditions: ['old_directive_deactivated'] },
   memory_relation_save: { category: 'write', risk: 'medium', postconditions: ['memory_source_recorded', 'entity_graph_updated'] },

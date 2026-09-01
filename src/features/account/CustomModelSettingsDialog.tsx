@@ -26,7 +26,7 @@ const EMPTY_FORM: FormState = { provider: 'deepseek', displayName: '', modelName
 const REASONING_OPTIONS: ModelReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
-  return <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={cn('relative h-6 w-11 rounded-full border transition-[background-color,border-color] duration-200', checked ? 'border-emerald-600 bg-emerald-600' : 'border-[var(--border-strong)] bg-[var(--surface-muted)]')}><span className={cn('absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out', checked ? 'translate-x-[22px]' : 'translate-x-[3px]')} /></button>
+  return <label className="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full focus-within:ring-2 focus-within:ring-emerald-500/35"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="peer sr-only" aria-label={label} /><span aria-hidden className={cn('absolute inset-[2px] rounded-full border transition-[background-color,border-color] duration-200 ease-out', checked ? 'border-emerald-600 bg-emerald-600' : 'border-[var(--border-strong)] bg-[var(--surface-muted)]')} /><span aria-hidden className={cn('absolute left-[5px] h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(15,23,42,.24)] transition-transform duration-200 ease-[cubic-bezier(.22,1,.36,1)]', checked && 'translate-x-5')} /></label>
 }
 
 export function CustomModelSettingsContent({ active = true }: { active?: boolean }) {

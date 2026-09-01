@@ -16,6 +16,7 @@ import type {
   AgentSessionToolPolicy,
   AgentSandboxMode,
   AgentSubtaskRole,
+  AgentSubtaskLogsView,
   AgentSubtaskView,
   StoryBranchDiffView,
   StoryBranchView,
@@ -221,8 +222,17 @@ export function mergeStoryBranchRequest(branchId: string): Promise<{ item: Story
 export function fetchAgentSubtasks(novelId: string): Promise<{ items: AgentSubtaskView[] }> {
   return requestData(`/api/agent/subtasks?novelId=${encodeURIComponent(novelId)}`)
 }
-export function createAgentSubtaskRequest(input: { novelId: string; parentSessionId: string; chapterId?: string | null; role: AgentSubtaskRole; prompt: string; tokenBudget: number }): Promise<{ item: AgentSubtaskView }> {
+export function createAgentSubtaskRequest(input: { novelId: string; parentSessionId: string; chapterId?: string | null; name: string; role: AgentSubtaskRole; triggerCondition: string; prompt: string; tokenBudget: number }): Promise<{ item: AgentSubtaskView }> {
   return requestData('/api/agent/subtasks', { method: 'POST', body: JSON.stringify(input) })
+}
+export function updateAgentSubtaskRequest(subtaskId: string, input: { name?: string; role?: AgentSubtaskRole; triggerCondition?: string; prompt?: string; tokenBudget?: number }): Promise<{ item: AgentSubtaskView }> {
+  return requestData(`/api/agent/subtasks/${subtaskId}`, { method: 'PATCH', body: JSON.stringify(input) })
+}
+export function deleteAgentSubtaskRequest(subtaskId: string): Promise<{ deleted: true }> {
+  return requestData(`/api/agent/subtasks/${subtaskId}`, { method: 'DELETE' })
+}
+export function fetchAgentSubtaskLogs(subtaskId: string): Promise<AgentSubtaskLogsView> {
+  return requestData(`/api/agent/subtasks/${subtaskId}/logs`)
 }
 export function cancelAgentSubtaskRequest(subtaskId: string): Promise<{ item: AgentSubtaskView }> {
   return requestData(`/api/agent/subtasks/${subtaskId}/cancel`, { method: 'POST' })

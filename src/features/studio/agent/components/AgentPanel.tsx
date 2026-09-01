@@ -1005,6 +1005,7 @@ export function AgentPanel({
                 return (
                 <div
                   key={message.id}
+                  id={`agent-message-${message.id}`}
                   className="agent-msg-cv group flex items-center justify-end gap-1.5"
                   onTouchStart={() => startLongPress(message.id)}
                   onTouchEnd={cancelLongPress}
@@ -1133,6 +1134,7 @@ export function AgentPanel({
               return (
                 <div
                   key={message.id}
+                  id={`agent-message-${message.id}`}
                   // 正在流式的消息不加 content-visibility，避免高度估算干扰自动滚底
                   className={cn('min-w-0', message.id !== lastAssistantId && 'agent-msg-cv')}
                 >
