@@ -533,6 +533,25 @@ export function AgentPanel({
     }
   }, [])
 
+  // 聊天轨道的导航必须滚动本面板的消息容器，而不是交给浏览器猜测最近的滚动祖先。
+  // 同时关闭贴底跟随，避免运行中的自动滚动把用户刚选择的历史轮次又拉回最新消息。
+  useEffect(() => {
+    const handleConversationNavigate = (event: Event) => {
+      const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
+      if (!messageId) return
+      const container = scrollRef.current
+      const target = document.getElementById(`agent-message-${messageId}`)
+      if (!container || !target || !container.contains(target)) return
+      pinnedToBottomRef.current = false
+      const containerRect = container.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const top = container.scrollTop + targetRect.top - containerRect.top - (container.clientHeight - targetRect.height) / 2
+      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    }
+    window.addEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)
+    return () => window.removeEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)
+  }, [])
+
   // 键盘弹起 / 底部导航隐藏使消息容器变矮时，像微信/QQ 一样把对话顶上去
   useKeyboardPushScroll(scrollRef)
 

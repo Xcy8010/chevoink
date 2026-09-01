@@ -19,6 +19,11 @@ export type AgentConversationRailItem = {
   assistantText: string
 }
 
+/** 对话很长时保持轨道的节奏感；完整历史仍可在主消息区滚动查看。 */
+const MAX_VISIBLE_CONVERSATION_MARKERS = 40
+const RAIL_VERTICAL_PADDING = 40
+const RAIL_MARKER_FOOTPRINT = 14
+
 export function AgentConversationRail({
   conversations,
   onSelectConversation,
@@ -28,39 +33,53 @@ export function AgentConversationRail({
 }) {
   const rootRef = useRef<HTMLElement | null>(null)
   const [preview, setPreview] = useState<{ conversation: AgentConversationRailItem; top: number } | null>(null)
-  const dense = conversations.length > 34
-  const veryDense = conversations.length > 68
+  const [railHeight, setRailHeight] = useState(0)
+  const maxVisibleMarkers = railHeight
+    ? Math.max(8, Math.min(MAX_VISIBLE_CONVERSATION_MARKERS, Math.floor((railHeight - RAIL_VERTICAL_PADDING) / RAIL_MARKER_FOOTPRINT)))
+    : MAX_VISIBLE_CONVERSATION_MARKERS
+  const visibleConversations = conversations.slice(-maxVisibleMarkers)
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const update = () => setRailHeight(root.clientHeight)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
 
   const showPreview = (conversation: AgentConversationRailItem, element: HTMLButtonElement) => {
     const root = rootRef.current
     if (!root) return
     const rootRect = root.getBoundingClientRect()
     const itemRect = element.getBoundingClientRect()
-    const top = Math.max(10, Math.min(rootRect.height - 126, itemRect.top - rootRect.top - 42))
+    const top = Math.max(10, Math.min(rootRect.height - 150, itemRect.top - rootRect.top - 54))
     setPreview({ conversation, top })
   }
 
   return (
-    <nav ref={rootRef} className="relative flex h-full w-11 flex-col items-center overflow-visible bg-[var(--app-bg)]" aria-label="当前任务聊天记录">
-      <div className={cn('flex min-h-0 w-full flex-1 flex-col items-center overflow-y-auto pb-4 pt-7 [scrollbar-width:none]', veryDense ? 'gap-0.5' : dense ? 'gap-1' : 'gap-[7px]')}>
-        {conversations.map((conversation, index) => {
-          const latest = index === conversations.length - 1
-          return <button key={conversation.id} type="button" onClick={() => onSelectConversation(conversation.userMessageId)} onMouseEnter={(event) => showPreview(conversation, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(conversation, event.currentTarget)} onBlur={() => setPreview(null)} className={cn('group flex w-full shrink-0 items-center justify-center', veryDense ? 'h-[3px]' : dense ? 'h-[5px]' : 'h-[7px]')} aria-label={`第 ${index + 1} 轮聊天`} aria-current={latest ? 'location' : undefined}>
+    <nav ref={rootRef} className="relative flex h-full w-11 flex-col items-center overflow-visible bg-transparent" aria-label="当前任务聊天记录">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-[7px] py-5">
+        {visibleConversations.map((conversation, visibleIndex) => {
+          const originalIndex = conversations.length - visibleConversations.length + visibleIndex
+          const latest = originalIndex === conversations.length - 1
+          return <button key={conversation.id} type="button" onClick={() => onSelectConversation(conversation.userMessageId)} onMouseEnter={(event) => showPreview(conversation, event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => showPreview(conversation, event.currentTarget)} onBlur={() => setPreview(null)} className="group flex h-[7px] w-full shrink-0 items-center justify-center" aria-label={`第 ${originalIndex + 1} 轮聊天`} aria-current={latest ? 'location' : undefined}>
             <span className={cn('h-[2px] rounded-full transition-[width,background-color,opacity] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', latest ? 'w-4 bg-[var(--text-primary)] opacity-90' : 'w-2.5 bg-[var(--text-tertiary)] opacity-40 group-hover:w-6 group-hover:bg-[var(--text-secondary)] group-hover:opacity-95 group-focus-visible:w-6 group-focus-visible:opacity-95')} aria-hidden />
           </button>
         })}
       </div>
       <div
         className={cn(
-          'pointer-events-none absolute left-[calc(100%+10px)] z-50 h-[112px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-[opacity,transform] duration-180 ease-[cubic-bezier(.22,1,.36,1)]',
+          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-[opacity,transform] duration-180 ease-[cubic-bezier(.22,1,.36,1)]',
           preview ? 'translate-x-0 scale-100 opacity-100' : '-translate-x-1 scale-[.98] opacity-0',
         )}
         style={{ top: preview?.top ?? 8 }}
         aria-hidden={!preview}
       >
         <div className="grid h-full grid-rows-2 gap-2">
-          <div className="min-h-0"><p className="text-[10px] font-medium text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-[17px] text-white/90">{preview?.conversation.userText || '（附件或引用）'}</p></div>
-          <div className="min-h-0 border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-[17px] text-white/80">{preview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
+          <div className="min-h-0 overflow-hidden"><p className="text-[10px] font-medium leading-4 text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/90">{preview?.conversation.userText || '（附件或引用）'}</p></div>
+          <div className="min-h-0 overflow-hidden border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium leading-4 text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/80">{preview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
         </div>
       </div>
     </nav>

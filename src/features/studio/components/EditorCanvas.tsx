@@ -10,6 +10,7 @@ import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingRevi
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import PlanMarkdownEditor from './PlanMarkdownEditor'
+import { preserveTextareaCaret } from './textarea-caret'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 type EditorCanvasProps = {
@@ -196,10 +197,13 @@ export default function EditorCanvas({
             <AutoGrowTextarea
               value={workspaceDocument.content}
               onChange={(event) =>
-                onWorkspaceDocumentChange?.({
-                  title: workspaceDocument.title,
-                  content: event.target.value,
-                })
+                {
+                  preserveTextareaCaret(event.currentTarget)
+                  onWorkspaceDocumentChange?.({
+                    title: workspaceDocument.title,
+                    content: event.target.value,
+                  })
+                }
               }
               className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
               placeholder="在这里维护目录内容。"
@@ -437,6 +441,7 @@ export default function EditorCanvas({
               <AutoGrowTextarea
                 value={chapterDraft.content}
                 onChange={(event) => {
+                  preserveTextareaCaret(event.currentTarget)
                   onChange({ ...chapterDraft, content: event.target.value })
                   emitSelection(event.target)
                 }}
@@ -522,6 +527,7 @@ export default function EditorCanvas({
               onScroll={streamingTextarea.onScroll}
               value={chapterDraft.content}
               onChange={(event) => {
+                preserveTextareaCaret(event.currentTarget)
                 onChange({ ...chapterDraft, content: event.target.value })
                 emitSelection(event.target)
               }}

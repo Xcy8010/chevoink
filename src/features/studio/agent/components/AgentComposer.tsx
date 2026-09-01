@@ -456,7 +456,7 @@ export function AgentComposer({
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragActive(true) }}
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false) }}
       onDrop={(event) => void handleDrop(event)}
-      className={`relative rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
+      className={`relative z-[80] rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
     >
       {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加引用、图片或文件</div> : null}
       {(attachments.length > 0 || uploading > 0) && (
@@ -650,7 +650,7 @@ export function AgentComposer({
               ))}
             </div>
           </details>
-          <details ref={modelMenuRef} className="group/model relative ml-auto" data-disabled={running || disabled || undefined}>
+          <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto" data-disabled={running || disabled || undefined}>
             <summary
               onClick={(event) => { if (running || disabled) event.preventDefault() }}
               aria-label="模型档位"
@@ -661,10 +661,10 @@ export function AgentComposer({
               <span className="text-[9px] text-[var(--text-tertiary)]">{activeReasoningEffort}</span>
               <ChevronDown className="h-3 w-3 transition-transform group-open/model:rotate-180" />
             </summary>
-            <div className="absolute bottom-full right-0 z-50 mb-2 w-[248px] overflow-visible rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.18)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
+            <div className="absolute bottom-full right-0 z-[140] mb-2 w-[248px] overflow-visible rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.18)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
               <div className="group/models relative">
                 <button type="button" className="flex h-9 w-full items-center justify-between rounded-[9px] px-2.5 text-xs hover:bg-[var(--surface-muted)]"><span className="font-medium text-[var(--text-primary)]">模型</span><span className="inline-flex max-w-36 items-center gap-1 truncate text-[var(--text-secondary)]">{activeModelLabel}<ChevronRight className="h-3 w-3" /></span></button>
-                <div className="invisible absolute bottom-0 right-[calc(100%-1px)] z-[70] w-60 translate-x-1 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 opacity-0 shadow-[0_18px_46px_rgba(15,23,42,0.2)] transition-[opacity,transform,visibility] duration-150 ease-out group-hover/models:visible group-hover/models:translate-x-0 group-hover/models:opacity-100 group-focus-within/models:visible group-focus-within/models:translate-x-0 group-focus-within/models:opacity-100">
+                <div className="invisible absolute bottom-0 right-[calc(100%-1px)] z-[150] w-60 translate-x-1 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 opacity-0 shadow-[0_18px_46px_rgba(15,23,42,0.2)] transition-[opacity,transform,visibility] duration-150 ease-out group-hover/models:visible group-hover/models:translate-x-0 group-hover/models:opacity-100 group-focus-within/models:visible group-focus-within/models:translate-x-0 group-focus-within/models:opacity-100">
                   <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">可用内置模型</p>
                   {editingReasoningTier ? (() => {
                     const option = modelOptions.find((item) => item.tier === editingReasoningTier)
@@ -674,7 +674,7 @@ export function AgentComposer({
                     const selected = reasoningSelections[modelKey] && efforts.includes(reasoningSelections[modelKey])
                       ? reasoningSelections[modelKey]
                       : option.defaultReasoningEffort
-                    return <div className="absolute bottom-0 right-[calc(100%+7px)] z-[80] w-52 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.2)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_140ms_cubic-bezier(.2,.8,.2,1)]">
+                    return <div className="absolute bottom-0 right-[calc(100%+7px)] z-[160] w-52 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.2)] motion-safe:origin-bottom-right motion-safe:animate-[agent-menu-in_140ms_cubic-bezier(.2,.8,.2,1)]">
                       <div className="flex items-center justify-between px-2 pb-1 pt-1"><div><p className="text-[10px] text-[var(--text-tertiary)]">{option.label}</p><p className="text-xs font-medium text-[var(--text-primary)]">思考模式</p></div><button type="button" onClick={() => setEditingReasoningTier(null)} className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] text-[var(--text-tertiary)] hover:bg-[var(--surface-muted)]" aria-label="关闭思考模式设置"><X className="h-3.5 w-3.5" /></button></div>
                       {efforts.map((effort) => <button key={effort} type="button" onClick={() => onReasoningEffortChange(modelKey, effort)} className={cn('flex h-9 w-full items-center justify-between rounded-[8px] px-2.5 text-left text-xs transition-colors hover:bg-[var(--surface-muted)]', effort === selected && 'bg-[var(--surface-muted)] font-medium')}><span>{REASONING_LABELS[effort]}</span><span className="inline-flex items-center gap-2 text-[10px] text-[var(--text-tertiary)]">{effort}{effort === selected ? <Check className="h-3.5 w-3.5 text-[var(--text-primary)]" /> : null}</span></button>)}
                     </div>

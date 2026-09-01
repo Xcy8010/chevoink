@@ -856,15 +856,6 @@ export default function StudioWorkspace() {
     setChapterSaveMessage(`已同步到 ${formatDateTime(chapterQuery.data.updatedAt)}`)
   }, [chapterQuery.data, selectedChapterId])
 
-  const selectionChapterRef = useRef<string | null>(null)
-  useEffect(() => {
-    const chapterId = chapterDraft?.id ?? null
-    if (selectionChapterRef.current === chapterId) return
-    selectionChapterRef.current = chapterId
-    const contentLength = chapterDraft?.content.length ?? 0
-    setEditorSelection({ start: contentLength, end: contentLength, text: '' })
-  }, [chapterDraft])
-
   useEffect(() => {
     if (!chapterQuery.isError) {
       return
@@ -4370,7 +4361,7 @@ export default function StudioWorkspace() {
             <div className="studio-perspective-enter h-full min-h-0">
             {featureFlags.dualWorkspace && workspacePerspective === 'work' ? (
               <WorkPerspective
-                conversationRail={<AgentConversationRail conversations={agentConversationRailItems} onSelectConversation={(messageId) => document.getElementById(`agent-message-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />}
+                conversationRail={<AgentConversationRail conversations={agentConversationRailItems} onSelectConversation={(messageId) => window.dispatchEvent(new CustomEvent('chevoink:agent-conversation-navigate', { detail: { messageId } }))} />}
                 conversation={<div className="mx-auto h-full min-h-0 w-full max-w-4xl px-4 py-2">{renderWritingAgent(undefined, false, workViewer ? 'inline' : 'responsive')}</div>}
                 activityDock={(workspaceActivities.length > 0 || agentTodos.length > 0 || pendingChapterReviews.length > 0 || Boolean(pendingPlanReview)) ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><AgentActivityBar
                   activities={workspaceActivities}

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 
 import type { EditorSelectionState } from '../types'
+import { preserveTextareaCaret } from './textarea-caret'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 const PlanRichMarkdownEditor = lazy(() => import('./PlanRichMarkdownEditor'))
@@ -101,6 +102,7 @@ export default function PlanMarkdownEditor({
           value={markdown}
           readOnly={!editable}
           onChange={(event) => {
+            preserveTextareaCaret(event.currentTarget)
             onChange?.(event.target.value)
             emitTextareaSelection(event.target, onSelectionChange)
           }}
