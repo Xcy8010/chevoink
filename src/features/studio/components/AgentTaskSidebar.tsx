@@ -33,6 +33,13 @@ export function AgentConversationRail({
 }) {
   const rootRef = useRef<HTMLElement | null>(null)
   const [preview, setPreview] = useState<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  // 淡出期间保留最后一次的定位与内容：若让 top 随 preview 置空回落到顶部，
+  // 卡片会先瞬移到顶部再淡出，看起来像“往上飞出去”。
+  const lastPreviewRef = useRef<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  useEffect(() => {
+    if (preview) lastPreviewRef.current = preview
+  }, [preview])
+  const displayPreview = preview ?? lastPreviewRef.current
   const [railHeight, setRailHeight] = useState(0)
   const maxVisibleMarkers = railHeight
     ? Math.max(8, Math.min(MAX_VISIBLE_CONVERSATION_MARKERS, Math.floor((railHeight - RAIL_VERTICAL_PADDING) / RAIL_MARKER_FOOTPRINT)))
@@ -71,15 +78,15 @@ export function AgentConversationRail({
       </div>
       <div
         className={cn(
-          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-[opacity,transform] duration-180 ease-[cubic-bezier(.22,1,.36,1)]',
-          preview ? 'translate-x-0 scale-100 opacity-100' : '-translate-x-1 scale-[.98] opacity-0',
+          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-opacity duration-200 ease-out',
+          preview ? 'opacity-100' : 'opacity-0',
         )}
-        style={{ top: preview?.top ?? 8 }}
+        style={{ top: displayPreview?.top ?? 8 }}
         aria-hidden={!preview}
       >
         <div className="grid h-full grid-rows-2 gap-2">
-          <div className="min-h-0 overflow-hidden"><p className="text-[10px] font-medium leading-4 text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/90">{preview?.conversation.userText || '（附件或引用）'}</p></div>
-          <div className="min-h-0 overflow-hidden border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium leading-4 text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/80">{preview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
+          <div className="min-h-0 overflow-hidden"><p className="text-[10px] font-medium leading-4 text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/90">{displayPreview?.conversation.userText || '（附件或引用）'}</p></div>
+          <div className="min-h-0 overflow-hidden border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium leading-4 text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/80">{displayPreview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
         </div>
       </div>
     </nav>

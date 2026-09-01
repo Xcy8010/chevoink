@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { FilePenLine, FolderPlus, LoaderCircle, MessageSquarePlus, MoreHorizontal, RefreshCcw, Settings2, Upload } from 'lucide-react'
 
-import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
 import Button from '@/components/ui/Button'
 import Surface from '@/components/ui/Surface'
 import type { ChapterStatus } from '../../../../shared/contracts/index.js'
@@ -10,7 +9,7 @@ import { type ChapterDraftState, type ChapterPendingReview, type PlanPendingRevi
 import ChapterChangeReview, { NextReviewFilePill } from './ChapterChangeReview'
 import PlanChangeReview from './PlanChangeReview'
 import PlanMarkdownEditor from './PlanMarkdownEditor'
-import { preserveTextareaCaret } from './textarea-caret'
+import LocalFirstTextarea from './LocalFirstTextarea'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 type EditorCanvasProps = {
@@ -194,17 +193,11 @@ export default function EditorCanvas({
               streaming={streaming}
             />
           ) : workspaceDocument.editableContent ? (
-            <AutoGrowTextarea
+            <LocalFirstTextarea
+              autoGrow
               value={workspaceDocument.content}
-              onChange={(event) =>
-                {
-                  preserveTextareaCaret(event.currentTarget)
-                  onWorkspaceDocumentChange?.({
-                    title: workspaceDocument.title,
-                    content: event.target.value,
-                  })
-                }
-              }
+              resetKey={workspaceDocument.id}
+              onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
               className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
               placeholder="在这里维护目录内容。"
             />
@@ -289,16 +282,12 @@ export default function EditorCanvas({
                 streaming={streaming}
               />
             ) : workspaceDocument.editableContent ? (
-              <textarea
+              <LocalFirstTextarea
                 ref={streamingTextarea.ref}
                 onScroll={streamingTextarea.onScroll}
                 value={workspaceDocument.content}
-                onChange={(event) =>
-                  onWorkspaceDocumentChange?.({
-                    title: workspaceDocument.title,
-                    content: event.target.value,
-                  })
-                }
+                resetKey={workspaceDocument.id}
+                onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
                 rows={20}
                 className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
                 placeholder="在这里维护目录内容。"
@@ -362,14 +351,6 @@ export default function EditorCanvas({
         </div>
       </Surface>
     )
-  }
-
-  function emitSelection(target: HTMLTextAreaElement) {
-    onSelectionChange?.({
-      start: target.selectionStart ?? 0,
-      end: target.selectionEnd ?? 0,
-      text: target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0),
-    })
   }
 
   if (isMobile) {
@@ -438,20 +419,13 @@ export default function EditorCanvas({
               <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                 {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
               </p>
-              <AutoGrowTextarea
+              <LocalFirstTextarea
+                autoGrow
                 value={chapterDraft.content}
-                onChange={(event) => {
-                  preserveTextareaCaret(event.currentTarget)
-                  onChange({ ...chapterDraft, content: event.target.value })
-                  emitSelection(event.target)
-                }}
-                onSelect={(event) => emitSelection(event.currentTarget)}
-                onClick={(event) => emitSelection(event.currentTarget)}
-                onKeyUp={(event) => emitSelection(event.currentTarget)}
-                onBlur={(event) => {
-                  emitSelection(event.currentTarget)
-                  onEditorBlur?.()
-                }}
+                resetKey={chapterDraft.id}
+                onCommit={(content) => onChange({ ...chapterDraft, content })}
+                onSelectionChange={onSelectionChange}
+                onBlur={() => onEditorBlur?.()}
                 wrapperClassName="mt-3"
                 className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                 placeholder="继续写这一章的正文。"
@@ -522,22 +496,14 @@ export default function EditorCanvas({
         ) : (
           <>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1">
-            <textarea
+            <LocalFirstTextarea
               ref={streamingTextarea.ref}
               onScroll={streamingTextarea.onScroll}
               value={chapterDraft.content}
-              onChange={(event) => {
-                preserveTextareaCaret(event.currentTarget)
-                onChange({ ...chapterDraft, content: event.target.value })
-                emitSelection(event.target)
-              }}
-              onSelect={(event) => emitSelection(event.currentTarget)}
-              onClick={(event) => emitSelection(event.currentTarget)}
-              onKeyUp={(event) => emitSelection(event.currentTarget)}
-              onBlur={(event) => {
-                emitSelection(event.currentTarget)
-                onEditorBlur?.()
-              }}
+              resetKey={chapterDraft.id}
+              onCommit={(content) => onChange({ ...chapterDraft, content })}
+              onSelectionChange={onSelectionChange}
+              onBlur={() => onEditorBlur?.()}
               rows={20}
               className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent px-1 text-[15px] leading-8 text-[var(--text-primary)] outline-none"
               placeholder="继续写这一章的正文。"

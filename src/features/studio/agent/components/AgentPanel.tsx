@@ -547,6 +547,12 @@ export function AgentPanel({
       const targetRect = target.getBoundingClientRect()
       const top = container.scrollTop + targetRect.top - containerRect.top - (container.clientHeight - targetRect.height) / 2
       container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      // 导航落点高亮：让“点击轨道 → 定位到这一轮”有可见反馈
+      target.classList.remove('agent-msg-flash')
+      // 强制重启动画：连续点击同一轨道也能再次闪烁
+      void target.offsetWidth
+      target.classList.add('agent-msg-flash')
+      window.setTimeout(() => target.classList.remove('agent-msg-flash'), 1500)
     }
     window.addEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)
     return () => window.removeEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)

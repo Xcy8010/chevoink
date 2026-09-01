@@ -19,7 +19,7 @@ import {
   Upload,
 } from 'lucide-react'
 
-import AutoGrowTextarea from '@/components/ui/AutoGrowTextarea'
+import LocalFirstTextarea from './LocalFirstTextarea'
 import BottomSheet from '@/components/ui/BottomSheet'
 import Button from '@/components/ui/Button'
 import { useKeyboardInset } from '@/hooks/useMobileComposer'
@@ -382,14 +382,6 @@ export default function ImmersiveComposer({
     })
   }
 
-  function emitSelection(target: HTMLTextAreaElement) {
-    onSelectionChange?.({
-      start: target.selectionStart ?? 0,
-      end: target.selectionEnd ?? 0,
-      text: target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0),
-    })
-  }
-
   return createPortal(
     <div className="fixed inset-0 z-[90] isolate overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
       <div className="mx-auto flex h-full max-w-[140rem] flex-col px-3 pb-3 pt-[calc(var(--safe-top)+10px)] md:px-6 md:py-5">
@@ -617,14 +609,10 @@ export default function ImmersiveComposer({
                       </p>
                     </div>
                     {workspaceDocument.editableContent ? (
-                      <textarea
+                      <LocalFirstTextarea
                         value={workspaceDocument.content}
-                        onChange={(event) =>
-                          onWorkspaceDocumentChange?.({
-                            title: workspaceDocument.title,
-                            content: event.target.value,
-                          })
-                        }
+                        resetKey={workspaceDocument.id}
+                        onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
                         rows={24}
                         className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
                         placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
@@ -704,16 +692,11 @@ export default function ImmersiveComposer({
                             {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
                           </p>
                         </div>
-                        <textarea
+                        <LocalFirstTextarea
                           value={chapterDraft.content}
-                          onChange={(event) => {
-                            onChange({ ...chapterDraft, content: event.target.value })
-                            emitSelection(event.target)
-                          }}
-                          onSelect={(event) => emitSelection(event.currentTarget)}
-                          onClick={(event) => emitSelection(event.currentTarget)}
-                          onKeyUp={(event) => emitSelection(event.currentTarget)}
-                          onBlur={(event) => emitSelection(event.currentTarget)}
+                          resetKey={chapterDraft.id}
+                          onCommit={(content) => onChange({ ...chapterDraft, content })}
+                          onSelectionChange={onSelectionChange}
                           rows={24}
                           className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
                           placeholder="继续写这一章的正文。"
@@ -788,14 +771,11 @@ export default function ImmersiveComposer({
                         <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">{workspaceDocument.description}</p>
                       </div>
                       {workspaceDocument.editableContent ? (
-                        <AutoGrowTextarea
+                        <LocalFirstTextarea
+                          autoGrow
                           value={workspaceDocument.content}
-                          onChange={(event) =>
-                            onWorkspaceDocumentChange?.({
-                              title: workspaceDocument.title,
-                              content: event.target.value,
-                            })
-                          }
+                          resetKey={workspaceDocument.id}
+                          onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
                           wrapperClassName="mt-3"
                           className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                           placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
@@ -826,16 +806,12 @@ export default function ImmersiveComposer({
                       <p className="border-b border-[var(--border-subtle)] pb-3 text-lg font-semibold tracking-[0.01em] text-[var(--text-primary)]">
                         {chapterDraft.title.trim() || `第 ${chapterDraft.orderIndex} 章`}
                       </p>
-                      <AutoGrowTextarea
+                      <LocalFirstTextarea
+                        autoGrow
                         value={chapterDraft.content}
-                        onChange={(event) => {
-                          onChange({ ...chapterDraft, content: event.target.value })
-                          emitSelection(event.target)
-                        }}
-                        onSelect={(event) => emitSelection(event.currentTarget)}
-                        onClick={(event) => emitSelection(event.currentTarget)}
-                        onKeyUp={(event) => emitSelection(event.currentTarget)}
-                        onBlur={(event) => emitSelection(event.currentTarget)}
+                        resetKey={chapterDraft.id}
+                        onCommit={(content) => onChange({ ...chapterDraft, content })}
+                        onSelectionChange={onSelectionChange}
                         wrapperClassName="mt-3"
                         className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                         placeholder="继续写这一章的正文。"

@@ -1,8 +1,8 @@
 import { FilePlus2, FolderPlus, LoaderCircle, MessageSquarePlus, X } from 'lucide-react'
 
 import type { ChapterDraftState, EditorSelectionState, WorkspaceDocumentView } from '../types'
+import LocalFirstTextarea from './LocalFirstTextarea'
 import PlanMarkdownEditor from './PlanMarkdownEditor'
-import { preserveTextareaCaret } from './textarea-caret'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 type Props = {
@@ -25,7 +25,6 @@ type Props = {
 export default function StudioChapterViewer({ draft, workspaceDocument = null, loading, selection, onChange, onWorkspaceDocumentChange, onSelectionChange, onAddSelection, onCreateVolume, onCreateChapter, onClose, onBlur, streamingContent, writeLocked = false }: Props) {
   const streaming = streamingContent !== undefined
   const streamingScroll = useStreamingAutoFollow<HTMLTextAreaElement>(streaming, streamingContent)
-  const emitSelection = (target: HTMLTextAreaElement) => onSelectionChange({ start: target.selectionStart ?? 0, end: target.selectionEnd ?? 0, text: target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0) })
   const hasDocument = Boolean(workspaceDocument)
   return <section className="flex h-full min-h-0 flex-col bg-[var(--surface-default)]">
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3">
@@ -37,9 +36,9 @@ export default function StudioChapterViewer({ draft, workspaceDocument = null, l
       <button type="button" onClick={onClose} className="rounded p-1 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="关闭查看器"><X className="h-4 w-4" /></button>
     </div>
     {loading && !draft && !hasDocument ? <div className="flex flex-1 items-center justify-center text-xs text-[var(--text-secondary)]">正在载入内容…</div> : workspaceDocument ? <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4">
-      {workspaceDocument.kind === 'plan' ? <PlanMarkdownEditor documentId={workspaceDocument.id} markdown={streamingContent ?? workspaceDocument.content} editable={workspaceDocument.editableContent && !writeLocked} streaming={streaming} onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })} onSelectionChange={onSelectionChange} onBlur={onBlur} /> : <textarea ref={streamingScroll.ref} onScroll={streamingScroll.onScroll} value={streamingContent ?? workspaceDocument.content} readOnly={!workspaceDocument.editableContent || writeLocked} onChange={(event) => { preserveTextareaCaret(event.currentTarget); onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content: event.target.value }); emitSelection(event.target) }} onSelect={(event) => emitSelection(event.currentTarget)} onClick={(event) => emitSelection(event.currentTarget)} onKeyUp={(event) => emitSelection(event.currentTarget)} onBlur={(event) => { emitSelection(event.currentTarget); onBlur() }} className="h-full w-full resize-none bg-transparent text-[14px] leading-8 text-[var(--text-primary)] outline-none" placeholder="在这里维护目录内容。" />}
+      {workspaceDocument.kind === 'plan' ? <PlanMarkdownEditor documentId={workspaceDocument.id} markdown={streamingContent ?? workspaceDocument.content} editable={workspaceDocument.editableContent && !writeLocked} streaming={streaming} onChange={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })} onSelectionChange={onSelectionChange} onBlur={onBlur} /> : <LocalFirstTextarea ref={streamingScroll.ref} onScroll={streamingScroll.onScroll} value={streamingContent ?? workspaceDocument.content} readOnly={!workspaceDocument.editableContent || writeLocked} resetKey={workspaceDocument.id} onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })} onSelectionChange={onSelectionChange} onBlur={onBlur} className="h-full w-full resize-none bg-transparent text-[14px] leading-8 text-[var(--text-primary)] outline-none" placeholder="在这里维护目录内容。" />}
     </div> : draft ? <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
-      <textarea ref={streamingScroll.ref} onScroll={streamingScroll.onScroll} value={streamingContent ?? draft.content} readOnly={writeLocked} onChange={(event) => { preserveTextareaCaret(event.currentTarget); onChange({ ...draft, content: event.target.value }); emitSelection(event.target) }} onSelect={(event) => emitSelection(event.currentTarget)} onClick={(event) => emitSelection(event.currentTarget)} onKeyUp={(event) => emitSelection(event.currentTarget)} onBlur={(event) => { emitSelection(event.currentTarget); onBlur() }} className="h-full w-full resize-none bg-transparent font-serif text-[15px] leading-8 text-[var(--text-primary)] outline-none read-only:cursor-progress read-only:opacity-90" placeholder="继续写这一章的正文。" />
+      <LocalFirstTextarea ref={streamingScroll.ref} onScroll={streamingScroll.onScroll} value={streamingContent ?? draft.content} readOnly={writeLocked} resetKey={draft.id} onCommit={(content) => onChange({ ...draft, content })} onSelectionChange={onSelectionChange} onBlur={onBlur} className="h-full w-full resize-none bg-transparent font-serif text-[15px] leading-8 text-[var(--text-primary)] outline-none read-only:cursor-progress read-only:opacity-90" placeholder="继续写这一章的正文。" />
     </div> : <div className="flex flex-1 items-center justify-center px-8 text-center text-xs leading-6 text-[var(--text-secondary)]">从右侧作品树选择章节、计划或目录，在查看器中查看和修改。</div>}
   </section>
 }

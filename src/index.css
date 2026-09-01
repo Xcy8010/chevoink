@@ -676,6 +676,19 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* 聊天轨道点击导航的落点高亮：柔和的品牌色闪烁一次 */
+@keyframes agent-msg-flash {
+  0% { background-color: transparent; }
+  18% { background-color: var(--color-brand-soft); }
+  60% { background-color: var(--color-brand-soft); }
+  100% { background-color: transparent; }
+}
+
+.agent-msg-flash {
+  animation: agent-msg-flash 1.5s ease-out;
+  border-radius: 10px;
+}
+
 .agent-reasoning-slider {
   appearance: none;
   height: 6px;
@@ -746,6 +759,7 @@ html[data-studio-resizing='true'] .studio-resizable-grid {
   .agent-tool-running-label,
   .agent-tool-progress { animation: none; }
   .studio-perspective-enter { animation: none; }
+  .agent-msg-flash { animation: none; }
   [class*='conversation-rail-in'],
   [class*='mode-label-in'] { animation: none; }
   .group\/model[open] > div { animation: none; }

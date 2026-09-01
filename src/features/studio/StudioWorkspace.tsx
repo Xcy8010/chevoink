@@ -896,6 +896,8 @@ export default function StudioWorkspace() {
   novelFormStateRef.current = novelForm
   const chapterDraftStateRef = useRef(chapterDraft)
   chapterDraftStateRef.current = chapterDraft
+  const chapterDirtyRef = useRef(chapterDirty)
+  chapterDirtyRef.current = chapterDirty
   const selectedChapterIdStateRef = useRef(selectedChapterId)
   selectedChapterIdStateRef.current = selectedChapterId
 
@@ -2111,19 +2113,22 @@ export default function StudioWorkspace() {
 
   const persistChapter = useCallback(
     async (reason: 'manual' | 'auto' | 'apply') => {
-      if (!chapterDraft) {
+      // 编辑器输入经 LocalFirstTextarea 防抖上报，闭包里的 chapterDraft 可能落后；
+      // 保存时一律以最新 ref 为准，blur/自动保存都能拿到当前输入。
+      const draft = chapterDraftStateRef.current
+      if (!draft) {
         return
       }
 
       // 仅拦截待审查的那些章，其他章节正常保存
-      if (pendingChapterReviews.some((item) => item.chapterId === chapterDraft.id)) {
+      if (pendingChapterReviewsRef.current.some((item) => item.chapterId === draft.id)) {
         if (reason !== 'auto') {
           promptConfirmPendingChapterReview('保存当前章节')
         }
         return
       }
 
-      if (!chapterDraft.title.trim() || !chapterDraft.content.trim()) {
+      if (!draft.title.trim() || !draft.content.trim()) {
         if (reason !== 'auto') {
           setChapterSaveState('error')
           setChapterSaveMessage('章节标题和正文都不能为空。')
@@ -2135,35 +2140,35 @@ export default function StudioWorkspace() {
       setChapterSaveMessage(reason === 'auto' ? '正在自动保存草稿...' : '正在保存章节...')
 
       try {
-        const localDraftId = chapterDraft.localOnly ? chapterDraft.id : null
+        const localDraftId = draft.localOnly ? draft.id : null
         const payload = {
-          title: chapterDraft.title.trim(),
-          summary: chapterDraft.summary.trim() || undefined,
-          content: chapterDraft.content,
-          status: chapterDraft.status,
-          visibility: chapterDraft.visibility,
-          ...(chapterDraft.localOnly ? {} : { expectedRevision: chapterDraft.revision }),
+          title: draft.title.trim(),
+          summary: draft.summary.trim() || undefined,
+          content: draft.content,
+          status: draft.status,
+          visibility: draft.visibility,
+          ...(draft.localOnly ? {} : { expectedRevision: draft.revision }),
         }
 
-        const savedChapter = chapterDraft.localOnly
+        const savedChapter = draft.localOnly
           ? await createChapterDraft(activeNovelId, payload)
-          : await updateChapterDraft(activeNovelId, chapterDraft.id, payload)
+          : await updateChapterDraft(activeNovelId, draft.id, payload)
 
         setChapters((current) =>
           replaceChapterItem(current, localDraftId, toChapterListItem(savedChapter)),
         )
         const latestDraft = chapterDraftStateRef.current
         const editsArrivedDuringSave = Boolean(
-          latestDraft && latestDraft.id === chapterDraft.id && (
-            latestDraft.title !== chapterDraft.title ||
-            latestDraft.summary !== chapterDraft.summary ||
-            latestDraft.content !== chapterDraft.content ||
-            latestDraft.status !== chapterDraft.status ||
-            latestDraft.visibility !== chapterDraft.visibility
+          latestDraft && latestDraft.id === draft.id && (
+            latestDraft.title !== draft.title ||
+            latestDraft.summary !== draft.summary ||
+            latestDraft.content !== draft.content ||
+            latestDraft.status !== draft.status ||
+            latestDraft.visibility !== draft.visibility
           ),
         )
         if (localDraftId) setSelectedTreeItemId(`chapter:${savedChapter.id}`)
-        if (localDraftId || selectedChapterIdStateRef.current === chapterDraft.id) setSelectedChapterId(savedChapter.id)
+        if (localDraftId || selectedChapterIdStateRef.current === draft.id) setSelectedChapterId(savedChapter.id)
         if (editsArrivedDuringSave && latestDraft) {
           // 网络请求期间用户仍可能继续输入。只接收服务端 revision/真实 id，绝不拿旧响应覆盖
           // 新输入；保留 dirty 让下一轮自动保存继续追上。
@@ -2186,7 +2191,7 @@ export default function StudioWorkspace() {
           current
             ? {
                 ...current,
-                chapterCount: chapterDraft.localOnly ? current.chapterCount + 1 : current.chapterCount,
+                chapterCount: draft.localOnly ? current.chapterCount + 1 : current.chapterCount,
                 updatedAt: savedChapter.updatedAt,
               }
             : current,
@@ -2201,7 +2206,7 @@ export default function StudioWorkspace() {
             ...current,
             novel: {
               ...current.novel,
-              chapterCount: chapterDraft.localOnly
+              chapterCount: draft.localOnly
                 ? current.novel.chapterCount + 1
                 : current.novel.chapterCount,
               updatedAt: savedChapter.updatedAt,
@@ -2224,7 +2229,7 @@ export default function StudioWorkspace() {
         setChapterSaveMessage(error instanceof Error ? error.message : '章节保存失败，请稍后重试。')
       }
     },
-    [activeNovelId, chapterDraft, pendingChapterReviews, syncStudioPayload],
+    [activeNovelId, syncStudioPayload],
   )
 
   useEffect(() => {
@@ -3296,11 +3301,15 @@ export default function StudioWorkspace() {
     void persistChapter('manual')
   }
 
-  // 失焦即刷保存：配合 800ms 防抖，保证有改动就落盘
+  // 失焦即刷保存：配合 800ms 防抖，保证有改动就落盘。
+  // LocalFirstTextarea 在失焦时先同步上报最后一批输入（同一事件批处理内排队），
+  // 等 React 提交完成后再读最新 dirty 触发保存。
   function handleEditorBlurFlush() {
-    if (chapterDirty) {
-      void persistChapter('auto')
-    }
+    window.setTimeout(() => {
+      if (chapterDirtyRef.current) {
+        void persistChapter('auto')
+      }
+    }, 0)
   }
 
   // 审查态按章节挂载：只在对应章节激活时展示绿增红减审查视图，切走不丢状态

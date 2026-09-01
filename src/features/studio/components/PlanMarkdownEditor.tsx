@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EditorSelectionState } from '../types'
-import { preserveTextareaCaret } from './textarea-caret'
+import LocalFirstTextarea from './LocalFirstTextarea'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
 
 const PlanRichMarkdownEditor = lazy(() => import('./PlanRichMarkdownEditor'))
@@ -46,12 +46,6 @@ function PlanEditorModeSwitch({ mode, onChange }: { mode: PlanEditorMode; onChan
   )
 }
 
-function emitTextareaSelection(target: HTMLTextAreaElement, onSelectionChange?: (selection: EditorSelectionState) => void) {
-  const start = target.selectionStart ?? 0
-  const end = target.selectionEnd ?? start
-  onSelectionChange?.({ start, end, text: target.value.slice(start, end) })
-}
-
 export default function PlanMarkdownEditor({
   documentId,
   markdown,
@@ -65,6 +59,54 @@ export default function PlanMarkdownEditor({
 }: Props) {
   const [mode, setMode] = useState<PlanEditorMode>('preview')
   const markdownScroll = useStreamingAutoFollow<HTMLTextAreaElement>(streaming, markdown)
+
+  // Milkdown 富文本每次击键都会同步上报 markdown，直接透传会让 StudioWorkspace 整树
+  // 每字重渲染一遍（与章节正文同样的“打字断一下”问题）；这里先缓冲，停顿后一次性上报。
+  const pendingMarkdownRef = useRef<string | null>(null)
+  const markdownCommitTimerRef = useRef<number | null>(null)
+  const onChangeRef = useRef(onChange)
+  const onBlurRef = useRef(onBlur)
+  onChangeRef.current = onChange
+  onBlurRef.current = onBlur
+
+  const flushPendingMarkdown = useCallback(() => {
+    if (markdownCommitTimerRef.current !== null) {
+      window.clearTimeout(markdownCommitTimerRef.current)
+      markdownCommitTimerRef.current = null
+    }
+    if (pendingMarkdownRef.current !== null) {
+      const next = pendingMarkdownRef.current
+      pendingMarkdownRef.current = null
+      onChangeRef.current?.(next)
+    }
+  }, [])
+
+  const handleRichMarkdownChange = useCallback(
+    (next: string) => {
+      pendingMarkdownRef.current = next
+      if (markdownCommitTimerRef.current !== null) window.clearTimeout(markdownCommitTimerRef.current)
+      markdownCommitTimerRef.current = window.setTimeout(() => {
+        markdownCommitTimerRef.current = null
+        flushPendingMarkdown()
+      }, 160)
+    },
+    [flushPendingMarkdown],
+  )
+
+  const handleRichEditorBlur = useCallback(() => {
+    // 失焦先把缓冲的计划内容上报，再交给外部的失焦保存逻辑。
+    flushPendingMarkdown()
+    onBlurRef.current?.()
+  }, [flushPendingMarkdown])
+
+  // 卸载时上报最后一批输入，防止切计划丢字。
+  useEffect(
+    () => () => {
+      if (markdownCommitTimerRef.current !== null) window.clearTimeout(markdownCommitTimerRef.current)
+      if (pendingMarkdownRef.current !== null) onChangeRef.current?.(pendingMarkdownRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     setMode('preview')
@@ -89,30 +131,22 @@ export default function PlanMarkdownEditor({
             markdown={markdown}
             editable={editable}
             mobile={mobile}
-            onChange={onChange}
-            onBlur={onBlur}
+            onChange={handleRichMarkdownChange}
+            onBlur={handleRichEditorBlur}
             onSelectionChange={onSelectionChange}
             streaming={streaming}
           />
         </Suspense>
       ) : (
-        <textarea
+        <LocalFirstTextarea
           ref={markdownScroll.ref}
           onScroll={markdownScroll.onScroll}
           value={markdown}
           readOnly={!editable}
-          onChange={(event) => {
-            preserveTextareaCaret(event.currentTarget)
-            onChange?.(event.target.value)
-            emitTextareaSelection(event.target, onSelectionChange)
-          }}
-          onSelect={(event) => emitTextareaSelection(event.currentTarget, onSelectionChange)}
-          onClick={(event) => emitTextareaSelection(event.currentTarget, onSelectionChange)}
-          onKeyUp={(event) => emitTextareaSelection(event.currentTarget, onSelectionChange)}
-          onBlur={(event) => {
-            emitTextareaSelection(event.currentTarget, onSelectionChange)
-            onBlur?.()
-          }}
+          resetKey={documentId}
+          onCommit={(next) => onChange?.(next)}
+          onSelectionChange={onSelectionChange}
+          onBlur={onBlur}
           spellCheck={false}
           className={`${
             mobile ? 'min-h-[60vh]' : 'min-h-[28rem] flex-1'
