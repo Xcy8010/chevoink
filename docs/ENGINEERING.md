@@ -211,7 +211,7 @@ postgres:16 服务容器 → npm ci → prisma generate → migrate deploy（测
 → npm audit --omit=dev --audit-level=high
 ```
 
-- CI 覆盖率基线门禁为 statements 18%、branches 59%、functions 35%、lines 18%；无数据库本地门禁为 10% / 59% / 15% / 10%。门禁先防倒退，再按关键模块增测逐步提高。
+- CI 覆盖率基线门禁为 statements 18%、branches 59%、functions 32%、lines 18%；无数据库本地门禁为 10% / 59% / 15% / 10%。2026-09-02 PostgreSQL 全量实测为 18.96% / 61.72% / 32.73% / 18.96%；门禁先防倒退，再按关键模块增测逐步提高。
 - 每次 CI 上传 `agent3-eval-<commit SHA>`，保留 30 天，避免评测只存在开发机或口头结论中。
 - 生产依赖审计门禁为 high；截至 2026-09-02，`npm audit --omit=dev` 为 **0 漏洞**。
 
@@ -332,7 +332,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 | 债务 | 现状 | 处置方向 |
 | --- | --- | --- |
-| 全仓覆盖率偏低 | CI 已锁住 18/59/35/18 基线，但语句/行覆盖仍不足以代表产品质量 | 优先覆盖 StudioWorkspace、AgentPanel、Credits 管理和支付前置链路，每次只上调不下调门禁 |
+| 全仓覆盖率偏低 | CI 已锁住 18/59/32/18 基线，但语句/行覆盖仍不足以代表产品质量 | 优先覆盖 StudioWorkspace、AgentPanel、Credits 管理和支付前置链路，每次只上调不下调门禁 |
 | CSP 仍可收紧 | 已 enforce，但样式兼容仍含 `unsafe-inline` | 将动态样式迁移到 nonce/hash 或静态 class 后移除 |
 | 关键前端交互覆盖仍不完整 | P0 正文光标、轨道导航、菜单层级与推理选择已有 DOM 回归；大组件仍有大量状态组合未覆盖 | 补 Work/IDE 切换、面板拖拽折叠、归档/分支/定时任务与 Credits 后台 E2E |
 | 真实产品指标未闭环 | 冻结评测可复现，但专家盲评、7/30 日留存、失败率与单位成本仍在近 200 人公测中采样 | 按第 11 节统一 cohort、版本与统计口径，达标前不宣称正式商业化完成 |

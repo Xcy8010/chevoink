@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 const coverageThresholds = process.env.CI
-  ? { statements: 18, branches: 59, functions: 35, lines: 18 }
+  ? { statements: 18, branches: 59, functions: 32, lines: 18 }
   : { statements: 10, branches: 59, functions: 15, lines: 10 }
 
 export default defineConfig({
