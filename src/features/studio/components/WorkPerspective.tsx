@@ -90,9 +90,8 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
     <aside className="h-full w-11 shrink-0 bg-transparent motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{conversationRail}</aside>
     <main
-      className="relative z-40 flex-1 overflow-visible bg-[var(--surface-default)] transition-[padding,min-width] duration-300 ease-out"
+      className="relative z-40 flex-1 overflow-visible bg-[var(--surface-default)] transition-[min-width] duration-300 ease-out"
       style={{
-        paddingLeft: showActivityDock && !rightOpen ? Math.max(0, Math.min(260, 296 + rightWidth - leftWidth)) : 0,
         minWidth: conversationMinWidth,
       }}
     >{conversation}</main>

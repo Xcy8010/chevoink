@@ -563,13 +563,17 @@ export function AgentPanel({
 
   // 聊天轨道的导航必须滚动本面板的消息容器，而不是交给浏览器猜测最近的滚动祖先。
   // 同时关闭贴底跟随，避免运行中的自动滚动把用户刚选择的历史轮次又拉回最新消息。
+  // 页面同时存在多个 AgentPanel 实例（如 IDE 侧栏常驻隐藏），消息 id 会跨实例撞车：
+  // getElementById 可能命中隐藏实例的元素，导致可见实例 contains 检查失败、导航静默失效。
+  // 因此必须在自己实例的容器内定位目标，且零高度容器（不可见实例）直接忽略。
   useEffect(() => {
     const handleConversationNavigate = (event: Event) => {
       const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
       if (!messageId) return
       const container = scrollRef.current
-      const target = document.getElementById(`agent-message-${messageId}`)
-      if (!container || !target || !container.contains(target)) return
+      if (!container || container.clientHeight === 0) return
+      const target = container.querySelector<HTMLElement>(`[id="agent-message-${messageId}"]`)
+      if (!target) return
       pinnedToBottomRef.current = false
       const containerRect = container.getBoundingClientRect()
       const targetRect = target.getBoundingClientRect()

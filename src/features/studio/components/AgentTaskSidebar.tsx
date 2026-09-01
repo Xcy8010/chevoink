@@ -80,13 +80,23 @@ export function AgentConversationRail({
         setActiveIndex(null)
         return
       }
+      // 页面同时存在多个 AgentPanel 实例（如 IDE 侧栏常驻隐藏），消息 id 会跨实例撞车，
+      // getElementById 可能命中隐藏实例（rect 全零）的元素；
+      // 必须取可见实例（有实际布局尺寸）的元素才能定位到正确的滚动容器
+      const findVisibleMessage = (messageId: string): HTMLElement | null => {
+        const candidates = document.querySelectorAll<HTMLElement>(`[id="agent-message-${messageId}"]`)
+        for (const item of candidates) {
+          if (item.getBoundingClientRect().height > 0) return item
+        }
+        return null
+      }
       // 每次都现找容器：轨道与消息流是兄弟列，从第一轮 user 消息元素向上定位滚动容器；
       // 会话切换/面板重挂载后无需重新绑定也能继续跟随
-      let candidate: HTMLElement | null = document.getElementById(`agent-message-${convs[0].userMessageId}`)
+      let candidate: HTMLElement | null = convs.length > 0 ? findVisibleMessage(convs[0].userMessageId) : null
       while (candidate && !/(auto|scroll)/.test(window.getComputedStyle(candidate).overflowY)) {
         candidate = candidate.parentElement
       }
-      if (!candidate) {
+      if (!candidate || candidate.clientHeight === 0) {
         setActiveIndex(null)
         return
       }
@@ -98,7 +108,7 @@ export function AgentConversationRail({
       const probe = candidate.getBoundingClientRect().top + candidate.clientHeight * 0.35
       let current: number | null = null
       for (let index = 0; index < convs.length; index += 1) {
-        const element = document.getElementById(`agent-message-${convs[index].userMessageId}`)
+        const element = findVisibleMessage(convs[index].userMessageId)
         if (!element) continue
         if (element.getBoundingClientRect().top > probe) break
         current = index
