@@ -2,7 +2,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台。**Chevoink Agent 3.0** 把题材研究、Story Charter、Skill OS、场景任务、长篇记忆、人类感质量门与版本化工具执行组织成一条可追踪创作流水线；读者可以在书城发现、追更、听书，社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。截至 **2026-09-02**，Agent 3.0 正在近 200 名用户参与的公开测试中。
+这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台。**Chevoink Agent 3.0** 把题材研究、Story Charter、Skill OS、场景任务、长篇记忆、人类感质量门与版本化工具执行组织成一条可追踪创作流水线；读者可以在书城发现、追更、听书，社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
 
 🌐 线上地址：<https://chevoink.chevolink.com>
 
@@ -25,6 +25,15 @@
   </tr>
 </table>
 
+**移动端**
+
+<table>
+  <tr>
+    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="移动端演示 1" width="420"><br>手机端首页与社区</td>
+    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="移动端演示 2" width="420"><br>手机端创作与阅读</td>
+  </tr>
+</table>
+
 ## 🤖 Chevoink Agent 3.0
 
 Agent 3.0 不是单次提示词生成器，而是围绕一部作品持续工作的有状态创作 Agent。它会先识别任务和作品阶段，再按需加载 2–3 个 Skill；需要调研时建立可缓存的 Research Dossier，需要写作时由 Story Compiler 把读者承诺、人物欲望、阻力、选择、代价与状态变化编译为场景任务；写后经过连续性与人类感质量检查，最后通过带 revision 的原子写入、ChangeSet 和事件流提交到工作区。
@@ -33,23 +42,34 @@ Agent 3.0 不是单次提示词生成器，而是围绕一部作品持续工作�
 
 ```mermaid
 flowchart TD
-  A[作者提示词 / 图片 / 文件 / 作品引用] --> B[上下文准备<br/>作品状态·章节·记忆·用户指令]
-  B --> C[两级 Skill Router<br/>确定性召回 + 语义裁决]
-  C --> D[按需加载 2–3 个 Skill<br/>版本锁定·权限过滤]
-  D --> E{任务类型}
-  E -->|新书/换题材/重大改卷| F[Research Dossier<br/>有预算·可缓存·有 TTL]
-  E -->|规划/写作/改稿| G[Story Compiler<br/>PREPARE → BEAT → WRITE]
-  E -->|检索/管理/导出| H[Agent Tool Loop]
-  F --> G
-  G --> I[连续性检查 + 人类感质量门<br/>证据化 finding·最多两轮局部修订]
-  H --> J[工具结果]
-  I --> J
-  J --> K{需要写入?}
-  K -->|否| L[SSE 流式回复与可回放轨迹]
-  K -->|是| M[revision 乐观锁 + ChangeSet<br/>原子写入·冲突不覆盖]
-  M --> L
-  L --> N[作者审阅 / 回滚 / 分支 / 发布]
-  N --> O[反馈、盲评与留存指标<br/>驱动下一轮质量迭代]
+  A[作者提示词 / 图片 / 文件 / 作品引用] --> B[任务与作品范围识别]
+  T[定时任务 / 子 Agent 触发] --> B
+  B --> C[上下文装配<br/>作品·卷章·记忆·当前光标·用户硬约束]
+  C --> C1[(会话·版本·记忆·用量)]
+  C --> D[权限与预算闸门<br/>网络·写入·发布·破坏性操作·Credits]
+  D --> E[两级 Skill Router<br/>确定性触发 + 语义裁决]
+  E --> F[按需加载 2–3 个 Skill<br/>版本锁定·正负触发·作用域过滤]
+  F --> F1[Style DNA / 合法技法检索<br/>只返回技法与统计特征，不回传原文]
+  F --> G{任务类型}
+  G -->|新书 / 换题材 / 事实依赖| H[Research Dossier<br/>搜索·深读·来源记录·缓存 TTL]
+  G -->|规划 / 写作 / 改稿 / 续写| I[Story Compiler<br/>Charter → Promise → Scene Task → Chapter Bridge]
+  G -->|检索 / 管理 / 导出| J[Agent Tool Loop<br/>98 个受治理工具·附件·封面·导出]
+  G -->|复杂协作 / 定时巡检| K[子 Agent / Schedule<br/>独立会话·预算·工具白名单·可取消]
+  H --> I
+  I --> L[模型执行<br/>流式思考·正文·工具参数]
+  J --> L
+  K --> L
+  L --> M[连续性 + 人类感 + 版权质量门<br/>证据化 finding·最多两轮局部修订]
+  M --> N{是否需要写入?}
+  N -->|否| O[整理答复与工具结果]
+  N -->|是| P[revision 乐观锁 + ChangeSet<br/>原子写入·回滚快照]
+  P -->|成功| O
+  P -->|版本冲突| Q[不覆盖新内容<br/>刷新上下文·请求重试或交给作者选择]
+  Q --> O
+  O --> R[SSE 流式回复<br/>事件持久化·断线续传·完整回放]
+  R --> S[作者审阅 / 回滚 / 分支 / 发布]
+  R --> U[Credits 与 AiUsageLog<br/>输入·输出·缓存 Token·工具次数·失败原因]
+  S --> V[反馈 / 盲评 / 留存 / 成本指标<br/>驱动 Skill、质量门与模型路由迭代]
 ```
 
 ### 系统架构
@@ -99,15 +119,6 @@ flowchart LR
 ```
 
 自动评测覆盖 24 个冻结中文网文场景、6 类题材、9 类任务和 12 类质量信号；CI 会保存带数据集 Hash、代码 SHA、模型与 Skill 版本的评测快照。自动指标用于回归定位，不能替代真实作者数据和至少三位目标题材读者/编辑的匿名盲评。
-
-**移动端**
-
-<table>
-  <tr>
-    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="移动端演示 1" width="420"><br>手机端首页与社区</td>
-    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="移动端演示 2" width="420"><br>手机端创作与阅读</td>
-  </tr>
-</table>
 
 ## 🧭 快速导航
 

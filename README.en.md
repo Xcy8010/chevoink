@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | **English**
 
-An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.0** organizes genre research, Story Charter, Skill OS, scene tasks, long-form memory, a human-quality gate, and versioned tool execution into one traceable creative workflow. Readers can discover, follow, listen to, and discuss books. The product is available on the web and as an Android app (Capacitor shell + in-app updates). As of **2026-09-02**, Agent 3.0 is in public beta with nearly 200 participants.
+An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.0** organizes genre research, Story Charter, Skill OS, scene tasks, long-form memory, a human-quality gate, and versioned tool execution into one traceable creative workflow. Readers can discover, follow, listen to, and discuss books. The product is available on the web and as an Android app (Capacitor shell + in-app updates).
 
 🌐 Live site: <https://chevoink.chevolink.com>
 
@@ -25,6 +25,15 @@ An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.
   </tr>
 </table>
 
+**Mobile**
+
+<table>
+  <tr>
+    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="Mobile demo 1" width="420"><br>Home & community</td>
+    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="Mobile demo 2" width="420"><br>Studio & reading</td>
+  </tr>
+</table>
+
 ## 🤖 Chevoink Agent 3.0
 
 Agent 3.0 is a stateful creative agent that keeps working with one novel rather than a one-shot prompt generator. It identifies the task and story phase, loads two or three relevant Skills on demand, builds a cacheable Research Dossier when research is justified, and uses the Story Compiler to turn reader promises, character desires, obstacles, choices, costs, and state transitions into a scene task. Continuity and human-quality checks run before a revision-guarded atomic write, ChangeSet, and durable event stream commit the result to the workspace.
@@ -33,23 +42,34 @@ Agent 3.0 is a stateful creative agent that keeps working with one novel rather 
 
 ```mermaid
 flowchart TD
-  A[Author prompt / images / files / work references] --> B[Context preparation<br/>story state·chapters·memory·directives]
-  B --> C[Two-stage Skill Router<br/>deterministic recall + semantic decision]
-  C --> D[Load 2–3 Skills on demand<br/>version lock·permission filtering]
-  D --> E{Task type}
-  E -->|New book / genre shift / major arc| F[Research Dossier<br/>budgeted·cached·TTL]
-  E -->|Plan / draft / revise| G[Story Compiler<br/>PREPARE → BEAT → WRITE]
-  E -->|Search / manage / export| H[Agent Tool Loop]
-  F --> G
-  G --> I[Continuity + human-quality gate<br/>evidence findings·up to two local repairs]
-  H --> J[Tool result]
-  I --> J
-  J --> K{Write required?}
-  K -->|No| L[SSE response and replayable trace]
-  K -->|Yes| M[revision lock + ChangeSet<br/>atomic write·no silent overwrite]
-  M --> L
-  L --> N[Author review / rollback / branch / publish]
-  N --> O[Feedback, blind review, and retention metrics]
+  A[Author prompt / images / files / work references] --> B[Task and work-scope identification]
+  T[Scheduled task / subagent trigger] --> B
+  B --> C[Context assembly<br/>work·volumes·chapters·memory·caret·directives]
+  C --> C1[(sessions·versions·memory·usage)]
+  C --> D[Permission and budget gate<br/>network·writes·publish·destructive ops·Credits]
+  D --> E[Two-stage Skill Router<br/>deterministic trigger + semantic decision]
+  E --> F[Load 2–3 Skills on demand<br/>version lock·positive/negative triggers·scope filter]
+  F --> F1[Style DNA / rights-cleared craft retrieval<br/>techniques and statistics, never source prose]
+  F --> G{Task type}
+  G -->|New book / genre shift / factual dependency| H[Research Dossier<br/>search·deep-read·provenance·cached TTL]
+  G -->|Plan / draft / revise / continue| I[Story Compiler<br/>Charter → Promise → Scene Task → Chapter Bridge]
+  G -->|Search / manage / export| J[Agent Tool Loop<br/>98 governed tools·attachments·covers·exports]
+  G -->|Complex collaboration / scheduled check| K[Subagent / Schedule<br/>isolated session·budget·allowlist·cancellable]
+  H --> I
+  I --> L[Model execution<br/>streaming reasoning·text·tool arguments]
+  J --> L
+  K --> L
+  L --> M[Continuity + human-quality + copyright gate<br/>evidence findings·up to two local repairs]
+  M --> N{Write required?}
+  N -->|No| O[Assemble response and tool results]
+  N -->|Yes| P[revision lock + ChangeSet<br/>atomic write·rollback snapshot]
+  P -->|Success| O
+  P -->|Conflict| Q[Do not overwrite newer text<br/>refresh context·retry or ask author]
+  Q --> O
+  O --> R[SSE response<br/>persisted events·resume·full replay]
+  R --> S[Author review / rollback / branch / publish]
+  R --> U[Credits and AiUsageLog<br/>input·output·cached tokens·tool counts·failures]
+  S --> V[Feedback / blind review / retention / cost metrics<br/>iterate Skills, quality gates, and routing]
 ```
 
 ### System architecture
@@ -99,15 +119,6 @@ flowchart LR
 ```
 
 The deterministic evaluation suite freezes 24 Chinese web-fiction scenarios across six genres, nine task classes, and twelve quality signals. CI stores a report carrying the dataset hash, code SHA, model, and Skill version. Automated metrics diagnose regressions; they do not replace real author outcomes or anonymous review by at least three target-genre readers/editors.
-
-**Mobile**
-
-<table>
-  <tr>
-    <td align="center"><img src="public/MOBILEdemo1.jpg" alt="Mobile demo 1" width="420"><br>Home & community</td>
-    <td align="center"><img src="public/MOBILEdemo2.jpg" alt="Mobile demo 2" width="420"><br>Studio & reading</td>
-  </tr>
-</table>
 
 ## 🧭 Quick Navigation
 
