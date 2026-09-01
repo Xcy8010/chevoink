@@ -39,6 +39,12 @@ export function AgentConversationRail({
   // 跟随滚动：高亮当前视口所在的轮次（贴底=最新轮），而不是固定高亮最后一条
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   const scrollFrameRef = useRef(0)
+  // 测量函数与最新 conversations 都走 ref：滚动监听只在挂载时绑定一次。
+  // 历史消息是异步渲染的（面板先显示 loading 再出列表），若在 effect 运行瞬间才找容器并绑定监听，
+  // 遇到元素尚未挂载就会把监听永久丢掉——轨道从此卡在回退位置（永远高亮最后一轮），
+  // 这正是“滚动聊天记录时轨道不跟随”的根因；改为每次滚动现找容器后彻底免疫时序问题。
+  const measureRef = useRef<() => void>(() => {})
+  const conversationsRef = useRef(conversations)
   useEffect(() => {
     if (preview) lastPreviewRef.current = preview
   }, [preview])
@@ -60,51 +66,64 @@ export function AgentConversationRail({
   }, [])
 
   useEffect(() => {
-    if (conversations.length === 0) {
-      setActiveIndex(null)
-      return
-    }
-    // 轨道与消息流是兄弟列，不能从轨道自身向上找：用第一轮 user 消息元素定位消息滚动容器
-    let candidate: HTMLElement | null = document.getElementById(`agent-message-${conversations[0].userMessageId}`)
-    while (candidate && !/(auto|scroll)/.test(window.getComputedStyle(candidate).overflowY)) {
-      candidate = candidate.parentElement
-    }
-    if (!candidate) {
-      setActiveIndex(null)
-      return
-    }
-    const container = candidate
+    conversationsRef.current = conversations
+    // 会话切换/历史载入完成/流式新轮次后主动校准一次；下一帧执行避免读到未完成的布局
+    if (scrollFrameRef.current) window.cancelAnimationFrame(scrollFrameRef.current)
+    scrollFrameRef.current = window.requestAnimationFrame(() => measureRef.current())
+  }, [conversations])
 
+  useEffect(() => {
     const measure = () => {
       scrollFrameRef.current = 0
-      // 贴底时跟随最新轮；否则以视口 35% 高度处的探针线定位当前轮次（消息在文档流中单调递增，可提前 break）
-      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 4) {
-        setActiveIndex(conversations.length - 1)
+      const convs = conversationsRef.current
+      if (convs.length === 0) {
+        setActiveIndex(null)
         return
       }
-      const probe = container.getBoundingClientRect().top + container.clientHeight * 0.35
+      // 每次都现找容器：轨道与消息流是兄弟列，从第一轮 user 消息元素向上定位滚动容器；
+      // 会话切换/面板重挂载后无需重新绑定也能继续跟随
+      let candidate: HTMLElement | null = document.getElementById(`agent-message-${convs[0].userMessageId}`)
+      while (candidate && !/(auto|scroll)/.test(window.getComputedStyle(candidate).overflowY)) {
+        candidate = candidate.parentElement
+      }
+      if (!candidate) {
+        setActiveIndex(null)
+        return
+      }
+      // 贴底时跟随最新轮；否则以视口 35% 高度处的探针线定位当前轮次（消息在文档流中单调递增，可提前 break）
+      if (candidate.scrollTop + candidate.clientHeight >= candidate.scrollHeight - 4) {
+        setActiveIndex(convs.length - 1)
+        return
+      }
+      const probe = candidate.getBoundingClientRect().top + candidate.clientHeight * 0.35
       let current: number | null = null
-      for (let index = 0; index < conversations.length; index += 1) {
-        const element = document.getElementById(`agent-message-${conversations[index].userMessageId}`)
+      for (let index = 0; index < convs.length; index += 1) {
+        const element = document.getElementById(`agent-message-${convs[index].userMessageId}`)
         if (!element) continue
         if (element.getBoundingClientRect().top > probe) break
         current = index
       }
       setActiveIndex(current)
     }
+    measureRef.current = measure
 
-    const onScroll = () => {
+    const request = () => {
       if (scrollFrameRef.current) return
       scrollFrameRef.current = window.requestAnimationFrame(measure)
     }
-
+    // scroll 不冒泡：capture 监听 document 才能收到任意容器的滚动；
+    // 消息流容器可能晚于本组件挂载，按容器绑定监听会错过首次出现的时机
+    document.addEventListener('scroll', request, { capture: true, passive: true })
+    window.addEventListener('resize', request)
     measure()
-    container.addEventListener('scroll', onScroll, { passive: true })
     return () => {
-      container.removeEventListener('scroll', onScroll)
+      document.removeEventListener('scroll', request, { capture: true })
+      window.removeEventListener('resize', request)
       if (scrollFrameRef.current) window.cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = 0
+      measureRef.current = () => {}
     }
-  }, [conversations])
+  }, [])
 
   const showPreview = (conversation: AgentConversationRailItem, element: HTMLButtonElement) => {
     const root = rootRef.current

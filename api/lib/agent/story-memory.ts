@@ -521,7 +521,8 @@ async function buildMemoryGraphOnce(
         const raw = await generateTextCompletion(
           system,
           user,
-          { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low' },
+          // 基础模型档：后台轻任务与用户侧体验档位解耦，未配置时自动回退极速
+          { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low', modelTier: 'basic' },
         )
         return aiGraphEnvelopeSchema.parse(parseJsonObject(raw))
       } catch (error) {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BookOpenText, Crosshair, ExternalLink, FilePlus2, FolderDown, FolderPlus, GitBranch, Home, ImagePlus, MoreHorizontal, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, PencilLine, Pin, Settings2, Trash2, Upload } from 'lucide-react'
+import { BookOpenText, Crosshair, ExternalLink, FilePlus2, FolderDown, FolderPlus, Home, ImagePlus, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, Settings2, Trash2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
@@ -33,17 +33,12 @@ type Props = {
   previewHref?: string
   detailPreviewHref?: string
   published?: boolean
-  activeTaskTitle?: string | null
-  activeTaskCanPersist?: boolean
-  onPinTask?: () => void
-  onRenameTask?: (title: string) => void
-  onOpenBranches?: () => void
 }
 
-type StudioMenuKey = 'task' | 'novel' | 'view' | 'design' | 'publish' | 'export'
+type StudioMenuKey = 'novel' | 'view' | 'design' | 'publish' | 'export'
 
-/** 参考 Codex 顶栏：菜单名最多两个字，点击展开操作卡片 */
-const STUDIO_MENUS: { key: Exclude<StudioMenuKey, 'task'>; label: string }[] = [
+/** 参考 Codex 顶栏：菜单名最多两个字，点击展开操作卡片。任务「更多」按钮归 Agent 面板顶栏，不在此列 */
+const STUDIO_MENUS: { key: StudioMenuKey; label: string }[] = [
   { key: 'novel', label: '作品' },
   { key: 'view', label: '查看' },
   { key: 'design', label: '设计' },
@@ -57,8 +52,6 @@ export default function StudioCommandBar(props: Props) {
   const autoFollow = useAgentStore((state) => state.autoFollow)
   const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   const [openMenu, setOpenMenu] = useState<StudioMenuKey | null>(null)
-  const [renamingTask, setRenamingTask] = useState(false)
-  const [taskTitleDraft, setTaskTitleDraft] = useState('')
   const menuRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!openMenu) return
@@ -75,7 +68,7 @@ export default function StudioCommandBar(props: Props) {
   )
   const publishLabel = props.published ? '更新发布' : '发布'
 
-  function renderStudioMenuBody(key: Exclude<StudioMenuKey, 'task'>) {
+  function renderStudioMenuBody(key: StudioMenuKey) {
     switch (key) {
       case 'novel':
         return <>
@@ -120,17 +113,8 @@ export default function StudioCommandBar(props: Props) {
         {([{ key: 'work' as const, label: 'Work', icon: BookOpenText }, { key: 'ide' as const, label: 'IDE', icon: PenLine }]).map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => props.onPerspectiveChange(key)} aria-pressed={props.perspective === key} className={cn('relative inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-200', props.perspective === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]')}><Icon className="h-3.5 w-3.5" />{label}</button>)}
       </div> : null}
       {props.workspaceControls !== false && props.perspectiveSwitchEnabled ? <div className="h-5 w-px bg-[var(--border-subtle)]" /> : null}
-      {/* 任务标题展示已移至 Agent 面板顶栏；菜单区随之左移补位 */}
-      {/* 菜单区：任务三点 + 顶栏菜单（参考 Codex 的文件/视图/帮助）；菜单名最多两个字 */}
+      {/* 任务标题与其「更多」按钮已移至 Agent 面板顶栏：它只作用于当前任务，与顶栏全局菜单无关 */}
       <div ref={menuRef} className="flex shrink-0 items-center gap-0.5">
-        <div className="relative">
-          <button type="button" onClick={() => toggleMenu('task')} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="任务操作" aria-expanded={openMenu === 'task'}><MoreHorizontal className="h-4 w-4" /></button>
-          {renderDropdown('task', 'w-52', <>
-            {props.onPinTask ? <button type="button" disabled={!props.activeTaskCanPersist} className={item} onClick={() => { closeMenu(); props.onPinTask?.() }}><Pin className="h-3.5 w-3.5" />置顶当前任务</button> : null}
-            {props.onRenameTask ? <button type="button" className={item} onClick={() => { setTaskTitleDraft(props.activeTaskTitle?.trim() || '新任务'); setRenamingTask(true); closeMenu() }}><PencilLine className="h-3.5 w-3.5" />编辑任务名称</button> : null}
-            {props.onOpenBranches ? <button type="button" className={item} onClick={() => { closeMenu(); props.onOpenBranches?.() }}><GitBranch className="h-3.5 w-3.5" />创建分支与版本</button> : null}
-          </>)}
-        </div>
         <div className="hidden items-center gap-0.5 md:flex">
           {STUDIO_MENUS.map(({ key, label }) => (
             <div key={key} className="relative">
@@ -163,7 +147,6 @@ export default function StudioCommandBar(props: Props) {
         {/* 发布/预览已收进顶栏「发布」「查看」菜单；最右侧返回首页保持不变 */}
         <Link to="/" className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">返回首页</span></Link>
       </div>
-      {renamingTask ? <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/25 p-4" onMouseDown={() => setRenamingTask(false)}><form onSubmit={(event) => { event.preventDefault(); if (taskTitleDraft.trim()) props.onRenameTask?.(taskTitleDraft.trim()); setRenamingTask(false) }} onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-md rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-5 shadow-2xl"><h2 className="text-sm font-semibold">编辑任务名称</h2><input autoFocus maxLength={160} value={taskTitleDraft} onChange={(event) => setTaskTitleDraft(event.target.value)} className="mt-4 h-10 w-full rounded-[9px] border border-[var(--border-subtle)] bg-transparent px-3 text-sm outline-none focus:border-[var(--border-strong)]" /><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setRenamingTask(false)} className="h-9 rounded-[9px] px-3 text-xs hover:bg-[var(--surface-muted)]">取消</button><button type="submit" disabled={!taskTitleDraft.trim()} className="h-9 rounded-[9px] bg-[var(--surface-contrast)] px-4 text-xs font-medium text-[var(--text-contrast)] disabled:opacity-45">保存</button></div></form></div> : null}
     </header>
   )
 }

@@ -5,9 +5,13 @@ import {
   CircleAlert,
   Copy,
   FileText,
+  GitBranch,
   History,
   LoaderCircle,
+  MoreHorizontal,
   Pencil,
+  PencilLine,
+  Pin,
   RotateCcw,
   SlidersHorizontal,
   SquarePen,
@@ -106,6 +110,10 @@ type AgentPanelProps = {
   taskTitle?: string | null
   /** 任务标题下方副标题：作品名 · 视角，与原顶栏任务展示一致。 */
   taskSubtitle?: string | null
+  /** 任务「更多」菜单：置顶/重命名/分支，紧随任务标题展示（原 StudioCommandBar 任务三点按钮迁入）。 */
+  onPinTask?: () => void
+  onRenameTask?: (title: string) => void
+  onOpenBranches?: () => void
   /** Work 桌面端由全局任务顶栏承载标题与操作，避免重复出现第二条 Agent 顶栏。 */
   hideHeader?: boolean
   /** “+”菜单可直接选择的目录/计划/章节；章节正文由输入框按需读取。 */
@@ -140,6 +148,9 @@ export function AgentPanel({
   mobileIntegratedHeader = false,
   taskTitle,
   taskSubtitle,
+  onPinTask,
+  onRenameTask,
+  onOpenBranches,
   hideHeader = false,
   showCreditWarning = false,
   showEmptySuggestions = true,
@@ -164,6 +175,17 @@ export function AgentPanel({
 
   const [historyLoading, setHistoryLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // 任务「更多」菜单与重命名弹窗（原 StudioCommandBar 任务三点按钮迁入）
+  const [taskMenuOpen, setTaskMenuOpen] = useState(false)
+  const [taskRenaming, setTaskRenaming] = useState(false)
+  const [taskTitleDraft, setTaskTitleDraft] = useState('')
+  const taskMenuRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!taskMenuOpen) return
+    const close = (event: MouseEvent) => { if (!taskMenuRef.current?.contains(event.target as Node)) setTaskMenuOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [taskMenuOpen])
   const [creativeFreedom, setCreativeFreedom] = useState<CreativeFreedom>(() => {
     if (typeof window === 'undefined') return 'balanced'
     const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
@@ -870,10 +892,21 @@ export function AgentPanel({
             <span className="min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">Chevoink Agent</span>
           </>
         ) : (
-          // 桌面端顶栏承接原 StudioCommandBar 的任务标题展示（border-l 样式保持一致）
-          <div className="min-w-0 max-w-[360px] border-l-2 border-[var(--text-primary)] pl-2.5">
-            <p className="truncate text-[13px] font-medium leading-4 text-[var(--text-primary)]">{taskTitle?.trim() || '新任务'}</p>
-            {taskSubtitle ? <p className="mt-0.5 truncate text-[10px] leading-3 text-[var(--text-tertiary)]">{taskSubtitle}</p> : null}
+          // 桌面端顶栏承接原 StudioCommandBar 的任务标题展示（border-l 样式保持一致）；
+          // 「更多」按钮紧随标题块：它只作用于当前任务，与顶栏全局菜单无关
+          <div className="flex min-w-0 items-center gap-1">
+            <div className="min-w-0 max-w-[360px] border-l-2 border-[var(--text-primary)] pl-2.5">
+              <p className="truncate text-[13px] font-medium leading-4 text-[var(--text-primary)]">{taskTitle?.trim() || '新任务'}</p>
+              {taskSubtitle ? <p className="mt-0.5 truncate text-[10px] leading-3 text-[var(--text-tertiary)]">{taskSubtitle}</p> : null}
+            </div>
+            {onPinTask || onRenameTask || onOpenBranches ? <div ref={taskMenuRef} className="relative shrink-0">
+              <button type="button" onClick={() => setTaskMenuOpen((value) => !value)} className="inline-flex h-7 w-7 items-center justify-center rounded-[8px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="任务操作" aria-expanded={taskMenuOpen}><MoreHorizontal className="h-4 w-4" /></button>
+              {taskMenuOpen ? <div className="absolute left-0 top-[calc(100%+7px)] z-50 w-52 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1 shadow-[0_18px_50px_rgba(15,23,42,.18)] motion-safe:origin-top-left motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(.2,.8,.2,1)]">
+                {onPinTask ? <button type="button" disabled={!sessionId} className="flex min-h-9 w-full items-center gap-2 px-2.5 text-left text-xs text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-45" onClick={() => { setTaskMenuOpen(false); onPinTask() }}><Pin className="h-3.5 w-3.5" />置顶当前任务</button> : null}
+                {onRenameTask ? <button type="button" className="flex min-h-9 w-full items-center gap-2 px-2.5 text-left text-xs text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]" onClick={() => { setTaskTitleDraft(taskTitle?.trim() || '新任务'); setTaskRenaming(true); setTaskMenuOpen(false) }}><PencilLine className="h-3.5 w-3.5" />编辑任务名称</button> : null}
+                {onOpenBranches ? <button type="button" className="flex min-h-9 w-full items-center gap-2 px-2.5 text-left text-xs text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]" onClick={() => { setTaskMenuOpen(false); onOpenBranches() }}><GitBranch className="h-3.5 w-3.5" />创建分支与版本</button> : null}
+              </div> : null}
+            </div> : null}
           </div>
         )}
         {phase !== 'idle' ? (
@@ -1342,6 +1375,8 @@ export function AgentPanel({
         onCopy={() => void copyInviteLink()}
         onClose={() => { autoCopyInviteRef.current = false; setInviteDialogOpen(false) }}
       />
+      {/* 任务重命名弹窗（原 StudioCommandBar 任务三点菜单迁入） */}
+      {taskRenaming ? <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/25 p-4" onMouseDown={() => setTaskRenaming(false)}><form onSubmit={(event) => { event.preventDefault(); if (taskTitleDraft.trim()) onRenameTask?.(taskTitleDraft.trim()); setTaskRenaming(false) }} onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-md rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-5 shadow-2xl"><h2 className="text-sm font-semibold">编辑任务名称</h2><input autoFocus maxLength={160} value={taskTitleDraft} onChange={(event) => setTaskTitleDraft(event.target.value)} className="mt-4 h-10 w-full rounded-[9px] border border-[var(--border-subtle)] bg-transparent px-3 text-sm outline-none focus:border-[var(--border-strong)]" /><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setTaskRenaming(false)} className="h-9 rounded-[9px] px-3 text-xs hover:bg-[var(--surface-muted)]">取消</button><button type="submit" disabled={!taskTitleDraft.trim()} className="h-9 rounded-[9px] bg-[var(--surface-contrast)] px-4 text-xs font-medium text-[var(--text-contrast)] disabled:opacity-45">保存</button></div></form></div> : null}
     </div>
   )
 }

@@ -29,7 +29,7 @@ import { buildStoryCompilerDigest } from './story-compiler.js'
  */
 
 const MODEL_IDENTITY_LABELS: Record<CreditModelTier, string> = {
-  speed: '极速模型', standard: '标准模型', performance: '性能模型', ultimate: '极致模型', custom: '自定义模型',
+  speed: '极速模型', standard: '标准模型', performance: '性能模型', ultimate: '极致模型', basic: '基础模型', custom: '自定义模型',
 }
 
 export function buildAgentIdentityPrompt(modelTier: CreditModelTier): string {

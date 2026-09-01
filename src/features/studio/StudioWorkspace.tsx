@@ -4049,6 +4049,15 @@ export default function StudioWorkspace() {
           mobileIntegratedHeader={mobileIntegratedHeader}
           taskTitle={activeAgentTaskWindow?.title ?? null}
           taskSubtitle={`${novelTitle} · ${workspacePerspective === 'work' ? 'Work 创作' : 'IDE 写作'}`}
+          // 任务「更多」菜单：紧随 Agent 面板顶栏的任务标题展示，仅作用于当前任务
+          onPinTask={() => {
+            if (!activeAgentTaskWindow?.sessionId) return
+            void updateAgentSessionSettings(activeAgentTaskWindow.sessionId, { pinned: true }).then(() => queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] }))
+          }}
+          onRenameTask={(title) => {
+            if (activeAgentTaskWindow) void handleRenameAgentTaskWindow(activeAgentTaskWindow.id, title)
+          }}
+          onOpenBranches={() => { setStudioSettingsSection('operations'); setStudioSettingsOpen(true) }}
           showCreditWarning={showCreditWarning}
           showEmptySuggestions={workspacePerspective === 'work'}
           hideHeader={false}
@@ -4495,16 +4504,6 @@ export default function StudioWorkspace() {
             previewHref={previewHref}
             detailPreviewHref={detailPreviewHref}
             published={novelForm?.status === 'published'}
-            activeTaskTitle={activeAgentTaskWindow?.title ?? null}
-            activeTaskCanPersist={Boolean(activeAgentTaskWindow?.sessionId)}
-            onPinTask={() => {
-              if (!activeAgentTaskWindow?.sessionId) return
-              void updateAgentSessionSettings(activeAgentTaskWindow.sessionId, { pinned: true }).then(() => queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] }))
-            }}
-            onRenameTask={(title) => {
-              if (activeAgentTaskWindow) void handleRenameAgentTaskWindow(activeAgentTaskWindow.id, title)
-            }}
-            onOpenBranches={() => { setStudioSettingsSection('operations'); setStudioSettingsOpen(true) }}
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">

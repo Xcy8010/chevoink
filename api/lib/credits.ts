@@ -275,9 +275,15 @@ export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userI
   if (!config) {
     const configuredModels = await prisma.aiModelConfig.count({ where: { ownerUserId: null } })
     if (tier === 'speed' && configuredModels === 0) return { tier, multiplierBps: 10000, provider: 'deepseek', modelName: null, baseUrl: null, apiKey: null, reasoningEffort: requestedReasoningEffort ?? 'high', reasoningEfforts: ['low', 'high', 'max'], visionEnabled: false }
+    // 基础模型档未建行/未启用时回退极速档：后台轻任务（关系网/导出建议）不因可选配置缺失而整体失败
+    if (tier === 'basic') return getModelTierRuntime('speed', userId, customModelId, requestedReasoningEffort ?? 'low')
     throw new DataAccessError(409, 'MODEL_TIER_UNAVAILABLE', '该模型档位尚未开放。')
   }
-  if (!isConfiguredBuiltIn(config)) throw new DataAccessError(409, 'MODEL_TIER_UNAVAILABLE', '该模型档位尚未完成服务配置。')
+  if (!isConfiguredBuiltIn(config)) {
+    // 基础模型档存在但服务配置不完整时同样回退极速档；回退后计费也按极速档记录
+    if (tier === 'basic') return getModelTierRuntime('speed', userId, customModelId, requestedReasoningEffort ?? 'low')
+    throw new DataAccessError(409, 'MODEL_TIER_UNAVAILABLE', '该模型档位尚未完成服务配置。')
+  }
   const capabilities = parseModelCapabilities(config.metadata, config.provider)
   const reasoningEffort = requestedReasoningEffort ?? capabilities.defaultReasoningEffort
   if (!capabilities.reasoningEfforts.includes(reasoningEffort)) throw new DataAccessError(400, 'REASONING_EFFORT_UNSUPPORTED', '该模型不支持所选推理强度。')

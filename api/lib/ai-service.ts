@@ -802,6 +802,8 @@ export async function generatePublishAdviceData(
     targetType: 'publishAdvice',
     temperature: 0.3,
     reasoningEffort: 'low',
+    // 基础模型档：后台轻任务与用户侧体验档位解耦，未配置时自动回退极速
+    modelTier: 'basic',
   })
 
   return sanitizePublishAdvice(extractJsonObject(content))
