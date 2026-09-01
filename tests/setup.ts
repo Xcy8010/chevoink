@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { config } from 'dotenv'
-import { fileURLToPath } from 'node:url'
 
 /**
  * 测试隔离三重闸（之一：库守卫）：
@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url'
  * 文件不存在 —— 就地注入最小可用环境（??= 不覆盖外部已设值），让纯单测无需任何配置即可全绿；
  * 库指向本地 chevoink_test（含 test 过守卫），本地无 DB 时集成组由 skipIf 自动降级。
  */
-const envTestPath = fileURLToPath(new URL('./.env.test', import.meta.url))
+// jsdom 会把 import.meta.url 映射成浏览器 URL；从仓库根解析可让 node/jsdom 两种环境共用守卫。
+const envTestPath = resolve(process.cwd(), 'tests/.env.test')
 
 if (!existsSync(envTestPath)) {
   process.env.APP_ENV ??= 'test'

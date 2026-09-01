@@ -2,9 +2,9 @@
 
 > 本文档统一汇总系统架构、关键技术决策、测试与 CI、部署方案、性能数据、安全策略与风险取舍、技术债务及演进计划。
 > 全部内容基于当前仓库代码与 `plan/` 目录内的真实方案文档，随工程演进持续更新。
-> `plan/00`–`plan/20` 为已落地阶段的真实规划快照，`plan/21` 为当前 2.0 实施方案；历史路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
+> `plan/00`–`plan/22` 为已落地阶段的真实规划快照，`plan/23` 是 Agent 3.0 的产品与评测基线；历史路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
 >
-> 最近更新：2026-08-26
+> 最近更新：2026-09-02。Agent 3.0 已进入近 200 人公测，工程能力已冻结，真实盲评、留存与商业化指标仍按第 11 节门禁持续采样。
 
 ## 目录
 
@@ -17,6 +17,8 @@
 7. [技术债务](#7-技术债务)
 8. [演进计划](#8-演进计划)
 9. [plan/ 方案文档索引](#9-plan-方案文档索引)
+10. [推荐系统落地记录](#10-推荐系统落地记录推荐算法优化方案)
+11. [Agent 3.0 正式发布门禁](#11-agent-30-正式发布门禁)
 
 ---
 
@@ -40,7 +42,7 @@
         │ 静态 dist/                    │ /api 反向代理
 ┌───────▼───────┐          ┌───────────▼────────────────────────┐
 │  Vite 构建产物 │          │  Express 4（PM2: chevoink-api）     │
-│  按路由分包    │          │  api/routes/*：13 个路由模块        │
+│  按路由分包    │          │  api/routes/*：16 个路由模块        │
 └───────────────┘          │  auth/novels/comments/posts/topics/ │
                            │  conversations/users/home/search/   │
                            │  meta/ai/agent/admin                │
@@ -49,12 +51,12 @@
                            │  ├── data/      数据访问层           │
                            │  ├── agent/     写作 Agent 引擎      │
                            │  │   loop 调度内核 + run-service +   │
-                           │  │   32 个工具 + 权限守卫 + 知识集    │
+                           │  │   98 个工具 + 权限守卫 + Skill OS  │
                            │  └── auth-session / 限流 / 审计      │
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
-                           │ PostgreSQL 16（29 张表 · 26 次迁移） │
+                           │ PostgreSQL 16（85 张表 · 48 次迁移） │
                            └─────────────────────────────────────┘
 ```
 
@@ -69,16 +71,16 @@
 | `src/features/discover` / `home` / `search` / `novel-detail` / `profile` | 发现流、详情页、个人中心 |
 | `src/features/admin` | 管理后台（数据看板、用户/作品/内容治理） |
 
-前后端通过 `shared/contracts/` 共享类型契约（含 Agent SSE 事件结构以及 Agent 2.0 的 `TaskSpec`、`ChangeSet`、`Volume`、`MemoryEvidence` 冻结契约），编译期即可发现接口失配。
+前后端通过 `shared/contracts/` 共享类型契约（含 Agent SSE 事件、`TaskSpec` / `ChangeSet`、Story Compiler、Skill、质量评估与 Agent 3.0 评测契约），编译期即可发现接口失配。
 
 ### 1.3 后端结构（api/）
 
-- **路由层** `api/routes/`：13 个路由模块，统一经 `parseBody` + zod schema 校验入参，统一 `{ success, data }` / `{ code, message }` 错误响应结构。
+- **路由层** `api/routes/`：16 个路由模块，统一经 `parseBody` + zod schema 校验入参，统一 `{ success, data }` / `{ code, message }` 错误响应结构。
 - **数据层** `api/lib/data/`：Prisma 访问封装，数据层兜底校验（如隐私级别 enum 兜底）。
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
   - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
-  - `tools/`：32 个注册工具（清单见 [1.5](#15-agent-工具清单32-个)），按依赖拆分为 chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export 十一组文件；`governance.ts` 冻结每个工具的风险分类与后置条件；
+  - `tools/`：98 个注册工具（见 [1.5](#15-agent-30-工具与运行管线98-个)），覆盖读写、调研、Skill、Story Compiler、质量治理、子 Agent、版本与定时任务；`governance.ts` 冻结每个工具的风险分类与后置条件；
   - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次 / 站内搜索 5 次 / 站内深读 8 次每 run）；
   - `knowledge/` + `skills/`：写作知识与操作知识集（对应 `plan/14` 幻觉治理方案）。
 
@@ -102,24 +104,20 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 前端消息分部模型 `AgentMessagePart`（text / reasoning / tool-call / attachment）由上述事件构建，写操作工具额外携带回滚快照（仅服务端持久化，消息列表接口返回前剥离），支撑「对话内一键回退」。
 
-### 1.5 Agent 工具清单（32 个）
+### 1.5 Agent 3.0 工具与运行管线（98 个）
 
-| 分组 | 工具 | 说明 |
-| --- | --- | --- |
-| 读（5） | novelGetContext · chapterRead · chapterListSummaries · memorySearch · planRead | 作品上下文、章节内容、跨会话记忆、计划工件 |
-| 调研（2） | webSearch · webRead | 博查为主的多级降级搜索；网页深读带 SSRF 防护 |
-| 站内参考（2） | platformNovelSearch · platformNovelRead | 按书名/标签/题材关键词定位站内已上架作品与本人未公开作品；读介绍/分类/章节正文，可见性硬闸在 DB where 层；类似作品走特征词检索+简介对比，站内无果降级联网搜索 |
-| 附件（2） | viewImage · readFile | GLM-4.1V 视觉旁路看图；pdf/docx/txt/md 读取 |
-| 导出（1） | novelExport | 一键导出作品 zip（规划/目录/章节/作品信息以及发布建议），只读免审批；支持章节子集与四类内容裁剪；产物存内存仓库（TTL 15 分钟）供前端下载卡片拉取 |
-| 章节写（5） | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | revision 原子冲突检测 + 409 语义 + 回滚快照 |
-| 作品管理（2） | novelRename · novelUpdateMeta | 书名与元信息更新 |
-| 计划工件（3） | planSave · planRename · planDelete | 大纲计划的保存/重命名/删除 |
-| 封面（3） | coverPromptSet · coverGenerate · coverApply | 提示词、生成、应用落盘 |
-| 高危（3） | novelPublish · novelArchive · novelDelete | 发布/下架/删除，权限守卫最严级别 |
-| 记忆与交互（3） | memorySave · todoWrite · askUser | 跨会话偏好记忆、待办自驱、向用户提问（每 run 3 次预算） |
-| 收尾（1） | planExit | 退出计划编辑态 |
+工具注册表统一出口 `api/lib/agent/tools/registry.ts`。98 个工具按能力域组织，而不是把模型暴露给无边界的“万能写入”：
 
-工具注册表统一出口 `api/lib/agent/tools/registry.ts`，name/description/参数 schema 逐字稳定（schema 即模型可见契约，改动等同行为变化）。
+- **作品读写与版本**：作品/章节/计划、局部改写、导出、分支、回滚与 revision 冲突保护；
+- **调研与附件**：站内检索、联网搜索与深读、图片理解、文档读取、Research Dossier；
+- **Story Compiler**：创作宪章、读者承诺、场景任务、章节桥接、人物与关系记忆；
+- **Skill OS 与文笔治理**：私有/共享技能的草稿、正负测试、发布、安装、确定性召回、Style DNA 与合法文笔库；
+- **质量与评测**：质量报告、问题项、反馈、前三章试制、冻结场景评测与盲评候选；
+- **自主协作**：待办、向用户提问、子 Agent、定时任务、权限沙箱与预算控制。
+
+`name`、`description` 与参数 schema 是模型可见契约；任何改动都视为行为变更，并由治理完整性测试保证每个工具都有风险级别与后置条件。
+
+一次 Agent 3.0 运行遵循固定管线：任务结构化 → 权限/预算过滤 → 作品上下文与技能确定性召回 → 研究/规划/写作工具执行 → revision 与回滚保护 → 质量门 → SSE 持久化与 Credits 记账。模型不能绕过服务端工具白名单直接修改正文。
 
 ### 1.5.1 作品技能与共享安装
 
@@ -131,14 +129,15 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 1.6 数据模型概览（prisma/schema.prisma）
 
-80 张表，按域划分（以下列核心表，完整定义以 schema 为准）：
+85 张表，按域划分（以下列核心表，完整定义以 schema 为准）：
 
 - **账号与额度**：User、SmsVerificationCode、AdminAuditLog、CreditAccount、CreditLedgerEntry、ReferralCode、ReferralRedemption、CreditSystemSetting、AiModelConfig
 - **创作与阅读**：Novel、Chapter、CoverAsset、ReadingProgress、NovelRead、ParagraphUnderline、NovelFavorite
 - **推荐**：RecommendationEvent
 - **社区互动**：Post、Topic、PostTopic、PostLike、PostBookmark、Comment、CommentLike、UserFollow
 - **私信**：Conversation、ConversationMember、Message
-- **Agent**：AgentSession、AgentRun、AgentMessage、AgentRunEvent、AgentArtifact、ProjectMemoryEntry、AiUsageLog、StoryBranch、AgentSubtask、AgentSchedule、AgentEvalComparison
+- **Agent 运行与协作**：AgentSession、AgentRun、AgentMessage、AgentRunEvent、AgentArtifact、ProjectMemoryEntry、AiUsageLog、StoryBranch、AgentSubtask、AgentSchedule、AgentEvalComparison
+- **Agent 3.0 创作与技能**：StoryCharter、ReaderPromise、SceneTask、ChapterBridge、AgentSkillDefinition、AgentSkillVersion、AgentSkillInstallation、AgentSkillRun、ResearchDossier、StyleProfile、TechniqueCard、ChapterQualityReport、QualityFinding、CorpusSource、AgentEvalSuite、AgentEvalSample、AgentEvalCandidate
 
 ### 1.7 Credits、邀请与模型路由
 
@@ -189,40 +188,36 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 3.1 测试矩阵（Vitest + Supertest）
 
-| 类别 | 文件 | 用例数 | 覆盖要点 |
-| --- | --- | --- | --- |
-| 单元 | studio-lib | 24 | 创作区表单/审查纯逻辑 |
-| 单元 | auth-session | 14 | 会话状态缓存、封禁驱逐、stale fallback 三态、缓存容量上限 |
-| 单元 | schemas | 9 | zod schema 正/反例 |
-| 单元 | panel-helpers | 7 | AgentPanel 抽取的纯声明（阶段文案逐字锚定） |
-| 单元 | phone / password | 6 / 6 | 手机号与密码规则 |
-| 单元 | active-runs | 5 | Agent 运行登记表（注册/计数/停止） |
-| 单元 | parse-body | 5 | 请求体解析与 400/401 边界 |
-| 单元 | agent2-contracts / agent-baseline | 5 / 2 | TaskSpec/ChangeSet/Volume/MemoryEvidence 契约与 revision 基线隔离 |
-| 单元 | agent-tool-governance / agent-eval-metrics | 3 / 2 | 32 工具治理完整性与统一评测汇总口径 |
-| 集成 | p0/p1/p2-validation | 27 / 21 / 15 | 三代校验文案逐字对照（DB 组）+ 401 优先顺序（无 DB 组） |
-| 集成 | app-smoke | 5 | 健康检查与基础路由冒烟 |
-| 集成 | agent2-revision | 3 | 同版本并发仅一次成功、旧客户端兼容写入、过期删除阻断（需 DB） |
+当前共有 **63 个测试文件、339 个用例**。CI 提供 PostgreSQL 16，执行全部数据库集成组；无数据库的本地环境会自动跳过 DB 组。
 
-- 最近一次全量结果：**17 个测试文件，16 passed / 1 skipped；105 tests passed / 55 skipped**（skipped 为本地无 PostgreSQL 时 DB 组按 `describe.skipIf(!dbAvailable)` 自动跳过——clone 后 `npm test` 开箱即用；CI 带 postgres:16 服务容器则执行全部 DB 用例）。
-- vitest 采用 forks 池：进程内缓存（封禁/令牌版本/限流 Map）互不串扰，也避免全局 PrismaClient 单例跨文件复用连接。
+| 层级 | 重点覆盖 |
+| --- | --- |
+| 契约与单元 | zod 输入契约、Agent SSE、98 工具治理、Skill/Story Compiler/质量门、Credits 整数账本与幂等 |
+| API 集成 | 认证优先级、章节 revision 冲突、Agent 运行/回放、后台管理、额度与模型路由 |
+| 前端 DOM 交互 | 正文输入不跳底且保留光标/滚动、聊天轨道最多 40 条并点击定位、预览文本截断、模型菜单层级、推理强度选择 |
+| 安全配置 | nginx CSP 必须处于 enforce，禁止回退到 Report-Only；关键 script/connect/frame/base/form 边界静态校验 |
+| Agent 3.0 冻结评测 | 24 个场景、6 个题材、9 类任务、12 个质量信号；数据集 Hash、代码 SHA 与版本号随 CI 工件保存 |
+
+Vitest 使用 forks 池隔离进程内缓存；jsdom 仅用于关键 UI 回归，避免把全部测试拖入浏览器环境。测试环境守卫统一从仓库根目录解析 `tests/.env.test`。
 
 ### 3.2 CI 流水线（.github/workflows/ci.yml）
 
-push main / PR 触发，单 job 串行五关（超时 20 分钟）：
+push main / PR 触发，单 job 串行执行：
 
 ```
 postgres:16 服务容器 → npm ci → prisma generate → migrate deploy（测试库 chevoink_test）
-→ npm run check（类型检查） → npm run lint → vitest run --coverage → npm run build
+→ npm run check（类型检查） → npm run lint → vitest run --coverage（覆盖率门禁）
+→ npm run agent3:eval（上传可追溯 JSON 工件）→ npm run build
 → npm audit --omit=dev --audit-level=high
 ```
 
-- 覆盖率仅产出报告、暂不设阈值门禁（待真实基线锚定，见技术债务）。
-- 最近四批冲刺提交（e5cae31 / 83a9bba / 598d575 / aff96dc）CI 结论均为 **success**。
+- CI 覆盖率基线门禁为 statements 18%、branches 59%、functions 35%、lines 18%；无数据库本地门禁为 10% / 59% / 15% / 10%。门禁先防倒退，再按关键模块增测逐步提高。
+- 每次 CI 上传 `agent3-eval-<commit SHA>`，保留 30 天，避免评测只存在开发机或口头结论中。
+- 生产依赖审计门禁为 high；截至 2026-09-02，`npm audit --omit=dev` 为 **0 漏洞**。
 
 ### 3.3 本地四重闸（每批改动纪律）
 
-`npx tsc --noEmit` → `npm test` → `npm run build` → `npm run lint`，lint 现态：0 错误、1 条存量 warning（StudioWorkspace react-hooks/exhaustive-deps，列入债务）。
+`npm run check` → `npm run lint` → `npx vitest run --coverage` → `npm run agent3:eval` → `npm run build` → `npm audit --omit=dev`。发布前还必须执行第 11 节的真实产品门禁；自动化全绿不等于留存与付费成立。
 
 ---
 
@@ -241,7 +236,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 ```
 
 - PM2 配置：`ecosystem.config.cjs`；远端脚本：`deploy/deploy-production.sh`。
-- 数据库迁移走 `prisma migrate deploy`（当前 41 次迁移；新增 Credits/模型基础迁移会在正式发布时随部署脚本应用）。
+- 数据库迁移走 `prisma migrate deploy`（当前 48 次迁移）。
 - 发布 Tag 与 APK：`scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk路径>`。
 
 ### 4.2 生产环境形态
@@ -297,7 +292,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ### 5.3 测试执行性能
 
-全量 17 个测试文件约 6–9 秒完成（本地 forks 池）；CI 含依赖安装与构建约 20 分钟内闭环。
+全量 63 个测试文件使用本地 forks 池并行执行；CI 额外包含 PostgreSQL 集成组、覆盖率、Agent 3.0 评测快照、构建与依赖审计，工作流超时上限为 20 分钟。
 
 ---
 
@@ -307,7 +302,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 | 层 | 控制 |
 | --- | --- |
-| 传输 | HTTPS 强制（HSTS max-age=31536000）；`X-Content-Type-Options: nosniff`；`X-Frame-Options: DENY`；CSP Report-Only 全策略已就位（`deploy/nginx.chevoink.conf`） |
+| 传输 | HTTPS 强制（HSTS max-age=31536000）；`X-Content-Type-Options: nosniff`；`X-Frame-Options: DENY`；CSP 已强制执行（`deploy/nginx.chevoink.conf`） |
 | 会话 | HttpOnly Cookie + 签名会话；封禁与 tokenVersion 吊销实时比对（60s 缓存 + DB 故障 stale fallback ≤10 分钟）；封禁缓存主动驱逐 |
 | 鉴权边界 | 所有写端点 401 优先于 400（未登录先拒，不泄露校验细节）；zod 校验统一文案 |
 | 限流 | 短信发码 IP 双窗口（小时/天）；admin 登录 IP+账号双键失败锁定；TTS 合成同 IP 每分钟 20 次；限流 Map 超上限清空防无界增长 |
@@ -325,9 +320,9 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 2. **认证降级放行而非 fail-closed**
    - 取舍：DB 故障时拒绝所有会话会把全站登录态打挂，可用性损失大于吊销窗口风险。
    - 缓解：stale fallback 只在 ≤10 分钟窗口内复用历史成功状态，封禁/tokenVersion 照常比对；超窗才放行且打 `warnAuthDegrade` 日志。
-3. **CSP 保持 Report-Only**
-   - 取舍：第三方图片/媒体直链较多，enforce 模式可能误伤内容展示。
-   - 缓解：Report-Only 持续收集违规报告，债务清单中推进转正。
+3. **CSP 已由 Report-Only 转为 enforce**
+   - 现状：脚本与 API 连接限制为同源；图片、媒体保留 HTTPS/data/blob 兼容范围；frame ancestors、base URI 与 form action 均锁定。
+   - 后续：当前样式仍需 `unsafe-inline`；待样式体系支持 nonce/hash 后进一步收紧。
 4. **admin 登录保留手工三模式分支校验**
    - 取舍：用户名/手机号/邮箱三模式是状态机校验，zod 化需 superRefine 复制分支且可能改变报错顺序，风险大于收益。
 
@@ -337,10 +332,11 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 | 债务 | 现状 | 处置方向 |
 | --- | --- | --- |
-| 覆盖率门禁缺失 | CI 只产出覆盖率报告；全仓口径基线偏低（测试集中于 api 校验/会话/Agent 核心与前端纯函数） | 先锚定核心模块（api/lib、shared/contracts）分模块阈值，再逐步收紧 |
-| CSP 未转正 | Report-Only 运行中 | 清理违规源后切 enforce |
-| 存量 lint warning | StudioWorkspace.tsx react-hooks/exhaustive-deps 1 条 | 涉及组件体改动，待前端测试覆盖补齐后处理 |
-| 前端组件无测试覆盖 | 大组件（StudioWorkspace 4215 行、AgentPanel 1020 行）本体未拆 | 维持「只抽模块级纯声明」纪律；先补关键交互测试再议组件拆分 |
+| 全仓覆盖率偏低 | CI 已锁住 18/59/35/18 基线，但语句/行覆盖仍不足以代表产品质量 | 优先覆盖 StudioWorkspace、AgentPanel、Credits 管理和支付前置链路，每次只上调不下调门禁 |
+| CSP 仍可收紧 | 已 enforce，但样式兼容仍含 `unsafe-inline` | 将动态样式迁移到 nonce/hash 或静态 class 后移除 |
+| 关键前端交互覆盖仍不完整 | P0 正文光标、轨道导航、菜单层级与推理选择已有 DOM 回归；大组件仍有大量状态组合未覆盖 | 补 Work/IDE 切换、面板拖拽折叠、归档/分支/定时任务与 Credits 后台 E2E |
+| 真实产品指标未闭环 | 冻结评测可复现，但专家盲评、7/30 日留存、失败率与单位成本仍在近 200 人公测中采样 | 按第 11 节统一 cohort、版本与统计口径，达标前不宣称正式商业化完成 |
+| 付费 Credits 商业链路待验收 | 整数账本、扣费、暂停/恢复与审计已存在；套餐、支付、订单、退款、发票与客服处置尚未形成完整验收证据 | 先做支付沙箱与对账演练，再灰度小额套餐，最后开放自动续费 |
 | Prisma 配置迁移 | `package.json#prisma` 已废弃（Prisma 7 移除） | 升级到 `prisma.config.ts` |
 | 部署打包白名单手工维护 | tar 白名单引用已删除文件曾导致打包失败（历史事故） | 新增顶层目录时同步核对 `deploy-production.ps1` 白名单 |
 
@@ -348,7 +344,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ## 8. 演进计划
 
-已完成的 1.0 方案：三端适配与分阶段上线（04）、写作 Agent 与 opencode 高保真复刻（10/11）、创作区深度重构（13）、幻觉治理与知识集 Skill（14）、发布链路与全站加载优化（15）、手机端创作区（16）、TTS 听书（17）、后台管理系统与社区推荐算法升级（18）、安卓 APK 打包（19）、沉浸式阅读区与安全区重构（20）。`plan/21` 为当前 Agent/创作区 2.0 实施方案，不属于已落地历史方案。
+已完成的 1.0–2.0 方案包括三端适配、写作 Agent、创作区重构、Skill/知识集、发布链路、手机端、TTS、管理后台、推荐系统、安卓壳、沉浸阅读以及 Work/IDE 桌面重构（04–22）。`plan/23` 定义 Agent 3.0 中文网文人类化创作、Skill 生态及正式完成标准。
 
 Agent 2.0 P0 工程基础（2026-08-25）已落地：
 
@@ -356,7 +352,7 @@ Agent 2.0 P0 工程基础（2026-08-25）已落地：
 - 新增章节 `revision` 迁移，Web 编辑器回传 `expectedRevision`，过期写入返回 409 且不覆盖新版本；旧 APP 保留兼容保存路径；
 - Agent 章节读取基线由时间戳改为 revision，正文覆盖/追加/区间改写/重命名统一使用带版本条件的原子写入；
 - 章节发布、插入移位、删除压缩与对话回滚同步推进 revision，并修复回滚中间插入章后的顺序空洞；
-- 32 个 Agent 工具建立可测试的风险分类与后置条件清单；建立七类核心 eval 与成功率、token、P95 延迟、回滚率统一汇总口径。
+- 当时的 32 个 Agent 工具建立了风险分类与后置条件清单；Agent 3.0 已扩展到 98 个工具，并继续由同一治理测试覆盖。
 
 Studio / Agent 2.0 桌面与记忆体验（2026-08-26）已落地：
 
@@ -374,6 +370,8 @@ Agent 流式写入与用量治理（2026-08-30）已落地：最终答复与长�
 - 会话历史按“最新 500 条→时间正序”恢复，消息写入采用幂等 upsert 与三次短重试；前端记录已恢复会话，视图切换不再用旧历史响应覆盖直播末尾总结；
 - Agent 输入框统一接收选择、剪贴板粘贴与拖放三类图片/文件入口，复用既有附件格式、数量与大小校验。
 
+Agent 3.0（2026-09-02）已完成工程冻结并进入近 200 人公测：Story Compiler 将创作宪章、读者承诺、场景任务与章节桥接纳入可追踪工件；Skill OS 支持私有技能、共享邀请、确定性路由与正负测试；Research Dossier、Style DNA、合法文笔库和质量报告共同约束研究、风格与正文质量；子 Agent、版本分支和定时任务沿用统一权限、预算、SSE 与审计链路。自动化冻结评测已接入 CI，但专家盲评、相对 2.0 的真实质量提升、留存、成本和失败率仍按第 11 节验收。
+
 P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场景至少 5 次的 1.0 基准；结果缺失前不进入 P1，也不在文档中填入推测数据。
 
 本轮工程冲刺（2026-08，85→90 分）新增沉淀：
@@ -386,17 +384,17 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 
 后续候选方向（按收益排序）：
 
-1. 核心模块覆盖率门禁落地（CI 阈值化）；
-2. CSP 转正与违规源清理；
-3. 前端关键交互测试补齐后，评估 StudioWorkspace / AgentPanel 组件级拆分；
-4. Prisma 配置文件迁移；
-5. 单机 PM2 → 多实例/容器化的水平扩展预案（当前单实例承载良好，暂不紧急）。
+1. 用真实盲评、留存、失败率和单位成本完成 Agent 3.0 产品门禁；
+2. 扩大 Work/IDE、Credits 管理与付费链路的组件/E2E 覆盖并逐步抬高 CI 阈值；
+3. CSP 去除 `unsafe-inline`，同时推进 Prisma 配置文件迁移；
+4. 完成套餐、支付、订单、退款、对账与客服处置的沙箱演练；
+5. 为公测增长准备 PM2 多实例/容器化、队列背压和模型供应商熔断预案。
 
 ---
 
 ## 9. plan/ 方案文档索引
 
-`plan/` 目录为各阶段的**真实规划快照与当前实施方案**，编号即立项顺序；**同编号多篇 = 同一阶段并行推进的独立工作流**（如 18 号后台管理与社区升级并行、20 号三篇性能/阅读区并行），非版本覆盖关系。`plan/00`–`plan/20` 已落地，`plan/21` 正在按 P0→P7 门禁实施。
+`plan/` 目录为各阶段的**真实规划快照与当前实施方案**，编号即立项顺序；**同编号多篇 = 同一阶段并行推进的独立工作流**，非版本覆盖关系。`plan/00`–`plan/22` 已落地，`plan/23` 的工程项已冻结，真实产品指标仍在公测验收。
 
 ### 9.1 方案清单
 
@@ -409,7 +407,7 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 | `plan/04` | 三端适配与分阶段上线方案 | 已落地 |
 | `plan/06` | 本地测试与并行协作规范 | 执行规范 |
 | `plan/07` · `plan/08` | AI 配置安全与长上下文方案 · env 变量设计与密钥托管规范 | 已落地（env 清单见 [4.3](#43-环境变量体系envexample)） |
-| `plan/09` | 数据模型与接口契约初稿 | 已落地（演进至 29 表，见 [1.6](#16-数据模型概览prismaschemaprisma)） |
+| `plan/09` | 数据模型与接口契约初稿 | 已落地（演进至 85 表，见 [1.6](#16-数据模型概览prismaschemaprisma)） |
 | `plan/10` · `plan/11` | 写作 Agent 设计方案 · opencode Agent 高保真复刻专项 | 已落地（实现有演进，见 9.2） |
 | `plan/12` · `plan/16` | 前端 UI/UX 产品级优化 · 手机端创作区深度优化 | 已落地（布局方案有演进，见 9.2） |
 | `plan/13` | 创作区 Agent 深度重构与前端产品级优化 | 已落地（含后续 P3/P4 模块级拆分） |
@@ -419,7 +417,9 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 | `plan/18`（两篇） | 后台管理系统 · 社区推荐算法与话题系统升级 | 已落地 |
 | `plan/19` | 安卓 APK 客户端打包（Capacitor 壳工程） | 已落地 |
 | `plan/20`（三篇） | 全站加载性能与 Agent 执行期卡顿修复 · 手机端沉浸式阅读区重构 · 阅读区全屏沉浸（安卓壳安全区体系重构） | 已落地 |
-| `plan/21` | 创作区与 Agent 2.0 企业级迭代方案 | 实施中（P0 工程基础完成，实测基线待跑） |
+| `plan/21` | 创作区与 Agent 2.0 企业级迭代方案 | 已落地，成为 3.0 的 revision/治理基础 |
+| `plan/22` | 创作区桌面端 Work 与 IDE 深度重构方案 | 已落地 |
+| `plan/23` | Agent 3.0 中文网文人类化创作与技能生态升级方案 | 工程冻结；真实盲评、留存、成本与失败率公测验收中 |
 | `plan/list/` | 多窗口并行执行规范与总控审查清单 | 执行规范 |
 
 ### 9.2 历史路径对照（方案引用 → 当前实现）
@@ -485,3 +485,24 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 | 推荐理由来自真实特征、无编造 | ✅ |
 | 曝光/点击/负反馈上报闭环 | ✅ |
 | 离线/线上评估指标（CTR/多样性等） | 待 Phase 2 数据积累后建立 |
+
+---
+
+## 11. Agent 3.0 正式发布门禁
+
+“功能完成”“CI 全绿”“近 200 人参加公测”都不是独立的正式上线证明。正式版本与付费 Credits 套餐必须把工程、质量、用户价值、成本和商业链路分开验收。
+
+| 门禁 | 2026-09-02 状态 | 正式放量要求 |
+| --- | --- | --- |
+| 工程可回归 | ✅ 已建立 | 63 个测试文件、339 个用例；覆盖率防倒退；CSP enforce；生产依赖审计；关键 UI 回归 |
+| 冻结场景评测 | 🟡 框架与 CI 快照已建立 | 每个正式场景至少 5 次；冻结模型、温度、Skill/检索版本、代码 SHA 与 token；失败样本可追溯 |
+| 专家盲评 | 🟡 后台能力具备，真实样本待完成 | 每篇至少 3 位目标题材读者/编辑；匿名比较 2.0、3.0 与人类样本；3.0 对 2.0 总体偏好胜率目标 ≥65% |
+| 质量改善 | 🟡 公测采样中 | “明显 AI/机械”标记率相对下降目标 ≥40%；作者改到可发布的平均轮数目标下降 ≥35% |
+| 留存与发布 | 🟡 近 200 人 cohort 可开始统计 | 首次创作后三章完成率目标提升 ≥25%；7 日继续创作率目标提升 ≥20%；同时跟踪章节发布率、更新发布率和周有效创作者 |
+| 成本与可靠性 | 🟡 已有 Token/Credits 日志，预算线待冻结 | 按任务类型记录成功率、P95 延迟、输入/输出/缓存 token、单次与每千字成本、降级率；阈值达标后才开放全量高成本能力 |
+| 版权与数据治理 | 🟡 权利记录、技法卡、撤权清理链路已实现 | 生产文档 100% 有来源/权利记录；版权泄漏阻断率 100%；确认侵权输出 0；用户可关闭、撤回并验证清理 |
+| 付费 Credits | 🔴 不应直接全量售卖 | 套餐与价格审批、支付沙箱、订单幂等、回调验签、退款/拒付、对账、发票/客服、余额异常补偿和暂停恢复演练全部通过 |
+
+公测统计必须固定 cohort 与版本：不要把新老用户、2.0/3.0、不同模型或不同赠送额度混在一个平均数里。建议先完成至少一个完整 7 日窗口，再决定是否扩大灰度；30 日留存只能在完整 30 日窗口后下结论。付费套餐采用“小额、限量、可人工退款”的灰度顺序，且账本总额必须能与支付渠道逐单对账。
+
+Definition of Done 仍以 `plan/23` 为准：Skill 全链路可观测与可回滚、Story Charter/前三章试制、Chapter Bridge、证据化质量门、合法文笔库、冻结同题集与盲评胜出、真实留存改善、成本/延迟/失败率达标，以及全功能可灰度、可独立关闭、兼容旧作品与旧客户端。任何一项未完成，都应标记为“Agent 3.0 公测”，而不是“已验证的正式商业版本”。

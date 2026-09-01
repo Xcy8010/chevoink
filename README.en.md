@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | **English**
 
-An AI application — an AI-driven, full-stack novel writing & reading platform: readers can discover, follow and listen to books in the bookstore; authors collaborate with a writing Agent in the studio to produce chapters (the Agent supports image/file attachments, vision, reference-material reading, web research and in-platform novel references); the community offers posts, topics and direct messages. Available as a web app and an Android app (Capacitor shell + in-app updates).
+An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.0** organizes genre research, Story Charter, Skill OS, scene tasks, long-form memory, a human-quality gate, and versioned tool execution into one traceable creative workflow. Readers can discover, follow, listen to, and discuss books. The product is available on the web and as an Android app (Capacitor shell + in-app updates). As of **2026-09-02**, Agent 3.0 is in public beta with nearly 200 participants.
 
 🌐 Live site: <https://chevoink.chevolink.com>
 
@@ -25,6 +25,81 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
   </tr>
 </table>
 
+## 🤖 Chevoink Agent 3.0
+
+Agent 3.0 is a stateful creative agent that keeps working with one novel rather than a one-shot prompt generator. It identifies the task and story phase, loads two or three relevant Skills on demand, builds a cacheable Research Dossier when research is justified, and uses the Story Compiler to turn reader promises, character desires, obstacles, choices, costs, and state transitions into a scene task. Continuity and human-quality checks run before a revision-guarded atomic write, ChangeSet, and durable event stream commit the result to the workspace.
+
+### Runtime flow
+
+```mermaid
+flowchart TD
+  A[Author prompt / images / files / work references] --> B[Context preparation<br/>story state·chapters·memory·directives]
+  B --> C[Two-stage Skill Router<br/>deterministic recall + semantic decision]
+  C --> D[Load 2–3 Skills on demand<br/>version lock·permission filtering]
+  D --> E{Task type}
+  E -->|New book / genre shift / major arc| F[Research Dossier<br/>budgeted·cached·TTL]
+  E -->|Plan / draft / revise| G[Story Compiler<br/>PREPARE → BEAT → WRITE]
+  E -->|Search / manage / export| H[Agent Tool Loop]
+  F --> G
+  G --> I[Continuity + human-quality gate<br/>evidence findings·up to two local repairs]
+  H --> J[Tool result]
+  I --> J
+  J --> K{Write required?}
+  K -->|No| L[SSE response and replayable trace]
+  K -->|Yes| M[revision lock + ChangeSet<br/>atomic write·no silent overwrite]
+  M --> L
+  L --> N[Author review / rollback / branch / publish]
+  N --> O[Feedback, blind review, and retention metrics]
+```
+
+### System architecture
+
+```mermaid
+flowchart LR
+  subgraph Client[Clients]
+    WEB[React Web<br/>Work / IDE / Reader]
+    APP[Android Capacitor]
+  end
+  subgraph Edge[Edge]
+    NGINX[nginx<br/>HTTPS·enforced CSP·static cache]
+  end
+  subgraph Service[Chevoink services]
+    API[Express API<br/>auth·works·community·Credits]
+    LOOP[Agent 3.0 Runtime<br/>Loop·98 Tools·sandbox]
+    SKILL[Skill OS 3.0<br/>Router·Loader·version/test/rollback]
+    STORY[Story Compiler<br/>Memory·Quality Gate·Craft Retrieval]
+    SSE[SSE Event Stream<br/>persistence·resume·replay]
+  end
+  subgraph Data[Data]
+    PG[(PostgreSQL<br/>85 Models·48 Migrations)]
+    FILES[(Managed uploads and exports)]
+  end
+  subgraph Providers[Providers]
+    LLM[OpenAI-compatible LLM]
+    VISION[Vision / Image]
+    SEARCH[Web Search / Reader]
+    TTS[TTS]
+  end
+  WEB --> NGINX
+  APP --> NGINX
+  NGINX --> API
+  API --> LOOP
+  LOOP --> SKILL
+  LOOP --> STORY
+  LOOP --> SSE
+  API --> PG
+  LOOP --> PG
+  API --> FILES
+  LOOP --> LLM
+  LOOP --> VISION
+  LOOP --> SEARCH
+  API --> TTS
+  SSE --> WEB
+  SSE --> APP
+```
+
+The deterministic evaluation suite freezes 24 Chinese web-fiction scenarios across six genres, nine task classes, and twelve quality signals. CI stores a report carrying the dataset hash, code SHA, model, and Skill version. Automated metrics diagnose regressions; they do not replace real author outcomes or anonymous review by at least three target-genre readers/editors.
+
 **Mobile**
 
 <table>
@@ -42,9 +117,10 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
 | Install the Android app | [Download & install guide](#-download--install-android-app) · [Releases page](https://github.com/Xcy8010/chevoink/releases) |
 | Learn how to use it | [User guide](#-user-guide) |
 | Explore features | [Feature overview](#-feature-overview) |
+| Understand Agent 3.0 | [Runtime flow & architecture](#-chevoink-agent-30) · [Agent 3.0 proposal (Chinese)](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |
 | Run it locally | [Quick start](#-quick-start) |
 | Understand the architecture | [Tech stack](#%EF%B8%8F-tech-stack) · [Directory structure](#-directory-structure) |
-| Deep engineering details | [Engineering Documentation](./docs/ENGINEERING.en.md) ([中文](./docs/ENGINEERING.md)) · [Development Standards](./docs/DEVELOPMENT-STANDARDS.en.md) ([中文](./docs/DEVELOPMENT-STANDARDS.md)) |
+| Deep engineering details | [Engineering Documentation](./docs/ENGINEERING.en.md) ([中文](./docs/ENGINEERING.md)) · [Development Standards](./docs/DEVELOPMENT-STANDARDS.en.md) ([中文](./docs/DEVELOPMENT-STANDARDS.md)) · [Agent evaluation guide (Chinese)](./tests/agent-evals/README.md) |
 | Deploy to production | [Deployment & releases](#-deployment--releases) · [Environment variables](#-environment-variables) |
 | Chat with us | [QQ group 158443235](#-community) |
 
@@ -53,7 +129,7 @@ An AI application — an AI-driven, full-stack novel writing & reading platform:
 Pick either channel:
 
 1. **GitHub Releases (recommended)**
-   - Open the [Releases page](https://github.com/Xcy8010/chevoink/releases) and enter the latest version (e.g. `v1.07`);
+   - Open the [Releases page](https://github.com/Xcy8010/chevoink/releases) and enter the latest version (e.g. `v1.50`);
    - Download `chevoink-vX.XX.apk` from the Assets section;
    - Tap to install. If the system warns about "unknown sources", allow "install anyway" in the dialog (the APK is signed with the release key).
 2. **Direct download from the official site**
@@ -74,8 +150,8 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ### Authors
 
 1. Enter the **Studio** and start talking to Chevoink Agent immediately. With no existing work, randomized creation examples appear; selecting one only fills the composer, and after the first send the Agent turns the hidden bootstrap workspace into a real novel through the scope-checked, atomic `novel_create` action. A new empty task inside an existing novel also receives four randomized building prompts;
-2. Write directly in the chapter editor, or summon the **AI writing Agent**: autonomous execution with maximum permissions by default (tool calls auto-approved, with a trace button), streaming chapter drafts and rewrites grounded in your settings and knowledge sets (worldbuilding, character cards), web research for source material, references to published works on the platform and your own unpublished works (fan-fiction / prequels, similar-work detection), cross-session memory of your preferences — intervenable at any time;
-3. Use the **Work Skills** area in Work, IDE, or mobile to save reusable long-term writing rules as private drafts. Each field has placeholder examples, or simply ask in chat: “create a … skill for me.” The Agent drafts and runs positive/negative trigger tests; it publishes only after your explicit confirmation. Shared skills can be installed after confirmation, while third-party source imports must declare their licence, attribution, and immutable version;
+2. Write directly in the chapter editor or invoke **Chevoink Agent 3.0**. It streams drafts and revisions grounded in your project knowledge, builds a genre Research Dossier only when needed, and uses Story Charter, Reader Promise, Scene Task, and Chapter Bridge to preserve long-form causality and continuity. Post-write quality findings always include source-text evidence;
+3. Manage Skill OS 3.0 in the **Work Skills** area on Work, IDE, or mobile. Built-ins route automatically; authors or the Agent can draft private Skills, which must pass positive/negative trigger tests before publication. Every version can be pinned, disabled, and rolled back. Shared installation requires author confirmation, while third-party source imports must declare a licence, attribution, and immutable version;
 4. Attach **images (≤6) and files (≤3, pdf/docx/txt/md)** to the prompt. Multimodal models receive image pixels directly, while text-only models automatically use the safe vision sidecar; files are always read before action. Conversation files are clickable, and long contents are collapsed by default;
 5. Generate cover art with one click via **AI cover generation** (remote URLs are automatically persisted to the site); you can also ask the Agent to "look at the current cover" to verify the artwork;
 6. **One-click export**: launch it from the immersive-mode toolbar, the "…" more menu or the mobile "More" sheet; pick the export scope (plans / catalog / chapters / work info & publishing advice, with per-chapter selection), and the server packs a zip for direct download, including AI-generated publishing advice for Fanqie Novel based on its official tag vocabulary; you can also ask the Agent in chat to export on demand (only certain chapters, or excluding specific parts);
@@ -93,7 +169,7 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ## ✨ Feature Overview
 
 - **Reading**: bookstore home (carousels, rankings, category picks), cloud-synced bookshelf & reading progress, immersive reader, TTS narration
-- **Studio**: a Codex-inspired Work/IDE shell, no-work Agent creation entry, randomized empty-task suggestions that only fill the composer, cross-novel task search/pin/archive, novel-version fork/diff/conflict-safe merge, four specialist subagents, durable schedules, server-enforced tool sandboxes, run replay/evaluation, novel/chapter management, an AI writing Agent with token-by-token conclusions and document writes, write-time editor locking, Work auto-follow, compact Harness-style tool activity, Skills, modality-aware attachments, image/file/work-tree references, web and in-platform research, cross-session memory, and a low-reasoning AI relationship graph spanning characters, places, organizations, items, events, and concepts; plus AI covers and scoped zip export
+- **Studio**: Codex-inspired Work/IDE workspace; Agent 3.0 with Research Dossier, Skill OS, Story Compiler, Chapter Bridge, human-quality gate, licensed craft retrieval, work-private Style DNA, first-three-chapter prototyping, and blind-review pipeline; cross-novel task search/pin/archive; branch/diff/conflict-safe merge; embedded subagents; schedules; permission sandbox; replay; multimodal attachments; web/in-platform research; cross-session memory; relationship graph; AI covers; and scoped ZIP export
 - **Community**: posts & topics, recommendation algorithm, comments/likes/bookmarks, follows & fans, direct messages with online presence
 - **Accounts**: phone + SMS-code login (Tencent Cloud SMS), HttpOnly Cookie session + Bearer fallback channel (survives Android shell process kills), public-beta Credits, and one-time referral rewards
 - **Admin console**: data dashboard, user/novel/content governance, encrypted built-in-model configuration, single-user and bulk Credits reset/pause controls, token ranking with user/novel/task drill-down, web-search and image-generation call counts, mobile-friendly
@@ -106,8 +182,8 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 | Frontend | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | Backend | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek text generation · Zhipu GLM-4.1V image understanding · OpenAI-compatible image generation · Edge TTS speech synthesis · Bocha web search (multi-engine fallback) |
-| Agent | Unified writing loop engine (`api/lib/agent`): loop scheduling kernel + tool registry + permission guards + knowledge-set Skills; the frontend consumes a standard event stream |
-| Testing | Vitest + Supertest (unit & integration smoke; zero-setup — `npm test` right after clone, DB cases auto-skip without a test database) |
+| Agent | Agent 3.0 Runtime (`api/lib/agent`): unified Loop, 98 governed tools, Skill OS 3.0, Story Compiler, layered memory, quality gate, embedded subagents, and durable SSE events |
+| Testing | Vitest + Supertest + Testing Library (unit, PostgreSQL integration, real DOM interaction, and frozen Agent evals; CI runs 63 files / 339 tests with coverage gates) |
 | Deployment | PM2 + nginx (production) · GitHub Actions CI (type check / lint / unit / integration tests on push) · Android Capacitor shell project (separate directory) |
 
 ## 📁 Directory Structure
@@ -117,9 +193,9 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ├── src/               # React frontend (app shell & routes, feature domains, shared components)
 ├── shared/contracts/  # Type contracts shared by frontend & backend
 ├── prisma/            # Data model schema, migrations, seed data
-├── tests/             # Vitest tests (unit + integration smoke, see tests/.env.test.example)
+├── tests/             # Unit, PostgreSQL integration, UI interaction, Chevoink-CN-Fiction-Eval
 ├── docs/              # Engineering docs (ENGINEERING & DEVELOPMENT-STANDARDS, both bilingual)
-├── plan/              # Planning snapshots per phase (24 docs + parallel execution checklists)
+├── plan/              # 28 phase proposals + 8 parallel execution checklists
 ├── deploy/            # nginx config & server deployment scripts
 ├── scripts/           # Deployment / push / data cleanup scripts
 └── public/            # Static assets
@@ -150,6 +226,8 @@ Common scripts:
 | `npm run dev` | Frontend + backend parallel development |
 | `npm run check` | TypeScript type check |
 | `npm run test` | Run tests (Vitest) |
+| `npx vitest run --coverage` | Run tests with local/CI dual-baseline coverage gates |
+| `npm run agent3:eval` | Emit a versioned Agent 3.0 deterministic eval snapshot with hashes and code SHA |
 | `npm run lint` | ESLint check |
 | `npm run build` | Production build |
 | `npm run deploy:prod` | One-click deploy to the production server |
@@ -157,7 +235,7 @@ Common scripts:
 ## 📦 Deployment & Releases
 
 - **Production deploy**: `npm run deploy:prod` (local gates: type check → tests → production-dependency security audit → build; then package & upload → remote migrate/build → PM2 reload → health check)
-- **Push to GitHub**: `powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`, supports `-Tag v1.07 -ReleaseAsset <apk path>` to tag and publish a Release (with the Android APK attached)
+- **Push to GitHub**: `powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`, supports `-Tag v1.50 -ReleaseAsset <apk path>` to tag and publish a Release (with the Android APK attached)
 - **Android APK**: built by the separate Capacitor shell project, distributed via the in-app update banner / settings-page update check
 
 ## 🔐 Environment Variables
@@ -172,17 +250,17 @@ Join the **Chevoink community group** (QQ group: `158443235`) to discuss the exp
 
 ## 📄 License
 
-This project is open-sourced under the [GNU AGPL-3.0 License](LICENSE): free to use, modify and distribute. **If you provide it as an online service (SaaS / web server), you must offer the corresponding, modifiable source code to its users.** Closed-source commercial deployment requires a separate commercial license from the original author.
+This project is open-sourced under the [GNU AGPL-3.0 License](LICENSE): free to use, modify, and distribute. **If you provide it as an online service (SaaS / web server), you must offer the corresponding, modifiable source code to that service's users.** Closed-source commercial deployment requires a separate [commercial licence](./docs/COMMERCIAL-LICENSE.md) from the original author.
 
 ## 🙏 Special Thanks
 
-Chevoink is independently designed and implemented. The following open-source projects provided important references during the evolution of Agent 2.0, the novel domain model, and the Studio experience:
+Chevoink is independently designed and implemented. The following open-source projects provided important references during the evolution of Agent 3.0, the novel domain model, and the Studio experience:
 
 | Open-source project | Referenced area in Chevoink | What we learned from it |
 | --- | --- | --- |
 | [OpenAI Codex](https://github.com/openai/codex) | Writing Agent Loop, Work mode, task/tool execution, context organization | Agent-first workflows, traceable tool calls, continuous long-running tasks, context compaction, restrained workspace hierarchy, and collapsible sidebars |
 | [OpenFic](https://github.com/syrizelink/OpenFic) | IDE mode, work tree, volume/chapter structure, novel retrieval, and writing Skills | Novel-focused IDE information architecture, the `Volume → Chapter` domain model, persisted panel layouts, chapter retrieval flows, and open-ended writing capabilities |
-| [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | Agent 2.0 story memory, character relationships, events, and conflict review | Layered memory, provenance and revision tracking, hybrid retrieval, memory updates, and conflict-governance patterns |
+| [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | Long-form Agent story memory, character relationships, events, and conflict review | Layered memory, provenance and revision tracking, hybrid retrieval, memory updates, and conflict-governance patterns |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | Reasoning and tool-activity UI in Work / IDE | Progressive disclosure of reasoning, execution-state communication, and compact visual hierarchy for tool-call history |
 | [React Flow / xyflow](https://github.com/xyflow/xyflow) | Story-memory relationship graph | Chevoink directly uses `@xyflow/react` for viewport panning, zooming, fit-to-view, controls, and minimap navigation |
 

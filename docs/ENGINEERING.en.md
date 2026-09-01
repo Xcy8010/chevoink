@@ -2,9 +2,9 @@
 
 > This document consolidates the system architecture, key technical decisions, testing & CI, deployment strategy, performance data, security posture & risk trade-offs, technical debt and evolution plans.
 > All content is grounded in the current repository code and the real planning documents under `plan/`, and is updated continuously as the project evolves.
-> `plan/00`–`plan/20` are true planning snapshots of landed phases; `plan/21` is the active 2.0 implementation plan. For the mapping between historical file paths and the current implementation, see [Section 9](#9-plan-document-index).
+> `plan/00`–`plan/22` are true planning snapshots of landed phases; `plan/23` defines the Agent 3.0 product and evaluation baseline. For the mapping between historical file paths and the current implementation, see [Section 9](#9-plan-document-index).
 >
-> Last updated: 2026-08-26
+> Last updated: 2026-09-02. Agent 3.0 is in public beta with nearly 200 participants. Engineering scope is frozen; real blind-review, retention, and commercialization metrics remain gated by Section 11.
 >
 > Language: English | [简体中文](./ENGINEERING.md)
 
@@ -20,6 +20,7 @@
 8. [Evolution Plan](#8-evolution-plan)
 9. [plan/ Document Index](#9-plan-document-index)
 10. [Recommendation System Rollout Record](#10-recommendation-system-rollout-record)
+11. [Agent 3.0 General-Availability Gates](#11-agent-30-general-availability-gates)
 
 ---
 
@@ -43,7 +44,7 @@
         │ static dist/                 │ /api reverse proxy
 ┌───────▼───────┐          ┌───────────▼────────────────────────┐
 │  Vite build   │          │  Express 4 (PM2: chevoink-api)     │
-│  artifacts,   │          │  api/routes/*: 13 route modules    │
+│  artifacts,   │          │  api/routes/*: 16 route modules    │
 │  code-split   │          │  auth/novels/comments/posts/topics/│
 │  by route     │          │  conversations/users/home/search/  │
 └───────────────┘          │  meta/ai/agent/admin               │
@@ -52,15 +53,15 @@
                            │  ├── data/      data access layer   │
                            │  ├── agent/     writing Agent engine│
                            │  │   loop kernel + run-service +    │
-                           │  │   32 tools + permission guards + │
-                           │  │   knowledge sets                 │
+                           │  │   98 tools + permission guards + │
+                           │  │   Skill OS                       │
                            │  └── auth-session / rate-limit /    │
                            │      audit                          │
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
-                           │ PostgreSQL 16 (29 tables ·          │
-                           │ 26 migrations)                      │
+                           │ PostgreSQL 16 (85 tables ·          │
+                           │ 48 migrations)                      │
                            └─────────────────────────────────────┘
 ```
 
@@ -75,16 +76,16 @@
 | `src/features/discover` / `home` / `search` / `novel-detail` / `profile` | Discovery feed, detail pages, personal center |
 | `src/features/admin` | Admin console (data dashboard, user/novel/content governance) |
 
-Frontend and backend share type contracts through `shared/contracts/`, including the Agent SSE protocol and the frozen Agent 2.0 `TaskSpec`, `ChangeSet`, `Volume`, and `MemoryEvidence` contracts, so interface mismatches are caught at compile time.
+Frontend and backend share type contracts through `shared/contracts/`, including Agent SSE, `TaskSpec` / `ChangeSet`, Story Compiler, Skill, quality, and Agent 3.0 evaluation contracts, so interface mismatches are caught at compile time.
 
 ### 1.3 Backend Structure (api/)
 
-- **Route layer** `api/routes/`: 13 route modules; all inputs are validated via `parseBody` + zod schemas; unified `{ success, data }` / `{ code, message }` response structures.
+- **Route layer** `api/routes/`: 16 route modules; all inputs are validated via `parseBody` + zod schemas; unified `{ success, data }` / `{ code, message }` response structures.
 - **Data layer** `api/lib/data/`: Prisma access wrappers with data-layer fallback validation (e.g. privacy-level enum fallback).
 - **Agent engine** `api/lib/agent/` (corresponds to `plan/10`, `plan/13`):
   - `loop.ts` execution kernel (executeAgentRun) + `active-runs.ts` run registry;
   - `run-service.ts` run lifecycle & session CRUD, `session-messages.ts` messages/rollback, `plan-artifacts.ts` plan artifacts;
-  - `tools/`: 32 registered tools (list in [1.5](#15-agent-tool-inventory-32-tools)), split by dependency into eleven files: chapter/novel/write/read/cover/search/platform/interact/todo/attachment/export; `governance.ts` freezes risk classifications and postconditions for every tool;
+  - `tools/`: 98 registered tools (see [1.5](#15-agent-30-tools-and-runtime-pipeline-98-tools)) spanning read/write, research, Skills, Story Compiler, quality governance, subagents, branches, and schedules; `governance.ts` freezes risk classifications and postconditions for every tool;
   - `permissions.ts` permission guards & budgets (per run: ask_user 3 / web search 5 / web deep-read 8 / platform search 5 / platform deep-read 8);
   - `knowledge/` + `skills/`: writing knowledge and operational knowledge sets (corresponds to the `plan/14` hallucination-governance plan).
 
@@ -108,24 +109,20 @@ During a run, frontend and backend communicate through a one-way SSE event strea
 
 The frontend message-part model `AgentMessagePart` (text / reasoning / tool-call / attachment) is built from the events above; write-operation tools additionally carry rollback snapshots (persisted server-side only, stripped before the message-list API returns), powering "one-click rollback inside the conversation".
 
-### 1.5 Agent Tool Inventory (32 tools)
+### 1.5 Agent 3.0 Tools and Runtime Pipeline (98 tools)
 
-| Group | Tools | Notes |
-| --- | --- | --- |
-| Read (5) | novelGetContext · chapterRead · chapterListSummaries · memorySearch · planRead | Novel context, chapter content, cross-session memory, plan artifacts |
-| Research (2) | webSearch · webRead | Multi-tier fallback search with Bocha as the primary engine; web deep-read with SSRF protection |
-| Platform reference (2) | platformNovelSearch · platformNovelRead | Locates published platform works and the author's own unpublished works by title/tag/genre keywords; reads synopsis/categories/chapter text with a visibility hard gate at the DB where layer; similar-work detection via feature-term search + synopsis comparison, falling back to web search when the platform yields nothing |
-| Attachments (2) | viewImage · readFile | GLM-4.1V vision side-channel; pdf/docx/txt/md reading |
-| Export (1) | novelExport | One-click zip export of the novel (plans/catalog/chapters/work info & publishing advice); read-only, skips approval; supports chapter subsets and four-scope trimming; artifacts stored in an in-memory store (TTL 15 min) for the frontend download card |
-| Chapter write (5) | chapterCreate · chapterWrite · chapterAppend · chapterEditRange · chapterRename | Atomic revision conflict detection + 409 semantics + rollback snapshots |
-| Novel management (2) | novelRename · novelUpdateMeta | Title & metadata updates |
-| Plan artifacts (3) | planSave · planRename · planDelete | Save/rename/delete outline plans |
-| Cover (3) | coverPromptSet · coverGenerate · coverApply | Prompt, generation, apply & persist |
-| High-risk (3) | novelPublish · novelArchive · novelDelete | Publish/take-down/delete, strictest permission level |
-| Memory & interaction (3) | memorySave · todoWrite · askUser | Cross-session preference memory, self-driven todos, ask the user (budget 3 per run) |
-| Wrap-up (1) | planExit | Exit plan-editing mode |
+The single registry entry point is `api/lib/agent/tools/registry.ts`. The 98 tools are grouped by capability instead of exposing an unbounded “universal write” primitive to the model:
 
-The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/description/parameter schemas are verbatim-stable (the schema is the model-visible contract; changing it equals changing behavior).
+- **Work read/write and versions**: novels, chapters, plans, range edits, exports, branches, rollback, and revision-conflict protection;
+- **Research and attachments**: platform search, web search/deep-read, image understanding, document reading, and Research Dossiers;
+- **Story Compiler**: Story Charter, Reader Promise, Scene Tasks, Chapter Bridges, characters, and relationship memory;
+- **Skill OS and prose governance**: private/shared Skill drafts, positive/negative tests, publishing, installation, deterministic retrieval, Style DNA, and the rights-cleared prose library;
+- **Quality and evaluation**: quality reports/findings, feedback, first-three-chapter prototypes, frozen scenarios, and blind-review candidates;
+- **Autonomous collaboration**: todos, user questions, subagents, schedules, permission sandboxing, and budgets.
+
+Tool `name`, `description`, and parameter schemas are model-visible contracts. Any change is treated as a behavioral change, and governance-completeness tests require a risk class and postcondition for every registered tool.
+
+Every Agent 3.0 run follows a fixed pipeline: task specification → permission/budget filtering → work context and deterministic Skill retrieval → research/planning/writing tools → revision and rollback protection → quality gate → persisted SSE and Credits accounting. The model cannot bypass the server-side allowlist to edit prose directly.
 
 ### 1.5.1 Work Skills and shared installation
 
@@ -137,14 +134,15 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 
 ### 1.6 Data Model Overview (prisma/schema.prisma)
 
-80 tables, organized by domain (core tables listed below; the schema is authoritative):
+85 tables, organized by domain (core tables listed below; the schema is authoritative):
 
 - **Accounts & Credits**: User, SmsVerificationCode, AdminAuditLog, CreditAccount, CreditLedgerEntry, ReferralCode, ReferralRedemption, CreditSystemSetting, AiModelConfig
 - **Writing & reading**: Novel, Chapter, CoverAsset, ReadingProgress, NovelRead, ParagraphUnderline, NovelFavorite
 - **Recommendation**: RecommendationEvent
 - **Community interaction**: Post, Topic, PostTopic, PostLike, PostBookmark, Comment, CommentLike, UserFollow
 - **Direct messages**: Conversation, ConversationMember, Message
-- **Agent**: AgentSession, AgentRun, AgentMessage, AgentRunEvent, AgentArtifact, ProjectMemoryEntry, AiUsageLog, StoryBranch, AgentSubtask, AgentSchedule, AgentEvalComparison
+- **Agent runtime and collaboration**: AgentSession, AgentRun, AgentMessage, AgentRunEvent, AgentArtifact, ProjectMemoryEntry, AiUsageLog, StoryBranch, AgentSubtask, AgentSchedule, AgentEvalComparison
+- **Agent 3.0 writing and Skills**: StoryCharter, ReaderPromise, SceneTask, ChapterBridge, AgentSkillDefinition, AgentSkillVersion, AgentSkillInstallation, AgentSkillRun, ResearchDossier, StyleProfile, TechniqueCard, ChapterQualityReport, QualityFinding, CorpusSource, AgentEvalSuite, AgentEvalSample, AgentEvalCandidate
 
 ### 1.7 Credits, referrals, and model routing
 
@@ -195,40 +193,36 @@ The tool registry has a single exit at `api/lib/agent/tools/registry.ts`; name/d
 
 ### 3.1 Test Matrix (Vitest + Supertest)
 
-| Category | File | Cases | Coverage highlights |
-| --- | --- | --- | --- |
-| Unit | studio-lib | 24 | Studio form/review pure logic |
-| Unit | auth-session | 14 | Session state cache, ban eviction, three-state stale fallback, cache capacity cap |
-| Unit | schemas | 9 | zod schema positive/negative cases |
-| Unit | panel-helpers | 7 | Pure declarations extracted from AgentPanel (stage copy verbatim-anchored) |
-| Unit | phone / password | 6 / 6 | Phone number & password rules |
-| Unit | active-runs | 5 | Agent run registry (register/count/stop) |
-| Unit | parse-body | 5 | Request body parsing & 400/401 boundaries |
-| Unit | agent2-contracts / agent-baseline | 5 / 2 | TaskSpec/ChangeSet/Volume/MemoryEvidence contracts and revision baseline isolation |
-| Unit | agent-tool-governance / agent-eval-metrics | 3 / 2 | Governance coverage for all 32 tools and stable eval aggregation |
-| Integration | p0/p1/p2-validation | 27 / 21 / 15 | Three generations of validation copy verbatim comparison (DB group) + 401 precedence (no-DB group) |
-| Integration | app-smoke | 5 | Health check & basic route smoke |
-| Integration | agent2-revision | 3 | Concurrent update conflict, stale delete blocking, and legacy-client compatibility (DB required) |
+The repository currently has **63 test files and 339 cases**. CI provides PostgreSQL 16 and executes all database integration groups; DB groups auto-skip in local environments without PostgreSQL.
 
-- Latest full run: **17 test files: 16 passed / 1 skipped; 105 tests passed / 55 skipped** (DB groups auto-skip via `describe.skipIf(!dbAvailable)` when PostgreSQL is absent locally; CI with a postgres:16 service container runs them all).
-- vitest uses the forks pool: in-process caches (ban/token-version/rate-limit Maps) do not cross-contaminate, and the global PrismaClient singleton does not reuse connections across files.
+| Layer | Primary coverage |
+| --- | --- |
+| Contracts and units | zod inputs, Agent SSE, 98-tool governance, Skill/Story Compiler/quality gates, integer Credits ledger, idempotency |
+| API integration | auth precedence, chapter revision conflicts, Agent run/replay, admin controls, Credits, and model routing |
+| Frontend DOM interaction | editor caret/scroll stability, 40-marker conversation rail and navigation, preview truncation, model-menu stacking, reasoning selection |
+| Security configuration | nginx CSP must be enforced, never Report-Only; static checks for script/connect/frame/base/form boundaries |
+| Frozen Agent 3.0 evaluation | 24 scenarios, 6 genres, 9 task classes, and 12 quality signals; dataset hash, code SHA, and version travel with the CI artifact |
+
+Vitest uses the forks pool to isolate process-local caches. jsdom is limited to critical UI regressions so the entire suite does not pay a browser-environment cost. All environments resolve `tests/.env.test` from the repository root.
 
 ### 3.2 CI Pipeline (.github/workflows/ci.yml)
 
-Triggered on push to main / PRs; a single job runs five gates serially (20-minute timeout):
+Triggered on pushes to main and pull requests; one job runs:
 
 ```
 postgres:16 service container → npm ci → prisma generate → migrate deploy (test DB chevoink_test)
-→ npm run check (type check) → npm run lint → vitest run --coverage → npm run build
+→ npm run check (type check) → npm run lint → vitest run --coverage (coverage gate)
+→ npm run agent3:eval (upload traceable JSON artifact) → npm run build
 → npm audit --omit=dev --audit-level=high
 ```
 
-- Coverage only produces reports; no threshold gate yet (pending a real baseline anchor, see technical debt).
-- The last four sprint commit batches (e5cae31 / 83a9bba / 598d575 / aff96dc) all concluded **success** in CI.
+- CI coverage floors are statements 18%, branches 59%, functions 35%, and lines 18%. The no-DB local floors are 10% / 59% / 15% / 10%. The first purpose is to prevent regression; floors rise as critical modules gain coverage.
+- Every CI run uploads `agent3-eval-<commit SHA>` for 30 days, preventing evaluation results from living only on a developer machine or in prose claims.
+- The production dependency gate is high severity. As of 2026-09-02, `npm audit --omit=dev` reports **0 vulnerabilities**.
 
 ### 3.3 Local Quadruple Gate (per-batch discipline)
 
-`npx tsc --noEmit` → `npm test` → `npm run build` → `npm run lint`. Current lint state: 0 errors, 1 pre-existing warning (StudioWorkspace react-hooks/exhaustive-deps, listed as debt).
+`npm run check` → `npm run lint` → `npx vitest run --coverage` → `npm run agent3:eval` → `npm run build` → `npm audit --omit=dev`. A release must also pass the real-product gates in Section 11; green automation is not proof of retention or willingness to pay.
 
 ---
 
@@ -247,7 +241,7 @@ scp upload (fallback to sftp on failure, 3 retries each) → remote extract to /
 ```
 
 - PM2 config: `ecosystem.config.cjs`; remote script: `deploy/deploy-production.sh`.
-- Database migrations go through `prisma migrate deploy` (41 migrations currently; the new Credits/model foundation migration is applied by the deployment script at release time).
+- Database migrations go through `prisma migrate deploy` (48 migrations currently).
 - Release tags & APK: `scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk path>`.
 
 ### 4.2 Production Topology
@@ -303,7 +297,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 
 ### 5.3 Test Execution Performance
 
-The full set of 17 test files finishes in roughly 6–9 seconds (local forks pool); CI closes the loop within ~20 minutes including dependency installation and build.
+All 63 test files use the local forks pool. CI additionally runs PostgreSQL integration groups, coverage, the Agent 3.0 evaluation snapshot, build, and dependency audit, with a 20-minute workflow timeout.
 
 ---
 
@@ -313,7 +307,7 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 
 | Layer | Control |
 | --- | --- |
-| Transport | HTTPS enforced (HSTS max-age=31536000); `X-Content-Type-Options: nosniff`; `X-Frame-Options: DENY`; full CSP Report-Only policy in place (`deploy/nginx.chevoink.conf`) |
+| Transport | HTTPS enforced (HSTS max-age=31536000); `X-Content-Type-Options: nosniff`; `X-Frame-Options: DENY`; CSP enforced (`deploy/nginx.chevoink.conf`) |
 | Session | HttpOnly Cookie + signed sessions; ban and tokenVersion revocation compared in real time (60s cache + DB-failure stale fallback ≤10 minutes); proactive eviction of the ban cache |
 | Auth boundary | All write endpoints return 401 before 400 (reject unauthenticated first, leaking no validation details); unified zod validation copy |
 | Rate limiting | SMS code IP dual window (hourly/daily); admin login IP+account dual-key failure lockout; TTS synthesis 20/min per IP; rate-limit Maps cleared past the cap to prevent unbounded growth |
@@ -331,9 +325,9 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 2. **Auth degradation opens rather than fail-closed**
    - Trade-off: rejecting all sessions on DB failure would take down site-wide login state; the availability loss outweighs the revocation-window risk.
    - Mitigation: stale fallback only reuses historical success states within a ≤10-minute window, with ban/tokenVersion still compared as usual; beyond the window it opens with a `warnAuthDegrade` log.
-3. **CSP stays Report-Only**
-   - Trade-off: many third-party image/media direct links; enforce mode could break content display.
-   - Mitigation: Report-Only keeps collecting violation reports; promotion to enforce is tracked in the debt list.
+3. **CSP has moved from Report-Only to enforce**
+   - Current scope: scripts and API connections are same-origin; images and media retain HTTPS/data/blob compatibility; frame ancestors, base URI, and form action are locked down.
+   - Follow-up: styles still require `unsafe-inline`; remove it after the style system supports nonces/hashes.
 4. **Admin login keeps the manual three-mode branch validation**
    - Trade-off: username/phone/email three-mode is a state-machine validation; zod-izing it would require superRefine to duplicate branches and could change error ordering — risk outweighs benefit.
 
@@ -343,10 +337,11 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 
 | Debt | Current state | Direction |
 | --- | --- | --- |
-| Missing coverage gate | CI only produces coverage reports; repo-wide baseline is low (tests concentrated on api validation/session/Agent core and frontend pure functions) | Anchor core modules first (api/lib, shared/contracts) with per-module thresholds, then tighten gradually |
-| CSP not enforced | Running Report-Only | Switch to enforce after cleaning violation sources |
-| Pre-existing lint warning | 1 in StudioWorkspace.tsx react-hooks/exhaustive-deps | Involves component-body changes; handle after frontend test coverage is in place |
-| Frontend components without test coverage | Large components (StudioWorkspace 4215 lines, AgentPanel 1020 lines) not split | Keep the "module-level pure declarations only" discipline; add key interaction tests before discussing component splits |
+| Repo-wide coverage remains low | CI now locks the 18/59/35/18 baseline, but statement/line coverage alone cannot establish product quality | Prioritize StudioWorkspace, AgentPanel, Credits admin, and payment prerequisites; only raise, never lower, the gate |
+| CSP can be tightened further | Enforced, but style compatibility still includes `unsafe-inline` | Move dynamic styles to nonces/hashes or static classes, then remove it |
+| Critical frontend interaction coverage is incomplete | P0 caret, rail navigation, menu stacking, and reasoning selection have DOM regressions; many large-component state combinations remain uncovered | Add Work/IDE switching, panel resize/collapse, archive/branch/schedule, and Credits-admin E2E coverage |
+| Real product metrics are not closed | Frozen evaluation is reproducible, but expert blind review, 7/30-day retention, failure rate, and unit cost are still being measured in the nearly-200-person beta | Fix cohort/version definitions per Section 11 and do not claim GA commercialization until thresholds pass |
+| Paid Credits flow still needs acceptance | Integer ledger, charging, pause/resume, and audit exist; complete evidence for packages, payments, orders, refunds, invoices, and support handling does not | Pass payment sandbox and reconciliation drills, then gray-release small packages before recurring plans |
 | Prisma config migration | `package.json#prisma` deprecated (removed in Prisma 7) | Upgrade to `prisma.config.ts` |
 | Manual deploy-pack whitelist | tar whitelist once referenced a deleted file and broke packaging (historical incident) | When adding top-level directories, cross-check the `deploy-production.ps1` whitelist |
 
@@ -354,15 +349,17 @@ The full set of 17 test files finishes in roughly 6–9 seconds (local forks poo
 
 ## 8. Evolution Plan
 
-Completed 1.0 plans: three-device adaptation & phased launch (04), writing Agent & high-fidelity opencode replication (10/11), studio deep refactor (13), hallucination governance & knowledge-set Skills (14), release pipeline & site-wide loading optimization (15), mobile studio (16), TTS narration (17), admin console & community recommendation algorithm upgrade (18), Android APK packaging (19), immersive reader & safe-area refactor (20). `plan/21` is the active Agent/Studio 2.0 plan.
+Completed 1.0–2.0 work includes three-device adaptation, the writing Agent, Studio refactors, Skill/knowledge sets, release pipeline, mobile, TTS, admin, recommendations, Android shell, immersive reading, and the desktop Work/IDE redesign (04–22). `plan/23` defines Agent 3.0's Chinese web-fiction, Skill ecosystem, and formal completion criteria.
 
-Agent 2.0 P0 engineering foundations landed on 2026-08-25: frozen runtime contracts; chapter revision migration and optimistic locking; version-guarded Agent chapter writes; revision propagation across publishing, insertion, deletion compaction, and rollback; test-enforced governance for 32 tools; and seven core eval scenarios with stable success/token/P95-latency/rollback aggregation. The formal P0 gate still requires at least five real-model runs per scenario against an available test database; P1 must not start before those measurements exist.
+Agent 2.0 P0 engineering foundations landed on 2026-08-25: frozen runtime contracts; chapter revision migration and optimistic locking; version-guarded Agent chapter writes; revision propagation across publishing, insertion, deletion compaction, and rollback; and test-enforced governance for the then-current 32 tools. Agent 3.0 has expanded the same governed registry to 98 tools.
 
 The 2026-08-30 Studio iteration streams final answers and long document-tool arguments over SSE, locks the target chapter/plan while the Agent writes, and lets tool activity navigate to that target. The former memory tab is now a whole-novel relationship graph: low-reasoning AI runs only when chapters exist and the graph is empty, while manual rebuilds have a ten-minute cooldown. The admin console treats `AiUsageLog` as the canonical model-token meter and exposes user ranking, novel/session/run drill-down, plus web-search and image-generation invocation counts.
 
 The 2026-08-31 Agent entry opens the complete workspace even when an author has no work. The system creates a non-public bootstrap novel and the first prompt drives the Agent to initialize it through the atomic `novel_create` action, which verifies both ownership and bootstrap state and cannot be replayed against a normal novel. Empty tasks share one context-aware randomized suggestion component across Work, IDE, and mobile; choosing a suggestion only fills the draft. First-work completion asks only about still-missing title, synopsis, tags, or cover.
 
 Studio / Agent 2.0 desktop and memory UX landed on 2026-08-26: the Work/IDE command bar now keeps only novel selection while chapter hierarchy lives in the editor header; the editor uses a flat edge-to-edge surface; Studio has a scoped neutral light/dark palette; side panels have no fixed maximum width and snap closed below their collapse thresholds; Work renders the memory graph directly in the inspector and mobile includes a dedicated memory view. Existing prose is projected into the graph through idempotent local rules, while every completed Agent turn performs threshold-based context compaction and revision-aware memory refresh without an additional model call. The in-process projection-version cache is capped at 500 novels.
+
+Agent 3.0 reached engineering freeze and entered a nearly-200-person public beta on 2026-09-02. Story Compiler makes Story Charters, Reader Promises, Scene Tasks, and Chapter Bridges traceable artifacts. Skill OS adds private Skills, shared invitations, deterministic routing, and positive/negative tests. Research Dossiers, Style DNA, the rights-cleared prose library, and quality reports govern research, style, and prose quality. Subagents, branches, and schedules share the same permission, budget, SSE, and audit chain. Deterministic frozen evaluation now runs in CI; expert blind review, demonstrated improvement over 2.0, retention, cost, and failure-rate acceptance remain governed by Section 11.
 
 New accumulations from this engineering sprint (2026-08, 85→90 points):
 
@@ -374,17 +371,17 @@ New accumulations from this engineering sprint (2026-08, 85→90 points):
 
 Candidate directions going forward (ordered by payoff):
 
-1. Land coverage gates for core modules (CI thresholding);
-2. Promote CSP to enforce and clean violation sources;
-3. After key frontend interaction tests are in place, evaluate component-level splits of StudioWorkspace / AgentPanel;
-4. Prisma config file migration;
-5. Horizontal-scaling playbook from single PM2 → multi-instance/containerized (current single instance carries the load well; not urgent).
+1. Close Agent 3.0 product gates with real blind-review, retention, failure-rate, and unit-cost data;
+2. Expand Work/IDE, Credits admin, and paid-flow component/E2E coverage while progressively raising CI floors;
+3. Remove CSP `unsafe-inline` and migrate Prisma configuration;
+4. Complete package/payment/order/refund/reconciliation/support sandbox drills;
+5. Prepare PM2 multi-instance/containerization, queue backpressure, and provider circuit-breaker playbooks for beta growth.
 
 ---
 
 ## 9. plan/ Document Index
 
-The `plan/` directory holds true landed-phase snapshots and active implementation plans; numbering equals project initiation order. **Multiple documents under the same number = independent workstreams advanced in parallel within one phase**, not version overrides. `plan/00`–`plan/20` have landed; `plan/21` is progressing through P0–P7 gates.
+The `plan/` directory holds true landed-phase snapshots and active implementation plans; numbering equals project initiation order. **Multiple documents under the same number = independent workstreams advanced in parallel within one phase**, not version overrides. `plan/00`–`plan/22` have landed; `plan/23` engineering is frozen while real product metrics remain in beta acceptance.
 
 ### 9.1 Document List
 
@@ -397,7 +394,7 @@ The `plan/` directory holds true landed-phase snapshots and active implementatio
 | `plan/04` | Three-device adaptation & phased launch | Landed |
 | `plan/06` | Local testing & parallel collaboration norms | Execution norm |
 | `plan/07` · `plan/08` | AI configuration security & long-context proposal · env variable design & secret custody spec | Landed (env list in [4.3](#43-environment-variable-system-envexample)) |
-| `plan/09` | Data model & interface contract draft | Landed (evolved to 29 tables, see [1.6](#16-data-model-overview-prismaschemaprisma)) |
+| `plan/09` | Data model & interface contract draft | Landed (evolved to 85 tables, see [1.6](#16-data-model-overview-prismaschemaprisma)) |
 | `plan/10` · `plan/11` | Writing Agent design · high-fidelity opencode Agent replication | Landed (implementation evolved, see 9.2) |
 | `plan/12` · `plan/16` | Frontend UI/UX product-grade optimization · mobile studio deep optimization | Landed (layout approach evolved, see 9.2) |
 | `plan/13` | Studio Agent deep refactor & frontend product-grade optimization | Landed (including later P3/P4 module-level splits) |
@@ -407,7 +404,9 @@ The `plan/` directory holds true landed-phase snapshots and active implementatio
 | `plan/18` (two docs) | Admin console · community recommendation algorithm & topic system upgrade | Landed |
 | `plan/19` | Android APK client packaging (Capacitor shell project) | Landed |
 | `plan/20` (three docs) | Site-wide loading performance & Agent-runtime jank fixes · mobile immersive reader refactor · reader fullscreen immersion (Android shell safe-area system refactor) | Landed |
-| `plan/21` | Studio and Agent 2.0 enterprise iteration plan | In progress (P0 engineering foundation complete; live baseline pending) |
+| `plan/21` | Studio and Agent 2.0 enterprise iteration plan | Landed; revision/governance foundation for 3.0 |
+| `plan/22` | Desktop Studio Work and IDE deep redesign | Landed |
+| `plan/23` | Agent 3.0 Chinese web-fiction humanization and Skill ecosystem | Engineering frozen; real blind-review, retention, cost, and failure-rate acceptance in progress |
 | `plan/list/` | Multi-window parallel execution norms & master review checklist | Execution norm |
 
 ### 9.2 Historical Path Mapping (proposal reference → current implementation)
@@ -473,3 +472,24 @@ The external "readers" metric switched from raw PV (+1 per chapter open) to UV (
 | Recommendation reasons from real features, no fabrication | ✅ |
 | Exposure/click/negative-feedback reporting closed loop | ✅ |
 | Offline/online evaluation metrics (CTR/diversity, etc.) | Pending Phase 2 data accumulation |
+
+---
+
+## 11. Agent 3.0 General-Availability Gates
+
+“Feature complete,” “green CI,” and “nearly 200 beta participants” are not independently sufficient evidence for general availability. Agent 3.0 and paid Credits packages must pass separate engineering, quality, user-value, cost, and commercial-flow gates.
+
+| Gate | Status on 2026-09-02 | Requirement before broad release |
+| --- | --- | --- |
+| Engineering regression safety | ✅ Established | 63 test files / 339 cases, coverage non-regression, enforced CSP, production dependency audit, and critical UI regressions |
+| Frozen-scenario evaluation | 🟡 Framework and CI snapshot established | At least five runs per formal scenario; freeze model, temperature, Skill/retrieval versions, code SHA, and tokens; every failure traceable |
+| Expert blind review | 🟡 Admin capability exists; real sample pending | At least three target-genre readers/editors per sample; anonymous comparison of 2.0, 3.0, and human samples; target ≥65% overall preference for 3.0 over 2.0 |
+| Quality improvement | 🟡 Beta sampling | Target ≥40% relative reduction in “obviously AI/mechanical” marks and ≥35% reduction in average author revision rounds to publishable text |
+| Retention and publishing | 🟡 Nearly-200-person cohort can now be measured | Target ≥25% lift in first-work three-chapter completion and ≥20% lift in 7-day continued creation; also track publish rate, update-publish rate, and weekly effective creators |
+| Cost and reliability | 🟡 Token/Credits logs exist; budgets not yet frozen | Track success rate, P95 latency, input/output/cache tokens, per-task and per-1,000-character cost, and degradation rate by task class; open expensive capabilities only after thresholds pass |
+| Copyright and data governance | 🟡 Rights records, technique cards, and revocation cleanup exist | 100% of production documents have source/rights records; 100% leak blocking; zero confirmed infringing outputs; user controls and deletion are verifiable |
+| Paid Credits | 🔴 Not ready for unrestricted sale | Approve packages/pricing; pass payment sandbox, order idempotency, callback signatures, refunds/chargebacks, reconciliation, invoicing/support, balance compensation, and pause/resume drills |
+
+Beta analysis must freeze cohort and version. Do not blend new and returning users, 2.0 and 3.0, different models, or different promotional grants into one average. Complete at least one full seven-day observation window before broadening the rollout; 30-day retention cannot be claimed before a complete 30-day window. Gray-release paid packages as small, capped, manually refundable purchases, and reconcile every ledger total to the payment provider.
+
+The Definition of Done remains `plan/23`: observable and reversible Skill lifecycle, Story Charter and first-three-chapter prototype, Chapter Bridges, evidence-based quality gates, a rights-cleared prose library, frozen-set and blind-review superiority, demonstrated retention improvement, accepted cost/latency/failure rates, and per-user rollout/disable/rollback compatibility for old works and clients. Until all gates pass, the accurate label is “Agent 3.0 public beta,” not “validated general-availability commercial product.”

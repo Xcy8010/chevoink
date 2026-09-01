@@ -64,9 +64,20 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # 覆盖率仅产出报告，不设阈值门禁（待 CI 跑出真实基线后再锚定）
-      - name: 测试（含覆盖率报告）
+      - name: 测试（含覆盖率门禁）
         run: npx vitest run --coverage
+
+      - name: 生成 Agent 3.0 确定性评测快照
+        run: |
+          DOTENV_CONFIG_QUIET=true npm --silent run agent3:eval > agent3-eval-report.json
+          node -e "JSON.parse(require('node:fs').readFileSync('agent3-eval-report.json', 'utf8'))"
+
+      - name: 保存 Agent 3.0 评测快照
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent3-eval-${{ github.sha }}
+          path: agent3-eval-report.json
+          retention-days: 30
 
       - name: 构建
         run: npm run build
