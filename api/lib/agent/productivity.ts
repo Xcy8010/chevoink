@@ -258,7 +258,7 @@ export async function cancelAgentSubtask(userId: string, subtaskId: string) {
   return { item: subtaskView(updated, stats.get(item.id) ?? { runCount: 0, lastRunAt: null }) }
 }
 
-/** 主 run 系统提示里的子 Agent 目录：主控据此按触发条件用 subagent_run 内嵌调用（codex/Zcode 模式） */
+/** 主 run 的服务端执行目录：尾部注入，主控据此按触发条件用 subagent_run 内嵌调用。 */
 export async function renderSubagentCatalog(userId: string, novelId: string): Promise<string> {
   const items = await prisma.agentSubtask.findMany({ where: { userId, novelId, enabled: true }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, name: true, role: true, triggerCondition: true, prompt: true } })
   if (!items.length) return ''

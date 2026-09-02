@@ -83,6 +83,8 @@ async function recordUsage(input: {
   chapterId?: string | null
   targetType?: string
   targetId?: string | null
+  agentRunId?: string | null
+  providerName?: string | null
   requestTokens?: number | null
   responseTokens?: number | null
   turn?: number | null
@@ -102,6 +104,7 @@ async function recordUsage(input: {
       targetId: input.targetId ?? null,
       providerType: input.providerType,
       providerMode: env.aiProviderMode,
+      providerName: input.providerName ?? null,
       modelName: input.modelName,
       action: input.action,
       requestTokens: input.requestTokens ?? null,
@@ -109,6 +112,7 @@ async function recordUsage(input: {
       turn: input.turn ?? null,
       promptCacheHitTokens: input.promptCacheHitTokens ?? null,
       promptCacheMissTokens: input.promptCacheMissTokens ?? null,
+      agentRunId: input.agentRunId ?? null,
       modelTier: input.modelTier ?? null,
       multiplierBps: input.multiplierBps ?? 10000,
       durationMs: input.durationMs,
@@ -138,7 +142,14 @@ type JsonProviderPayload = {
   error?: { message?: unknown }
   data?: unknown
   choices?: Array<{ message?: { content?: unknown } }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_cache_hit_tokens?: unknown
+    prompt_cache_miss_tokens?: unknown
+    prompt_tokens_details?: { cached_tokens?: unknown }
+  }
 }
 
 async function parseJsonResponse(response: Response): Promise<JsonProviderPayload> {
@@ -186,34 +197,53 @@ export type ChatTokenUsage = {
   promptTokens: number
   completionTokens: number
   totalTokens: number
-  /** 缓存命中输入 token：DeepSeek 顶层字段或 OpenAI prompt_tokens_details.cached_tokens，供应商未返回时为 0 */
-  promptCacheHitTokens: number
-  promptCacheMissTokens: number
+  /** null 表示供应商未返回缓存观测；0 表示供应商明确返回了 0。 */
+  promptCacheHitTokens: number | null
+  promptCacheMissTokens: number | null
 }
 
 /** 供应商 usage 载荷中与缓存命中相关的字段（双格式） */
 export type ProviderUsageCachePayload = {
-  prompt_tokens?: number
-  prompt_cache_hit_tokens?: number
-  prompt_cache_miss_tokens?: number
+  prompt_tokens?: unknown
+  prompt_cache_hit_tokens?: unknown
+  prompt_cache_miss_tokens?: unknown
   prompt_tokens_details?: { cached_tokens?: unknown }
 }
 
 /**
  * 从供应商 usage 提取缓存命中/未命中：DeepSeek 返回顶层 prompt_cache_hit/miss_tokens，
- * OpenAI 兼容网关返回 prompt_tokens_details.cached_tokens；均未返回时保持 0（现状行为，不报错）。
+ * GLM/OpenAI 兼容网关返回 prompt_tokens_details.cached_tokens；均未返回时保持 null/null。
+ * 显式 0 命中是有效观测，必须保留并据 prompt_tokens 推导全部未命中。
  */
-export function extractCacheTokens(usage: ProviderUsageCachePayload): { hit: number; miss: number } {
-  const deepseekHit = typeof usage.prompt_cache_hit_tokens === 'number' ? usage.prompt_cache_hit_tokens : null
-  const openAiHitValue = usage.prompt_tokens_details?.cached_tokens
-  const openAiHit = typeof openAiHitValue === 'number' ? openAiHitValue : null
-  const hit = deepseekHit ?? openAiHit ?? 0
-  if (hit <= 0) {
-    return { hit: 0, miss: 0 }
+export function extractCacheTokens(usage: ProviderUsageCachePayload): { hit: number | null; miss: number | null } {
+  const tokenCount = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null
+  )
+  const promptTokens = tokenCount(usage.prompt_tokens)
+  const deepseekHit = tokenCount(usage.prompt_cache_hit_tokens)
+  const deepseekMiss = tokenCount(usage.prompt_cache_miss_tokens)
+
+  // DeepSeek 顶层字段优先；任意一个字段有效即说明本次 usage 可观测。
+  if (deepseekHit !== null || deepseekMiss !== null) {
+    const hit = Math.min(
+      deepseekHit ?? Math.max(0, (promptTokens ?? deepseekMiss ?? 0) - (deepseekMiss ?? 0)),
+      promptTokens ?? Number.MAX_SAFE_INTEGER,
+    )
+    const miss = Math.min(
+      deepseekMiss ?? Math.max(0, (promptTokens ?? hit) - hit),
+      promptTokens === null ? Number.MAX_SAFE_INTEGER : Math.max(0, promptTokens - hit),
+    )
+    return { hit, miss }
   }
-  const deepseekMiss = typeof usage.prompt_cache_miss_tokens === 'number' ? usage.prompt_cache_miss_tokens : null
-  return { hit, miss: deepseekMiss ?? Math.max(0, (usage.prompt_tokens ?? 0) - hit)
+
+  // 智谱 GLM 与其他 OpenAI 兼容网关使用 cached_tokens；显式 0 不能当作字段缺失。
+  const compatibleHit = tokenCount(usage.prompt_tokens_details?.cached_tokens)
+  if (compatibleHit !== null) {
+    const hit = Math.min(compatibleHit, promptTokens ?? Number.MAX_SAFE_INTEGER)
+    return { hit, miss: Math.max(0, (promptTokens ?? hit) - hit) }
   }
+
+  return { hit: null, miss: null }
 }
 
 export type ChatStreamChunk =
@@ -228,6 +258,63 @@ export type ChatCompletionResult = {
   toolCalls: ToolCallRequest[]
   finishReason: 'stop' | 'tool_calls' | 'length'
   usage: ChatTokenUsage
+}
+
+type ProviderReasoningInput = {
+  provider?: string | null
+  providerBaseUrl?: string | null
+  model: string
+  reasoningEffort: import('../../shared/contracts/index.js').ModelReasoningEffort
+}
+
+function isGlmProvider(input: ProviderReasoningInput): boolean {
+  const provider = input.provider?.trim().toLowerCase() ?? ''
+  const baseUrl = input.providerBaseUrl?.trim().toLowerCase() ?? ''
+  const model = input.model.trim().toLowerCase()
+  return provider === 'zhipu'
+    || provider === 'bigmodel'
+    || provider === 'glm'
+    || baseUrl.includes('bigmodel.cn')
+    || model.startsWith('glm-')
+}
+
+function parseGlmVersion(model: string): { major: number; minor: number } | null {
+  const match = /^glm-(\d+)(?:\.(\d+))?/i.exec(model.trim())
+  return match ? { major: Number(match[1]), minor: Number(match[2] ?? 0) } : null
+}
+
+function supportsGlmThinking(model: string): boolean {
+  const version = parseGlmVersion(model)
+  return Boolean(version && (version.major > 4 || (version.major === 4 && version.minor >= 5)))
+}
+
+function supportsGlmReasoningEffort(model: string): boolean {
+  const version = parseGlmVersion(model)
+  return Boolean(version && (version.major > 5 || (version.major === 5 && version.minor >= 2)))
+}
+
+/**
+ * 各 OpenAI-compatible 供应商的推理参数并不完全兼容。
+ * GLM 缓存无需请求参数；这里只避免旧版 GLM 收到仅 5.2+ 支持的 reasoning_effort。
+ */
+export function buildProviderReasoningPayload(input: ProviderReasoningInput): Record<string, unknown> {
+  const provider = input.provider?.trim().toLowerCase() ?? ''
+  if (provider === 'deepseek') {
+    return {
+      thinking: { type: input.reasoningEffort === 'none' ? 'disabled' : 'enabled' },
+      ...(input.reasoningEffort === 'none' ? {} : { reasoning_effort: input.reasoningEffort }),
+    }
+  }
+  if (isGlmProvider(input)) {
+    if (!supportsGlmThinking(input.model)) return {}
+    return {
+      thinking: { type: input.reasoningEffort === 'none' ? 'disabled' : 'enabled' },
+      ...(input.reasoningEffort !== 'none' && supportsGlmReasoningEffort(input.model)
+        ? { reasoning_effort: input.reasoningEffort }
+        : {}),
+    }
+  }
+  return { reasoning_effort: input.reasoningEffort }
 }
 
 type ChatWithToolsParams = {
@@ -248,6 +335,7 @@ type ChatWithToolsParams = {
     chapterId?: string | null
     targetType?: string
     targetId?: string | null
+    agentRunId?: string | null
     turn?: number | null
     modelTier?: CreditModelTier
     multiplierBps?: number
@@ -295,7 +383,6 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   const endpoint = `${(params.providerBaseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`
 
   const reasoningEffort = params.reasoningEffort ?? env.aiReasoningEffort
-  const isDeepSeek = (params.provider ?? '').toLowerCase() === 'deepseek'
   const body: Record<string, unknown> = {
     model,
     temperature: params.temperature ?? 0.6,
@@ -307,14 +394,12 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     messages: toProviderMessages(params.messages),
   }
 
-  // DeepSeek 的关闭思考通过 thinking=disabled 表达；把 none 错传给 reasoning_effort 会触发 400。
-  // 其他 OpenAI 兼容供应商保留各自声明的强度值。
-  if (isDeepSeek) {
-    body.thinking = { type: reasoningEffort === 'none' ? 'disabled' : 'enabled' }
-    if (reasoningEffort !== 'none') body.reasoning_effort = reasoningEffort
-  } else {
-    body.reasoning_effort = reasoningEffort
-  }
+  Object.assign(body, buildProviderReasoningPayload({
+    provider: params.provider,
+    providerBaseUrl: params.providerBaseUrl,
+    model,
+    reasoningEffort,
+  }))
 
   if (params.tools.length > 0) {
     body.tools = params.tools
@@ -341,7 +426,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   let content = ''
   let reasoning = ''
   let finishReason: ChatCompletionResult['finishReason'] = 'stop'
-  const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, promptCacheHitTokens: 0, promptCacheMissTokens: 0 }
+  const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, promptCacheHitTokens: null, promptCacheMissTokens: null }
   const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>()
 
   const decoder = new TextDecoder()
@@ -371,8 +456,10 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
       usage.totalTokens = parsed.usage.total_tokens ?? usage.totalTokens
       const cache = extractCacheTokens(parsed.usage)
-      usage.promptCacheHitTokens = cache.hit
-      usage.promptCacheMissTokens = cache.miss
+      if (cache.hit !== null && cache.miss !== null) {
+        usage.promptCacheHitTokens = cache.hit
+        usage.promptCacheMissTokens = cache.miss
+      }
     }
 
     const choice = parsed.choices?.[0]
@@ -491,11 +578,13 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     chapterId: params.usageLog.chapterId ?? null,
     targetType: params.usageLog.targetType ?? 'agentRun',
     targetId: params.usageLog.targetId ?? null,
+    agentRunId: params.usageLog.agentRunId ?? null,
+    providerName: params.provider ?? env.aiTextProvider,
     requestTokens: usage.promptTokens || null,
     responseTokens: usage.completionTokens || null,
     turn: params.usageLog.turn ?? null,
-    promptCacheHitTokens: usage.promptCacheHitTokens > 0 ? usage.promptCacheHitTokens : null,
-    promptCacheMissTokens: usage.promptCacheMissTokens > 0 ? usage.promptCacheMissTokens : null,
+    promptCacheHitTokens: usage.promptCacheHitTokens,
+    promptCacheMissTokens: usage.promptCacheMissTokens,
     durationMs: Date.now() - startedAt,
     modelTier: params.usageLog.modelTier ?? 'speed',
     multiplierBps: params.usageLog.multiplierBps ?? 10000,
@@ -511,7 +600,6 @@ export async function generateTextCompletion(
 ) {
   const modelRuntime = await getModelTierRuntime(options.modelTier ?? 'speed')
   const completionReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
-  const isDeepSeek = modelRuntime.provider.toLowerCase() === 'deepseek'
   ensureTextProviderConfigured(modelRuntime.apiKey)
   await assertCreditAccess(options.userId, modelRuntime.tier, false)
 
@@ -526,14 +614,12 @@ export async function generateTextCompletion(
     body: JSON.stringify({
       model: modelRuntime.modelName ?? env.aiTextModel,
       temperature: options.temperature ?? 0.7,
-      ...(
-        isDeepSeek
-          ? {
-              thinking: { type: completionReasoning === 'none' ? 'disabled' : 'enabled' },
-              ...(completionReasoning === 'none' ? {} : { reasoning_effort: completionReasoning }),
-            }
-          : { reasoning_effort: completionReasoning }
-      ),
+      ...buildProviderReasoningPayload({
+        provider: modelRuntime.provider,
+        providerBaseUrl: modelRuntime.baseUrl,
+        model: modelRuntime.modelName ?? env.aiTextModel,
+        reasoningEffort: completionReasoning,
+      }),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -556,6 +642,7 @@ export async function generateTextCompletion(
     throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '模型未返回有效内容。')
   }
 
+  const completionCache = extractCacheTokens(payload.usage ?? {})
   await recordUsage({
     userId: options.userId,
     providerType: 'text',
@@ -565,8 +652,11 @@ export async function generateTextCompletion(
     chapterId: options.chapterId ?? null,
     targetType: options.targetType ?? 'text',
     targetId: options.targetId ?? null,
+    providerName: modelRuntime.provider,
     requestTokens: payload.usage?.prompt_tokens ?? estimateTokenCount(`${systemPrompt}\n${userPrompt}`),
     responseTokens: payload.usage?.completion_tokens ?? estimateTokenCount(content),
+    promptCacheHitTokens: completionCache.hit,
+    promptCacheMissTokens: completionCache.miss,
     durationMs: Date.now() - startedAt,
     modelTier: modelRuntime.tier,
     multiplierBps: options.multiplierBps ?? modelRuntime.multiplierBps,

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 本文件验证缓存友好布局的两条硬性保证：
 // 1) system 不含逐轮变动数据（wordCount/记忆召回/Skill 正文/章节状态/指令/封面候选）
 // 2) 快照消息位于 history 与 todoDigest 之间，且原文包含被移出的全部动态内容
-// 3) 同一任务内数据变化（字数增长/记忆刷新）时 system 消息逐字节不变
+// 3) 相同规则下跨 Run 数据变化（字数/记忆/视觉能力）时 system 消息逐字节不变
 
 vi.mock('../../api/lib/prisma.js', () => ({
   prisma: {
@@ -49,7 +49,7 @@ vi.mock('../../api/lib/agent/tools/todo-tools.js', async (importOriginal) => {
 
 const { prisma } = await import('../../api/lib/prisma.js')
 const { searchStoryMemory } = await import('../../api/lib/agent/story-memory.js')
-const { assembleContext } = await import('../../api/lib/agent/context.js')
+const { assembleContext, insertSubagentCatalog } = await import('../../api/lib/agent/context.js')
 
 type AssembleInput = Parameters<typeof assembleContext>[0]
 
@@ -94,7 +94,7 @@ function mockState(overrides?: { novelWordCount?: number; chapterWordCount?: num
   ] as never)
 }
 
-function buildInput(): AssembleInput {
+function buildInput(visionEnabled = false): AssembleInput {
   return {
     // assembleContext 不消费 agent 字段，最小构造即可
     agent: { id: 'writer', name: '写作 Agent' } as unknown as AssembleInput['agent'],
@@ -106,8 +106,8 @@ function buildInput(): AssembleInput {
     chapterId: 'chapter-1',
     prompt: '把第三章开头改得更抓人',
     selection: null,
-    attachments: [],
-    visionEnabled: false,
+    attachments: [{ kind: 'image', name: '参考图.png', url: 'https://example.test/reference.png' }],
+    visionEnabled,
     taskSpec: {
       id: 'spec-1',
       intent: 'revise',
@@ -149,6 +149,8 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     expect(content).toContain('压缩标记')
     expect(content).toContain('站内作品标签库')
     expect(content).toContain('作者当前编辑的章节以尾部快照为准；未指明章节时优先针对该章节操作。')
+    expect(content).toContain('服务端工作区快照协议')
+    expect(content).toContain('作者当前明确硬约束优先于 soft Skill')
 
     // 逐轮变动内容全部不在 system
     expect(content).not.toContain('34567') // 作品 wordCount
@@ -197,13 +199,13 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     expect(String(messages[6].content)).toContain('把第三章开头改得更抓人')
   })
 
-  it('同一任务内数据变化（字数增长/记忆刷新）时 system 逐字节不变，变化只出现在尾部快照', async () => {
+  it('跨 Run 数据与视觉能力变化时 system 逐字节不变，变化只出现在尾部消息', async () => {
     const first = await assembleContext(buildInput())
     const firstSystem = first.messages[0].content
 
     // 第二轮：作品与章节字数增长、记忆召回刷新
     mockState({ novelWordCount: 36000, chapterWordCount: 1500, memoryTitle: '舰队补给线设定' })
-    const second = await assembleContext(buildInput())
+    const second = await assembleContext(buildInput(true))
     const secondSystem = second.messages[0].content
 
     expect(secondSystem).toBe(firstSystem)
@@ -214,5 +216,18 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     expect(firstSnapshot).toContain('炎脉核心设定')
     expect(secondSnapshot).toContain('36000')
     expect(secondSnapshot).toContain('舰队补给线设定')
+    expect(String(second.messages.at(-1)?.content)).toContain('图片像素已直接随本轮发送')
+  })
+
+  it('子 Agent 目录插入尾部执行区，不再改写 system 前缀', async () => {
+    const { messages } = await assembleContext(buildInput())
+    const systemBefore = messages[0].content
+
+    insertSubagentCatalog(messages, '[子 Agent 目录]\n- 审稿员（subagentId=reviewer-1）')
+
+    expect(messages[0].content).toBe(systemBefore)
+    expect(String(messages.at(-3)?.content)).toContain('[服务端子 Agent 目录]')
+    expect(String(messages.at(-2)?.content)).toContain('本轮任务契约')
+    expect(String(messages.at(-1)?.content)).toContain('把第三章开头改得更抓人')
   })
 })

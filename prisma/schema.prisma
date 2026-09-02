@@ -974,6 +974,7 @@ model AiUsageLog {
   targetId          String?        @map("target_id") @db.VarChar(64)
   providerType      AiProviderType @map("provider_type")
   providerMode      String         @map("provider_mode") @db.VarChar(16)
+  providerName      String?        @map("provider_name") @db.VarChar(40)
   modelName         String         @map("model_name") @db.VarChar(128)
   action            String         @db.VarChar(64)
   requestTokens     Int?           @map("request_tokens")
@@ -983,6 +984,8 @@ model AiUsageLog {
   /** 供应商返回的缓存命中/未命中输入 token（DeepSeek 顶层字段或 OpenAI prompt_tokens_details） */
   promptCacheHitTokens  Int?       @map("prompt_cache_hit_tokens")
   promptCacheMissTokens Int?       @map("prompt_cache_miss_tokens")
+  /** 主 Agent Run 归属；主循环等于 targetId，子 Agent 指向 parentRunId。 */
+  agentRunId        String?        @map("agent_run_id") @db.VarChar(64)
   modelTier         String?        @map("model_tier") @db.VarChar(24)
   multiplierBps     Int            @default(10000) @map("multiplier_bps")
   creditChargeMilli Int            @default(0) @map("credit_charge_milli")
@@ -993,7 +996,10 @@ model AiUsageLog {
   chapter           Chapter?       @relation(fields: [chapterId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([createdAt])
   @@index([targetType, targetId])
+  @@index([agentRunId, createdAt])
+  @@index([providerName, modelName, createdAt])
   @@map("ai_usage_logs")
 }
 

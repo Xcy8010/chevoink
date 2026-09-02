@@ -312,9 +312,10 @@ export type AdminTokenManagementPayload = {
     totalTokens: number
     requestTokens: number
     responseTokens: number
-    /** 缓存命中/未命中输入 token（供应商未返回时为 0，命中率由前端按 hit/(hit+miss) 计算） */
+    /** 已观测到的缓存命中/未命中输入 token；是否可观测由 cacheObservedTokens 与 requestTokens 对比。 */
     cacheHitTokens: number
     cacheMissTokens: number
+    cacheObservedTokens: number
     users: number
     webSearchCalls: number
     imageCalls: number
@@ -339,11 +340,14 @@ export type AdminTokenManagementPayload = {
   models?: Array<{
     modelTier: string
     modelLabel: string
+    providerName: string | null
+    modelName: string
     totalTokens: number
     requestTokens: number
     responseTokens: number
     cacheHitTokens: number
     cacheMissTokens: number
+    cacheObservedTokens: number
     requestCount: number
   }>
   /** Agent 运行级缓存聚合（按 runId 分组，取消耗前 20） */
@@ -353,9 +357,27 @@ export type AdminTokenManagementPayload = {
     responseTokens: number
     hitTokens: number
     missTokens: number
+    cacheObservedTokens: number
     chargedMilli: number
     turns: number
+    requests: number
     startedAt: string
+  }>
+  /** 最近 Agent 调用逐轮明细；缓存字段为 null 表示供应商未返回，而 0 表示已观测但未命中。 */
+  runTurns?: Array<{
+    id: string
+    runId: string
+    scope: 'main' | 'subagent'
+    targetId: string | null
+    turn: number | null
+    providerName: string | null
+    modelName: string
+    promptTokens: number
+    responseTokens: number
+    hitTokens: number | null
+    missTokens: number | null
+    chargedMilli: number
+    createdAt: string
   }>
   trend?: Array<{ date: string; requestTokens: number; responseTokens: number }>
 }

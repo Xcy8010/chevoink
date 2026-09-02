@@ -21,7 +21,7 @@ import { readManagedImageDataUrl } from '../agent-attachment-storage.js'
 import { applySessionToolPolicy, getAgentDefinition, getToolsForAgent, type AgentDefinition } from './agents.js'
 import { deregisterActiveRun, registerActiveRun } from './active-runs.js'
 import { clearRunBaselines } from './baseline.js'
-import { assembleContext } from './context.js'
+import { assembleContext, insertSubagentCatalog } from './context.js'
 import { captureUserDirectives, compactSessionContext } from './context-engine.js'
 import { syncNovelMemoryProjection } from './story-memory.js'
 import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
@@ -782,14 +782,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     if (agent.type === 'orchestrator') {
       const { renderSubagentCatalog } = await import('./productivity.js')
       const catalog = await renderSubagentCatalog(params.userId, params.novelId)
-      if (catalog) {
-        const firstSystem = messages.find((message) => message.role === 'system')
-        if (firstSystem && typeof firstSystem.content === 'string') {
-          firstSystem.content = `${firstSystem.content}\n\n${catalog}`
-        } else {
-          messages.unshift({ role: 'system', content: catalog })
-        }
-      }
+      insertSubagentCatalog(messages, catalog)
     }
     if (directVisionEnabled) {
       for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -989,6 +982,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           chapterId: params.chapterId,
           targetType: 'agentRun',
           targetId: runId,
+          agentRunId: runId,
           turn,
           modelTier: modelRuntime.tier,
           multiplierBps: modelRuntime.multiplierBps,
@@ -1169,6 +1163,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
             chapterId: params.chapterId,
             targetType: 'agentRun',
             targetId: runId,
+            agentRunId: runId,
             turn: null,
             modelTier: modelRuntime.tier,
             multiplierBps: modelRuntime.multiplierBps,
