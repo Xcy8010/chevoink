@@ -196,6 +196,8 @@ export default function StudioWorkspace() {
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
+  // 会话历史拉取中：任务状态卡显示占位而非卸载，切换任务/作品时右侧列宽度不跳变
+  const agentHydrating = useAgentStore((state) => state.workspaceHydrating)
   const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const agentTodos = useAgentStore((state) => state.todos)
   const agentTodosVersion = useAgentStore((state) => state.todosVersion)
@@ -4638,7 +4640,8 @@ export default function StudioWorkspace() {
             onAutoFollowChange={setAutoFollow}
             onOpenStudioSettings={(section = 'general') => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
           /> : null}
-          <div className={cn('flex min-w-0 flex-1 flex-col transition-opacity', studioQuery.isPlaceholderData && 'pointer-events-none opacity-60')}>
+          <div className={cn('flex min-w-0 flex-1 flex-col transition-opacity', workspacePerspective === 'ide' && studioQuery.isPlaceholderData && 'pointer-events-none opacity-60')}>
+          {/* 半透明防误编辑仅限 IDE 表单视图；Work 对话区数据不依赖 studioQuery，透明只会造成无意义闪烁 */}
           <StudioCommandBar
             workspaceControls={workspacePerspective === 'ide'}
             workspaceSidebarOpen={workspacePerspective === 'ide' ? ideTreeOpen : workspaceSidebarOpen}
@@ -4685,7 +4688,7 @@ export default function StudioWorkspace() {
                   onApproveAllReviews={handleApproveAllPendingReviews}
                   onRejectAllReviews={handleRequestRejectAllPendingReviews}
                   appearance="dock"
-                /></div></div> : undefined}
+                /></div></div> : agentHydrating ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3" role="status" aria-label="正在载入任务状态"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><div className="space-y-1.5 px-1 pb-1 pt-1">{[0, 1, 2].map((row) => <div key={row} className="h-8 rounded-[10px] bg-[var(--surface-default)]" style={{ width: row === 1 ? '72%' : '92%', opacity: 1 - row * 0.15 }} />)}</div></div></div> : undefined}
                 inspector={<WorkInspector
                   tab={workInspectorTab}
                   onTabChange={setWorkInspectorTab}

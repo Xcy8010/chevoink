@@ -457,6 +457,8 @@ export function AgentPanel({
     }
 
     setHistoryLoading(true)
+    // 同步全局水合标记：右侧任务状态卡在历史到达前显示占位而非卸载，避免布局宽度跳变
+    useAgentStore.getState().setWorkspaceHydrating(true)
     fetchAgentSessionMessages(sessionId)
       .then(({ messages: history, activeRunId }) => {
         if (cancelled) {
@@ -491,11 +493,14 @@ export function AgentPanel({
       .finally(() => {
         if (!cancelled) {
           setHistoryLoading(false)
+          useAgentStore.getState().setWorkspaceHydrating(false)
         }
       })
 
     return () => {
       cancelled = true
+      // 兜底：会话切换/面板卸载时结束水合标记，避免早退路径让任务状态卡占位悬挂
+      useAgentStore.getState().setWorkspaceHydrating(false)
     }
   }, [sessionId, connect, disconnect])
 
@@ -1065,14 +1070,12 @@ export function AgentPanel({
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {historyLoading ? (
-          /* 切换任务/作品时的对话历史加载态：交替左右气泡骨架 + 淡入，
-             历史到达后消息原地浮现，避免「清空 → 一行字 → 消息」的闪屏跳变 */
-          <div className="space-y-4 py-2 motion-safe:animate-fade-in" aria-label="正在载入对话" aria-live="polite">
-            {[0, 1, 2].map((row) => (
-              <div key={row} className={cn('flex', row % 2 === 1 ? 'justify-end' : 'justify-start')}>
-                <div className="h-9 rounded-[18px] bg-[var(--surface-muted)]" style={{ width: row === 1 ? '46%' : '62%' }} />
-              </div>
-            ))}
+          /* 切换任务/作品时的对话历史加载态：Codex 式 Agent 图标流光（居中），
+             图标形状作 mask、渐变光带扫过；历史到达后消息原地浮现，避免闪屏跳变 */
+          <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
+            <span
+              className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_2s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+            />
           </div>
         ) : messages.length === 0 ? (
           <AgentEmptyWelcome

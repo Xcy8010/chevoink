@@ -61,10 +61,31 @@ export async function listLoopSessionMessages(
     where: { sessionId },
     // 必须先取最新窗口再恢复为时间正序。旧实现按 asc + take 会永久截掉
     // 长会话末尾的工具操作与最终总结，刷新后看起来就像“上一轮消失”。
+    // 窗口提到 2000：多章长会话（每轮几十个工具消息）轻松超过 500，
+    // 截掉的会是最早几轮（开场/前几章的总结与操作），刷新后像“前面的内容丢了”。
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: 500,
+    take: 2000,
   })
   const records = newestRecords.reverse()
+
+  // 轮次完整性：窗口边界若切在同一轮 run 中间，把该轮更早的消息补齐。
+  // 否则最老一轮只剩后半截（如只剩总结没有操作），看起来像内容丢失。
+  const boundary = records[0]
+  if (boundary?.runId) {
+    const runEarliest = await prisma.agentMessage.findFirst({
+      where: { sessionId, runId: boundary.runId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    })
+    if (runEarliest && runEarliest.id !== boundary.id) {
+      const remainder = await prisma.agentMessage.findMany({
+        where: { sessionId, runId: boundary.runId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      })
+      const known = new Set(records.map((record) => record.id))
+      records.unshift(...remainder.filter((record) => !known.has(record.id)))
+    }
+  }
 
   const messages: AgentUIMessage[] = []
   for (const record of records) {

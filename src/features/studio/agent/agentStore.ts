@@ -195,6 +195,8 @@ type AgentStoreState = {
   activeSessionId: string | null
   /** 当前 messages 已完成恢复的会话；用于 Work/IDE 切换时复用同一份会话而不闪烁重载。 */
   loadedSessionId: string | null
+  /** 会话历史拉取中（切任务/切作品）：右侧任务状态卡据此显示占位而非卸载，避免布局宽度跳变 */
+  workspaceHydrating: boolean
   /** 输入框草稿：提升到全局 store，避免面板重挂载时丢失未发送内容 */
   composerDraft: string
   /** 输入框附件（已上传成功的元数据）：同草稿提升全局，沉浸/普通视图重挂载不丢 */
@@ -223,6 +225,8 @@ type AgentStoreState = {
   /** 续接服务端仍在进行的 run（刷新后恢复）：不追加用户消息，从 seq 0 重放事件重建直播 */
   resumeRun: (runId: string, sessionId: string | null) => void
   restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
+  /** 标记会话历史拉取开始/结束（配合 workspaceHydrating） */
+  setWorkspaceHydrating: (value: boolean) => void
   resetRun: () => void
   clearError: () => void
   /** 作者回到该任务窗口：清除未读信号与运行中登记 */
@@ -451,6 +455,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   errorCode: null,
   activeSessionId: null,
   loadedSessionId: null,
+  workspaceHydrating: false,
   composerDraft: '',
   composerAttachments: [],
   composerReferences: [],
@@ -548,8 +553,11 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       toolNavigationRequest: null,
       // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
       ...deriveSessionStateFromMessages(restored),
+      workspaceHydrating: false,
     })
   },
+
+  setWorkspaceHydrating: (value) => set({ workspaceHydrating: value }),
 
   resetRun: () =>
     set({

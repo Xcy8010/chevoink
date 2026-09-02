@@ -326,8 +326,10 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const projectTasks = (novelId: string): SidebarTask[] => {
     const remote = (sessionsByNovel.get(novelId) ?? []).map((session) => ({ ...session, temporary: false }))
     if (novelId !== props.currentNovelId) return sortWorkspaceItemsByLatest(remote)
-    const localIds = new Set(localTasks.map((task) => task.id))
-    return sortWorkspaceItemsByLatest([...localTasks, ...remote.filter((task) => !localIds.has(task.id))])
+    // 同 id 任务以服务端为准（快照只补服务端尚没有的本地临时任务）：
+    // 快照→服务端合并时 updatedAt 不再漂移，切换作品后任务列表不重排跳动
+    const remoteIds = new Set(remote.map((task) => task.id))
+    return sortWorkspaceItemsByLatest([...remote, ...localTasks.filter((task) => !remoteIds.has(task.id))])
   }
   const pinnedNovels = sortWorkspaceItemsByLatest(novels.filter((item) => item.pinnedAt))
   const pinnedSessions = sortWorkspaceItemsByLatest(sessions.filter((item) => item.pinnedAt))
