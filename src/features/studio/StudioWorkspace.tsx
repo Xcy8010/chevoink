@@ -619,11 +619,11 @@ export default function StudioWorkspace() {
 
   useEffect(() => {
     localStudioPayloadRef.current = null
-    setCurrentNovel(null)
-    setNovelForm(null)
-    setProjectNotes(null)
-    setCoverForm(null)
-    setCoverAssets([])
+    // Codex 式无骨架切换：渲染基座（currentNovel/novelForm/projectNotes/coverForm）不清空，
+    // 配合 studioQuery 的 keepPreviousData 占位帧继续渲染上一个作品视图（isPlaceholderData
+    // 半透明禁点），新载荷到达后由下方同步 effect 全量替换——否则这里清成 null 会立刻
+    // 命中渲染入口的骨架短路，整个工作区卸载重建，左侧栏滚动与展开状态全部丢失。
+    // 仅清编辑态与选中态，防止旧作品的草稿/脏标记/封面选中泄漏进新作品上下文。
     setSelectedCoverId(null)
     setChapters([])
     setVolumes([])
