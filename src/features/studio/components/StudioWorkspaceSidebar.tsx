@@ -17,7 +17,7 @@ import type { AgentSession, FeedbackKind, Novel } from '../../../../shared/contr
 import { updateNovelMeta } from '../api'
 import { fetchAgentSessions, fetchSessionsRunStatus, renameAgentSession, updateAgentSessionSettings } from '../agent/agentApi'
 import ChevoinkAgentMark from '../agent/components/ChevoinkAgentMark'
-import { isRunActive, useAgentStore } from '../agent/agentStore'
+import { useAgentStore } from '../agent/agentStore'
 import type { AgentTaskSidebarItem } from './AgentTaskSidebar'
 
 type SettingsSection = 'general' | 'models' | 'operations' | 'archives'
@@ -156,6 +156,8 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const sessionSignals = useAgentStore((state) => state.sessionSignals)
   const runningSessionIds = useAgentStore((state) => state.runningSessionIds)
   const agentPhase = useAgentStore((state) => state.phase)
+  /** 正在直播的会话：phase 只对它成立，不能拿去判断其他任务行 */
+  const livePhaseSessionId = useAgentStore((state) => state.activeSessionId)
   const trackedRunningIds = useMemo(() => [...runningSessionIds], [runningSessionIds])
   const sidebarSessionIds = useMemo(
     () => [...new Set([...localTasks.map((task) => task.id), ...sessions.map((session) => session.id), ...trackedRunningIds])].slice(0, 60),
@@ -177,6 +179,8 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const summary = creditQuery.data
   const remainingPercent = summary?.dailyAllowance ? Math.max(0, Math.min(100, Math.round(summary.totalRemaining / summary.dailyAllowance * 100))) : 100
   const warningThreshold: 5 | 10 | 20 | null = remainingPercent <= 5 ? 5 : remainingPercent <= 10 ? 10 : remainingPercent <= 20 ? 20 : null
+  // 用真实余额而不是取整百分比判耗尽：0.4% 会四舍五入成 0%，但额度还能用
+  const creditsExhausted = summary ? summary.totalRemaining <= 0 : false
 
   useEffect(() => setExpandedProjects((current) => new Set(current).add(props.currentNovelId)), [props.currentNovelId])
   useEffect(() => {
@@ -333,13 +337,23 @@ export default function StudioWorkspaceSidebar(props: Props) {
     const active = task.id === props.activeTaskId
     const signal = sessionSignals[task.id]
     const remoteStatus = remoteRunStatuses[task.id]?.status
-    const spinning = (active && isRunActive(agentPhase)) || runningSessionIds.has(task.id) || remoteStatus === 'running' || remoteStatus === 'queued'
-    // 状态指示器优先级：待确认（黄）> 运行中（转圈）> 异常中止（红）/ 已完成（绿，仅未读时）> 占位
-    const indicator = signal?.kind === 'attention' || remoteStatus === 'awaiting_approval'
+    // 正在直播的任务窗口以本地 phase 为唯一真相：run-status 轮询最多滞后 10s，
+    // 作者答完选择后不能再残留黄点，必须立即回到转圈
+    const livePhase = active && livePhaseSessionId === task.id ? agentPhase : null
+    const awaiting = livePhase
+      ? livePhase === 'awaiting_approval' || livePhase === 'awaiting_input'
+      : signal?.kind === 'attention' || remoteStatus === 'awaiting_approval'
+    const spinning = livePhase
+      ? livePhase === 'starting' || livePhase === 'running'
+      : runningSessionIds.has(task.id) || remoteStatus === 'running' || remoteStatus === 'queued'
+    // 异常中止持续显示（含当前任务窗口内），直到作者发新提示词或任务恢复运行
+    const aborted = signal?.kind === 'failed' || livePhase === 'failed' || livePhase === 'cancelled'
+    // 状态指示器优先级：待作者选择（黄）> 运行中（转圈）> 异常中止（红）> 已完成（绿，仅未读且不在该窗口内）> 占位
+    const indicator = awaiting
       ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
       : spinning
         ? <LoaderCircle className="h-3 w-3 animate-spin text-[var(--text-tertiary)]" aria-hidden="true" />
-        : signal?.kind === 'failed' && !active
+        : aborted
           ? <span className="h-1.5 w-1.5 rounded-full bg-rose-500" aria-hidden="true" />
           : signal?.kind === 'done' && !active
             ? <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
@@ -377,7 +391,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
       </div>
 
       <div className="relative shrink-0 border-t border-[var(--border-subtle)]" ref={accountRef}>
-        {warningThreshold && !warningDismissed ? <div className="mx-2 my-2 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-2.5 text-[10px]"><div className="flex items-center gap-2"><Gauge className="h-3.5 w-3.5 text-amber-500" /><span className="flex-1">剩余 {remainingPercent}% 使用量</span><button type="button" onClick={() => { if (summary?.resetsAt) window.localStorage.setItem(`chevoink:credit-warning:${summary.resetsAt}:${warningThreshold}`, 'dismissed'); setWarningDismissed(true) }} aria-label="关闭提醒"><X className="h-3 w-3" /></button></div></div> : null}
+        {warningThreshold && !warningDismissed ? <div className="mx-2 my-2 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-2.5 text-[10px]"><div className="flex items-start gap-2"><Gauge className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" /><span className="min-w-0 flex-1 leading-4">{creditsExhausted ? <><span className="font-medium text-[var(--text-primary)]">额度已耗尽</span><br />邀请好友领取 300 Credits！</> : `剩余 ${remainingPercent}% 使用量`}</span><button type="button" onClick={openInvite} className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-emerald-600 px-2 font-medium text-white transition-opacity hover:opacity-90"><Gift className="h-3 w-3" />邀请</button><button type="button" onClick={() => { if (summary?.resetsAt) window.localStorage.setItem(`chevoink:credit-warning:${summary.resetsAt}:${warningThreshold}`, 'dismissed'); setWarningDismissed(true) }} className="shrink-0 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" aria-label="关闭提醒"><X className="h-3 w-3" /></button></div></div> : null}
         <button type="button" onClick={() => setAccountOpen((value) => !value)} className="flex h-11 w-full items-center gap-2.5 px-3 text-left hover:bg-[var(--surface-muted)]" aria-expanded={accountOpen}><Avatar name={sessionUser?.nickname ?? '创作者'} src={sessionUser?.avatarUrl} size="sm" className="h-7 w-7" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{sessionUser?.nickname ?? '创作者'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', accountOpen && 'rotate-180')} /></button>
         {accountOpen ? <div className="absolute bottom-[calc(100%-2px)] left-2 right-2 z-[70] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_20px_55px_rgba(15,23,42,.22)] motion-safe:origin-bottom motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(.2,.8,.2,1)]"><div className="mb-1 flex items-center gap-2 rounded-[10px] bg-emerald-600 px-3 py-2.5 text-[11px] text-white shadow-[0_5px_16px_rgba(5,150,105,.18)]"><Gift className="h-3.5 w-3.5" /><span className="font-medium">公测期间，每日送 450 Credits！</span></div><button type="button" onClick={() => setUsageExpanded((value) => !value)} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs font-medium hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" /><span className="flex-1">剩余用量</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', usageExpanded && 'rotate-180')} /></button>{usageExpanded ? <div className="mx-1 mb-1 rounded-[10px] bg-[var(--surface-muted)] px-3 py-2.5 text-[11px]"><div className="flex items-end justify-between"><div><p className="text-[var(--text-tertiary)]">当前可用</p><p className="mt-0.5 text-base font-semibold tabular-nums">{summary ? formatCreditAmount(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p></div><span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"><div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${remainingPercent}%` }} /></div><div className="mt-2 flex justify-between text-[10px] text-[var(--text-tertiary)]"><span>每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits</span><span>{formatCreditResetLabel(summary?.resetsAt)}</span></div><button type="button" onClick={() => navigate('/account/usage')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button></div> : null}<button type="button" onClick={openInvite} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Gift className="h-3.5 w-3.5" />邀请好友</button><button type="button" onClick={() => { setAccountOpen(false); props.onOpenStudioSettings('general') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />创作区设置</button><button type="button" onClick={() => { setAccountOpen(false); setFeedbackKind('suggestion') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Lightbulb className="h-3.5 w-3.5" />提交建议</button><button type="button" onClick={() => { setAccountOpen(false); setFeedbackKind('bug') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Bug className="h-3.5 w-3.5" />问题反馈</button><button type="button" onClick={() => navigate('/')} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" />返回首页</button></div> : null}
       </div>

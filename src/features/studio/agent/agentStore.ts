@@ -233,7 +233,7 @@ type AgentStoreState = {
   endSessionHydration: (sessionId: string) => void
   resetRun: () => void
   clearError: () => void
-  /** 作者回到该任务窗口：清除未读信号与运行中登记 */
+  /** 作者回到该任务窗口：清除完成/待确认未读信号与运行中登记（异常中止的红点持久保留） */
   dismissSessionSignal: (sessionId: string) => void
   /** 侧栏轮询兑底：同步服务端 run 状态，维护运行中登记并产出完成/失败未读信号 */
   syncRemoteRunStatuses: (statuses: Record<string, AgentSessionRunStatus | null>) => void
@@ -561,8 +561,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
-      // 续接仍在进行的 run：侧栏保持运行中展示（刷新后恢复场景）
-      ...(sessionId ? { runningSessionIds: new Set(state.runningSessionIds).add(sessionId) } : {}),
+      // 续接仍在进行的 run：侧栏保持运行中展示（刷新后恢复场景）；
+      // 任务重新跑起来后上一轮的异常中止红点不再成立，一并撤下
+      ...(sessionId
+        ? {
+            runningSessionIds: new Set(state.runningSessionIds).add(sessionId),
+            ...(state.sessionSignals[sessionId] ? (() => { const next = { ...state.sessionSignals }; delete next[sessionId]; return { sessionSignals: next } })() : {}),
+          }
+        : {}),
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
     })),
 
@@ -639,11 +645,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
 
   dismissSessionSignal: (sessionId) =>
     set((state) => {
-      const hasSignal = Boolean(state.sessionSignals[sessionId])
+      const signal = state.sessionSignals[sessionId]
+      // 异常中止（红点）是必须被处理的事实，进入任务窗口不算已消费：
+      // 红点持续显示到作者发出新提示词（beginRun）或任务恢复运行（resumeRun / 轮询到 running）为止
+      const dropSignal = Boolean(signal) && signal.kind !== 'failed'
       const isRunning = state.runningSessionIds.has(sessionId)
-      if (!hasSignal && !isRunning) return state
+      if (!dropSignal && !isRunning) return state
       const signals = { ...state.sessionSignals }
-      delete signals[sessionId]
+      if (dropSignal) delete signals[sessionId]
       const running = new Set(state.runningSessionIds)
       running.delete(sessionId)
       return { sessionSignals: signals, runningSessionIds: running }
@@ -663,21 +672,23 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
               signals[sessionId] = { runId: entry.runId, kind: 'attention', at: Date.now() }
               changed = true
             }
-          } else if (signals[sessionId]?.kind === 'attention') {
-            // 任务已从挂起恢复运行，未读黄点不再成立
+          } else if (signals[sessionId]) {
+            // 任务已从挂起/异常中止恢复运行，未读黄点与红点都不再成立
             delete signals[sessionId]
             changed = true
           }
           continue
         }
         // 终态：仅此前已登记运行中的会话才产出一次性信号（历史终态不回传，避免误报未读）；
-        // paused 为作者主动停止、当前正查看的会话无需提示，均只撤登记
+        // paused 为作者主动停止，只撤登记不提示
         if (!running.has(sessionId)) continue
         running.delete(sessionId)
         changed = true
         const kind: SessionSignalKind | null =
           entry.status === 'completed' ? 'done' : entry.status === 'failed' || entry.status === 'cancelled' ? 'failed' : null
-        if (!kind || sessionId === state.activeSessionId) continue
+        if (!kind) continue
+        // 已完成（绿）不打扰正在查看该任务的作者；异常中止（红）当前窗口内同样要显示
+        if (kind === 'done' && sessionId === state.activeSessionId) continue
         signals[sessionId] = { runId: entry.runId, kind, at: Date.now() }
       }
       return changed ? { runningSessionIds: running, sessionSignals: signals } : {}
@@ -988,8 +999,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           }
 
         case 'run.finished':
-          // 只撤运行中登记，不写终态未读信号：SSE 连接着当前会话，收到 finished 时作者必然正在看，
-          // 若写入信号，切走后信号才显现（绿点“突然亮”假象）；切走后才完成的绿/红点由 run-status 轮询层产生
+          // 完成（绿）不写未读信号：SSE 连着当前会话，收到 finished 时作者必然正在看，
+          // 若写入信号，切走后信号才显现（绿点“突然亮”假象）；切走后才完成的绿点由 run-status 轮询层产生。
+          // 异常中止（红）相反：必须当场写入并持续提示，直到作者发新提示词或任务恢复运行
           return {
             ...base,
             phase: event.status,
@@ -1001,6 +1013,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             messages: settleRunningToolParts(state.messages, '已中断'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
             ...withoutRunningSession(state),
+            ...(event.status === 'succeeded' ? withoutActiveSessionSignal(state) : noteSessionSignal(state, 'failed')),
           }
 
         case 'error':
@@ -1014,6 +1027,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                   phase: 'failed' as const,
                   messages: settleRunningToolParts(state.messages, '已中断'),
                   workspaceActivities: settleRunningActivities(state.workspaceActivities),
+                  // 不可恢复错误可能没有后续的 run.finished，这里就把红点落下
+                  ...noteSessionSignal(state, 'failed'),
                 }),
           }
 

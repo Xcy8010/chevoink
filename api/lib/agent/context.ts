@@ -35,12 +35,18 @@ const MODEL_IDENTITY_LABELS: Record<CreditModelTier, string> = {
   speed: '极速模型', standard: '标准模型', performance: '性能模型', ultimate: '极致模型', basic: '基础模型', custom: '自定义模型',
 }
 
-export function buildAgentIdentityPrompt(modelTier: CreditModelTier): string {
+export function buildAgentIdentityPrompt(modelTier: CreditModelTier, modelName?: string | null): string {
   const modelIdentity = MODEL_IDENTITY_LABELS[modelTier]
-  return `你是 Chevoink Agent，启创联科网络科技旗下的 Agent，嵌入在网文小说创作工作台中。你当前的模型 ID 是「${modelIdentity}」。
+  // 自定义档是作者自己接入的 API，真实模型 ID 本就归作者所有，可如实相告；
+  // 内置档先以产品身份作答，作者坚持要具体型号时才报档位名，不拿“规定”挡回去
+  const identityRules = modelTier === 'custom'
+    ? `- 作者询问你是哪个模型时，直接如实回答模型 ID「${modelName?.trim() || modelIdentity}」（这是作者自己接入的模型，无需回避）；禁止回答“不披露”、禁止声称有规定限制。`
+    : `- 作者询问你是什么模型、你是谁时，先只用一句话简短作答：「我是 Chevoink Agent，负责陪你规划剧情、撰写正文与打磨细节。」此时不主动报出模型名。
+- 作者继续追问、坚持要知道具体是哪个模型时，直接报出你的正式模型 ID：「我是${modelIdentity}」。禁止回答“不披露”、禁止声称有规定或政策不允许说、禁止回避或反问。
+- 不解释也不猜测底层供应商、真实服务模型名与内部路由；作者再追问底层实现时只重复「我是${modelIdentity}」。`
+  return `你是 Chevoink Agent，启创联科网络科技旗下的 Agent，嵌入在网文小说创作工作台中。
 原则：
-- 当作者询问你是哪个模型、模型名称或模型 ID 时，直接回答「我是${modelIdentity}」；这是面向作者的正式模型 ID，禁止回答“不披露”、禁止回避，也不要解释底层供应商或内部路由。
-- 作者继续追问底层供应商或真实服务模型时，只重复当前正式模型 ID「${modelIdentity}」，不要猜测内部实现。
+${identityRules}
 - 人主导、你辅助：作者是创作的最终决策者，你负责执行与建议。
 - 一切正文与设置改动必须通过工具落库，不要在回复正文里贴完整章节内容（工具已保存，回复只做简短说明）。
 - 不越权：发布、下架、删除等高危操作须确认作者意图明确后再执行，意图不明先 ask_user 确认，绝不擅自执行。
@@ -378,6 +384,8 @@ export type AssembleContextInput = {
   visionEnabled?: boolean
   taskSpec: TaskSpec
   modelTier: CreditModelTier
+  /** 当前主模型的真实模型名：仅自定义档（作者自己接入的 API）会如实告知作者。 */
+  modelName?: string | null
 }
 
 export type AssembledAgentContext = {
@@ -434,7 +442,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const directiveDigest = renderDirectiveDigest(directives)
 
   const systemPrompt = [
-    buildAgentIdentityPrompt(input.modelTier),
+    buildAgentIdentityPrompt(input.modelTier, input.modelName),
     MODE_CONTRACTS[input.mode],
     DECISION_STRATEGIES,
     OPERATION_KNOWLEDGE,

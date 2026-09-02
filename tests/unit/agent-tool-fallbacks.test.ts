@@ -84,9 +84,16 @@ describe('Agent 工具协议与结构化输出兜底', () => {
 describe('模型身份、排序与聊天区尺寸契约', () => {
   it.each([
     ['speed', '极速模型'], ['standard', '标准模型'], ['performance', '性能模型'], ['ultimate', '极致模型'],
-  ] as const)('%s 档位直接声明正式模型 ID %s', (tier, label) => {
+  ] as const)('%s 档位先报 Chevoink Agent，追问才报档位名 %s', (tier, label) => {
     const prompt = buildAgentIdentityPrompt(tier)
+    expect(prompt).toContain('我是 Chevoink Agent')
     expect(prompt).toContain(`我是${label}`)
+    expect(prompt).toContain('禁止回答“不披露”')
+  })
+
+  it('自定义档如实报出作者自己接入的真实模型 ID', () => {
+    const prompt = buildAgentIdentityPrompt('custom', 'deepseek-chat')
+    expect(prompt).toContain('deepseek-chat')
     expect(prompt).toContain('禁止回答“不披露”')
   })
 

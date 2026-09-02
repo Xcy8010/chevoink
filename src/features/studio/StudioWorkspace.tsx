@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
+import { BookOpen, BookOpenText, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, SlidersHorizontal, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -30,6 +30,7 @@ import MetaPanel from './components/MetaPanel'
 import NovelCoverCropDialog from './components/NovelCoverCropDialog'
 import PublishNovelDialog from './components/PublishNovelDialog'
 import StudioCommandBar from './components/StudioCommandBar'
+import StudioMobileAccountCard from './components/StudioMobileAccountCard'
 import CreateNovelDialog from './components/CreateNovelDialog'
 import StudioWorkspaceSidebar from './components/StudioWorkspaceSidebar'
 import { AgentConversationRail } from './components/AgentTaskSidebar'
@@ -4577,10 +4578,11 @@ export default function StudioWorkspace() {
             onClose={() => setMobileMoreOpen(false)}
             title={novelTitleMissing ? '未命名作品' : novelTitle}
           >
+            <StudioMobileAccountCard />
             <div className="space-y-0.5 px-3 pt-1">
               {(
                 [
-                  { key: 'meta', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
+                  { key: 'meta', sectionLabel: '本作品', label: novelTitleMissing ? '去命名作品' : '作品设置', icon: Settings2, action: () => setMobileView('meta') },
                   { key: 'cover', label: '封面工坊', icon: ImagePlus, action: () => setMobileView('cover') },
                   ...(featureFlags.memory2
                     ? [{ key: 'memory', label: '关系网', icon: Network, action: () => setMobileView('memory') }]
@@ -4595,6 +4597,8 @@ export default function StudioWorkspace() {
                     ? [{ key: 'preview', label: '预览阅读', icon: BookOpen, action: () => navigate(previewHref) }]
                     : []),
                   { key: 'create-chapter', label: '新建章节', icon: FileText, action: () => handleRequestCreateChapter() },
+                  // 创作区级（非本作品）入口单独成组：手机没有侧栏账户菜单与 IDE 顶栏「…」菜单，只能落在这里
+                  { key: 'studio-settings', sectionLabel: '创作区', label: '创作区设置', icon: SlidersHorizontal, action: () => { setStudioSettingsSection('general'); setStudioSettingsOpen(true) } },
                   { key: 'feedback-suggestion', label: '提交建议', icon: Lightbulb, action: () => setFeedbackKind('suggestion') },
                   { key: 'feedback-bug', label: '问题反馈', icon: Bug, action: () => setFeedbackKind('bug') },
                   // 删除条件与电脑端一致：仅草稿或已下架可删，已发布时仍可点击但只给 toast 提示
@@ -4608,14 +4612,17 @@ export default function StudioWorkspace() {
                   },
                 ] as Array<{
                   key: string
+                  /** 分组标题：该项之前插入一行小标题，作品级与创作区级操作不再平铺在一起 */
+                  sectionLabel?: string
                   label: string
                   icon: typeof PenLine
                   action: () => void
                   danger?: boolean
                   disabled?: boolean
                 }>
-              ).map(({ key, label, icon: Icon, action, danger, disabled }) => (
+              ).map(({ key, sectionLabel, label, icon: Icon, action, danger, disabled }) => (
                 <Fragment key={key}>
+                  {sectionLabel ? <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-[var(--text-tertiary)]">{sectionLabel}</p> : null}
                   {danger ? <div className="my-1 border-t border-[var(--border-subtle)]" /> : null}
                   <button
                     type="button"

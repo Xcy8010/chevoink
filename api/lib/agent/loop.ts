@@ -776,6 +776,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       visionEnabled: directVisionEnabled,
       taskSpec,
       modelTier: modelRuntime.tier,
+      modelName: modelRuntime.modelName,
     })
     const messages: ChatMessage[] = assembledContext.messages
     // 子 Agent 目录注入：主控据此按触发条件用 subagent_run 像调工具一样内嵌调用子 Agent（codex/Zcode 模式）
