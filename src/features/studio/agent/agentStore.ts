@@ -924,6 +924,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           }
 
         case 'run.finished':
+          // 只撤运行中登记，不写终态未读信号：SSE 连接着当前会话，收到 finished 时作者必然正在看，
+          // 若写入信号，切走后信号才显现（绿点“突然亮”假象）；切走后才完成的绿/红点由 run-status 轮询层产生
           return {
             ...base,
             phase: event.status,
@@ -935,9 +937,6 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             messages: settleRunningToolParts(state.messages, '已中断'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
             ...withoutRunningSession(state),
-            // 未读终态信号：成功→绿点、失败/取消→红点；当前窗口内完成时同样记录，
-            // 切走再回来才显示（宿主在激活窗口时 dismiss）
-            ...noteSessionSignal(state, event.status === 'succeeded' ? 'done' : 'failed'),
           }
 
         case 'error':

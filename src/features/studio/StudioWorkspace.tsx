@@ -4063,7 +4063,11 @@ export default function StudioWorkspace() {
     return <StudioSkeleton />
   }
 
-  const novelTitleState = resolveNovelTitleState(currentNovel)
+  const novelTitleState = resolveNovelTitleState(
+    // 跨作品切换瞬间：新作品载荷未到达前 currentNovel 仍是上一部作品，
+    // 从作品列表缓存里取路由指向的作品标题先行展示，侧栏高亮与命令栏标题立即跟上不再跳变
+    currentNovel.id === activeNovelId ? currentNovel : novelOptions.find((item) => item.id === activeNovelId) ?? currentNovel,
+  )
   const novelTitle = novelTitleState.title
   const novelTitleMissing = novelTitleState.missing
   const wordCountLabel = formatWordCount(currentNovel.wordCount)
@@ -4614,7 +4618,7 @@ export default function StudioWorkspace() {
             perspective={workspacePerspective}
             perspectiveSwitchEnabled={featureFlags.dualWorkspace}
             onPerspectiveChange={setWorkspacePerspective}
-            currentNovelId={currentNovel.id}
+            currentNovelId={activeNovelId}
             currentNovelTitle={novelTitle}
             novels={novelOptions}
             novelsLoading={myNovelsQuery.isLoading}

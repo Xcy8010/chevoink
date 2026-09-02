@@ -1065,9 +1065,14 @@ export function AgentPanel({
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {historyLoading ? (
-          <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            正在载入对话…
+          /* 切换任务/作品时的对话历史加载态：交替左右气泡骨架 + 淡入，
+             历史到达后消息原地浮现，避免「清空 → 一行字 → 消息」的闪屏跳变 */
+          <div className="space-y-4 py-2 motion-safe:animate-fade-in" aria-label="正在载入对话" aria-live="polite">
+            {[0, 1, 2].map((row) => (
+              <div key={row} className={cn('flex', row % 2 === 1 ? 'justify-end' : 'justify-start')}>
+                <div className="h-9 rounded-[18px] bg-[var(--surface-muted)]" style={{ width: row === 1 ? '46%' : '62%' }} />
+              </div>
+            ))}
           </div>
         ) : messages.length === 0 ? (
           <AgentEmptyWelcome
@@ -1077,7 +1082,7 @@ export function AgentPanel({
             showSuggestions={showEmptySuggestions}
           />
         ) : (
-          <div className="flex flex-col gap-4 pb-2">
+          <div className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
             {messages.map((message) => {
               if (message.role === 'user') {
                 return (
