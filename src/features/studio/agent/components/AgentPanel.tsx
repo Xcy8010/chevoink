@@ -1366,7 +1366,7 @@ export function AgentPanel({
                     summaryExpanded={blockExpanded}
                     onToggleSummary={handleToggleBlockSummary}
                   />
-                  {/* 结论操作条：每个对话块结尾均提供复制与创建分支（qoder/Trae 风格，流式进行中不显示） */}
+                  {/* 结论操作条：每个对话块结尾均提供复制与创建分支（纯 icon，悬停 title 说明，流式进行中不显示） */}
                   {isBlockLast && !messageRunActive && getMessageText(message.parts) ? (
                     <div className="mt-1 flex justify-start gap-0.5">
                       <button
@@ -1374,30 +1374,25 @@ export function AgentPanel({
                         onClick={() =>
                           void handleCopyText(message.id, getMessageText(message.parts))
                         }
-                        className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
                         aria-label="复制回复"
+                        title={copiedId === message.id ? '已复制' : '复制'}
                       >
                         {copiedId === message.id ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 text-emerald-500" />
-                            已复制
-                          </>
+                          <Check className="h-3.5 w-3.5 text-emerald-500" />
                         ) : (
-                          <>
-                            <Copy className="h-3.5 w-3.5" />
-                            复制
-                          </>
+                          <Copy className="h-3.5 w-3.5" />
                         )}
                       </button>
                       {sessionId ? (
                         <button
                           type="button"
                           onClick={() => setForkTarget({ messageId: message.id })}
-                          className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
                           aria-label="从这条对话创建分支"
+                          title="创建分支"
                         >
                           <GitBranch className="h-3.5 w-3.5" />
-                          创建分支
                         </button>
                       ) : null}
                     </div>

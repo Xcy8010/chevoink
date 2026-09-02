@@ -1,0 +1,5 @@
+{
+  // 内置 CSS 校验器不认识 Tailwind 的 @tailwind 指令会报 unknownAtRules 警告，
+  // 仅为编辑器提示问题（构建走 PostCSS + Tailwind，不受影响），在此静默
+  "css.lint.unknownAtRules": "ignore"
+}

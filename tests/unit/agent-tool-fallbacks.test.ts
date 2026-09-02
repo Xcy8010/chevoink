@@ -33,7 +33,8 @@ describe('Agent 工具协议与结构化输出兜底', () => {
     const coerced = tool?.coerceArgs?.({ arguments: JSON.stringify({ research_topic: '县城旧案', category: '现实悬疑', signals: '新书只有一句描述' }) })
     const parsed = tool?.parameters.safeParse(coerced)
     expect(parsed?.success).toBe(true)
-    if (parsed?.success) expect(parsed.data.queries).toHaveLength(1)
+    // registry 里工具参数统一按 ZodType<unknown> 存储，断言内收窄成具体形状
+    if (parsed?.success) expect((parsed.data as { queries: string[] }).queries).toHaveLength(1)
   })
 
   it('前三章试制可修复 snake_case、部分结构项并补齐三章蓝图', () => {
@@ -52,8 +53,9 @@ describe('Agent 工具协议与结构化输出兜底', () => {
     const parsed = tool?.parameters.safeParse(coerced)
     expect(parsed?.success).toBe(true)
     if (parsed?.success) {
-      expect(parsed.data.directions).toHaveLength(2)
-      expect(parsed.data.chapterBlueprints.map((item) => item.orderIndex)).toEqual([1, 2, 3])
+      const data = parsed.data as { directions: unknown[]; chapterBlueprints: { orderIndex: number }[] }
+      expect(data.directions).toHaveLength(2)
+      expect(data.chapterBlueprints.map((item) => item.orderIndex)).toEqual([1, 2, 3])
     }
   })
 
