@@ -76,6 +76,7 @@ const AdminCommentsPage = lazyPage(() => import('@/features/admin/pages/AdminCom
 const AdminMessagesPage = lazyPage(() => import('@/features/admin/pages/AdminMessagesPage'))
 const AdminAgentEvalsPage = lazyPage(() => import('@/features/admin/pages/AdminAgentEvalsPage'))
 const AdminCraftLibraryPage = lazyPage(() => import('@/features/admin/pages/AdminCraftLibraryPage'))
+const AdminFeedbackPage = lazyPage(() => import('@/features/admin/pages/AdminFeedbackPage'))
 const AdminLogsPage = lazyPage(() => import('@/features/admin/pages/AdminLogsPage'))
 const AdminSettingsPage = lazyPage(() => import('@/features/admin/pages/AdminSettingsPage'))
 
@@ -500,6 +501,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <AdminLayout>
         <AdminCraftLibraryPage />
+      </AdminLayout>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/admin/feedback',
+    title: '用户反馈 / 建议',
+    description: '查看创作区提交的问题反馈与功能建议，标记采纳或忽略。',
+    element: (
+      <AdminLayout>
+        <AdminFeedbackPage />
       </AdminLayout>
     ),
     useShell: false,

@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.js'
 import commentsRoutes from './routes/comments.js'
 import changeSetRoutes from './routes/changesets.js'
 import conversationsRoutes from './routes/conversations.js'
+import feedbackRoutes from './routes/feedback.js'
 import homeRoutes from './routes/home.js'
 import metaRoutes from './routes/meta.js'
 import novelsRoutes from './routes/novels.js'
@@ -85,6 +86,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/comments', commentsRoutes)
 app.use('/api/changesets', changeSetRoutes)
 app.use('/api/conversations', conversationsRoutes)
+app.use('/api/feedback', feedbackRoutes)
 app.use('/api/home', homeRoutes)
 app.use('/api/meta', metaRoutes)
 app.use('/api/novels', novelsRoutes)

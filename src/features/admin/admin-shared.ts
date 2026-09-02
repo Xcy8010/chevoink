@@ -57,6 +57,7 @@ const ACTION_LABELS: Record<string, string> = {
   'chapter.delete': '删除章节',
   'post.delete': '删除帖子',
   'comment.delete': '删除评论',
+  'feedback.status': '处理用户反馈',
 }
 
 export function describeAdminAction(action: string): string {

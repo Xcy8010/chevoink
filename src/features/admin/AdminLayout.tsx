@@ -42,6 +42,7 @@ const navItems = [
   { to: '/admin/credits', label: 'Credits 管理' },
   { to: '/admin/models', label: '模型管理' },
   { to: '/admin/craft', label: '合法文笔库' },
+  { to: '/admin/feedback', label: '用户反馈 / 建议' },
   { to: '/admin/logs', label: '操作日志' },
   { to: '/admin/settings', label: '安全设置' },
 ]
@@ -63,6 +64,7 @@ const mobileMoreNav = [
   { to: '/admin/credits', label: 'Credits 管理' },
   { to: '/admin/models', label: '模型管理' },
   { to: '/admin/craft', label: '合法文笔库' },
+  { to: '/admin/feedback', label: '用户反馈 / 建议' },
   { to: '/admin/logs', label: '操作日志' },
   { to: '/admin/settings', label: '安全设置' },
 ]

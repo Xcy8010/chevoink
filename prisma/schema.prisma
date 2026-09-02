@@ -434,6 +434,7 @@ model User {
   agentEvalComparisons       AgentEvalComparison[]
   following                  UserFollow[]            @relation("UserFollowFollower")
   followers                  UserFollow[]            @relation("UserFollowFollowing")
+  feedbacks                  Feedback[]
 
   @@map("users")
 }
@@ -2421,4 +2422,49 @@ model AgentBlindReview {
   @@unique([sampleId, reviewerHash])
   @@index([reviewerHash, submittedAt])
   @@map("agent_blind_reviews")
+}
+
+/// 用户反馈类别：问题反馈 / 功能建议
+enum FeedbackKind {
+  bug
+  suggestion
+}
+
+/// 用户反馈处理状态：待处理 / 已采纳 / 已忽略（后两者可撤销回 pending）
+enum FeedbackStatus {
+  pending
+  accepted
+  ignored
+}
+
+model Feedback {
+  id               String         @id @default(cuid()) @db.VarChar(64)
+  userId           String         @map("user_id") @db.VarChar(64)
+  kind             FeedbackKind
+  status           FeedbackStatus @default(pending)
+  content          String
+  /**
+   * 联系方式（邮箱/手机号/微信/QQ 等，用户自填，可空）
+   */
+  contact          String?        @db.VarChar(160)
+  imageUrls        String[]       @default([]) @map("image_urls")
+  /**
+   * 提交来源标记（如 studio-work / studio-ide / studio-mobile），用于定位问题场景
+   */
+  source           String?        @db.VarChar(64)
+  pageUrl          String?        @map("page_url") @db.VarChar(500)
+  /**
+   * 客户端环境快照（UA、视口、主题等），便于复现问题
+   */
+  clientInfo       Json           @default("{}") @map("client_info")
+  handledByAdminId String?        @map("handled_by_admin_id") @db.VarChar(64)
+  handledAt        DateTime?      @map("handled_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([kind, status, createdAt])
+  @@index([userId, createdAt])
+  @@map("feedbacks")
 }

@@ -144,6 +144,38 @@ html.dark .studio-workspace {
   --border-strong: rgba(148, 163, 184, 0.2);
 }
 
+/*
+ * 反馈/建议弹窗：通过 portal 挂到 body，拿不到 .studio-workspace 的变量作用域，
+ * 而全局浅色 --surface-default 是纸黄色；这里重新声明一层纯白色盘。
+ */
+.feedback-dialog {
+  --surface-default: #ffffff;
+  --surface-solid: #ffffff;
+  --surface-muted: #f1f2f5;
+  --surface-contrast: #1a1d23;
+  --surface-contrast-hover: #101216;
+  --text-primary: #171a20;
+  --text-secondary: #596171;
+  --text-tertiary: #7b8493;
+  --text-contrast: #f7f8fa;
+  --border-subtle: rgba(23, 26, 32, 0.1);
+  --border-strong: rgba(23, 26, 32, 0.18);
+}
+
+html.dark .feedback-dialog {
+  --surface-default: #15181e;
+  --surface-solid: #15181e;
+  --surface-muted: #1d2129;
+  --surface-contrast: #eef1f5;
+  --surface-contrast-hover: #ffffff;
+  --text-primary: #edf0f4;
+  --text-secondary: #abb3bf;
+  --text-tertiary: #7f8998;
+  --text-contrast: #111318;
+  --border-subtle: rgba(148, 163, 184, 0.12);
+  --border-strong: rgba(148, 163, 184, 0.2);
+}
+
 /* 计划专用 Markdown 编辑器：保持 Markdown 为唯一数据源，预览态由 Milkdown 所见即所得编辑。 */
 .plan-rich-markdown .milkdown {
   min-height: 100%;

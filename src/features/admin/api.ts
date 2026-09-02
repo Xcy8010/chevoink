@@ -15,6 +15,8 @@ import type {
   AdminCreationRecordsIndexPayload,
   AdminCreationRecordsPayload,
   AdminDashboardPayload,
+  AdminFeedbackDetailPayload,
+  AdminFeedbackListPayload,
   AdminListPayload,
   AdminLoginRequest,
   AdminMePayload,
@@ -34,6 +36,8 @@ import type {
   AgentBlindReviewSubmission,
   CorpusDocumentImport,
   CorpusSourceCreate,
+  FeedbackKind,
+  FeedbackStatus,
 } from '../../../shared/contracts/index.js'
 import { requestJson } from '@/app/api-client'
 
@@ -359,6 +363,27 @@ export function listAdminComments(input: {
 
 export function deleteAdminComment(commentId: string): Promise<{ ok: boolean }> {
   return requestJson(`/api/admin/comments/${commentId}`, { method: 'DELETE' })
+}
+
+/* ---------------- 用户反馈 / 建议 ---------------- */
+
+export function listAdminFeedbacks(input: {
+  status?: FeedbackStatus
+  kind?: FeedbackKind
+  search?: string
+  page: number
+  pageSize: number
+}): Promise<AdminFeedbackListPayload> {
+  return requestJson(`/api/admin/feedback${buildQueryString(input)}`)
+}
+
+export function getAdminFeedbackDetail(feedbackId: string): Promise<AdminFeedbackDetailPayload> {
+  return requestJson<AdminFeedbackDetailPayload>(`/api/admin/feedback/${feedbackId}`)
+}
+
+/** 标记已采纳/已忽略；status 传 pending 即撤销回待处理 */
+export function setAdminFeedbackStatus(feedbackId: string, status: FeedbackStatus): Promise<{ ok: true }> {
+  return requestJson(`/api/admin/feedback/${feedbackId}/status`, { method: 'POST', body: JSON.stringify({ status }) })
 }
 
 /* ---------------- 审计日志 ---------------- */

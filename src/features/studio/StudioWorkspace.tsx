@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
+import { BookOpen, BookOpenText, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -9,9 +9,10 @@ import Surface from '@/components/ui/Surface'
 import { useToast } from '@/components/ui/toast-context'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { updateShelfCover } from '@/features/home/local-shelf'
+import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
 import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
-import type { AgentStreamEvent, Chapter, CoverAsset, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
+import type { AgentStreamEvent, Chapter, CoverAsset, FeedbackKind, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
 import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
 import { getMe } from '../community/api'
@@ -206,6 +207,7 @@ export default function StudioWorkspace() {
   const toolNavigationRequest = useAgentStore((state) => state.toolNavigationRequest)
   const clearToolNavigationRequest = useAgentStore((state) => state.clearToolNavigationRequest)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
   // Agent 聊天区最小宽度：侧栏展开时保持 420；折叠后 = 420 - 侧栏宽度（保底 160），
@@ -4593,6 +4595,8 @@ export default function StudioWorkspace() {
                     ? [{ key: 'preview', label: '预览阅读', icon: BookOpen, action: () => navigate(previewHref) }]
                     : []),
                   { key: 'create-chapter', label: '新建章节', icon: FileText, action: () => handleRequestCreateChapter() },
+                  { key: 'feedback-suggestion', label: '提交建议', icon: Lightbulb, action: () => setFeedbackKind('suggestion') },
+                  { key: 'feedback-bug', label: '问题反馈', icon: Bug, action: () => setFeedbackKind('bug') },
                   // 删除条件与电脑端一致：仅草稿或已下架可删，已发布时仍可点击但只给 toast 提示
                   {
                     key: 'delete-novel',
@@ -4698,6 +4702,7 @@ export default function StudioWorkspace() {
             published={novelForm?.status === 'published'}
             novelStatus={novelForm?.status}
             onToggleNovelCompletion={handleToggleNovelCompletion}
+            onOpenStudioSettings={(section = 'general') => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
           />
 
           <div className="min-h-0 flex-1 overflow-hidden">
@@ -5081,6 +5086,8 @@ export default function StudioWorkspace() {
         onClose={() => setActiveChangeSetId(null)}
         onChanged={refreshWorkspaceAfterAgentWrite}
       /> : null}
+      {/* 手机端「更多」面板的反馈入口（桌面端由侧栏账户菜单与 IDE 顶栏「…」菜单各自持有） */}
+      <FeedbackDialog open={feedbackKind !== null} kind={feedbackKind ?? 'bug'} source="studio-mobile" onClose={() => setFeedbackKind(null)} />
     </>
   )
 }

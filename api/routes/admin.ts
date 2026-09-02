@@ -29,6 +29,7 @@ import {
   getAdminCreationRecordsData,
   getAdminCreationRecordsIndexData,
   getAdminDashboardData,
+  getAdminFeedbackDetailData,
   getAdminTokenManagementData,
   getAdminNovelDetailData,
   getAdminChapterContentData,
@@ -39,6 +40,7 @@ import {
   listAdminAuditLogsData,
   listAdminCommentsData,
   listAdminConversationsData,
+  listAdminFeedbacksData,
   listAdminNovelsData,
   listAdminPostsData,
   listAdminUserFavoriteNovelsData,
@@ -47,6 +49,7 @@ import {
   recordAdminAuditLog,
   resetUserPasswordData,
   restoreNovelData,
+  setFeedbackStatusData,
   setUserBannedData,
   setUserRoleData,
   takeDownNovelData,
@@ -1329,6 +1332,73 @@ router.post('/craft/sources/:sourceId/revoke', async (req: Request, res: Respons
       detail: { receiptHash: receipt.receiptHash }, ip: getRequestIp(req),
     })
     res.status(200).json(buildSuccess(requestId, { receipt }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+/* ---------------- 用户反馈 / 建议 ---------------- */
+
+const feedbackStatusSchema = z.object({ status: z.enum(['pending', 'accepted', 'ignored']) })
+
+router.get('/feedback', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const status = req.query.status
+    const kind = req.query.kind
+    const payload = await listAdminFeedbacksData({
+      status: status === 'pending' || status === 'accepted' || status === 'ignored' ? status : undefined,
+      kind: kind === 'bug' || kind === 'suggestion' ? kind : undefined,
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      page: parsePositiveInt(req.query.page, 1),
+      pageSize: parsePositiveInt(req.query.pageSize, 20),
+    })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/feedback/:feedbackId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    await requireAdmin(req)
+    const feedback = await getAdminFeedbackDetailData(req.params.feedbackId)
+    if (!feedback) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '反馈不存在。'))
+      return
+    }
+    res.status(200).json(buildSuccess(requestId, { feedback }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+/** 标记已采纳/已忽略，或撤销回待处理（status = pending 即撤销） */
+router.post('/feedback/:feedbackId/status', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const admin = await requireAdmin(req)
+    const body = parseBody(feedbackStatusSchema, req.body, '请选择要执行的处理动作。')
+    const result = await setFeedbackStatusData(req.params.feedbackId, body.status, admin.id)
+    if (!result) {
+      res.status(404).json(buildError(requestId, 'NOT_FOUND', '反馈不存在。'))
+      return
+    }
+
+    await recordAdminAuditLog({
+      adminId: admin.id,
+      action: 'feedback.status',
+      targetType: 'feedback',
+      targetId: req.params.feedbackId,
+      detail: { kind: result.kind, from: result.previousStatus, to: body.status },
+      ip: getRequestIp(req),
+    })
+    res.status(200).json(buildSuccess(requestId, { ok: true }))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

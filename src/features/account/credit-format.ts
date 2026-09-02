@@ -9,3 +9,11 @@ export function formatCreditAmount(value: number): string {
   return roundCreditAmount(value).toLocaleString('zh-CN')
 }
 
+/** 每日额度重置时刻的短文案，用于创作区侧栏与顶栏的用量卡片。 */
+export function formatCreditResetLabel(value?: string | null): string {
+  if (!value) return '稍后自动重置'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '稍后自动重置'
+  return `${date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 重置`
+}
+

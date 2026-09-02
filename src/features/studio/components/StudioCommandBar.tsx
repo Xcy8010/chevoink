@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
 import type { Novel } from '../../../../shared/contracts/index.js'
+import StudioMoreMenu, { type StudioSettingsSection } from './StudioMoreMenu'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
 import { useAgentStore } from '../agent/agentStore'
 
@@ -37,6 +38,8 @@ type Props = {
   novelStatus?: Novel['status']
   /** 完结 ↔ 继续连载切换（确认弹窗由宿主处理） */
   onToggleNovelCompletion?: () => void
+  /** IDE 视图没有 Work 侧栏的账户菜单，创作区设置由顶栏「…」菜单打开 */
+  onOpenStudioSettings?: (section?: StudioSettingsSection) => void
 }
 
 type StudioMenuKey = 'novel' | 'view' | 'design' | 'publish' | 'export'
@@ -161,6 +164,7 @@ export default function StudioCommandBar(props: Props) {
       </button> : null}
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {/* 发布/预览已收进顶栏「发布」「查看」菜单；最右侧返回首页保持不变 */}
+        {props.perspective === 'ide' ? <StudioMoreMenu onOpenStudioSettings={props.onOpenStudioSettings} /> : null}
         <Link to="/" className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">返回首页</span></Link>
       </div>
     </header>
