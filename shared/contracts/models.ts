@@ -855,6 +855,12 @@ export interface AgentSession {
   sandboxMode: import('./agent-productivity.js').AgentSandboxMode
   novelTitle?: string
   lastRunAt: string | null
+  /** 分支来源任务 ID：非空表示本任务是某个任务的分支副本 */
+  forkedFromSessionId: string | null
+  /** 分支切出的对话消息 ID：整任务复制时为空 */
+  forkedFromMessageId: string | null
+  /** 切分支的时刻：晚于它的消息即分支内新增对话 */
+  forkedAt: string | null
   createdAt: string
   updatedAt: string
   [key: string]: unknown

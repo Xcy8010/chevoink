@@ -39,6 +39,7 @@ import { formatCreditAmount } from '@/features/account/credit-format'
 import CreditQuotaDialog from '@/features/account/CreditQuotaDialog'
 import InviteCreditsDialog from '@/features/account/InviteCreditsDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
+import DangerConfirmDialog from '../../components/DangerConfirmDialog'
 import ImageLightbox from '../../components/ImageLightbox'
 
 import {
@@ -48,6 +49,7 @@ import {
   deleteAgentSessionMessage,
   fetchAgentSessionMessages,
   fetchAgentSessions,
+  forkAgentSession,
   renameAgentSession,
   resolveAgentApproval,
   resolveAgentQuestion,
@@ -98,6 +100,8 @@ type AgentPanelProps = {
   onSessionDeleted?: (sessionId: EntityId) => void
   /** 新建任务对话：宿主重置 sessionId 为 null（首次发送时懒创建） */
   onNewSession?: () => void
+  /** 从某条对话切出分支成功：宿主把新会话登记为任务窗口并切过去 */
+  onTaskForked?: (session: AgentSession) => void
   /** 回退成功后宿主刷新工作区（章节树/编辑器/小说信息） */
   onWorkspaceRollback?: () => void
   onClose?: () => void
@@ -147,6 +151,7 @@ export function AgentPanel({
   onSelectSession,
   onSessionDeleted,
   onNewSession,
+  onTaskForked,
   onWorkspaceRollback,
   onClose,
   className,
@@ -259,6 +264,11 @@ export function AgentPanel({
     | null
   >(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
+  // 分支溯源：本会话是副本时后端随消息一起返回，用于底部「从聊天中继续」提示
+  const [forkInfo, setForkInfo] = useState<{ sessionId: string; forkedAt: string | null } | null>(null)
+  // 待确认的分支创建：messageId 为空表示从整段对话切分支
+  const [forkTarget, setForkTarget] = useState<{ messageId: string | null } | null>(null)
+  const [forkBusy, setForkBusy] = useState(false)
   const longPressTimerRef = useRef<number | null>(null)
   const copyResetTimerRef = useRef<number | null>(null)
   // 懒创建会话：首次发送时 sessionId 从 null 变为新建 id，此时正在流式输出，需跳过历史恢复避免冲掉直播消息
@@ -395,7 +405,7 @@ export function AgentPanel({
 
   // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
   const blockInfoById = useMemo(() => {
-    const map = new Map<string, { firstId: string; ops: number }>()
+    const map = new Map<string, { firstId: string; lastId: string; ops: number }>()
     let firstId: string | null = null
     let ops = 0
     let ids: string[] = []
@@ -404,8 +414,10 @@ export function AgentPanel({
         return
       }
       const blockFirst = firstId
+      // 块尾消息用于挂结论操作条（复制 / 创建分支），每个对话块结尾都要有
+      const blockLast = ids[ids.length - 1] ?? blockFirst
       for (const id of ids) {
-        map.set(id, { firstId: blockFirst, ops })
+        map.set(id, { firstId: blockFirst, lastId: blockLast, ops })
       }
       firstId = null
       ops = 0
@@ -483,6 +495,8 @@ export function AgentPanel({
     const cached = readSessionMessagesCache(sessionId)
     let holdTimer: number | null = null
     setHistoryErrorSessionId(null)
+    // 切到别的会话才丢弃分支信息，回到同一会话时保留，避免提示闪一下再出现
+    setForkInfo((current) => (current && current.sessionId === sessionId ? current : null))
     if (cached) {
       // 有缓存：绘制前同步复原，切换即显示，全程不进任何加载态（后续请求静默修正）
       useAgentStore.getState().restoreMessages(cached, sessionId)
@@ -499,6 +513,7 @@ export function AgentPanel({
           return
         }
         setOlderPagination(payload.pagination ? { hasMore: payload.pagination.hasMore, before: payload.pagination.earliestRunStartedAt } : null)
+        setForkInfo(payload.fork ? { sessionId, forkedAt: payload.fork.forkedAt } : null)
         const history = payload.messages
         const activeRunId = payload.activeRunId
         const live = useAgentStore.getState()
@@ -782,6 +797,38 @@ export function AgentPanel({
       setActionError('复制失败，请手动选择文本复制。')
     }
   }, [])
+
+  const handleConfirmFork = useCallback(async () => {
+    if (!sessionId || !forkTarget) {
+      return
+    }
+    setForkBusy(true)
+    try {
+      const result = await forkAgentSession(sessionId, forkTarget.messageId ?? undefined)
+      setForkTarget(null)
+      onTaskForked?.(result.session)
+    } catch (error) {
+      setForkTarget(null)
+      setActionError(error instanceof Error ? error.message : '创建分支失败，请稍后再试。')
+    } finally {
+      setForkBusy(false)
+    }
+  }, [forkTarget, onTaskForked, sessionId])
+
+  // 分支底部「从聊天中继续」：只在副本还没有任何新对话时展示。
+  // 复制过来的消息 createdAt 均早于 forkedAt，分支内新对话必然比它晚；
+  // 本地刚发出的消息用客户端时钟（可能与服务端有偏差），额外按 local- 前缀与运行态兑底
+  const branchContinueVisible = useMemo(() => {
+    if (!sessionId || forkInfo?.sessionId !== sessionId || messages.length === 0 || active) {
+      return false
+    }
+    const forkedAt = forkInfo.forkedAt ? new Date(forkInfo.forkedAt).getTime() : null
+    return !messages.some(
+      (message) =>
+        message.id.startsWith('local-') ||
+        (forkedAt != null && new Date(message.createdAt).getTime() > forkedAt),
+    )
+  }, [active, forkInfo, messages, sessionId])
 
   const cancelLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -1292,6 +1339,7 @@ export function AgentPanel({
 
               const block = blockInfoById.get(message.id)
               const isBlockFirst = block?.firstId === message.id
+              const isBlockLast = block?.lastId === message.id
               const blockExpanded = block ? !!expandedBlocks[block.firstId] : false
               // 仅当前 run 的消息视为活跃：新任务开始时历史块保持折叠，不会被全局 active 连带展开
               const messageRunActive = active && message.runId === runId
@@ -1318,9 +1366,9 @@ export function AgentPanel({
                     summaryExpanded={blockExpanded}
                     onToggleSummary={handleToggleBlockSummary}
                   />
-                  {/* 最后结论复制：结尾左下角（qoder/Trae 风格），流式进行中不显示 */}
-                  {message.id === lastAssistantId && !active && getMessageText(message.parts) ? (
-                    <div className="mt-1 flex justify-start">
+                  {/* 结论操作条：每个对话块结尾均提供复制与创建分支（qoder/Trae 风格，流式进行中不显示） */}
+                  {isBlockLast && !messageRunActive && getMessageText(message.parts) ? (
+                    <div className="mt-1 flex justify-start gap-0.5">
                       <button
                         type="button"
                         onClick={() =>
@@ -1341,11 +1389,33 @@ export function AgentPanel({
                           </>
                         )}
                       </button>
+                      {sessionId ? (
+                        <button
+                          type="button"
+                          onClick={() => setForkTarget({ messageId: message.id })}
+                          className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
+                          aria-label="从这条对话创建分支"
+                        >
+                          <GitBranch className="h-3.5 w-3.5" />
+                          创建分支
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
               )
             })}
+            {/* 分支副本尚无新对话：底部分隔线提示可从此继续聊，一发新消息就消失 */}
+            {branchContinueVisible ? (
+              <div className="flex select-none items-center gap-3 py-1 text-[11px] text-[var(--text-tertiary)]">
+                <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                <span className="inline-flex items-center gap-1.5">
+                  <GitBranch className="h-3.5 w-3.5" />
+                  从聊天中继续
+                </span>
+                <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+              </div>
+            ) : null}
             <ProcessingHint visible={awaiting} />
             {pendingApproval ? (
               <AgentPermissionCard approval={pendingApproval} onResolve={handleResolveApproval} />
@@ -1471,6 +1541,17 @@ export function AgentPanel({
         busy={confirmBusy}
         onConfirm={() => void handleConfirmAction()}
         onCancel={() => setConfirmAction(null)}
+      />
+      <DangerConfirmDialog
+        open={Boolean(forkTarget)}
+        tone="default"
+        title="创建任务分支"
+        description="将复制一份同名任务（标题带角标区分），把当前到这条对话为止的上下文完整带过去，在新分支里接着聊不会影响原任务。"
+        bullets={['原任务对话与已写入作品的内容保持不变', '分支里的新对话不会回流到原任务']}
+        confirmLabel="创建分支"
+        busy={forkBusy}
+        onConfirm={() => void handleConfirmFork()}
+        onCancel={() => setForkTarget(null)}
       />
       <InviteCreditsDialog
         open={inviteDialogOpen}

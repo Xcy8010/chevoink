@@ -12,6 +12,7 @@ import {
   Eye,
   FileText,
   FolderDown,
+  GitBranch,
   Library,
   LoaderCircle,
   Search,
@@ -22,6 +23,7 @@ import {
 import { buildApiUrl } from '@/app/api-base'
 import { cn } from '@/lib/utils'
 import ImageLightbox from '../../components/ImageLightbox'
+import { formatTaskRelativeTime } from '../../lib/relative-time'
 import type {
   AgentMessagePart,
   AgentToolDisplayPayload,
@@ -576,6 +578,67 @@ function MarkdownCard({
   )
 }
 
+/** 跨任务上下文卡片：折叠行 = 已读取任务「标题」，展开为任务归属与对话片段，作者可核对 Agent 到底读了哪个任务 */
+function TaskContextCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'taskContext' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const primary = display.tasks[0]
+  const headline = display.mode === 'list'
+    ? `已列出历史任务 · ${display.tasks.length} 个`
+    : primary
+      ? `已读取任务「${primary.title}」${display.excerpts.length > 0 ? ` · ${display.excerpts.length} 条对话` : ''}`
+      : '未找到对应任务'
+
+  return (
+    <div className="border-t border-[var(--border-subtle)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
+      >
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">{headline}</span>
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><GitBranch className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
+      </button>
+      {expanded ? (
+        <div className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-1.5 pl-5">
+          <ul>
+            {display.tasks.map((task) => (
+              <li key={task.sessionId} className="flex items-center gap-2 py-1">
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">
+                  {task.title}
+                  {task.isBranch ? ' · 分支' : ''}
+                </span>
+                <span className="shrink-0 text-[10px] text-[var(--text-secondary)]">{task.novelTitle}</span>
+                <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-secondary)]">
+                  {formatTaskRelativeTime(task.lastActiveAt)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {display.excerpts.length > 0 ? (
+            <ul className="mt-1 border-t border-[var(--border-subtle)] pt-1.5">
+              {display.excerpts.map((excerpt, index) => (
+                <li key={`${excerpt.createdAt}:${index}`} className="py-1">
+                  <p className="text-[10px] text-[var(--text-tertiary)]">
+                    {excerpt.role === 'user' ? '作者' : 'Agent'} · {formatTaskRelativeTime(excerpt.createdAt)}
+                  </p>
+                  <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-[var(--text-secondary)]">
+                    {excerpt.text}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ToolDisplayRenderer({
   display,
   onNavigateTarget,
@@ -604,6 +667,8 @@ function ToolDisplayRenderer({
       return <ViewedImageCard display={display} />
     case 'markdown':
       return <MarkdownCard display={display} />
+    case 'taskContext':
+      return <TaskContextCard display={display} />
     case 'chapterRef':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">

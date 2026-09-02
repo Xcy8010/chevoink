@@ -61,15 +61,25 @@ export async function listLoopSessionMessages(
   messages: AgentUIMessage[]
   activeRunId: string | null
   pagination: { hasMore: boolean; earliestRunStartedAt: string | null }
+  /** 分支溯源：非空时前端在复制过来的对话下方渲染「从聊天中继续」分隔线 */
+  fork: { forkedFromSessionId: string; forkedFromMessageId: string | null; forkedAt: string | null } | null
 }> {
   const session = await prisma.agentSession.findFirst({
     where: { id: sessionId, userId },
-    select: { id: true },
+    select: { id: true, forkedFromSessionId: true, forkedFromMessageId: true, forkedAt: true },
   })
 
   if (!session) {
     throw new DataAccessError(404, 'NOT_FOUND', '会话不存在或无权访问。')
   }
+
+  const fork = session.forkedFromSessionId
+    ? {
+        forkedFromSessionId: session.forkedFromSessionId,
+        forkedFromMessageId: session.forkedFromMessageId,
+        forkedAt: session.forkedAt?.toISOString() ?? null,
+      }
+    : null
 
   const runLimit = options.runLimit ?? null
   if (runLimit != null) {
@@ -114,6 +124,7 @@ export async function listLoopSessionMessages(
         hasMore,
         earliestRunStartedAt: pageRuns.length ? pageRuns[pageRuns.length - 1].createdAt.toISOString() : null,
       },
+      fork,
     }
   }
 
@@ -166,6 +177,7 @@ export async function listLoopSessionMessages(
     messages,
     activeRunId: getActiveRunIdBySession(sessionId),
     pagination: { hasMore: false, earliestRunStartedAt: null },
+    fork,
   }
 }
 

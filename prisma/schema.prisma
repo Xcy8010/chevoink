@@ -1119,6 +1119,12 @@ model AgentSession {
   toolPolicy         Json?               @map("tool_policy")
   sandboxMode        String              @default("workspace") @map("sandbox_mode") @db.VarChar(24)
   lastRunAt          DateTime?           @map("last_run_at")
+  // 任务分支溯源：只存 id 不建外键，源任务被删后分支仍独立可用（分支即完整副本）
+  forkedFromSessionId String?            @map("forked_from_session_id") @db.VarChar(64)
+  /** 从哪条对话切出的分支；整任务复制时为空 */
+  forkedFromMessageId String?            @map("forked_from_message_id") @db.VarChar(64)
+  /** 切分支的时刻：晚于它的消息即分支内新增对话，用于收起「从聊天中继续」提示 */
+  forkedAt           DateTime?           @map("forked_at")
   createdAt          DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")
   user               User                @relation(fields: [userId], references: [id])
@@ -1132,6 +1138,7 @@ model AgentSession {
 
   @@index([userId, novelId])
   @@index([novelId, updatedAt])
+  @@index([forkedFromSessionId])
   @@map("agent_sessions")
 }
 

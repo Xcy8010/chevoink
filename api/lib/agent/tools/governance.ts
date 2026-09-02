@@ -35,6 +35,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   skill_shared_invites: { category: 'read', risk: 'low', postconditions: ['recipient_scope_verified', 'pending_invites_only'] },
   session_history_search: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
   session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
+  task_context_list: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'metadata_only'] },
+  task_context_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
   story_charter_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'active_promises_only'] },
   chapter_bridge_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'bridge_revision_reported'] },
   quality_report_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'chapter_revision_reported'] },

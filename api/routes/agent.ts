@@ -20,6 +20,7 @@ import {
   continueLoopRun,
   createAgentSessionData,
   deleteAgentSessionData,
+  forkAgentSessionData,
   listAgentSessionHistoryData,
   listAgentSessionsData,
   listSessionRunStatuses,
@@ -79,6 +80,11 @@ const router = Router()
 const createAgentSessionSchema = z.object({
   novelId: z.string().min(1),
   title: z.string().optional(),
+})
+
+const forkAgentSessionSchema = z.object({
+  /** 从哪条对话切分支；不传则复制整个任务的对话上下文 */
+  fromMessageId: z.string().trim().min(1).optional(),
 })
 
 const updateAgentSessionSchema = z.object({
@@ -245,6 +251,20 @@ router.delete('/sessions/:sessionId', async (req: Request, res: Response): Promi
     stopActiveRunsInSession(req.params.sessionId)
     const payload = await deleteAgentSessionData(userId, req.params.sessionId)
     res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 切任务分支：同名带角标的副本，对话上下文一并复制（可指定截断到某条对话）
+router.post('/sessions/:sessionId/fork', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const body = parseBody(forkAgentSessionSchema, req.body ?? {}, '请提供分支参数。')
+    const payload = await forkAgentSessionData(userId, req.params.sessionId, { fromMessageId: body.fromMessageId })
+    res.status(201).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

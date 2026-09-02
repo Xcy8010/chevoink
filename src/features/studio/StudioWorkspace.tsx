@@ -12,7 +12,7 @@ import { updateShelfCover } from '@/features/home/local-shelf'
 import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
 import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
-import type { AgentStreamEvent, Chapter, CoverAsset, FeedbackKind, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
+import type { AgentSession, AgentStreamEvent, Chapter, CoverAsset, FeedbackKind, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
 import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
 import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
 import { getMe } from '../community/api'
@@ -704,13 +704,18 @@ export default function StudioWorkspace() {
     setAgentStateNovelId(activeNovelId)
 
     const requestedSessionId = searchParams.get('session')
+    // 侧栏在其它作品点「新建对话/新建任务」会带 ?session=new 跳过来：置顶一个干净的新对话窗口
+    const requestNewTask = requestedSessionId === 'new'
     const snapshot = readStoredAgentWorkspace(activeNovelId)
-    const snapshotTasks = snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
+    const storedTasks = snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
+    const freshTaskWindow = requestNewTask ? createLocalAgentTaskWindow() : null
+    const snapshotTasks = freshTaskWindow ? [freshTaskWindow, ...storedTasks] : storedTasks
     setAgentTaskWindows(snapshotTasks)
     setSelectedTreeItemId(snapshot?.selectedTreeItemId ?? null)
     setCatalogDocument(snapshot?.catalogDocument ?? null)
 
     const initialTaskWindow =
+      freshTaskWindow ??
       snapshotTasks.find((taskWindow) => taskWindow.id === snapshot?.activeTaskId) ?? snapshotTasks[0] ?? null
     applyAgentTaskWindowState(initialTaskWindow)
 
@@ -769,6 +774,7 @@ export default function StudioWorkspace() {
         }, dedupeAgentTaskWindows(aliveSnapshotTasks)))
 
         const nextTaskWindow =
+          (freshTaskWindow ? mergedTasks.find((taskWindow) => taskWindow.id === freshTaskWindow.id) : null) ??
           (requestedSessionId ? mergedTasks.find((taskWindow) => taskWindow.sessionId === requestedSessionId || taskWindow.id === requestedSessionId) : null) ??
           mergedTasks.find((taskWindow) => taskWindow.id === (snapshot?.activeTaskId ?? initialTaskWindow?.id)) ??
           mergedTasks[0] ??
@@ -3599,6 +3605,83 @@ export default function StudioWorkspace() {
     applyAgentTaskWindowState(nextTaskWindow)
   }
 
+  /** 侧栏作品行的「新建对话」：当前作品直接开窗口，其它作品带 ?session=new 跳过去后由深链逻辑开窗口 */
+  function handleCreateTaskInNovel(novelId: string) {
+    if (novelId === activeNovelId) {
+      handleCreateAgentTaskWindow()
+      return
+    }
+
+    navigate(`/studio/novel/${novelId}?session=new`)
+  }
+
+  /** 侧栏删除任务：移除任务窗口；删掉的是当前窗口时补一个新对话，避免创作区空白 */
+  function handleAgentTaskDeleted(deletedTaskId: string) {
+    const wasActive = activeAgentTaskWindowId === deletedTaskId || agentSessionId === deletedTaskId
+    setAgentTaskWindows((current) =>
+      current.filter(
+        (taskWindow) => taskWindow.sessionId !== deletedTaskId && taskWindow.id !== deletedTaskId,
+      ),
+    )
+
+    if (!wasActive) {
+      return
+    }
+
+    const nextTaskWindow = createLocalAgentTaskWindow()
+    setAgentTaskWindows((current) => [nextTaskWindow, ...current])
+    applyAgentTaskWindowState(nextTaskWindow)
+  }
+
+  /** 任务切出分支：把新会话登记成任务窗口并切过去（跳作品时走深链） */
+  function handleAgentTaskForked(session: AgentSession) {
+    void queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] })
+
+    if (session.novelId !== activeNovelId) {
+      navigate(`/studio/novel/${session.novelId}?session=${encodeURIComponent(session.id)}`)
+      return
+    }
+
+    // 分支已带全量历史，标为未加载让后续补载工件（对话内容由 Agent 面板自己拉）
+    const forkedTaskWindow = buildAgentTaskWindowFromSession(session)
+    pruneTemporaryTaskWindows(forkedTaskWindow.id)
+    setAgentTaskWindows((current) => [
+      forkedTaskWindow,
+      ...current.filter((taskWindow) => taskWindow.id !== forkedTaskWindow.id),
+    ])
+    applyAgentTaskWindowState(forkedTaskWindow)
+  }
+
+  /** 侧栏已调完删除接口，这里只做缓存清理；删的是当前作品才需要换页 */
+  async function handleNovelDeletedFromSidebar(deletedNovelId: string) {
+    if (typeof window !== 'undefined' && window.localStorage.getItem(STUDIO_LAST_NOVEL_STORAGE_KEY) === deletedNovelId) {
+      window.localStorage.removeItem(STUDIO_LAST_NOVEL_STORAGE_KEY)
+    }
+
+    queryClient.setQueryData<UserMePayload>(['community', 'me'], (current) =>
+      current
+        ? {
+            ...current,
+            authoredNovels: (current.authoredNovels ?? []).filter((item) => item.id !== deletedNovelId),
+            drafts: (current.drafts ?? []).filter((item) => item.novelId !== deletedNovelId),
+          }
+        : current,
+    )
+    queryClient.setQueryData<Novel[]>(['studio', 'my-novels'], (current) =>
+      Array.isArray(current) ? current.filter((item) => item.id !== deletedNovelId) : current,
+    )
+    queryClient.removeQueries({ queryKey: ['studio', deletedNovelId] })
+    queryClient.removeQueries({ queryKey: ['studio-chapter', deletedNovelId] })
+    queryClient.removeQueries({ queryKey: ['novel-detail', deletedNovelId] })
+    queryClient.removeQueries({ queryKey: ['reader', deletedNovelId] })
+
+    if (deletedNovelId === activeNovelId) {
+      navigate('/studio', { replace: true })
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
+  }
+
   async function handleSelectAgentTaskWindow(taskWindowId: string) {
     if (agentRunState.active) {
       setAgentRunState((current) => ({
@@ -4228,6 +4311,7 @@ export default function StudioWorkspace() {
               ),
             )
           }}
+          onTaskForked={handleAgentTaskForked}
           onNewSession={() => {
             // 新建任务对话：建本地任务窗口并激活（sessionId 为 null，首次发送时懒创建）；
             // 不能只清空 activeAgentTaskWindowId，否则会被兜底 effect 回选第一个窗口覆盖
@@ -4676,6 +4760,15 @@ export default function StudioWorkspace() {
               else navigate(`/studio/novel/${taskNovelId}?session=${encodeURIComponent(taskId)}`)
             }}
             onRenameTask={(taskId, title) => void handleRenameAgentTaskWindow(taskId, title)}
+            onCreateTaskInNovel={handleCreateTaskInNovel}
+            onTaskDeleted={handleAgentTaskDeleted}
+            onTaskForked={handleAgentTaskForked}
+            onNovelDeleted={(deletedNovelId) => void handleNovelDeletedFromSidebar(deletedNovelId)}
+            currentNovelStatus={novelForm?.status}
+            onOpenNovelMeta={() => setActiveToolPanel('meta')}
+            onExportNovel={() => setExportDialogOpen(true)}
+            onPublishNovel={handlePublishNovel}
+            onToggleNovelCompletion={handleToggleNovelCompletion}
             autoFollow={autoFollow}
             onAutoFollowChange={setAutoFollow}
             onOpenStudioSettings={(section = 'general') => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}

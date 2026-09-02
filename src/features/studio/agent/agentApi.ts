@@ -122,16 +122,18 @@ export function resolveAgentQuestion(
 /** 会话消息 + activeRunId（服务端仍在进行的 run，刷新后据此续接直播）；
  * runLimit 时按 run 轮次分页（50 轮/页，用户端手动加载更早），不传则全量 */
 export type AgentSessionMessagesPagination = { hasMore: boolean; earliestRunStartedAt: string | null }
+/** 分支溯源：非空说明本任务是副本，forkedAt 之后的对话属于分支内新增 */
+export type AgentSessionForkInfo = { forkedFromSessionId: string; forkedFromMessageId: string | null; forkedAt: string | null }
 
 export function fetchAgentSessionMessages(
   sessionId: string,
   options?: { runLimit?: number; beforeRunStartedAt?: string | null },
-): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination }> {
+): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination; fork?: AgentSessionForkInfo | null }> {
   const query = new URLSearchParams()
   if (options?.runLimit != null) query.set('runLimit', String(options.runLimit))
   if (options?.beforeRunStartedAt) query.set('before', options.beforeRunStartedAt)
   const suffix = query.toString() ? `?${query.toString()}` : ''
-  return requestData<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination }>(
+  return requestData<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination; fork?: AgentSessionForkInfo | null }>(
     `/api/agent/sessions/${sessionId}/messages${suffix}`,
   )
 }
@@ -273,6 +275,17 @@ export function createEvalComparisonRequest(input: { novelId: string; name: stri
 export function deleteAgentSession(sessionId: string): Promise<{ sessionId: string; deleted: true }> {
   return requestData<{ sessionId: string; deleted: true }>(`/api/agent/sessions/${sessionId}`, {
     method: 'DELETE',
+  })
+}
+
+/** 切任务分支：复制一份同名带角标的任务，传 fromMessageId 则只复制到该条对话为止 */
+export function forkAgentSession(
+  sessionId: string,
+  fromMessageId?: string,
+): Promise<{ session: AgentSession; sourceSessionId: string; copiedRunCount: number; copiedMessageCount: number }> {
+  return requestData(`/api/agent/sessions/${sessionId}/fork`, {
+    method: 'POST',
+    body: JSON.stringify(fromMessageId ? { fromMessageId } : {}),
   })
 }
 

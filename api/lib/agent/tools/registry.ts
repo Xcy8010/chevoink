@@ -74,6 +74,7 @@ import {
   skillTestTool,
 } from './skill-tools.js'
 import { sessionHistorySearchTool, sessionMessageReadTool } from './session-history-tools.js'
+import { taskContextListTool, taskContextReadTool } from './task-context-tools.js'
 import {
   chapterBridgeCommitTool,
   chapterBridgeGetTool,
@@ -137,6 +138,8 @@ export const allTools: AgentTool<any>[] = [
   skillSharedInvitesTool,
   sessionHistorySearchTool,
   sessionMessageReadTool,
+  taskContextListTool,
+  taskContextReadTool,
   storyCharterGetTool,
   chapterBridgeGetTool,
   qualityReportGetTool,

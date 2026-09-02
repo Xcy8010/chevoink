@@ -721,6 +721,9 @@ function toAgentSession(record: {
   sandboxMode?: string
   novel?: { title: string; displayTitle: string | null }
   lastRunAt?: Date | string | null
+  forkedFromSessionId?: string | null
+  forkedFromMessageId?: string | null
+  forkedAt?: Date | string | null
   createdAt?: Date | string | null
   updatedAt?: Date | string | null
 }): AgentSession {
@@ -735,6 +738,9 @@ function toAgentSession(record: {
     sandboxMode: record.sandboxMode === 'read_only' || record.sandboxMode === 'full_access' ? record.sandboxMode : 'workspace',
     novelTitle: record.novel?.displayTitle?.trim() || record.novel?.title,
     lastRunAt: toIso(record.lastRunAt),
+    forkedFromSessionId: record.forkedFromSessionId ?? null,
+    forkedFromMessageId: record.forkedFromMessageId ?? null,
+    forkedAt: toIso(record.forkedAt),
     createdAt: toIso(record.createdAt) ?? new Date().toISOString(),
     updatedAt: toIso(record.updatedAt) ?? new Date().toISOString(),
   }
@@ -1034,6 +1040,154 @@ export async function deleteAgentSessionData(userId: string, sessionId: string) 
   return {
     sessionId: session.id,
     deleted: true as const,
+  }
+}
+
+/** 分支副本最多携带的对话轮数：超长任务只带最近若干轮，避免一次复制打爆事务 */
+const FORK_RUN_LIMIT = 400
+/** 同名任务角标上限：够用且避免异常输入导致死循环 */
+const FORK_SUFFIX_LIMIT = 99
+
+/** 去掉标题尾部的「 (2)」角标，拿到分支族的基名 */
+function stripForkSuffix(title: string): string {
+  return title.replace(/\s*\(\d+\)\s*$/, '').trim() || title.trim()
+}
+
+/**
+ * 生成分支标题：与源任务同名并追加角标，角标取该作品下同族任务的最大值 +1。
+ * 例：「评估仓库类型」已有 (2)(3) 时，新分支为「评估仓库类型 (4)」。
+ */
+function nextForkTitle(baseTitle: string, siblingTitles: string[]): string {
+  const base = stripForkSuffix(baseTitle)
+  let maxIndex = 1
+  for (const title of siblingTitles) {
+    const trimmed = title.trim()
+    if (stripForkSuffix(trimmed) !== base) continue
+    const matched = /\((\d+)\)\s*$/.exec(trimmed)
+    const index = matched ? Number(matched[1]) : 1
+    if (Number.isFinite(index) && index > maxIndex) maxIndex = index
+  }
+  const nextIndex = Math.min(maxIndex + 1, FORK_SUFFIX_LIMIT)
+  return `${base} (${nextIndex})`.slice(0, 160)
+}
+
+/** 运行中/待确认的 run 复制到分支后必须落终态，否则分支一打开就被判定为「有任务在跑」 */
+function settledForkStatus(status: AgentRunRecord['status']): AgentRunRecord['status'] {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' ? status : 'cancelled'
+}
+
+/**
+ * 从现有任务切出分支：新建一个同名带角标的任务，并把对话上下文（run + 消息）整份复制过去。
+ * 传 fromMessageId 时只复制到该条对话为止，用于「从这条对话继续」的分叉。
+ * 工件、记忆与事件流不复制：分支只承接对话上下文，写入产物仍归源任务，避免重复占用。
+ */
+export async function forkAgentSessionData(
+  userId: string,
+  sessionId: string,
+  input?: { fromMessageId?: string },
+) {
+  const session = await ensureOwnedSession(userId, sessionId)
+  const fromMessageId = input?.fromMessageId?.trim() || undefined
+
+  // 截断点：分支只带到这条对话（含），之后的对话不进副本
+  let cutoff: Date | null = null
+  if (fromMessageId) {
+    const anchor = await prisma.agentMessage.findFirst({
+      where: { id: fromMessageId, sessionId: session.id },
+      select: { createdAt: true },
+    })
+    if (!anchor) throw new DataAccessError(404, 'AGENT_MESSAGE_NOT_FOUND', '这条对话已不存在，无法从它创建分支。')
+    cutoff = anchor.createdAt
+  }
+
+  const siblings = await prisma.agentSession.findMany({
+    where: { userId, novelId: session.novelId },
+    select: { title: true },
+    take: 200,
+  })
+  const title = nextForkTitle(session.title, siblings.map((item) => item.title))
+  const forkedAt = new Date()
+
+  const sourceRuns = await prisma.agentRun.findMany({
+    where: { sessionId: session.id, ...(cutoff ? { createdAt: { lte: cutoff } } : {}) },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: FORK_RUN_LIMIT,
+  })
+  // 取的是最近 N 轮，写入前按时间正序还原，副本里的对话顺序与源任务一致
+  sourceRuns.reverse()
+  const sourceRunIds = sourceRuns.map((run) => run.id)
+  const sourceMessages = sourceRunIds.length > 0
+    ? await prisma.agentMessage.findMany({
+        where: { runId: { in: sourceRunIds }, ...(cutoff ? { createdAt: { lte: cutoff } } : {}) },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      })
+    : []
+
+  const forked = await prisma.$transaction(async (tx) => {
+    const created = await tx.agentSession.create({
+      data: {
+        userId,
+        novelId: session.novelId,
+        title,
+        status: 'active',
+        toolPolicy: (session.toolPolicy ?? undefined) as Prisma.InputJsonValue | undefined,
+        sandboxMode: session.sandboxMode,
+        lastRunAt: session.lastRunAt,
+        forkedFromSessionId: session.id,
+        forkedFromMessageId: fromMessageId ?? null,
+        forkedAt,
+      },
+    })
+
+    const runIdMap = new Map<string, string>()
+    for (const run of sourceRuns) {
+      const copied = await tx.agentRun.create({
+        data: {
+          sessionId: created.id,
+          userId,
+          novelId: run.novelId,
+          chapterId: run.chapterId,
+          mode: run.mode,
+          action: run.action,
+          agentType: run.agentType,
+          status: settledForkStatus(run.status),
+          inputSummary: run.inputSummary,
+          outputSummary: run.outputSummary,
+          engine: run.engine,
+          currentTurn: run.currentTurn,
+          usage: (run.usage ?? undefined) as Prisma.InputJsonValue | undefined,
+          taskSpec: (run.taskSpec ?? undefined) as Prisma.InputJsonValue | undefined,
+          modelTier: run.modelTier,
+          customModelId: run.customModelId,
+          reasoningEffort: run.reasoningEffort,
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt,
+          createdAt: run.createdAt,
+        },
+        select: { id: true },
+      })
+      runIdMap.set(run.id, copied.id)
+    }
+
+    // 消息保留原 createdAt：分支内新增对话必然晚于 forkedAt，前端据此收起「从聊天中继续」
+    const messageRows = sourceMessages
+      .map((message) => {
+        const runId = runIdMap.get(message.runId)
+        return runId
+          ? { runId, sessionId: created.id, role: message.role, parts: message.parts as Prisma.InputJsonValue, createdAt: message.createdAt }
+          : null
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+    if (messageRows.length > 0) await tx.agentMessage.createMany({ data: messageRows })
+
+    return { created, runCount: runIdMap.size, messageCount: messageRows.length }
+  })
+
+  return {
+    session: toAgentSession(forked.created),
+    sourceSessionId: session.id,
+    copiedRunCount: forked.runCount,
+    copiedMessageCount: forked.messageCount,
   }
 }
 

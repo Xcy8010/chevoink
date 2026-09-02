@@ -179,6 +179,22 @@ export type AgentToolDisplayPayload =
       wordCount: number
       chapterTitle?: string
     }
+  | {
+      /** 跨任务跨作品上下文读取：展示读到的任务卡片与对话片段，作者可核对 Agent 到底看了哪个任务 */
+      kind: 'taskContext'
+      /** list=任务候选列表；read=某个任务的上下文 */
+      mode: 'list' | 'read'
+      tasks: Array<{
+        sessionId: EntityId
+        title: string
+        novelTitle: string
+        lastActiveAt: string
+        messageCount: number
+        /** 该任务是否为其他任务的分支副本 */
+        isBranch: boolean
+      }>
+      excerpts: Array<{ role: string; createdAt: string; text: string }>
+    }
 
 /** 工具调用的回滚快照（写操作自动记录） */
 export interface AgentRollbackSnapshot {
