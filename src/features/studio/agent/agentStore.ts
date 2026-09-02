@@ -195,8 +195,9 @@ type AgentStoreState = {
   activeSessionId: string | null
   /** 当前 messages 已完成恢复的会话；用于 Work/IDE 切换时复用同一份会话而不闪烁重载。 */
   loadedSessionId: string | null
-  /** 会话历史拉取中（切任务/切作品）：右侧任务状态卡据此显示占位而非卸载，避免布局宽度跳变 */
-  workspaceHydrating: boolean
+  /** 正在拉取历史的会话 id：加载态的全局唯一真相。
+      旧实现靠各面板实例各自的布尔标记，一旦标记与全局 messages 失配就会误渲染空态欢迎页 */
+  hydratingSessionId: string | null
   /** 输入框草稿：提升到全局 store，避免面板重挂载时丢失未发送内容 */
   composerDraft: string
   /** 输入框附件（已上传成功的元数据）：同草稿提升全局，沉浸/普通视图重挂载不丢 */
@@ -227,8 +228,9 @@ type AgentStoreState = {
   restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
   /** 加载更早对话：把更早轮次前插合并（按 id 去重），不触碰进行中的 run */
   prependMessages: (messages: AgentUIMessage[]) => void
-  /** 标记会话历史拉取开始/结束（配合 workspaceHydrating） */
-  setWorkspaceHydrating: (value: boolean) => void
+    /** 标记指定会话开始/结束历史水合：与 loadedSessionId 一同构成加载态判定依据 */
+  beginSessionHydration: (sessionId: string) => void
+  endSessionHydration: (sessionId: string) => void
   resetRun: () => void
   clearError: () => void
   /** 作者回到该任务窗口：清除未读信号与运行中登记 */
@@ -440,7 +442,32 @@ function settleRunningActivities(activities: WorkspaceActivity[]): WorkspaceActi
   )
 }
 
-export const useAgentStore = create<AgentStoreState>((set) => ({
+/** 会话消息缓存：切回读过的任务窗口时同步复原，做到「有缓存直接显示」而不是重新拉取闪加载态。
+    store 只能持有当前会话一份 messages，因此缓存放在模块层（不参与订阅，不引发重渲染） */
+const SESSION_MESSAGES_CACHE_LIMIT = 12
+const sessionMessagesCache = new Map<string, AgentUIMessage[]>()
+
+function writeSessionMessagesCache(sessionId: string | null, messages: AgentUIMessage[]) {
+  if (!sessionId || messages.length === 0) {
+    return
+  }
+  // 重新插入以维持访问顺序，超出上限时淘汰最久未用的会话
+sessionMessagesCache.delete(sessionId)
+  sessionMessagesCache.set(sessionId, messages)
+  while (sessionMessagesCache.size > SESSION_MESSAGES_CACHE_LIMIT) {
+    const oldest = sessionMessagesCache.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    sessionMessagesCache.delete(oldest)
+  }
+}
+
+export function readSessionMessagesCache(sessionId: string): AgentUIMessage[] | null {
+  return sessionMessagesCache.get(sessionId) ?? null
+}
+
+export const useAgentStore = create<AgentStoreState>((set, get) => ({
   runId: null,
   phase: 'idle',
   agentTitle: '写作主控',
@@ -457,7 +484,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   errorCode: null,
   activeSessionId: null,
   loadedSessionId: null,
-  workspaceHydrating: false,
+  hydratingSessionId: null,
   composerDraft: '',
   composerAttachments: [],
   composerReferences: [],
@@ -541,7 +568,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
 
   restoreMessages: (messages, sessionId = null) => {
     const restored = decorateAcceptedMessages(messages)
-    set({
+    writeSessionMessagesCache(sessionId, restored)
+    set((state) => ({
       messages: restored,
       phase: 'idle',
       runId: null,
@@ -555,11 +583,15 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       toolNavigationRequest: null,
       // 从历史工具轨迹恢复会话级变更与待办；不递增触发版本，避免历史恢复误自动展开
       ...deriveSessionStateFromMessages(restored),
-      workspaceHydrating: false,
-    })
+      // 只清除属于本会话的水合标记，避免覆盖后发起的其它会话
+      hydratingSessionId: state.hydratingSessionId === sessionId ? null : state.hydratingSessionId,
+    }))
   },
 
-  setWorkspaceHydrating: (value) => set({ workspaceHydrating: value }),
+  beginSessionHydration: (sessionId) => set({ hydratingSessionId: sessionId }),
+
+  endSessionHydration: (sessionId) =>
+    set((state) => (state.hydratingSessionId === sessionId ? { hydratingSessionId: null } : {})),
 
   prependMessages: (incoming) =>
     set((state) => {
@@ -576,7 +608,10 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       }
     }),
 
-  resetRun: () =>
+  resetRun: () => {
+    // 离开旧会话前把最新消息（含刚直播完的内容）快照进缓存：切回来可零延迟复原
+    const { loadedSessionId: leavingSessionId, messages: leavingMessages } = get()
+    writeSessionMessagesCache(leavingSessionId, leavingMessages)
     set({
       runId: null,
       phase: 'idle',
@@ -594,10 +629,11 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       todos: [],
       liveToolDrafts: {},
       toolNavigationRequest: null,
-      // 切换会话视为“离开旧对话”：清空消息避免旧内容残留，进图标流光加载态；
+      // 切换会话视为“离开旧对话”：清空消息，由渲染层按「未水合」展示图标流光；
       // 同会话重挂载/续活走早退路径（loadedSessionId 命中）不会经过这里
       messages: [],
-    }),
+    })
+  },
 
   clearError: () => set({ errorMessage: null, errorCode: null }),
 

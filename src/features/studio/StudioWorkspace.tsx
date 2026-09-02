@@ -196,8 +196,6 @@ export default function StudioWorkspace() {
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
-  // 会话历史拉取中：任务状态卡显示占位而非卸载，切换任务/作品时右侧列宽度不跳变
-  const agentHydrating = useAgentStore((state) => state.workspaceHydrating)
   const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const agentTodos = useAgentStore((state) => state.todos)
   const agentTodosVersion = useAgentStore((state) => state.todosVersion)
@@ -478,7 +476,11 @@ export default function StudioWorkspace() {
     },
   })
 
+  /** 当前已应用（用户可见）的任务窗口 id：后台补载工件返回时据此判断用户是否已切走 */
+  const appliedAgentTaskWindowIdRef = useRef<string | null>(null)
+
   function applyAgentTaskWindowState(taskWindow: AgentTaskWindowState | null) {
+    appliedAgentTaskWindowIdRef.current = taskWindow?.id ?? null
     if (!taskWindow) {
       setActiveAgentTaskWindowId(null)
       setAgentSessionId(null)
@@ -540,11 +542,25 @@ export default function StudioWorkspace() {
       return
     }
 
+    // 先切后载：立即把会话切过去，切换在同一帧内完成（对话内容由 Agent 面板按会话缓存复原）；
+    // 工件历史在后台补齐，避免点击后整屏卡在 getWritingAgentSessionHistory 的网络往返上
+    applyAgentTaskWindowState(targetTaskWindow)
+
+    if (!targetTaskWindow.sessionId || targetTaskWindow.loaded) {
+      return
+    }
+
     const loadedTaskWindow = await hydrateAgentTaskWindow(targetTaskWindow)
 
     setAgentTaskWindows((current) =>
       current.map((taskWindow) => (taskWindow.id === taskWindowId ? loadedTaskWindow : taskWindow)),
     )
+
+    // 补载期间用户可能已切到别的任务窗口，此时不得用旧窗口状态覆盖
+    if (appliedAgentTaskWindowIdRef.current !== taskWindowId) {
+      return
+    }
+
     applyAgentTaskWindowState(loadedTaskWindow)
   }
 
@@ -4701,7 +4717,7 @@ export default function StudioWorkspace() {
                   onApproveAllReviews={handleApproveAllPendingReviews}
                   onRejectAllReviews={handleRequestRejectAllPendingReviews}
                   appearance="dock"
-                /></div></div> : agentHydrating ? <div className="flex h-full min-h-0 flex-col"><div className="rounded-[20px] bg-[var(--surface-muted)] p-3" role="status" aria-label="正在载入任务状态"><p className="px-2 pb-1 pt-1 text-sm font-semibold text-[var(--text-secondary)]">任务状态</p><div className="space-y-1.5 px-1 pb-1 pt-1">{[0, 1, 2].map((row) => <div key={row} className="h-8 rounded-[10px] bg-[var(--surface-default)]" style={{ width: row === 1 ? '72%' : '92%', opacity: 1 - row * 0.15 }} />)}</div></div></div> : undefined}
+                /></div></div> : undefined}
                 inspector={<WorkInspector
                   tab={workInspectorTab}
                   onTabChange={setWorkInspectorTab}
@@ -4752,7 +4768,6 @@ export default function StudioWorkspace() {
                 rightOpen={workRightOpen}
                 outerSidebarOpen={workspaceSidebarOpen}
                 conversationMinWidth={conversationMinWidth}
-                activityDockHydrating={agentHydrating}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
                 onToggleRight={() => {

@@ -17,8 +17,6 @@ type Props = {
   conversationMinWidth?: number
   /** 外层创作侧栏是否展开：折叠后对话区在整个视口居中（任务状态卡改悬浮，不再挤压对话列） */
   outerSidebarOpen?: boolean
-  /** 会话历史拉取中：此时任务状态卡尚未重建，仍应占据右侧栏避免对话列宽度跳动 */
-  activityDockHydrating?: boolean
   rightOpen: boolean
   inspectorWidth: number
   viewerWidth: number
@@ -39,7 +37,7 @@ const inspectorRailItems = [
 const PANEL_MOTION_MS = 220
 
 /** Agent-first 工作台：左侧窄轨对应当前任务的逐轮聊天，右侧窄轨按需展开作品与证据。 */
-export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize, activityDockHydrating = false }: Props) {
+export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
@@ -63,7 +61,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     containerWidth,
     leftWidth,
     rightWidth,
-    hasActivity: Boolean(activityDock) || activityDockHydrating,
+    hasActivity: Boolean(activityDock),
     hasViewer: viewerPresent,
   })
   // 外层侧栏折叠时对话列需在整个视口居中：任务状态卡改为悬浮定位（不再占据 main 右侧流空间），

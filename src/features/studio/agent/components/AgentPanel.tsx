@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Check,
@@ -55,7 +55,7 @@ import {
   startAgentLoopRun,
   stopAgentLoopRun,
 } from '../agentApi'
-import { isRunActive, useAgentStore, type ComposerReference } from '../agentStore'
+import { isRunActive, readSessionMessagesCache, useAgentStore, type ComposerReference } from '../agentStore'
 import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
@@ -127,6 +127,9 @@ type AgentPanelProps = {
   onOpenStudioSettings?: (section: 'general' | 'models' | 'operations' | 'archives') => void
 }
 
+/** 无缓存首次拉取时图标流光的保底展示时长（一个完整扫光周期），避免快请求下只闪一下 */
+const MIN_SHIMMER_HOLD_MS = 1500
+
 export function AgentPanel({
   sessionId,
   novelId,
@@ -177,28 +180,26 @@ export function AgentPanel({
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
-  const [historyLoading, setHistoryLoading] = useState(() =>
-    // 挂载首帧消息为空时直接进入加载态：否则重挂载（切换任务/视角）的第一帧会先闪一帧空会话欢迎页
-    useAgentStore.getState().messages.length === 0,
-  )
-  // 延迟显示加载态：历史很快返回（会话已缓存/近库）时不闪图标流光，直接呈现消息；
-  // 只有超过阈值才进入加载态，动画本身也放慢让扫光更自然
-  const [showHistoryShimmer, setShowHistoryShimmer] = useState(false)
   // 更早对话分页：每页最多 50 轮 run，用户手动点击顶部按钮加载更早内容
   const [olderPagination, setOlderPagination] = useState<{ hasMore: boolean; before: string | null } | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
-  // store 中已加载消息所属的会话：与当前 sessionId 不一致说明切换瞬间渲染的是旧会话残留，
-  // 渲染层按加载中处理（空白占位），避免旧会话内容闪现一帧
+  // 无缓存首次加载的流光保底窗口（快请求下也走完一个扫光周期）
+  const [shimmerHolding, setShimmerHolding] = useState(false)
+  // 历史拉取失败的会话：不能标记成“已恢复”（否则不再重试），但需让渲染层退出加载态，避免流光永久转圈
+  const [historyErrorSessionId, setHistoryErrorSessionId] = useState<string | null>(null)
   const storeLoadedSessionId = useAgentStore((state) => state.loadedSessionId)
-  const sessionStale = storeLoadedSessionId !== null && storeLoadedSessionId !== sessionId
-  useEffect(() => {
-    if (!historyLoading) {
-      setShowHistoryShimmer(false)
-      return
-    }
-    const timer = window.setTimeout(() => setShowHistoryShimmer(true), 260)
-    return () => window.clearTimeout(timer)
-  }, [historyLoading])
+  const hydratingSessionId = useAgentStore((state) => state.hydratingSessionId)
+  // 加载态完全由全局 store 状态派生，不再依赖任何局部标记：
+  // 只有 store 明确宣告「本会话已水合」（loadedSessionId 命中）或「本就没有会话」时才允许欢迎页，
+  // 其余一切中间态（切换中/拉取中/宿主解析中/水合归属不明）都走图标流光，从结构上杜绍欢迎页闪现
+  const conversationReady = messages.length > 0
+  const conversationSettled =
+    sessionId === null || storeLoadedSessionId === sessionId || historyErrorSessionId === sessionId
+  const conversationLoading =
+    // 保底窗口优先：无缓存首载即便请求 200ms 就回来，也走完一个完整扫光周期再显示，避免流光一闪而过
+    shimmerHolding ||
+    (!conversationReady &&
+      (sessionResolving || (sessionId !== null && hydratingSessionId === sessionId) || !conversationSettled))
   const [actionError, setActionError] = useState<string | null>(null)
   // 任务「更多」菜单与重命名弹窗（原 StudioCommandBar 任务三点按钮迁入）
   const [taskMenuOpen, setTaskMenuOpen] = useState(false)
@@ -442,8 +443,9 @@ export function AgentPanel({
     [],
   )
 
-  // 恢复会话历史（切换会话时重新拉取；新会话尚未创建时直接置空；懒创建触发的 sessionId 变化跳过）
-  useEffect(() => {
+  // 恢复会话历史（切换会话时优先用缓存，无缓存才拉取；懒创建触发的 sessionId 变化跳过）
+  // 用 layout effect：会话复位与缓存复原在浏览器绘制前完成，切换只有一次绘制，不会闪旧对话内容
+  useLayoutEffect(() => {
     if (sessionId && lazySessionRef.current === sessionId) {
       lazySessionRef.current = null
       return
@@ -454,14 +456,12 @@ export function AgentPanel({
     const live = useAgentStore.getState()
     if (live.runId && isRunActive(live.phase) && live.activeSessionId === sessionId) {
       connect(live.runId, live.lastSeq)
-      setHistoryLoading(false)
       return
     }
 
     // Work / IDE 只是同一任务的两种视图。消息已经属于当前会话时直接复用
     // Zustand 中的完整内容，避免重新拉取、闪现 loading，亦避免旧响应覆盖直播收尾。
     if (live.loadedSessionId === sessionId) {
-      setHistoryLoading(false)
       return
     }
 
@@ -476,14 +476,23 @@ export function AgentPanel({
     useAgentStore.getState().resetRun()
 
     if (!sessionId) {
-      useAgentStore.getState().restoreMessages([], null)
-      setHistoryLoading(false)
+      // 新任务窗口（会话尚未懒创建）：resetRun 已清空，直接展示欢迎页
       return
     }
 
-    setHistoryLoading(true)
-    // 同步全局水合标记：右侧任务状态卡在历史到达前显示占位而非卸载，避免布局宽度跳变
-    useAgentStore.getState().setWorkspaceHydrating(true)
+    const cached = readSessionMessagesCache(sessionId)
+    let holdTimer: number | null = null
+    setHistoryErrorSessionId(null)
+    if (cached) {
+      // 有缓存：绘制前同步复原，切换即显示，全程不进任何加载态（后续请求静默修正）
+      useAgentStore.getState().restoreMessages(cached, sessionId)
+    } else {
+      // 无缓存：进图标流光，并保底一个完整扫光周期
+      useAgentStore.getState().beginSessionHydration(sessionId)
+      setShimmerHolding(true)
+      holdTimer = window.setTimeout(() => setShimmerHolding(false), MIN_SHIMMER_HOLD_MS)
+    }
+
     fetchAgentSessionMessages(sessionId, { runLimit: 50 })
       .then((payload) => {
         if (cancelled) {
@@ -516,20 +525,24 @@ export function AgentPanel({
         if (!cancelled) {
           // 网络失败不能把该会话标记成“已恢复”，否则 Work/IDE 切换后也不会重试。
           useAgentStore.getState().restoreMessages([], null)
+          setHistoryErrorSessionId(sessionId)
           setOlderPagination(null)
         }
       })
       .finally(() => {
         if (!cancelled) {
-          setHistoryLoading(false)
-          useAgentStore.getState().setWorkspaceHydrating(false)
+          useAgentStore.getState().endSessionHydration(sessionId)
         }
       })
 
     return () => {
       cancelled = true
-      // 兜底：会话切换/面板卸载时结束水合标记，避免早退路径让任务状态卡占位悬挂
-      useAgentStore.getState().setWorkspaceHydrating(false)
+      if (holdTimer !== null) {
+        window.clearTimeout(holdTimer)
+      }
+      setShimmerHolding(false)
+      // 兜底：会话切换/面板卸载时结束水合标记，不让加载态悬挂
+      useAgentStore.getState().endSessionHydration(sessionId)
     }
   }, [sessionId, connect, disconnect])
 
@@ -538,7 +551,7 @@ export function AgentPanel({
   // 单次滚底只能跳到「估算底部」，随后底部消息真实布局、高度膨胀，位置会停在半山腰；
   // 改为逐帧追底直到连续多帧稳定贴底才收敛
   useEffect(() => {
-    if (historyLoading) {
+    if (conversationLoading) {
       return
     }
     const node = scrollRef.current
@@ -569,7 +582,7 @@ export function AgentPanel({
       }
     })
     return () => cancelAnimationFrame(frame)
-  }, [messages, pendingApproval, pendingQuestion, historyLoading])
+  }, [messages, pendingApproval, pendingQuestion, conversationLoading])
 
   // 跟踪用户是否贴底。只要出现一次「向上滚动」就立刻脱离贴底：
   // 流式输出时每个增量都会触发自动滚底，若只用「距底 80px」判定，用户手指刚上滑十几像素
@@ -1133,9 +1146,10 @@ export function AgentPanel({
 
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {messages.length > 0 && !sessionStale ? (
-          /* 已有内容直接呈现：切回已加载会话 / 同会话重用 / 直播收尾时不插任何加载态，做到「有缓存直接显示」 */
-          <div className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
+        {conversationReady ? (
+          /* 已有内容直接呈现：切回已加载会话 / 同会话重用 / 直播收尾时不插任何加载态，做到「有缓存直接显示」。
+             按会话取 key：跨会话切换重放淡入，同会话流式追加不重挂载 */
+          <div key={storeLoadedSessionId ?? 'pending'} className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
             {olderPagination?.hasMore ? (
               <div className="flex justify-center pb-1">
                 <button
@@ -1340,19 +1354,14 @@ export function AgentPanel({
               </div>
             ) : null}
           </div>
-        ) : historyLoading || sessionStale || sessionResolving ? (
-          /* 无历史且历史仍在拉取（或切换瞬间旧会话残留 / 宿主会话解析中）：延迟进入的 Codex 式 Agent 图标流光（居中），
-             图标形状作 mask、渐变光带扫过；已到达的消息始终优先直接呈现 */
-          showHistoryShimmer ? (
-            <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
-              <span
-                className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_1.5s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
-              />
-            </div>
-          ) : (
-            /* 历史拉取刚启动（延迟窗口内）：渲染不可见占位，避免欢迎/加载图在消息到达瞬间闪现 */
-            <div className="min-h-full" aria-hidden="true" />
-          )
+        ) : conversationLoading ? (
+          /* 任何「归属不明」的中间态都走 Codex 式 Agent 图标流光（居中）：图标形状作 mask、渐变光带扫过。
+             无缓存时保底一个完整扫光周期，绝不在此处退化成欢迎页 */
+          <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
+            <span
+              className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_1.5s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+            />
+          </div>
         ) : (
           <AgentEmptyWelcome
             novelName={novelName}
@@ -1420,7 +1429,7 @@ export function AgentPanel({
         <AgentComposer
           novelId={novelId}
           running={active}
-          disabled={historyLoading}
+          disabled={conversationLoading}
           onSend={(prompt, attachments, freedom, selectedQualityMode) => void handleSend(prompt, attachments, freedom, selectedQualityMode)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
