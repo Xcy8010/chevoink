@@ -85,6 +85,9 @@ async function recordUsage(input: {
   targetId?: string | null
   requestTokens?: number | null
   responseTokens?: number | null
+  turn?: number | null
+  promptCacheHitTokens?: number | null
+  promptCacheMissTokens?: number | null
   durationMs: number
   modelTier?: CreditModelTier | null
   multiplierBps?: number
@@ -103,6 +106,9 @@ async function recordUsage(input: {
       action: input.action,
       requestTokens: input.requestTokens ?? null,
       responseTokens: input.responseTokens ?? null,
+      turn: input.turn ?? null,
+      promptCacheHitTokens: input.promptCacheHitTokens ?? null,
+      promptCacheMissTokens: input.promptCacheMissTokens ?? null,
       modelTier: input.modelTier ?? null,
       multiplierBps: input.multiplierBps ?? 10000,
       durationMs: input.durationMs,
@@ -180,6 +186,34 @@ export type ChatTokenUsage = {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /** 缓存命中输入 token：DeepSeek 顶层字段或 OpenAI prompt_tokens_details.cached_tokens，供应商未返回时为 0 */
+  promptCacheHitTokens: number
+  promptCacheMissTokens: number
+}
+
+/** 供应商 usage 载荷中与缓存命中相关的字段（双格式） */
+export type ProviderUsageCachePayload = {
+  prompt_tokens?: number
+  prompt_cache_hit_tokens?: number
+  prompt_cache_miss_tokens?: number
+  prompt_tokens_details?: { cached_tokens?: unknown }
+}
+
+/**
+ * 从供应商 usage 提取缓存命中/未命中：DeepSeek 返回顶层 prompt_cache_hit/miss_tokens，
+ * OpenAI 兼容网关返回 prompt_tokens_details.cached_tokens；均未返回时保持 0（现状行为，不报错）。
+ */
+export function extractCacheTokens(usage: ProviderUsageCachePayload): { hit: number; miss: number } {
+  const deepseekHit = typeof usage.prompt_cache_hit_tokens === 'number' ? usage.prompt_cache_hit_tokens : null
+  const openAiHitValue = usage.prompt_tokens_details?.cached_tokens
+  const openAiHit = typeof openAiHitValue === 'number' ? openAiHitValue : null
+  const hit = deepseekHit ?? openAiHit ?? 0
+  if (hit <= 0) {
+    return { hit: 0, miss: 0 }
+  }
+  const deepseekMiss = typeof usage.prompt_cache_miss_tokens === 'number' ? usage.prompt_cache_miss_tokens : null
+  return { hit, miss: deepseekMiss ?? Math.max(0, (usage.prompt_tokens ?? 0) - hit)
+  }
 }
 
 export type ChatStreamChunk =
@@ -214,6 +248,7 @@ type ChatWithToolsParams = {
     chapterId?: string | null
     targetType?: string
     targetId?: string | null
+    turn?: number | null
     modelTier?: CreditModelTier
     multiplierBps?: number
   }
@@ -306,7 +341,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   let content = ''
   let reasoning = ''
   let finishReason: ChatCompletionResult['finishReason'] = 'stop'
-  const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, promptCacheHitTokens: 0, promptCacheMissTokens: 0 }
   const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>()
 
   const decoder = new TextDecoder()
@@ -314,7 +349,14 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   let buffer = ''
 
   const handleDelta = (parsed: {
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    usage?: {
+      prompt_tokens?: number
+      completion_tokens?: number
+      total_tokens?: number
+      prompt_cache_hit_tokens?: number
+      prompt_cache_miss_tokens?: number
+      prompt_tokens_details?: { cached_tokens?: unknown }
+    }
     choices?: Array<{
       finish_reason?: unknown
       delta?: {
@@ -328,6 +370,9 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       usage.promptTokens = parsed.usage.prompt_tokens ?? usage.promptTokens
       usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
       usage.totalTokens = parsed.usage.total_tokens ?? usage.totalTokens
+      const cache = extractCacheTokens(parsed.usage)
+      usage.promptCacheHitTokens = cache.hit
+      usage.promptCacheMissTokens = cache.miss
     }
 
     const choice = parsed.choices?.[0]
@@ -448,6 +493,9 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     targetId: params.usageLog.targetId ?? null,
     requestTokens: usage.promptTokens || null,
     responseTokens: usage.completionTokens || null,
+    turn: params.usageLog.turn ?? null,
+    promptCacheHitTokens: usage.promptCacheHitTokens > 0 ? usage.promptCacheHitTokens : null,
+    promptCacheMissTokens: usage.promptCacheMissTokens > 0 ? usage.promptCacheMissTokens : null,
     durationMs: Date.now() - startedAt,
     modelTier: params.usageLog.modelTier ?? 'speed',
     multiplierBps: params.usageLog.multiplierBps ?? 10000,

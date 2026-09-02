@@ -850,16 +850,25 @@ function utc8PeriodStart(period: AdminTokenPeriod, now = new Date()): Date {
 export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'today'): Promise<AdminTokenManagementPayload> {
   const startedAt = utc8PeriodStart(period)
   const usageWhere = { createdAt: { gte: startedAt } }
-  const [summary, userGroups, actionGroups, modelGroups, toolEntries, rawTrend] = await Promise.all([
-    prisma.aiUsageLog.aggregate({ where: usageWhere, _sum: { requestTokens: true, responseTokens: true } }),
+  const [summary, userGroups, actionGroups, modelGroups, toolEntries, rawTrend, runGroups] = await Promise.all([
+    prisma.aiUsageLog.aggregate({ where: usageWhere, _sum: { requestTokens: true, responseTokens: true, promptCacheHitTokens: true, promptCacheMissTokens: true } }),
     prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['userId'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
     prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['action'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
-    prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['modelTier'], _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.aiUsageLog.groupBy({ where: usageWhere, by: ['modelTier'], _sum: { requestTokens: true, responseTokens: true, promptCacheHitTokens: true, promptCacheMissTokens: true }, _count: { _all: true } }),
     prisma.creditLedgerEntry.findMany({
       where: { createdAt: { gte: startedAt }, sourceType: { in: ['web_search', 'image_generation'] }, deltaMilli: { lte: 0 } },
       select: { userId: true, sourceType: true },
     }),
     prisma.aiUsageLog.findMany({ where: usageWhere, select: { createdAt: true, requestTokens: true, responseTokens: true } }),
+    // Agent 运行级缓存聚合：targetId 即 runId，轮数取 max(turn)，按输入量取前 20
+    prisma.aiUsageLog.groupBy({
+      by: ['targetId'],
+      where: { ...usageWhere, targetType: 'agentRun', targetId: { not: null } },
+      _sum: { requestTokens: true, responseTokens: true, promptCacheHitTokens: true, promptCacheMissTokens: true, creditChargeMilli: true },
+      _max: { turn: true },
+      _min: { createdAt: true },
+      _count: { _all: true },
+    }),
   ])
   const toolCounts = new Map<string, { webSearchCalls: number; imageCalls: number }>()
   for (const entry of toolEntries) {
@@ -889,6 +898,8 @@ export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'to
   const userMap = new Map(users.map((user) => [user.id, user]))
   const requestTokens = summary._sum.requestTokens ?? 0
   const responseTokens = summary._sum.responseTokens ?? 0
+  const cacheHitTokens = summary._sum.promptCacheHitTokens ?? 0
+  const cacheMissTokens = summary._sum.promptCacheMissTokens ?? 0
   const webSearchCalls = [...toolCounts.values()].reduce((total, item) => total + item.webSearchCalls, 0)
   const imageCalls = [...toolCounts.values()].reduce((total, item) => total + item.imageCalls, 0)
   const modelLabels: Record<string, string> = { speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', custom: '自定义' }
@@ -903,7 +914,7 @@ export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'to
   return {
     period,
     periodStartedAt: startedAt.toISOString(),
-    summary: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens, users: rankedUserIds.length, webSearchCalls, imageCalls },
+    summary: { totalTokens: requestTokens + responseTokens, requestTokens, responseTokens, cacheHitTokens, cacheMissTokens, users: rankedUserIds.length, webSearchCalls, imageCalls },
     users: rankedUserIds.flatMap((userId) => {
       const user = userMap.get(userId)
       if (!user) return []
@@ -928,9 +939,25 @@ export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'to
         totalTokens: modelRequestTokens + modelResponseTokens,
         requestTokens: modelRequestTokens,
         responseTokens: modelResponseTokens,
+        cacheHitTokens: item._sum.promptCacheHitTokens ?? 0,
+        cacheMissTokens: item._sum.promptCacheMissTokens ?? 0,
         requestCount: item._count._all,
       }
     }).sort((left, right) => right.totalTokens - left.totalTokens),
+    runs: runGroups
+      .filter((item): item is typeof item & { targetId: string } => Boolean(item.targetId))
+      .map((item) => ({
+        runId: item.targetId,
+        promptTokens: item._sum.requestTokens ?? 0,
+        responseTokens: item._sum.responseTokens ?? 0,
+        hitTokens: item._sum.promptCacheHitTokens ?? 0,
+        missTokens: item._sum.promptCacheMissTokens ?? 0,
+        chargedMilli: item._sum.creditChargeMilli ?? 0,
+        turns: item._max.turn ?? 0,
+        startedAt: (item._min.createdAt ?? new Date(0)).toISOString(),
+      }))
+      .sort((left, right) => (right.promptTokens + right.responseTokens) - (left.promptTokens + left.responseTokens))
+      .slice(0, 20),
     trend: [...trendMap.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, value]) => ({ date, ...value })),
   }
 }

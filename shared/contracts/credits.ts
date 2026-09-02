@@ -52,6 +52,9 @@ export type CreditLedgerItem = {
   multiplier: number
   requestTokens: number | null
   responseTokens: number | null
+  /** 缓存命中输入 token（供应商未返回或旧记录为 null） */
+  promptCacheHitTokens: number | null
+  promptCacheMissTokens: number | null
   createdAt: string
 }
 

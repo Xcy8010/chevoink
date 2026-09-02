@@ -312,6 +312,9 @@ export type AdminTokenManagementPayload = {
     totalTokens: number
     requestTokens: number
     responseTokens: number
+    /** 缓存命中/未命中输入 token（供应商未返回时为 0，命中率由前端按 hit/(hit+miss) 计算） */
+    cacheHitTokens: number
+    cacheMissTokens: number
     users: number
     webSearchCalls: number
     imageCalls: number
@@ -339,7 +342,20 @@ export type AdminTokenManagementPayload = {
     totalTokens: number
     requestTokens: number
     responseTokens: number
+    cacheHitTokens: number
+    cacheMissTokens: number
     requestCount: number
+  }>
+  /** Agent 运行级缓存聚合（按 runId 分组，取消耗前 20） */
+  runs?: Array<{
+    runId: string
+    promptTokens: number
+    responseTokens: number
+    hitTokens: number
+    missTokens: number
+    chargedMilli: number
+    turns: number
+    startedAt: string
   }>
   trend?: Array<{ date: string; requestTokens: number; responseTokens: number }>
 }

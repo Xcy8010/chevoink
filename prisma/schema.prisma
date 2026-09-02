@@ -978,6 +978,11 @@ model AiUsageLog {
   action            String         @db.VarChar(64)
   requestTokens     Int?           @map("request_tokens")
   responseTokens    Int?           @map("response_tokens")
+  /** Agent 轮号（targetType=agentRun 时有效；wrapUp 兑底调用为 null） */
+  turn              Int?           @map("turn")
+  /** 供应商返回的缓存命中/未命中输入 token（DeepSeek 顶层字段或 OpenAI prompt_tokens_details） */
+  promptCacheHitTokens  Int?       @map("prompt_cache_hit_tokens")
+  promptCacheMissTokens Int?       @map("prompt_cache_miss_tokens")
   modelTier         String?        @map("model_tier") @db.VarChar(24)
   multiplierBps     Int            @default(10000) @map("multiplier_bps")
   creditChargeMilli Int            @default(0) @map("credit_charge_milli")

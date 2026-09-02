@@ -208,6 +208,20 @@ export async function getCreditUsage(userId: string, take = 100): Promise<Credit
       take: Math.min(Math.max(take, 1), 300),
     }),
   ])
+  // 账本幂等键为 usage:{usageLogId}，据此精确关联用量日志补齐缓存命中字段（旧记录/非 token 条目为 null）
+  const usageLogIds = entries
+    .filter((entry) => entry.kind === 'usage' && entry.sourceType === 'model_tokens' && entry.idempotencyKey.startsWith('usage:'))
+    .map((entry) => entry.idempotencyKey.slice('usage:'.length))
+  const cacheByLogId = new Map<string, { hit: number; miss: number }>()
+  if (usageLogIds.length > 0) {
+    const usageLogs = await prisma.aiUsageLog.findMany({
+      where: { id: { in: usageLogIds }, promptCacheHitTokens: { not: null } },
+      select: { id: true, promptCacheHitTokens: true, promptCacheMissTokens: true },
+    })
+    for (const log of usageLogs) {
+      cacheByLogId.set(log.id, { hit: log.promptCacheHitTokens ?? 0, miss: log.promptCacheMissTokens ?? 0 })
+    }
+  }
   const ledger: CreditLedgerItem[] = entries.map((entry) => ({
     id: entry.id,
     delta: milliToCredits(entry.deltaMilli),
@@ -218,6 +232,8 @@ export async function getCreditUsage(userId: string, take = 100): Promise<Credit
     multiplier: entry.multiplierBps / 10000,
     requestTokens: entry.requestTokens,
     responseTokens: entry.responseTokens,
+    promptCacheHitTokens: cacheByLogId.get(entry.idempotencyKey.slice('usage:'.length))?.hit ?? null,
+    promptCacheMissTokens: cacheByLogId.get(entry.idempotencyKey.slice('usage:'.length))?.miss ?? null,
     createdAt: entry.createdAt.toISOString(),
   }))
   return { account, ledger }
