@@ -4,6 +4,7 @@ import { Pause, Play, RefreshCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import Button from '@/components/ui/Button'
+import { useToast } from '@/components/ui/toast-context'
 import { formatCreditAmount } from '@/features/account/credit-format'
 import { AdminCard, AdminPageHeader, AdminPanelState } from '../AdminLayout'
 import AdminDangerActionDialog, { type AdminDangerPayload } from '../components/AdminDangerActionDialog'
@@ -33,6 +34,7 @@ function Ring({ value }: { value: number }) {
 
 export default function AdminCreditsManagementPage() {
   const queryClient = useQueryClient()
+  const toast = useToast()
   const query = useQuery({ queryKey: ['admin', 'credits'], queryFn: getAdminCreditsManagement })
   const [pending, setPending] = useState<PendingAction>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -49,6 +51,7 @@ export default function AdminCreditsManagementPage() {
     onSuccess: async () => {
       setPending(null)
       setSelected(new Set())
+      toast.success('操作已完成')
       await queryClient.invalidateQueries({ queryKey: ['admin', 'credits'] })
     },
   })
@@ -87,6 +90,6 @@ export default function AdminCreditsManagementPage() {
         </AdminCard>
       </div> : null}
     </AdminPanelState>
-    {copy ? <AdminDangerActionDialog open title={copy.title} description={copy.description} confirmation={copy.confirmation} busy={mutation.isPending} onConfirm={(payload) => mutation.mutate(payload)} onClose={() => setPending(null)} /> : null}
+    {copy ? <AdminDangerActionDialog open title={copy.title} description={copy.description} confirmation={copy.confirmation} onConfirm={(payload) => mutation.mutateAsync(payload)} onClose={() => setPending(null)} /> : null}
   </div>
 }
