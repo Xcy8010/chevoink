@@ -22,7 +22,10 @@ import { buildStoryCompilerDigest } from './story-compiler.js'
 
 /**
  * Context Manager（plan/13 §4.4 / §4.5）。
- * - system prompt 三段式：身份与边界 → 模式契约（含六条决策策略）→ 当前上下文摘要
+ * - system prompt 只保留任务内稳定的固定规则：身份与边界 → 模式契约（含决策策略）→ 固定知识/文案；
+ *   逐轮可变的数据与注入指引全部后移到 history 之后的尾部快照（buildWorkspaceSnapshot）——
+ *   system 是消息序列第一个元素，其中任何字符变化都会击穿后续 history 的供应商缓存前缀，
+ *   后移之后每轮只在尾部新增增量，历史部分缓存得以延续
  * - 正文不默认全文注入：模型需要正文时自己调 chapter_read（带 range）
  * - L2 记忆（风格规则/角色卡/时间线/伏笔）摘要注入，按重要性截断
  * - 历史消息按字符预算裁剪：超预算的旧消息折叠为一条摘要占位
@@ -99,15 +102,19 @@ const TAG_LIBRARY_DIGEST = [
   ...NOVEL_TAG_GROUPS.map((group) => `${group.label}：${group.tags.join('、')}`),
 ].join('\n')
 
-/** L2：作品信息 + 风格/一致性规则包（≤800 字） */
-async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
+/** L2：作品信息 + 风格/一致性规则包（≤800 字）。
+ * 归属拆分：bootstrap 初始化协议留在 system（规则权威性，零作品场景无缓存可损失）；
+ * 作品数据行（章节/字数等逐轮可变字段）返回给调用方进尾部快照。 */
+async function buildNovelRuleBundle(
+  novelId: string,
+): Promise<{ bootstrapPrompt: string | null; novelDataBundle: string | null }> {
   const novel = await prisma.novel.findUnique({
     where: { id: novelId },
     select: { title: true, displayTitle: true, summary: true, tagNames: true, status: true, chapterCount: true, wordCount: true, coverAssetId: true },
   })
 
   if (!novel) {
-    return null
+    return { bootstrapPrompt: null, novelDataBundle: null }
   }
 
   const rules = await prisma.projectMemoryEntry.findMany({
@@ -124,17 +131,18 @@ async function buildNovelRuleBundle(novelId: string): Promise<string | null> {
     && novel.chapterCount === 0
     && novel.wordCount === 0
 
-  const lines = [
+  const bootstrapPrompt = isBootstrapNovel
+    ? `作品初始化协议：当前是系统为零作品作者准备的隐藏占位作品，作者本轮是在让你真正创建第一部作品。结合作者明确给出的题材与设定，主动用 novel_create 一次性把书名、简介、标签落库，不要继续保留「未命名作品」和占位简介。任务结束前核对书名、简介、标签、正式封面四项；正文收尾只询问作者是否需要继续完善仍然缺失的项目，已经设置好的项目不要重复询问。正式封面缺失=${novel.coverAssetId ? '否' : '是'}。`
+    : null
+
+  const dataLines = [
     `当前作品：《${novel.displayTitle?.trim() || novel.title}》（${novel.status === 'published' ? '已发布' : novel.status === 'completed' ? '已完结' : novel.status === 'archived' ? '已下架' : '草稿'}，${novel.chapterCount} 章 / ${novel.wordCount} 字）`,
     novel.summary ? `简介：${clip(novel.summary, 200)}` : '',
     novel.tagNames.length ? `标签：${novel.tagNames.join('、')}` : '',
-    isBootstrapNovel
-      ? `作品初始化协议：当前是系统为零作品作者准备的隐藏占位作品，作者本轮是在让你真正创建第一部作品。结合作者明确给出的题材与设定，主动用 novel_create 一次性把书名、简介、标签落库，不要继续保留「未命名作品」和占位简介。任务结束前核对书名、简介、标签、正式封面四项；正文收尾只询问作者是否需要继续完善仍然缺失的项目，已经设置好的项目不要重复询问。正式封面缺失=${novel.coverAssetId ? '否' : '是'}。`
-      : '',
     ...rules.map((rule) => `[${rule.memoryType === 'stylePreference' ? '风格' : '一致性'}] ${rule.title}：${clip(rule.content, 160)}`),
   ].filter(Boolean)
 
-  return lines.join('\n')
+  return { bootstrapPrompt, novelDataBundle: dataLines.length > 0 ? dataLines.join('\n') : null }
 }
 
 /** L2/L3：角色卡 + 时间线 + 伏笔摘要（≤1200 字） */
@@ -306,6 +314,38 @@ async function loadSessionHistory(
   return kept
 }
 
+/** 尾部动态快照：把逐轮可变的数据与注入指引从 system 原文搬运到 history 之后的独立 user 消息。
+ * system 是消息序列第一个元素，其中任何字符变化都会让供应商对后续 history 的缓存前缀整体失效；
+ * 快照位于 history 之后、todoDigest 之前，每轮整体重建且只新增尾部增量，历史部分的缓存不受影响。
+ * 各段仅做原文搬运并标注来源，不重写、不删减。 */
+function buildWorkspaceSnapshot(sections: {
+  skillDigest: string
+  novelDataBundle: string | null
+  memoryDigest: string | null
+  planDigest: string | null
+  coverDigest: string | null
+  storyCompilerDigest: string | null
+  checkpointDigest: string | null
+  directiveDigest: string | null
+  chapterLine: string
+}): string | null {
+  const blocks = [
+    `【技能指引】\n${sections.skillDigest}`,
+    sections.novelDataBundle ? `【作品数据】\n${sections.novelDataBundle}` : null,
+    sections.memoryDigest ? `【记忆召回】\n${sections.memoryDigest}` : null,
+    sections.planDigest ? `【计划文件夹】\n${sections.planDigest}` : null,
+    sections.coverDigest ? `【封面候选】\n${sections.coverDigest}` : null,
+    sections.storyCompilerDigest ? `【Story Compiler】\n${sections.storyCompilerDigest}` : null,
+    sections.checkpointDigest ? `【压缩检查点】\n${sections.checkpointDigest}` : null,
+    sections.directiveDigest ? `【生效指令】\n${sections.directiveDigest}` : null,
+    `【当前章节】\n${sections.chapterLine}`,
+  ].filter(Boolean)
+  if (blocks.length === 0) {
+    return null
+  }
+  return `[当前作品上下文快照]（系统每轮自动刷新的数据与注入指引，不改变系统规则）\n\n${blocks.join('\n\n')}`
+}
+
 export type AssembleContextInput = {
   agent: AgentDefinition
   mode: AgentExecutionMode
@@ -332,7 +372,7 @@ export type AssembledAgentContext = {
 export async function assembleContext(input: AssembleContextInput): Promise<AssembledAgentContext> {
   const checkpointState = await loadContextCheckpoint(input.sessionId)
   const storyCompilerFeatureEnabled = isAgent2FeatureEnabled('storyCompiler', input.userId)
-  const [ruleBundle, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags, storyCompilerDigest] = await Promise.all([
+  const [ruleBundleSplit, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags, storyCompilerDigest] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
     buildStoryMemoryDigest(input.userId, input.novelId, input.prompt),
     buildPlanFolderDigest(input.userId, input.novelId),
@@ -368,6 +408,14 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       })
     : null
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null
+  const { bootstrapPrompt, novelDataBundle } = ruleBundleSplit
+
+  // 逐轮可变内容的 digest 统一收集，全部进尾部快照；system 只留任务内稳定的固定规则
+  const skillDigest = skillRoute
+    ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom)
+    : 'Skill OS 当前未对该账号启用；直接遵从作者目标，不得自行套用未知写作模板。'
+  const checkpointDigest = checkpointState.checkpoint ? renderCheckpointDigest(checkpointState.checkpoint) : null
+  const directiveDigest = renderDirectiveDigest(directives)
 
   const systemPrompt = [
     buildAgentIdentityPrompt(input.modelTier),
@@ -381,25 +429,30 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     OPERATION_KNOWLEDGE,
     buildGeneralWritingDigest(),
     genreDigest,
-    skillRoute
-      ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom)
-      : 'Skill OS 当前未对该账号启用；直接遵从作者目标，不得自行套用未知写作模板。',
     '技能操作：作者明确要求“创建/新增一个技能”，且该偏好会在后续任务反复复用时，先调用 skill_create_draft 生成私有、关闭的草稿；再只在创建或修改后运行一条应命中和一条不应命中的 skill_test。测试完成后说明结果，只有作者本轮明确要求发布时才调用 skill_publish。普通单轮要求不得保存成技能。作者明确要求安装共享技能时，先用 skill_shared_invites 列出待处理邀请，再只对作者指定的 inviteId 调用 skill_install_shared；不得自动导入 GitHub 或任意外部源码，第三方来源必须由作者在技能区提供许可证、归属和固定版本。',
     '历史对话中形如「[调用工具 xxx：yyy]」的行是系统对已发生工具调用的压缩标记，仅供你了解之前做过什么，不是回复文本的一部分。你自己的回复中严禁出现「[调用工具 …]」「[调用 tool]」这类文字：需要执行操作时直接发起真正的工具调用，需要向作者汇报进展时用自然语言描述。',
-    ruleBundle,
+    bootstrapPrompt,
     TAG_LIBRARY_DIGEST,
+    '作者当前编辑的章节以尾部快照为准；未指明章节时优先针对该章节操作。',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const chapterLine = chapter
+    ? `作者当前正在编辑：第${chapter.orderIndex}章《${chapter.title}》（chapterId=${chapter.id}，${chapter.wordCount} 字）。`
+    : '作者当前未打开具体章节。'
+
+  const workspaceSnapshot = buildWorkspaceSnapshot({
+    skillDigest,
+    novelDataBundle,
     memoryDigest,
     planDigest,
     coverDigest,
     storyCompilerDigest,
-    checkpointState.checkpoint ? renderCheckpointDigest(checkpointState.checkpoint) : null,
-    renderDirectiveDigest(directives),
-    chapter
-      ? `作者当前正在编辑：第${chapter.orderIndex}章《${chapter.title}》（chapterId=${chapter.id}，${chapter.wordCount} 字）。未指明章节时优先针对该章节操作。`
-      : '作者当前未打开具体章节。',
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+    checkpointDigest,
+    directiveDigest,
+    chapterLine,
+  })
 
   const intentSections = [input.prompt.trim()]
 
@@ -436,6 +489,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     messages: [
       { role: 'system', content: systemPrompt },
       ...history,
+      // 动态快照紧跟在历史之后：system 不含逐轮变动内容，缓存前缀止于 system+history，
+      // 快照/todoDigest/taskSpec/意图都是每轮重建的尾部增量，不破坏已缓存的历史前缀
+      ...(workspaceSnapshot ? [{ role: 'user' as const, content: workspaceSnapshot }] : []),
       // 待办快照紧跟在历史之后、用户指令之前：位置越靠近当前轮次权重越高，
       // 避免被历史里旧任务的待办痕迹带偏（尤其是“继续”这类短指令）
       ...(todoDigest ? [{ role: 'user' as const, content: todoDigest }] : []),
