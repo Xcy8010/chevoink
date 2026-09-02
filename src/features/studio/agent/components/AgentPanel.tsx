@@ -173,13 +173,20 @@ export function AgentPanel({
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
-  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(() =>
+    // 挂载首帧消息为空时直接进入加载态：否则重挂载（切换任务/视角）的第一帧会先闪一帧空会话欢迎页
+    useAgentStore.getState().messages.length === 0,
+  )
   // 延迟显示加载态：历史很快返回（会话已缓存/近库）时不闪图标流光，直接呈现消息；
   // 只有超过阈值才进入加载态，动画本身也放慢让扫光更自然
   const [showHistoryShimmer, setShowHistoryShimmer] = useState(false)
   // 更早对话分页：每页最多 50 轮 run，用户手动点击顶部按钮加载更早内容
   const [olderPagination, setOlderPagination] = useState<{ hasMore: boolean; before: string | null } | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // store 中已加载消息所属的会话：与当前 sessionId 不一致说明切换瞬间渲染的是旧会话残留，
+  // 渲染层按加载中处理（空白占位），避免旧会话内容闪现一帧
+  const storeLoadedSessionId = useAgentStore((state) => state.loadedSessionId)
+  const sessionStale = storeLoadedSessionId !== null && storeLoadedSessionId !== sessionId
   useEffect(() => {
     if (!historyLoading) {
       setShowHistoryShimmer(false)
@@ -1122,7 +1129,7 @@ export function AgentPanel({
 
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {messages.length > 0 ? (
+        {messages.length > 0 && !sessionStale ? (
           /* 已有内容直接呈现：切回已加载会话 / 同会话重用 / 直播收尾时不插任何加载态，做到「有缓存直接显示」 */
           <div className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
             {olderPagination?.hasMore ? (
@@ -1329,8 +1336,8 @@ export function AgentPanel({
               </div>
             ) : null}
           </div>
-        ) : historyLoading ? (
-          /* 无历史且历史仍在拉取：延迟进入的 Codex 式 Agent 图标流光（居中），
+        ) : historyLoading || sessionStale ? (
+          /* 无历史且历史仍在拉取（或切换瞬间旧会话残留）：延迟进入的 Codex 式 Agent 图标流光（居中），
              图标形状作 mask、渐变光带扫过；已到达的消息始终优先直接呈现 */
           showHistoryShimmer ? (
             <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
