@@ -253,6 +253,9 @@ export default function StudioWorkspace() {
       snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
     return initialTask?.sessionId ?? null
   })
+  // 会话解析中：切换作品/首载时任务窗口的 sessionId 需等服务端会话列表合并后才能定案，
+  // 这段中间态禁止 AgentPanel 渲染空态欢迎页（否则欢迎页会显示整个网络请求时长）
+  const [agentSessionsResolving, setAgentSessionsResolving] = useState(false)
   // 任务窗口同样从快照惰性恢复：挂载即落在该作品上次活跃的任务窗口，
   // 避免初始空窗口先触发快照写入效应清掉存档、或界面闪现「新任务」
   const [agentTaskWindows, setAgentTaskWindows] = useState<AgentTaskWindowState[]>(() => {
@@ -678,6 +681,7 @@ export default function StudioWorkspace() {
   useEffect(() => {
     agentRunAbortControllerRef.current?.abort()
     resetAgentWorkspace()
+    setAgentSessionsResolving(true)
     setAgentStateNovelId(activeNovelId)
 
     const requestedSessionId = searchParams.get('session')
@@ -791,11 +795,17 @@ export default function StudioWorkspace() {
         applyAgentTaskWindowState(loadedTaskWindow)
       } catch {
         // 保留本地快照作为回退，不在这里打断创作流程
+      } finally {
+        // 会话解析结束（命中会话或确认为空）后解除占位，空态欢迎页才能正常出现
+        if (!cancelled) {
+          setAgentSessionsResolving(false)
+        }
       }
     })()
 
     return () => {
       cancelled = true
+      setAgentSessionsResolving(false)
     }
     // 任务深链只在作品切换/首载时消费一次；把 searchParams 加入依赖会在删除
     // `session` 参数后再次重置工作区，反而覆盖刚恢复的目标任务。
@@ -4171,6 +4181,7 @@ export default function StudioWorkspace() {
     return (
       <AgentPanel
           sessionId={agentSessionId}
+          sessionResolving={agentSessionsResolving}
           novelId={activeNovelId}
           novelName={currentNovel?.displayTitle?.trim() || currentNovel?.title?.trim() || '未命名作品'}
           initializingNovel={currentNovel ? isBootstrapNovel(currentNovel) : false}

@@ -121,6 +121,9 @@ type AgentPanelProps = {
   /** 桌面端由工作区左下角统一承载额度提醒；手机端没有该侧栏时在输入框上方展示。 */
   showCreditWarning?: boolean
   showEmptySuggestions?: boolean
+  /** 宿主正在异步解析当前任务窗口的会话（切换作品/首载/快照与服务端合并）：
+      期间 sessionId 尚未定案，禁止渲染空态欢迎页，避免欢迎页在中间态显示数百毫秒 */
+  sessionResolving?: boolean
   onOpenStudioSettings?: (section: 'general' | 'models' | 'operations' | 'archives') => void
 }
 
@@ -154,6 +157,7 @@ export function AgentPanel({
   hideHeader = false,
   showCreditWarning = false,
   showEmptySuggestions = true,
+  sessionResolving = false,
   onOpenStudioSettings,
   referenceOptions = [],
 }: AgentPanelProps) {
@@ -1336,8 +1340,8 @@ export function AgentPanel({
               </div>
             ) : null}
           </div>
-        ) : historyLoading || sessionStale ? (
-          /* 无历史且历史仍在拉取（或切换瞬间旧会话残留）：延迟进入的 Codex 式 Agent 图标流光（居中），
+        ) : historyLoading || sessionStale || sessionResolving ? (
+          /* 无历史且历史仍在拉取（或切换瞬间旧会话残留 / 宿主会话解析中）：延迟进入的 Codex 式 Agent 图标流光（居中），
              图标形状作 mask、渐变光带扫过；已到达的消息始终优先直接呈现 */
           showHistoryShimmer ? (
             <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
