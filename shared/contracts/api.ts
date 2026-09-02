@@ -26,6 +26,7 @@ import type {
   Pagination,
   PostDetailPayload,
   Post,
+  AgentRunStatus,
   ProjectMemoryEntry,
   ReaderPayload,
   ReadingProgressItem,
@@ -487,6 +488,19 @@ export type GenerateCoverImageResponse = ApiSuccess<{
 export type ListAgentSessionsResponse = ApiSuccess<{
   items: AgentSession[]
 }>
+
+/** 侧栏任务窗口状态轮询：每个会话最新一条 run 的状态（近期无 run 为 null）。
+ * running/queued→转圈、awaiting_approval→黄点（同时覆盖权限审批与 ask_user 挂起）、
+ * completed/failed/cancelled→终态（绿/红点，仅本页面会话内由事件层实时记录，此接口不回传历史终态）。 */
+export type AgentSessionRunStatus = {
+  runId: string
+  status: AgentRunStatus
+  finishedAt: string | null
+}
+
+export type AgentSessionRunStatusPayload = {
+  statuses: Record<string, AgentSessionRunStatus | null>
+}
 
 export type CreateAgentSessionRequest = {
   novelId: string

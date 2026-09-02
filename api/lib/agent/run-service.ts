@@ -13,7 +13,9 @@ import type {
   AgentRouteDecision,
   AgentRuleBundle,
   AgentRun,
+  AgentRunStatus,
   AgentSession,
+  AgentSessionRunStatusPayload,
   AgentStoryMemoryDigest,
   AgentStreamEvent,
   AgentWorkspaceToolPolicy,
@@ -1095,4 +1097,41 @@ export async function listAgentSessionHistoryData(userId: string, sessionId: str
       buildAgentRunResultPayload(run, artifactMap.get(run.id) ?? [], memoryMap.get(run.id) ?? []),
     ),
   }
+}
+
+/** 侧栏任务窗口状态轮询：批量查询会话各自最新一条 run 的状态（30 天窗口内）。
+ * awaiting_approval 同时覆盖权限审批与 ask_user 挂起；历史终态不在此回传——
+ * 未读绿/红点由前端事件层实时记录，避免把几天前的旧完成误报为未读。 */
+export async function listSessionRunStatuses(userId: string, sessionIds: string[]): Promise<AgentSessionRunStatusPayload> {
+  const ids = [...new Set(sessionIds.filter((id) => typeof id === 'string' && id.length > 0))].slice(0, 50)
+  if (ids.length === 0) return { statuses: {} }
+
+  const owned = await prisma.agentSession.findMany({
+    where: { id: { in: ids }, userId },
+    select: { id: true },
+  })
+  if (owned.length === 0) return { statuses: {} }
+  const ownedIds = owned.map((session) => session.id)
+
+  const runs = await prisma.agentRun.findMany({
+    where: {
+      sessionId: { in: ownedIds },
+      createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+    select: { id: true, sessionId: true, status: true, finishedAt: true },
+  })
+
+  const statuses: AgentSessionRunStatusPayload['statuses'] = {}
+  for (const id of ownedIds) statuses[id] = null
+  for (const run of runs) {
+    if (statuses[run.sessionId]) continue
+    statuses[run.sessionId] = {
+      runId: run.id,
+      status: run.status as AgentRunStatus,
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+    }
+  }
+  return { statuses }
 }

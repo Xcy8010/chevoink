@@ -2,6 +2,7 @@ import { buildApiUrl } from '@/app/api-base'
 import { buildAuthHeader } from '@/lib/auth-token'
 import type {
   AgentSession,
+  AgentSessionRunStatusPayload,
   AgentUIMessage,
   ApiResponse,
   ContextState,
@@ -136,6 +137,12 @@ export function fetchAgentSessions(novelId?: string, options?: { query?: string;
   return requestData<{ items: AgentSession[] }>(
     `/api/agent/sessions?${query.toString()}`,
   )
+}
+
+/** 侧栏任务窗口状态轮询：批量查各会话最新 run 状态（运行中/挂起），驱动绿黄红点与转圈 */
+export function fetchSessionsRunStatus(sessionIds: string[]): Promise<AgentSessionRunStatusPayload> {
+  if (sessionIds.length === 0) return Promise.resolve({ statuses: {} })
+  return requestData<AgentSessionRunStatusPayload>(`/api/agent/sessions/run-status?ids=${encodeURIComponent(sessionIds.join(','))}`)
 }
 
 export function fetchAgentContextState(sessionId: string): Promise<ContextState> {

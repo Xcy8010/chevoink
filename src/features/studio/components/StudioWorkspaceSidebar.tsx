@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive, BookOpenText, Bot, Check, ChevronDown, ChevronRight, Clock3, Crosshair,
-  Gauge, Gift, Home, MoreHorizontal, PencilLine, Pin, PinOff, Plus, Search, Settings2, X,
+  Gauge, Gift, Home, LoaderCircle, MoreHorizontal, PencilLine, Pin, PinOff, Plus, Search, Settings2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -14,8 +14,9 @@ import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
 import type { AgentSession, Novel } from '../../../../shared/contracts/index.js'
 import { updateNovelMeta } from '../api'
-import { fetchAgentSessions, renameAgentSession, updateAgentSessionSettings } from '../agent/agentApi'
+import { fetchAgentSessions, fetchSessionsRunStatus, renameAgentSession, updateAgentSessionSettings } from '../agent/agentApi'
 import ChevoinkAgentMark from '../agent/components/ChevoinkAgentMark'
+import { isRunActive, useAgentStore } from '../agent/agentStore'
 import type { AgentTaskSidebarItem } from './AgentTaskSidebar'
 
 type SettingsSection = 'general' | 'models' | 'operations' | 'archives'
@@ -155,6 +156,29 @@ export default function StudioWorkspaceSidebar(props: Props) {
     id: task.id, novelId: props.currentNovelId, title: task.title, updatedAt: task.updatedAt,
     pinnedAt: null, temporary: task.temporary,
   })), [props.currentNovelId, props.currentTasks])
+  // 任务状态信号：本地 SSE 实时层（agentStore）+ 服务端 run-status 轮询兑底，
+  // 覆盖切走窗口/跨作品/折叠期间的任务完成、待确认、异常中止与运行中提示
+  const sessionSignals = useAgentStore((state) => state.sessionSignals)
+  const runningSessionIds = useAgentStore((state) => state.runningSessionIds)
+  const agentPhase = useAgentStore((state) => state.phase)
+  const trackedRunningIds = useMemo(() => [...runningSessionIds], [runningSessionIds])
+  const sidebarSessionIds = useMemo(
+    () => [...new Set([...localTasks.map((task) => task.id), ...sessions.map((session) => session.id), ...trackedRunningIds])].slice(0, 60),
+    [localTasks, sessions, trackedRunningIds],
+  )
+  const runStatusQuery = useQuery({
+    queryKey: ['agent', 'sessions', 'run-status', sidebarSessionIds],
+    queryFn: () => fetchSessionsRunStatus(sidebarSessionIds),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+    enabled: sidebarSessionIds.length > 0,
+  })
+  const remoteRunStatuses = useMemo(() => runStatusQuery.data?.statuses ?? {}, [runStatusQuery.data])
+  useEffect(() => {
+    const statuses = runStatusQuery.data?.statuses
+    if (!statuses) return
+    useAgentStore.getState().syncRemoteRunStatuses(statuses)
+  }, [runStatusQuery.data])
   const summary = creditQuery.data
   const remainingPercent = summary?.dailyAllowance ? Math.max(0, Math.min(100, Math.round(summary.totalRemaining / summary.dailyAllowance * 100))) : 100
   const warningThreshold: 5 | 10 | 20 | null = remainingPercent <= 5 ? 5 : remainingPercent <= 10 ? 10 : remainingPercent <= 20 ? 20 : null
@@ -310,7 +334,20 @@ export default function StudioWorkspaceSidebar(props: Props) {
 
   function taskRow(task: SidebarTask, compact = false) {
     const active = task.id === props.activeTaskId
-    return <button key={`${task.novelId}:${task.id}`} type="button" onClick={() => props.onSelectTask(task.id, task.novelId)} onContextMenu={(event) => openContext(event, { kind: 'task', id: task.id, novelId: task.novelId, title: task.title, pinned: Boolean(task.pinnedAt), temporary: task.temporary })} disabled={props.taskSwitchLocked} className={cn('group flex w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[12px] transition-colors disabled:opacity-50', compact ? 'h-8' : 'h-9', active ? 'bg-[var(--surface-muted)] font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-current={active ? 'page' : undefined}><span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', active ? 'bg-emerald-500' : 'bg-[var(--text-tertiary)]/35')} /><span className="min-w-0 flex-1 truncate">{task.title || '新任务'}</span>{task.pinnedAt ? <Pin className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" /> : null}</button>
+    const signal = sessionSignals[task.id]
+    const remoteStatus = remoteRunStatuses[task.id]?.status
+    const spinning = (active && isRunActive(agentPhase)) || runningSessionIds.has(task.id) || remoteStatus === 'running' || remoteStatus === 'queued'
+    // 状态指示器优先级：待确认（黄）> 运行中（转圈）> 异常中止（红）/ 已完成（绿，仅未读时）> 占位
+    const indicator = signal?.kind === 'attention' || remoteStatus === 'awaiting_approval'
+      ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
+      : spinning
+        ? <LoaderCircle className="h-3 w-3 animate-spin text-[var(--text-tertiary)]" aria-hidden="true" />
+        : signal?.kind === 'failed' && !active
+          ? <span className="h-1.5 w-1.5 rounded-full bg-rose-500" aria-hidden="true" />
+          : signal?.kind === 'done' && !active
+            ? <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+            : <span className="h-1.5 w-1.5 rounded-full" aria-hidden="true" />
+    return <button key={`${task.novelId}:${task.id}`} type="button" onClick={() => props.onSelectTask(task.id, task.novelId)} onContextMenu={(event) => openContext(event, { kind: 'task', id: task.id, novelId: task.novelId, title: task.title, pinned: Boolean(task.pinnedAt), temporary: task.temporary })} disabled={props.taskSwitchLocked} className={cn('group flex w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[12px] transition-colors disabled:opacity-50', compact ? 'h-8' : 'h-9', active ? 'bg-[var(--surface-muted)] font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-current={active ? 'page' : undefined}><span className="flex h-3 w-3 shrink-0 items-center justify-center">{indicator}</span><span className="min-w-0 flex-1 truncate">{task.title || '新任务'}</span>{task.pinnedAt ? <Pin className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" /> : null}</button>
   }
 
   function body(preview = false) {

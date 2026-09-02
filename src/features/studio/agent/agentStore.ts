@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import type {
   AgentAttachmentMeta,
   AgentMessagePart,
+  AgentSessionRunStatus,
   AgentStreamEvent,
   AgentTodoItem,
   AgentTokenUsage,
@@ -36,6 +37,11 @@ export type PendingApproval = {
   allowAlways: boolean
   expiresAt: string
 }
+
+/** 任务窗口侧栏状态信号：done=任务完成（绿）、attention=待作者确认（黄）、failed=异常中止（红）。
+ * 仅记录本页面会话内实时收到的事件；切走窗口后的运行/挂起状态由服务端 run-status 轮询兑底。 */
+export type SessionSignalKind = 'done' | 'attention' | 'failed'
+export type SessionSignal = { runId: string; kind: SessionSignalKind; at: number }
 
 /** ask_user 工具挂起中的提问，驱动专门的提问卡片 UI */
 export type PendingQuestion = {
@@ -175,6 +181,10 @@ type AgentStoreState = {
   messages: AgentUIMessage[]
   pendingApproval: PendingApproval | null
   pendingQuestion: PendingQuestion | null
+  /** 本页面内发起过且尚未收到终态的会话：切走窗口后 SSE 已断，侧栏先按运行中展示，轮询纠正 */
+  runningSessionIds: Set<string>
+  /** 各会话未读状态信号（绿/黄/红点）；激活该会话时由宿主 dismiss 清除 */
+  sessionSignals: Record<string, SessionSignal>
   usage: AgentTokenUsage
   currentTurn: number
   lastSeq: number
@@ -215,6 +225,10 @@ type AgentStoreState = {
   restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
   resetRun: () => void
   clearError: () => void
+  /** 作者回到该任务窗口：清除未读信号与运行中登记 */
+  dismissSessionSignal: (sessionId: string) => void
+  /** 侧栏轮询兑底：同步服务端 run 状态，维护运行中登记并产出完成/失败未读信号 */
+  syncRemoteRunStatuses: (statuses: Record<string, AgentSessionRunStatus | null>) => void
   setComposerDraft: (value: string) => void
   setComposerAttachments: (list: AgentAttachmentMeta[]) => void
   addComposerAttachment: (meta: AgentAttachmentMeta) => void
@@ -232,6 +246,29 @@ type AgentStoreState = {
 }
 
 const emptyUsage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+
+/** 把终态/挂起信号写入对应会话；无归属会话时静默跳过 */
+function noteSessionSignal(state: { activeSessionId: string | null; runId: string | null; sessionSignals: Record<string, SessionSignal> }, kind: SessionSignalKind) {
+  const sessionId = state.activeSessionId
+  if (!sessionId) return {}
+  return { sessionSignals: { ...state.sessionSignals, [sessionId]: { runId: state.runId ?? '', kind, at: Date.now() } } }
+}
+
+function withoutRunningSession(state: { activeSessionId: string | null; runningSessionIds: Set<string> }) {
+  if (!state.activeSessionId || !state.runningSessionIds.has(state.activeSessionId)) return {}
+  const next = new Set(state.runningSessionIds)
+  next.delete(state.activeSessionId)
+  return { runningSessionIds: next }
+}
+
+/** 任务不再需要确认（已回答/已审批/自动兜底继续）时撤下当前会话的未读黄点 */
+function withoutActiveSessionSignal(state: { activeSessionId: string | null; sessionSignals: Record<string, SessionSignal> }) {
+  const sessionId = state.activeSessionId
+  if (!sessionId || !state.sessionSignals[sessionId]) return {}
+  const next = { ...state.sessionSignals }
+  delete next[sessionId]
+  return { sessionSignals: next }
+}
 
 // 自动追踪开关持久化：刷新/重开页面后保持用户上次的选择（默认开启）
 const AUTO_FOLLOW_STORAGE_KEY = 'chevoink-agent-auto-follow'
@@ -404,6 +441,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   messages: [],
   pendingApproval: null,
   pendingQuestion: null,
+  runningSessionIds: new Set<string>(),
+  sessionSignals: {},
   usage: emptyUsage,
   currentTurn: 0,
   lastSeq: 0,
@@ -440,6 +479,13 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
+      // 新 run 开跑：登记运行中供侧栏展示；同一会话的旧终态信号视为已消费
+      ...(sessionId
+        ? {
+            runningSessionIds: new Set(state.runningSessionIds).add(sessionId),
+            ...(state.sessionSignals[sessionId] ? (() => { const next = { ...state.sessionSignals }; delete next[sessionId]; return { sessionSignals: next } })() : {}),
+          }
+        : {}),
       // 工作区变更与待办按任务窗口（会话）累计，新 run 不清空；
       // 上一个任务若被停止后遗留了「执行中」的工具卡片（终态事件丢失时），开新任务前一并收尾
       workspaceActivities: settleRunningActivities(state.workspaceActivities),
@@ -466,7 +512,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     })),
 
   resumeRun: (runId, sessionId) =>
-    set({
+    set((state) => ({
       runId,
       phase: 'starting',
       activeSessionId: sessionId,
@@ -481,8 +527,10 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
+      // 续接仍在进行的 run：侧栏保持运行中展示（刷新后恢复场景）
+      ...(sessionId ? { runningSessionIds: new Set(state.runningSessionIds).add(sessionId) } : {}),
       // 不清空变更/待办：历史部分由 restoreMessages 推导，活跃 run 部分由事件重放按 callId 去重补齐
-    }),
+    })),
 
   restoreMessages: (messages, sessionId = null) => {
     const restored = decorateAcceptedMessages(messages)
@@ -524,6 +572,52 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
     }),
 
   clearError: () => set({ errorMessage: null, errorCode: null }),
+
+  dismissSessionSignal: (sessionId) =>
+    set((state) => {
+      const hasSignal = Boolean(state.sessionSignals[sessionId])
+      const isRunning = state.runningSessionIds.has(sessionId)
+      if (!hasSignal && !isRunning) return state
+      const signals = { ...state.sessionSignals }
+      delete signals[sessionId]
+      const running = new Set(state.runningSessionIds)
+      running.delete(sessionId)
+      return { sessionSignals: signals, runningSessionIds: running }
+    }),
+  syncRemoteRunStatuses: (statuses) =>
+    set((state) => {
+      const running = new Set(state.runningSessionIds)
+      const signals = { ...state.sessionSignals }
+      let changed = false
+      for (const [sessionId, entry] of Object.entries(statuses)) {
+        if (!entry) continue
+        if (entry.status === 'running' || entry.status === 'queued' || entry.status === 'awaiting_approval') {
+          if (!running.has(sessionId)) { running.add(sessionId); changed = true }
+          if (entry.status === 'awaiting_approval') {
+            // 挂起持续提示：兜底刷新或跨窗口期间丢失的本地黄点
+            if (signals[sessionId]?.kind !== 'attention') {
+              signals[sessionId] = { runId: entry.runId, kind: 'attention', at: Date.now() }
+              changed = true
+            }
+          } else if (signals[sessionId]?.kind === 'attention') {
+            // 任务已从挂起恢复运行，未读黄点不再成立
+            delete signals[sessionId]
+            changed = true
+          }
+          continue
+        }
+        // 终态：仅此前已登记运行中的会话才产出一次性信号（历史终态不回传，避免误报未读）；
+        // paused 为作者主动停止、当前正查看的会话无需提示，均只撤登记
+        if (!running.has(sessionId)) continue
+        running.delete(sessionId)
+        changed = true
+        const kind: SessionSignalKind | null =
+          entry.status === 'completed' ? 'done' : entry.status === 'failed' || entry.status === 'cancelled' ? 'failed' : null
+        if (!kind || sessionId === state.activeSessionId) continue
+        signals[sessionId] = { runId: entry.runId, kind, at: Date.now() }
+      }
+      return changed ? { runningSessionIds: running, sessionSignals: signals } : {}
+    }),
 
   setComposerDraft: (value) => set({ composerDraft: value }),
 
@@ -668,6 +762,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           return {
             ...base,
             ...(question ? { phase: 'awaiting_input' as const, pendingQuestion: question } : {}),
+            ...(question ? noteSessionSignal(state, 'attention') : {}),
             ...(isWrite && !isSubagentInternal && !existingActivity
               ? {
                   activitiesVersion: state.activitiesVersion + 1,
@@ -752,7 +847,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
               : {}
           return {
             ...base,
-            ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null } : {}),
+            ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null, ...withoutActiveSessionSignal(state) } : {}),
             ...todoUpdate,
             liveToolDrafts: Object.fromEntries(Object.entries(state.liveToolDrafts).filter(([callId]) => callId !== event.callId)),
             workspaceActivities: state.workspaceActivities.map((activity) =>
@@ -797,10 +892,11 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
               allowAlways: event.allowAlways,
               expiresAt: event.expiresAt,
             },
+            ...noteSessionSignal(state, 'attention'),
           }
 
         case 'permission.resolved':
-          return { ...base, phase: 'running', pendingApproval: null }
+          return { ...base, phase: 'running', pendingApproval: null, ...withoutActiveSessionSignal(state) }
 
         case 'step.finish':
           return {
@@ -814,7 +910,8 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
           }
 
         case 'run.paused':
-          // 停止时正在执行的工具永远等不到 tool.result，就地收尾避免卡片一直「执行中」
+          // 停止时正在执行的工具永远等不到 tool.result，就地收尾避免卡片一直「执行中」；
+          // 用户主动停止不产生未读信号，仅撤下运行中登记
           return {
             ...base,
             phase: 'paused',
@@ -823,6 +920,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             liveToolDrafts: {},
             messages: settleRunningToolParts(state.messages, '已停止'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
+            ...withoutRunningSession(state),
           }
 
         case 'run.finished':
@@ -836,6 +934,10 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
             liveToolDrafts: {},
             messages: settleRunningToolParts(state.messages, '已中断'),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
+            ...withoutRunningSession(state),
+            // 未读终态信号：成功→绿点、失败/取消→红点；当前窗口内完成时同样记录，
+            // 切走再回来才显示（宿主在激活窗口时 dismiss）
+            ...noteSessionSignal(state, event.status === 'succeeded' ? 'done' : 'failed'),
           }
 
         case 'error':

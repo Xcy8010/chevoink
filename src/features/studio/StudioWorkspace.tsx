@@ -263,6 +263,11 @@ export default function StudioWorkspace() {
       snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
     return initialTask?.id ?? null
   })
+  // 作者回到任务窗口即清除该窗口的未读信号（绿/黄/红点），无论从同作品还是跨作品路径切入
+  const dismissSessionSignal = useAgentStore((state) => state.dismissSessionSignal)
+  useEffect(() => {
+    if (activeAgentTaskWindowId) dismissSessionSignal(activeAgentTaskWindowId)
+  }, [activeAgentTaskWindowId, dismissSessionSignal])
   // 当前任务窗口状态归属的作品：切换作品后状态水合落地前，快照写入效应
   // 不得用旧作品窗口写入/删除（会污染目标作品快照），仅状态归属当前作品时才允许写
   const [agentStateNovelId, setAgentStateNovelId] = useState(activeNovelId)

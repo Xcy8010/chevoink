@@ -22,6 +22,7 @@ import {
   deleteAgentSessionData,
   listAgentSessionHistoryData,
   listAgentSessionsData,
+  listSessionRunStatuses,
   resolveLoopRunApproval,
   resolveLoopRunQuestion,
   startLoopRun,
@@ -176,6 +177,20 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
     const query = typeof req.query.q === 'string' ? req.query.q : undefined
     const includeArchived = req.query.includeArchived === 'true'
     const payload = await listAgentSessionsData(userId, novelId, { query, includeArchived })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/sessions/run-status', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const userId = requireSessionUserId(req)
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : ''
+    const sessionIds = raw.split(',').map((id) => id.trim()).filter(Boolean)
+    const payload = await listSessionRunStatuses(userId, sessionIds)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
