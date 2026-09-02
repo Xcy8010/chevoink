@@ -1,5 +1,5 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, BookOpenText, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -59,6 +59,35 @@ import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdat
 import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
+/** Work 检查区/查看器布局按作品记忆：切换作品时恢复该作品上次的界面 */
+type WorkPanelUiState = { rightOpen: boolean; viewer: 'chapter' | 'document' | null; inspectorTab: WorkInspectorTab }
+const WORK_PANEL_UI_STORAGE_KEY = 'chevoink:studio-work-panel-ui'
+
+function readWorkPanelUi(novelId: string): WorkPanelUiState | null {
+  try {
+    const raw = window.localStorage.getItem(WORK_PANEL_UI_STORAGE_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const value = (JSON.parse(raw) as Record<string, WorkPanelUiState | undefined>)[novelId]
+    return value && typeof value.rightOpen === 'boolean' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function writeWorkPanelUi(novelId: string, state: WorkPanelUiState) {
+  try {
+    const raw = window.localStorage.getItem(WORK_PANEL_UI_STORAGE_KEY)
+    const map = raw ? (JSON.parse(raw) as Record<string, WorkPanelUiState>) : {}
+    map[novelId] = state
+    window.localStorage.setItem(WORK_PANEL_UI_STORAGE_KEY, JSON.stringify(map))
+  } catch {
+    // 持久化失败不影响布局切换
+  }
+}
+
 export default function StudioWorkspace() {
   const { novelId } = useParams()
   const navigate = useNavigate()
@@ -71,6 +100,10 @@ export default function StudioWorkspace() {
     queryKey: ['studio', activeNovelId],
     queryFn: () => getStudioPayload(activeNovelId),
     refetchOnWindowFocus: false,
+    // 跨作品切换时沿用上一个作品的载荷渲染（Codex 式无骨架切换）：整个工作区不卸载，
+    // 左侧栏保留滚动与展开状态，聊天区/右侧栏随新载荷到达后无缝替换；
+    // 中间帧由 isPlaceholderData 驱动内容区禁点防误操作
+    placeholderData: keepPreviousData,
   })
   const myNovelsQuery = useQuery({
     queryKey: ['studio', 'my-novels'],
@@ -142,6 +175,22 @@ export default function StudioWorkspace() {
   const [workRightOpen, setWorkRightOpen] = useState(false)
   const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
   const [workViewer, setWorkViewer] = useState<'chapter' | 'document' | null>(null)
+  // 切换作品时保存上一作品的检查区布局、恢复当前作品上次的布局（右侧栏开关/页签/查看器，
+  // 含刷新后首次进入），像 Codex 一样每个作品回到自己当时的界面
+  const currentWorkPanelUiRef = useRef<WorkPanelUiState>({ rightOpen: false, viewer: null, inspectorTab: 'work' })
+  currentWorkPanelUiRef.current = { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab }
+  const prevWorkNovelUiRef = useRef<string | null>(null)
+  useEffect(() => {
+    const previous = prevWorkNovelUiRef.current
+    prevWorkNovelUiRef.current = activeNovelId
+    if (previous && previous !== activeNovelId) {
+      writeWorkPanelUi(previous, currentWorkPanelUiRef.current)
+    }
+    const restored = readWorkPanelUi(activeNovelId)
+    setWorkRightOpen(restored?.rightOpen ?? false)
+    setWorkViewer(restored?.viewer ?? null)
+    setWorkInspectorTab(restored?.inspectorTab ?? 'work')
+  }, [activeNovelId])
   const [ideTreeOpen, setIdeTreeOpen] = useState(true)
   const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
@@ -4580,7 +4629,7 @@ export default function StudioWorkspace() {
             onAutoFollowChange={setAutoFollow}
             onOpenStudioSettings={(section = 'general') => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
           /> : null}
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div className={cn('flex min-w-0 flex-1 flex-col transition-opacity', studioQuery.isPlaceholderData && 'pointer-events-none opacity-60')}>
           <StudioCommandBar
             workspaceControls={workspacePerspective === 'ide'}
             workspaceSidebarOpen={workspacePerspective === 'ide' ? ideTreeOpen : workspaceSidebarOpen}

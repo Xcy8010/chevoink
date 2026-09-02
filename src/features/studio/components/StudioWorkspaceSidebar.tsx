@@ -118,6 +118,13 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const peekCloseTimerRef = useRef<number | null>(null)
   const autoCopyRef = useRef(false)
   const dragRef = useRef<{ x: number; width: number; raw: number } | null>(null)
+  // 作品列表滚动位置记忆：折叠/展开或切换作品重挂载后恢复，不再回到顶部
+  const listScrollTopRef = useRef(0)
+  const restoreListScroll = (element: HTMLDivElement | null) => {
+    if (element && listScrollTopRef.current > 0) {
+      element.scrollTop = listScrollTopRef.current
+    }
+  }
 
   const novels = useMemo(
     () => sortWorkspaceItemsByLatest(props.novels.filter((item) => item.status !== 'archived')),
@@ -316,7 +323,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
         <button type="button" onClick={() => setSearchOpen(true)} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" aria-label="搜索作品与任务" title="搜索（Ctrl+K）"><Search className="h-4 w-4" /></button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin]">
+      <div ref={restoreListScroll} onScroll={(event) => { listScrollTopRef.current = event.currentTarget.scrollTop }} className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin]">
         <div className="space-y-0.5 pb-3">
           <button type="button" onClick={props.onCreateTask} disabled={props.taskSwitchLocked} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs font-medium hover:bg-[var(--surface-muted)] disabled:opacity-45"><PencilLine className="h-4 w-4" /><span className="flex-1">新对话</span><Plus className="h-3.5 w-3.5 text-[var(--text-tertiary)]" /></button>
           <button type="button" onClick={() => props.onAutoFollowChange(!props.autoFollow)} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]"><Crosshair className="h-4 w-4" /><span className="flex-1">正文追踪</span><span className="text-[10px] text-[var(--text-tertiary)]">{props.autoFollow ? '已开启' : '已关闭'}</span></button>
