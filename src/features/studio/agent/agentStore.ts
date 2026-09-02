@@ -594,6 +594,9 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       todos: [],
       liveToolDrafts: {},
       toolNavigationRequest: null,
+      // 切换会话视为“离开旧对话”：清空消息避免旧内容残留，进图标流光加载态；
+      // 同会话重挂载/续活走早退路径（loadedSessionId 命中）不会经过这里
+      messages: [],
     }),
 
   clearError: () => set({ errorMessage: null, errorCode: null }),

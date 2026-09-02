@@ -4062,6 +4062,8 @@ export default function StudioWorkspace() {
   }
 
   if (studioQuery.isLoading || !novelForm || !projectNotes || !coverForm || !currentNovel) {
+    // 作品基座/表单数据未就绪：整页骨架；keepPreviousData 下正常切换不会命中（数据保持上一作品），
+    // 会话历史由 AgentPanel 用图标流光自行加载，避免骨架与加载态叠加闪烁
     return <StudioSkeleton />
   }
 
@@ -4739,6 +4741,7 @@ export default function StudioWorkspace() {
                 rightOpen={workRightOpen}
                 outerSidebarOpen={workspaceSidebarOpen}
                 conversationMinWidth={conversationMinWidth}
+                activityDockHydrating={agentHydrating}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
                 onToggleRight={() => {

@@ -1335,7 +1335,7 @@ export function AgentPanel({
           showHistoryShimmer ? (
             <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
               <span
-                className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_3s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+                className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_1.5s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
               />
             </div>
           ) : (
