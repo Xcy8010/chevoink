@@ -225,6 +225,8 @@ type AgentStoreState = {
   /** 续接服务端仍在进行的 run（刷新后恢复）：不追加用户消息，从 seq 0 重放事件重建直播 */
   resumeRun: (runId: string, sessionId: string | null) => void
   restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
+  /** 加载更早对话：把更早轮次前插合并（按 id 去重），不触碰进行中的 run */
+  prependMessages: (messages: AgentUIMessage[]) => void
   /** 标记会话历史拉取开始/结束（配合 workspaceHydrating） */
   setWorkspaceHydrating: (value: boolean) => void
   resetRun: () => void
@@ -558,6 +560,21 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   },
 
   setWorkspaceHydrating: (value) => set({ workspaceHydrating: value }),
+
+  prependMessages: (incoming) =>
+    set((state) => {
+      const known = new Set(state.messages.map((message) => message.id))
+      const older = decorateAcceptedMessages(incoming).filter((message) => !known.has(message.id))
+      if (older.length === 0) {
+        return {}
+      }
+      const merged = [...older, ...state.messages]
+      return {
+        messages: merged,
+        // 更早轮次含写工具轨迹：重派生变更/待办但不递增触发版本，避免历史误自动展开
+        ...deriveSessionStateFromMessages(merged),
+      }
+    }),
 
   resetRun: () =>
     set({

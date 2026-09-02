@@ -119,12 +119,20 @@ export function resolveAgentQuestion(
   })
 }
 
-/** 会话消息 + activeRunId（服务端仍在进行的 run，刷新后据此续接直播） */
+/** 会话消息 + activeRunId（服务端仍在进行的 run，刷新后据此续接直播）；
+ * runLimit 时按 run 轮次分页（50 轮/页，用户端手动加载更早），不传则全量 */
+export type AgentSessionMessagesPagination = { hasMore: boolean; earliestRunStartedAt: string | null }
+
 export function fetchAgentSessionMessages(
   sessionId: string,
-): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null }> {
-  return requestData<{ messages: AgentUIMessage[]; activeRunId: string | null }>(
-    `/api/agent/sessions/${sessionId}/messages`,
+  options?: { runLimit?: number; beforeRunStartedAt?: string | null },
+): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination }> {
+  const query = new URLSearchParams()
+  if (options?.runLimit != null) query.set('runLimit', String(options.runLimit))
+  if (options?.beforeRunStartedAt) query.set('before', options.beforeRunStartedAt)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return requestData<{ messages: AgentUIMessage[]; activeRunId: string | null; pagination?: AgentSessionMessagesPagination }>(
+    `/api/agent/sessions/${sessionId}/messages${suffix}`,
   )
 }
 

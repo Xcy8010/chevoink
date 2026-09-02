@@ -174,6 +174,20 @@ export function AgentPanel({
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
   const [historyLoading, setHistoryLoading] = useState(false)
+  // 延迟显示加载态：历史很快返回（会话已缓存/近库）时不闪图标流光，直接呈现消息；
+  // 只有超过阈值才进入加载态，动画本身也放慢让扫光更自然
+  const [showHistoryShimmer, setShowHistoryShimmer] = useState(false)
+  // 更早对话分页：每页最多 50 轮 run，用户手动点击顶部按钮加载更早内容
+  const [olderPagination, setOlderPagination] = useState<{ hasMore: boolean; before: string | null } | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  useEffect(() => {
+    if (!historyLoading) {
+      setShowHistoryShimmer(false)
+      return
+    }
+    const timer = window.setTimeout(() => setShowHistoryShimmer(true), 260)
+    return () => window.clearTimeout(timer)
+  }, [historyLoading])
   const [actionError, setActionError] = useState<string | null>(null)
   // 任务「更多」菜单与重命名弹窗（原 StudioCommandBar 任务三点按钮迁入）
   const [taskMenuOpen, setTaskMenuOpen] = useState(false)
@@ -459,11 +473,14 @@ export function AgentPanel({
     setHistoryLoading(true)
     // 同步全局水合标记：右侧任务状态卡在历史到达前显示占位而非卸载，避免布局宽度跳变
     useAgentStore.getState().setWorkspaceHydrating(true)
-    fetchAgentSessionMessages(sessionId)
-      .then(({ messages: history, activeRunId }) => {
+    fetchAgentSessionMessages(sessionId, { runLimit: 50 })
+      .then((payload) => {
         if (cancelled) {
           return
         }
+        setOlderPagination(payload.pagination ? { hasMore: payload.pagination.hasMore, before: payload.pagination.earliestRunStartedAt } : null)
+        const history = payload.messages
+        const activeRunId = payload.activeRunId
         const live = useAgentStore.getState()
         if (shouldKeepLiveSessionMessages(live.runId, live.phase, live.activeSessionId, sessionId)) {
           // 新会话首次发送会与空历史请求并发；直播态始终比更早发出的历史快照新。
@@ -488,6 +505,7 @@ export function AgentPanel({
         if (!cancelled) {
           // 网络失败不能把该会话标记成“已恢复”，否则 Work/IDE 切换后也不会重试。
           useAgentStore.getState().restoreMessages([], null)
+          setOlderPagination(null)
         }
       })
       .finally(() => {
@@ -803,12 +821,47 @@ export function AgentPanel({
       return
     }
     try {
+      // 删除/回退后的重拉：不带分页参数走全量，避免已加载的更早轮次被页窗口截掉；
+      // 同时清掉分页游标，防止顶部按钮残留过期状态
       const { messages: history } = await fetchAgentSessionMessages(sessionId)
+      setOlderPagination(null)
       useAgentStore.getState().restoreMessages(history, sessionId)
     } catch {
       /* 拉取失败保留现有消息 */
     }
   }, [sessionId])
+
+  // 加载更早对话：按 run 轮次向前翻页（50 轮/页），把视口重新对准加载前的首条消息避免跳动
+  const loadOlderMessages = useCallback(async () => {
+    if (!sessionId || !olderPagination?.hasMore || loadingOlder) {
+      return
+    }
+    const before = olderPagination.before
+    if (!before) {
+      setOlderPagination(null)
+      return
+    }
+    const anchorId = useAgentStore.getState().messages[0]?.id ?? null
+    setLoadingOlder(true)
+    try {
+      const payload = await fetchAgentSessionMessages(sessionId, { runLimit: 50, beforeRunStartedAt: before })
+      setOlderPagination(payload.pagination ? { hasMore: payload.pagination.hasMore, before: payload.pagination.earliestRunStartedAt } : null)
+      useAgentStore.getState().prependMessages(payload.messages)
+      if (anchorId) {
+        // content-visibility 虚拟化下前插内容高度初始为估算值：多帧对齐锚点直到布局稳定
+        const alignAnchor = () => {
+          document.getElementById(`agent-message-${anchorId}`)?.scrollIntoView({ block: 'start' })
+        }
+        alignAnchor()
+        requestAnimationFrame(alignAnchor)
+        window.setTimeout(alignAnchor, 80)
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '加载更早对话失败，请稍后再试。')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [sessionId, olderPagination, loadingOlder])
 
   const handleConfirmAction = useCallback(async () => {
     if (!confirmAction) {
@@ -1069,12 +1122,12 @@ export function AgentPanel({
 
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {historyLoading ? (
+        {showHistoryShimmer ? (
           /* 切换任务/作品时的对话历史加载态：Codex 式 Agent 图标流光（居中），
-             图标形状作 mask、渐变光带扫过；历史到达后消息原地浮现，避免闪屏跳变 */
+             图标形状作 mask、渐变光带扫过；历史很快返回时本分支不渲染，消息直接浮现 */
           <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
             <span
-              className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_2s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+              className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_2.6s_cubic-bezier(.45,0,.55,1)_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
             />
           </div>
         ) : messages.length === 0 ? (
@@ -1086,6 +1139,19 @@ export function AgentPanel({
           />
         ) : (
           <div className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
+            {olderPagination?.hasMore ? (
+              <div className="flex justify-center pb-1">
+                <button
+                  type="button"
+                  onClick={() => void loadOlderMessages()}
+                  disabled={loadingOlder}
+                  className="flex items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loadingOlder ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />}
+                  {loadingOlder ? '正在载入更早对话…' : '加载更早对话'}
+                </button>
+              </div>
+            ) : null}
             {messages.map((message) => {
               if (message.role === 'user') {
                 return (

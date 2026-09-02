@@ -643,13 +643,21 @@ router.delete('/novels/:novelId/skills/:skillId', async (req: Request, res: Resp
   }
 })
 
-// 新链路：会话消息（parts 结构），用于历史恢复与切换会话
+// 新链路：会话消息（parts 结构），用于历史恢复与切换会话；
+// 支持按 run 轮次分页（runLimit/before）：只服务用户端历史展示，Agent 链路不受影响
 router.get('/sessions/:sessionId/messages', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
 
   try {
     const userId = requireSessionUserId(req)
-    const payload = await listLoopSessionMessages(userId, req.params.sessionId)
+    const runLimitRaw = Number(req.query.runLimit)
+    const runLimit = Number.isFinite(runLimitRaw) && runLimitRaw > 0 && runLimitRaw <= 200 ? Math.floor(runLimitRaw) : undefined
+    const beforeRaw = typeof req.query.before === 'string' ? req.query.before : undefined
+    const beforeRunStartedAt = beforeRaw && !Number.isNaN(Date.parse(beforeRaw)) ? beforeRaw : undefined
+    const payload = await listLoopSessionMessages(userId, req.params.sessionId, {
+      runLimit,
+      beforeRunStartedAt,
+    })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

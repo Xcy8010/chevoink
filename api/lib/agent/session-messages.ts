@@ -43,11 +43,25 @@ async function normalizeLegacyViewedImageUrls(userId: string, parts: AgentMessag
 }
 
 /** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；
- * 附带 activeRunId：前端刷新后据此续接进行中的任务直播 */
+ * 附带 activeRunId：前端刷新后据此续接进行中的任务直播。
+ * 分页模式（传 runLimit）：按 run 轮次分组取页，整轮返回永不截半轮；
+ * 只服务用户端历史展示，Agent 上下文组装走服务端自身链路不受影响 */
+export type ListSessionMessagesOptions = {
+  /** 加载更早游标：只取早于该时间开始的 run 轮次 */
+  beforeRunStartedAt?: string | null
+  /** 单页轮数上限（按 run 计） */
+  runLimit?: number
+}
+
 export async function listLoopSessionMessages(
   userId: string,
   sessionId: string,
-): Promise<{ messages: AgentUIMessage[]; activeRunId: string | null }> {
+  options: ListSessionMessagesOptions = {},
+): Promise<{
+  messages: AgentUIMessage[]
+  activeRunId: string | null
+  pagination: { hasMore: boolean; earliestRunStartedAt: string | null }
+}> {
   const session = await prisma.agentSession.findFirst({
     where: { id: sessionId, userId },
     select: { id: true },
@@ -57,6 +71,53 @@ export async function listLoopSessionMessages(
     throw new DataAccessError(404, 'NOT_FOUND', '会话不存在或无权访问。')
   }
 
+  const runLimit = options.runLimit ?? null
+  if (runLimit != null) {
+    // 分页模式：先取 run 轮次窗口（多取 1 个判断 hasMore），再取窗口内全部消息；
+    // 按 run 整轮返回，天然不会把某轮截成两半
+    const runs = await prisma.agentRun.findMany({
+      where: {
+        sessionId,
+        ...(options.beforeRunStartedAt ? { createdAt: { lt: new Date(options.beforeRunStartedAt) } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: runLimit + 1,
+    })
+    const hasMore = runs.length > runLimit
+    const pageRuns = runs.slice(0, runLimit)
+    const pageRunIds = pageRuns.map((run) => run.id)
+    const records = pageRunIds.length
+      ? await prisma.agentMessage.findMany({
+          where: { sessionId, runId: { in: pageRunIds } },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        })
+      : []
+
+    const pagedMessages: AgentUIMessage[] = []
+    for (const record of records) {
+      const stripped = (record.parts as unknown as AgentMessagePart[]).map((part) =>
+        part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
+      )
+      pagedMessages.push({
+        id: record.id,
+        runId: record.runId,
+        role: record.role as 'user' | 'assistant',
+        parts: await normalizeLegacyViewedImageUrls(userId, stripped),
+        createdAt: record.createdAt.toISOString(),
+      })
+    }
+
+    return {
+      messages: pagedMessages,
+      activeRunId: getActiveRunIdBySession(sessionId),
+      pagination: {
+        hasMore,
+        earliestRunStartedAt: pageRuns.length ? pageRuns[pageRuns.length - 1].createdAt.toISOString() : null,
+      },
+    }
+  }
+
+  // 全量模式（删除/回退后的界面重拉等低频操作）：保留大窗口，避免已加载内容变少
   const newestRecords = await prisma.agentMessage.findMany({
     where: { sessionId },
     // 必须先取最新窗口再恢复为时间正序。旧实现按 asc + take 会永久截掉
@@ -101,7 +162,11 @@ export async function listLoopSessionMessages(
     })
   }
 
-  return { messages, activeRunId: getActiveRunIdBySession(sessionId) }
+  return {
+    messages,
+    activeRunId: getActiveRunIdBySession(sessionId),
+    pagination: { hasMore: false, earliestRunStartedAt: null },
+  }
 }
 
 async function findOwnedSessionMessage(userId: string, sessionId: string, messageId: string) {
