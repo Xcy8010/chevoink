@@ -1122,22 +1122,8 @@ export function AgentPanel({
 
       {/* 消息流 */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {showHistoryShimmer ? (
-          /* 切换任务/作品时的对话历史加载态：Codex 式 Agent 图标流光（居中），
-             图标形状作 mask、渐变光带扫过；历史很快返回时本分支不渲染，消息直接浮现 */
-          <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
-            <span
-              className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_2.6s_cubic-bezier(.45,0,.55,1)_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
-            />
-          </div>
-        ) : messages.length === 0 ? (
-          <AgentEmptyWelcome
-            novelName={novelName}
-            initializingNovel={initializingNovel}
-            seed={emptyStateSeed ?? sessionId ?? novelId}
-            showSuggestions={showEmptySuggestions}
-          />
-        ) : (
+        {messages.length > 0 ? (
+          /* 已有内容直接呈现：切回已加载会话 / 同会话重用 / 直播收尾时不插任何加载态，做到「有缓存直接显示」 */
           <div className="flex flex-col gap-4 pb-2 motion-safe:animate-fade-in">
             {olderPagination?.hasMore ? (
               <div className="flex justify-center pb-1">
@@ -1343,6 +1329,26 @@ export function AgentPanel({
               </div>
             ) : null}
           </div>
+        ) : historyLoading ? (
+          /* 无历史且历史仍在拉取：延迟进入的 Codex 式 Agent 图标流光（居中），
+             图标形状作 mask、渐变光带扫过；已到达的消息始终优先直接呈现 */
+          showHistoryShimmer ? (
+            <div className="flex min-h-full items-center justify-center py-10" role="status" aria-label="正在载入对话">
+              <span
+                className="block h-12 w-12 bg-[length:220%_100%] bg-[linear-gradient(100deg,var(--text-tertiary)_38%,var(--text-primary)_50%,var(--text-tertiary)_62%)] motion-safe:animate-[agent-icon-shimmer_3s_linear_infinite] [mask-image:url(/chevoink-agent.png)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+              />
+            </div>
+          ) : (
+            /* 历史拉取刚启动（延迟窗口内）：渲染不可见占位，避免欢迎/加载图在消息到达瞬间闪现 */
+            <div className="min-h-full" aria-hidden="true" />
+          )
+        ) : (
+          <AgentEmptyWelcome
+            novelName={novelName}
+            initializingNovel={initializingNovel}
+            seed={emptyStateSeed ?? sessionId ?? novelId}
+            showSuggestions={showEmptySuggestions}
+          />
         )}
       </div>
 
