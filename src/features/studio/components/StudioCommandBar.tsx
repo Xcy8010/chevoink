@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BookOpenText, Crosshair, ExternalLink, FilePlus2, Flag, FolderDown, FolderPlus, Home, ImagePlus, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, RotateCcw, Settings2, Trash2, Upload } from 'lucide-react'
+import { BookOpen, BookOpenText, Bug, Crosshair, ExternalLink, FilePlus2, Flag, FolderDown, FolderPlus, Home, ImagePlus, Lightbulb, NotebookPen, PanelLeftClose, PanelLeftOpen, PenLine, RotateCcw, Settings2, Trash2, Upload } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
-import type { Novel } from '../../../../shared/contracts/index.js'
+import type { FeedbackKind, Novel } from '../../../../shared/contracts/index.js'
 import StudioMoreMenu, { type StudioSettingsSection } from './StudioMoreMenu'
 import WorkspaceNovelSwitcher from './WorkspaceNovelSwitcher'
 import { useAgentStore } from '../agent/agentStore'
@@ -42,7 +43,7 @@ type Props = {
   onOpenStudioSettings?: (section?: StudioSettingsSection) => void
 }
 
-type StudioMenuKey = 'novel' | 'view' | 'design' | 'publish' | 'export'
+type StudioMenuKey = 'novel' | 'view' | 'design' | 'publish' | 'export' | 'help'
 
 /** 参考 Codex 顶栏：菜单名最多两个字，点击展开操作卡片。任务「更多」按钮归 Agent 面板顶栏，不在此列 */
 const STUDIO_MENUS: { key: StudioMenuKey; label: string }[] = [
@@ -51,6 +52,7 @@ const STUDIO_MENUS: { key: StudioMenuKey; label: string }[] = [
   { key: 'design', label: '设计' },
   { key: 'publish', label: '发布' },
   { key: 'export', label: '导出' },
+  { key: 'help', label: '帮助' },
 ]
 
 const dropdownClass = 'absolute left-0 top-[calc(100%+7px)] z-50 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1 shadow-[0_18px_50px_rgba(15,23,42,.18)] motion-safe:origin-top-left motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(.2,.8,.2,1)]'
@@ -59,6 +61,7 @@ export default function StudioCommandBar(props: Props) {
   const autoFollow = useAgentStore((state) => state.autoFollow)
   const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   const [openMenu, setOpenMenu] = useState<StudioMenuKey | null>(null)
+  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!openMenu) return
@@ -112,6 +115,13 @@ export default function StudioCommandBar(props: Props) {
         </>
       case 'export':
         return <button type="button" className={item} onClick={() => { closeMenu(); props.onExport() }}><FolderDown className="h-3.5 w-3.5" />一键导出</button>
+      case 'help':
+        return <>
+          <button type="button" className={item} onClick={() => { closeMenu(); setFeedbackKind('suggestion') }}><Lightbulb className="h-3.5 w-3.5" />提交建议</button>
+          <button type="button" className={item} onClick={() => { closeMenu(); setFeedbackKind('bug') }}><Bug className="h-3.5 w-3.5" />问题反馈</button>
+          {/* 帮助文档属账户中心页面：新窗口打开，创作区界面原样保留 */}
+          <button type="button" className={item} onClick={() => { closeMenu(); window.open('/account/docs', '_blank', 'noopener,noreferrer') }}><BookOpen className="h-3.5 w-3.5" />帮助文档</button>
+        </>
       default:
         return null
     }
@@ -167,6 +177,7 @@ export default function StudioCommandBar(props: Props) {
         {props.perspective === 'ide' ? <StudioMoreMenu onOpenStudioSettings={props.onOpenStudioSettings} /> : null}
         <Link to="/" className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">返回首页</span></Link>
       </div>
+      <FeedbackDialog open={feedbackKind !== null} kind={feedbackKind ?? 'suggestion'} source={`studio-${props.perspective}`} onClose={() => setFeedbackKind(null)} />
     </header>
   )
 }

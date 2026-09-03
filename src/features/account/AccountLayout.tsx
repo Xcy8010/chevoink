@@ -149,17 +149,17 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-[#f6f6f4] text-[var(--text-primary)] [scrollbar-gutter:stable] dark:bg-[var(--app-bg)]">
       <header className="sticky top-0 z-40 border-b border-[#e8e8e5] bg-[#f6f6f4]/95 backdrop-blur-xl dark:border-[var(--border-subtle)] dark:bg-[color:var(--app-bg)]/94">
-        <div className="flex h-14 items-center gap-1 px-4 sm:px-6">
+        <div className="flex h-16 items-center gap-1 px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 pr-3">
-            <AppImage src="/chevoink-agent.png" alt="" className="h-7 w-7 rounded-[8px]" />
-            <span className="text-[15px] font-semibold tracking-tight">Chevoink</span>
+            <AppImage src="/chevoink-agent.png" alt="" className="h-8 w-8 rounded-[9px]" />
+            <span className="text-base font-semibold tracking-tight">Chevoink</span>
           </Link>
           <nav className="hidden items-center md:flex">
             {NAV_CARDS.map((card) => (
               <div key={card.id} className="group relative">
                 <button
                   type="button"
-                  className="flex h-14 items-center gap-1 px-3 text-sm text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)]"
+                  className="flex h-16 items-center gap-1 px-3 text-[15px] text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)]"
                 >
                   {card.label}
                   <ChevronDown className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180" />
@@ -173,7 +173,7 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
             ))}
           </nav>
           <div className="group relative ml-auto">
-            <button type="button" className="flex h-14 items-center px-1" aria-label="账户菜单">
+            <button type="button" className="flex h-16 items-center px-1" aria-label="账户菜单">
               <Avatar name={user?.nickname ?? '创作者'} src={user?.avatarUrl} size="sm" className="h-8 w-8" />
             </button>
             <div className="pointer-events-none absolute right-0 top-full z-50 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
@@ -204,23 +204,24 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
           </div>
         </div>
       </header>
-      <div className="flex min-h-[calc(100%-3.5rem)] items-stretch">
+      <div className="flex min-h-[calc(100%-4rem)] items-stretch">
         {withSidebar ? (
           <aside className={cn('hidden shrink-0 border-r border-[#e8e8e5] transition-[width] duration-200 lg:block dark:border-[var(--border-subtle)]', collapsed ? 'w-[64px]' : 'w-[264px]')}>
-            <div className={cn('sticky top-14 py-7', collapsed ? 'px-2' : 'px-4')}>
-              <div className="flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={toggleCollapsed}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text-tertiary)] transition-colors hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]"
-                  aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
-                  title={collapsed ? '展开侧栏' : '折叠侧栏'}
-                >
-                  {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-                </button>
-              </div>
+            <div className={cn('sticky top-16 py-6', collapsed ? 'px-2' : 'px-4')}>
               {collapsed ? (
-                <nav className="mt-5 space-y-1">
+                <>
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={toggleCollapsed}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text-tertiary)] transition-colors hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]"
+                      aria-label="展开侧栏"
+                      title="展开侧栏"
+                    >
+                      <PanelLeftOpen className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <nav className="mt-5 space-y-1">
                   {SIDEBAR_NAV.map(({ id, label, href, icon: Icon }) => (
                     <Link
                       key={id}
@@ -236,15 +237,31 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
                       <Icon className="h-4 w-4" />
                     </Link>
                   ))}
-                </nav>
+                  </nav>
+                </>
               ) : (
                 <>
-                  <div className="mt-4 px-2">
-                    <p className="flex items-center gap-2 text-sm font-semibold">
-                      <span className="truncate">{user?.nickname ?? '创作者'}</span>
-                      <span className="shrink-0 rounded-full bg-emerald-600/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">公测版</span>
-                    </p>
-                    <p className="mt-1 truncate text-xs text-[var(--text-tertiary)]">{user?.email ?? user?.phone ?? '启创墨域账户'}</p>
+                  {/* 用户信息置顶：头像 + 昵称 + 套餐徽标 + 邮箱，对照参考站侧栏头部 */}
+                  <div className="flex items-start justify-between gap-2 px-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Avatar name={user?.nickname ?? '创作者'} src={user?.avatarUrl} size="sm" className="h-10 w-10 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-2 text-[15px] font-semibold">
+                          <span className="truncate">{user?.nickname ?? '创作者'}</span>
+                          <span className="shrink-0 rounded-full bg-emerald-600/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">公测版</span>
+                        </p>
+                        <p className="mt-0.5 truncate text-[13px] text-[var(--text-tertiary)]">{user?.email ?? user?.phone ?? '启创墨域账户'}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleCollapsed}
+                      className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[var(--text-tertiary)] transition-colors hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]"
+                      aria-label="折叠侧栏"
+                      title="折叠侧栏"
+                    >
+                      <PanelLeftClose className="h-4 w-4" />
+                    </button>
                   </div>
                   <nav className="mt-7 space-y-1">
                     {SIDEBAR_NAV.map(({ id, label, href, icon: Icon }) => (
