@@ -38,6 +38,13 @@ function normalize(value: string): string {
   return value.toLocaleLowerCase('zh-CN').replace(/\s+/g, '')
 }
 
+/** 显示层映射：Agent 把章节 ID 写进标题（如「章节:cmxxx」）时替换为章节真实名，避免记忆中心显示一串码 */
+function displayMemoryTitle(title: string, chapterTitles: Map<string, string>): string {
+  const match = /^(?:章节|chapter)[:：]\s*(.+)$/i.exec(title.trim())
+  const name = match ? chapterTitles.get(match[1].trim()) : undefined
+  return name ?? title
+}
+
 function tokens(value: string): string[] {
   const text = normalize(value)
   const result = new Set<string>()
@@ -712,7 +719,7 @@ export async function listStoryMemories(userId: string, novelId: string, input: 
     reviewStatus: { not: 'rejected' as const },
     ...(input.memoryType ? { memoryType: input.memoryType } : {}),
   }
-  const [total, rows, typeGroups] = await Promise.all([
+  const [total, rows, typeGroups, chapterRows] = await Promise.all([
     prisma.projectMemoryEntry.count({ where }),
     prisma.projectMemoryEntry.findMany({
       where,
@@ -721,14 +728,16 @@ export async function listStoryMemories(userId: string, novelId: string, input: 
       take: input.pageSize,
     }),
     prisma.projectMemoryEntry.groupBy({ by: ['memoryType'], where: { novelId, status: { in: ['confirmed', 'inferred'] }, reviewStatus: { not: 'rejected' } }, _count: { _all: true } }),
+    prisma.chapter.findMany({ where: { novelId }, select: { id: true, title: true } }),
   ])
+  const chapterTitles = new Map(chapterRows.map((item) => [item.id, item.title]))
   return {
     total,
     items: rows.map((item) => ({
       id: item.id,
       memoryType: item.memoryType,
       layer: item.layer,
-      title: item.title,
+      title: displayMemoryTitle(item.title, chapterTitles),
       content: item.content,
       importance: item.importance,
       status: item.status,
@@ -766,11 +775,13 @@ export async function updateStoryMemoryEntry(userId: string, memoryId: string, p
     }
   }
   const updated = await prisma.projectMemoryEntry.findFirstOrThrow({ where: { id: memory.id } })
+  const chapterRows = await prisma.chapter.findMany({ where: { novelId: memory.novelId }, select: { id: true, title: true } })
+  const chapterTitles = new Map(chapterRows.map((item) => [item.id, item.title]))
   return {
     id: updated.id,
     memoryType: updated.memoryType,
     layer: updated.layer,
-    title: updated.title,
+    title: displayMemoryTitle(updated.title, chapterTitles),
     content: updated.content,
     importance: updated.importance,
     status: updated.status,

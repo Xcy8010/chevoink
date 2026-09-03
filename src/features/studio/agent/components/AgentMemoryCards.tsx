@@ -256,19 +256,22 @@ export default function AgentMemoryCards({ novelId }: Props) {
               </article>
             </div>
           ))}
-          {hasMore ? (
-            <button
-              type="button"
-              onClick={() => void load(page + 1, typeFilter)}
-              disabled={loadingMore}
-              className="flex h-[152px] flex-col items-center justify-center gap-1.5 rounded-[12px] border border-dashed border-[var(--border-subtle)] text-[10px] text-[var(--text-tertiary)] transition-colors duration-300 hover:border-[var(--text-tertiary)] hover:text-[var(--text-secondary)] disabled:opacity-50"
-            >
-              {loadingMore ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <span className="text-sm leading-none">+</span>}
-              加载更多
-            </button>
-          ) : null}
         </div>
       )}
+
+      {hasMore ? (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => void load(page + 1, typeFilter)}
+            disabled={loadingMore}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)] disabled:opacity-50"
+          >
+            {loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            {loadingMore ? '加载中…' : '加载更多'}
+          </button>
+        </div>
+      ) : null}
 
       {menu ? createPortal(
         <div
