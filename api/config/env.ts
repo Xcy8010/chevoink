@@ -103,6 +103,14 @@ export const env = {
   // 对齐主流 Agent 单任务消耗量级（百轮/百万 token），配合循环内的上下文瘦身机制防爆窗
   agentMaxTurns: parsePositiveNumber(process.env.AGENT_MAX_TURNS, 100),
   agentRunTokenBudget: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET, 2000000),
+  // plan/18：tokenBudget 硬顶（作者可显式上调预算，服务端 clamp 到此上限防失控）
+  agentRunTokenBudgetCeiling: parsePositiveNumber(process.env.AGENT_RUN_TOKEN_BUDGET_CEILING, 5000000),
+  // plan/18 P2 墙钟：总帽防无限烧 credits；发生过自动续跑后切长任务帽；空转帽防低速空转
+  agentRunWallClockMinutes: parsePositiveNumber(process.env.AGENT_RUN_WALL_CLOCK_MINUTES, 60),
+  agentRunWallClockLongMinutes: parsePositiveNumber(process.env.AGENT_RUN_WALL_CLOCK_LONG_MINUTES, 180),
+  agentRunIdleMinutes: parsePositiveNumber(process.env.AGENT_RUN_IDLE_MINUTES, 10),
+  // plan/18 P1 信道重复检测两阶段：observe=只记日志零干预，enforce=提醒→再命中终止
+  agentRepeatGuardMode: process.env.AGENT_REPEAT_GUARD_MODE === 'enforce' ? 'enforce' : 'observe',
   // Agent 2.0 上下文检查点：65% 提醒、78% 自动压缩；按实际模型窗口可覆盖。
   agentContextWindowTokens: parsePositiveNumber(process.env.AGENT_CONTEXT_WINDOW_TOKENS, 128000),
   // Agent 增量能力可独立回退；灰度名单非空时，仅名单用户启用这些能力。

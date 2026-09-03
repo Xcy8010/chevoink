@@ -39,6 +39,15 @@ import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
+import { toolSignature } from './tool-signature.js'
+import { createRepeatDetector } from './repeat-detect.js'
+import {
+  CHECKPOINT_BUDGET_SLICE,
+  CHECKPOINT_MAX_RESUMES,
+  CHECKPOINT_TURN_SLICE,
+  evaluateCheckpoint,
+  resolveRunTokenBudget,
+} from './checkpoint.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
@@ -161,6 +170,19 @@ const STRUCTURE_MUTATION_TOOLS = new Set([
   'volume_delete',
 ])
 const STRUCTURE_FAILURE_LIMIT = 3
+
+/** plan/18 P4 检查点条件 b：算「真实进展」的写类工具（成功调用计入区间进展） */
+const WRITE_PROGRESS_TOOLS = new Set([
+  'chapter_write',
+  'chapter_append',
+  'chapter_edit_range',
+  'chapter_create',
+  'plan_save',
+  'memory_save',
+])
+
+/** plan/18 P0 重复签名熔断：前 2 次成功同签名后，第 3 次相同调用不执行 */
+const REPEAT_SIGNATURE_BLOCK_AFTER_SUCCESSES = 2
 
 /** 长上下文防稀释阈值（plan/14 §三 A4）：超过后每轮在队尾刷新一条轻量提醒 */
 const CONTEXT_REMINDER_THRESHOLD_CHARS = 60000
@@ -774,6 +796,26 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const usage = emptyUsage()
   let turn = 0
 
+  // —— plan/18 防护状态（全部 run 级内存滑窗，不跨 run）——
+  // P2 墙钟：总帽防无限烧 credits；空转帽防低速空转。审批/提问等待发生在工具执行内部，
+  // 工具返回即刷新活动钟，天然排除挂起期误杀
+  const runStartedAt = Date.now()
+  let lastActivityAt = Date.now()
+  // P0 重复签名滑窗：只记成功执行；失败后同签名正当重试不计次
+  let lastSuccessSig: string | null = null
+  let successRepeat = 0
+  let blockedRepeat = 0
+  // 非空时本轮工具执行完立即走 wrap-up（P0 第 4 次同签名 / P1 干预模式二次命中）
+  let forceWrapUpReason: string | null = null
+  // P1 信道重复检测：正文+思考共用一个检测器，观察/干预由 env.agentRepeatGuardMode 决定
+  const repeatDetector = createRepeatDetector()
+  let repeatReminderSent = false
+  // P4 检查点自动续跑状态
+  let resumeCount = 0
+  let compactionCount = 0
+  let writeProgressCount = 0
+  let checkpointWriteBaseline = 0
+
   // 进行中的轮次缓冲：中止/崩溃时当前轮消息还没走到轮末落库点，
   // 不兜底补偿的话作者刷新后会丢掉整个进行中轮次（只看到上一轮为止的进度）
   let liveTurn: { messageId: string; parts: AgentMessagePart[]; streamedText: string; streamedReasoning: string } | null = null
@@ -1002,8 +1044,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       sessionPolicy?.sandboxMode === 'read_only' || sessionPolicy?.sandboxMode === 'full_access' ? sessionPolicy.sandboxMode : 'workspace',
     )
     const openAITools = toOpenAITools(tools)
-    const maxTurns = env.agentMaxTurns
-    const runTokenBudget = Math.min(env.agentRunTokenBudget, Math.max(500, params.tokenBudget ?? env.agentRunTokenBudget))
+    // plan/18：轮次片/预算片可被检查点续跑刷新，改 let；预算从「只能下调」改为 clamp 到硬顶（默认 500 万）
+    let maxTurns = env.agentMaxTurns
+    let runTokenBudget = resolveRunTokenBudget(params.tokenBudget, env.agentRunTokenBudget, env.agentRunTokenBudgetCeiling)
 
     const toolContext: ToolContext = {
       userId: params.userId,
@@ -1041,8 +1084,140 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       content: `[系统提醒] 对话已较长，重申信道纪律：正文信道每个关键节点可给作者一句可见进展（刚完成什么、下一步做什么）；收尾时写交付说明（不超过 2 句 80 字）；规划产出走 plan_save，修订带 planId；需要作者决策用 ask_user。当前模式：${params.mode}。`,
     }
 
-    while (turn < maxTurns) {
+    /** P1 信道重复命中处置：观察模式只记日志零干预；干预模式首次提醒、二次命中强制收尾 */
+    const handleRepeatHit = (gram: string | null): void => {
+      if (!gram) return
+      if (env.agentRepeatGuardMode !== 'enforce') {
+        console.warn('[agent-loop] repeat-detector 命中（观察模式，不干预）', runId, JSON.stringify(gram))
+        return
+      }
+      if (!repeatReminderSent) {
+        repeatReminderSent = true
+        messages.push({
+          role: 'user',
+          content: '[系统] 检测到信道正在重复输出同一段内容。立即停止复读，直接输出新内容或推进下一步动作。',
+        })
+        return
+      }
+      forceWrapUpReason = '信道重复输出同一段内容已终止（复读熔断）。'
+    }
+
+    /** 统一收尾（plan/18）：预算耗尽/墙钟/空转/熔断都走这里——先让模型无工具总结进展，再按待办剩余定终态 */
+    const wrapUpAndFinish = async (reasonText: string): Promise<void> => {
+      const wrapMessageId = randomUUID()
+      bus.emit({ type: 'message.start', messageId: wrapMessageId, role: 'assistant' })
+      const wrapStreamer = createVisibleTextStreamer()
+      messages.push({
+        role: 'user',
+        content: `[系统] ${reasonText}请立即停止调用工具，用一段话总结目前的进展与剩余工作。`,
+      })
+      const wrapUp = await chatWithTools({
+        messages,
+        tools: [],
+        model: runtimeModelName,
+        providerBaseUrl: modelRuntime.baseUrl,
+        providerApiKey: modelRuntime.apiKey,
+        provider: modelRuntime.provider,
+        reasoningEffort: modelRuntime.reasoningEffort,
+        temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
+        onChunk: (chunk) => {
+          if (chunk.type === 'text-delta') {
+            const wrapUpIncrement = wrapStreamer.push(chunk.delta)
+            if (wrapUpIncrement) bus.emit({ type: 'text.delta', messageId: wrapMessageId, delta: wrapUpIncrement })
+          }
+        },
+        signal: controller.signal,
+        usageLog: {
+          userId: params.userId,
+          action: 'agentLoopWrapUp',
+          novelId: params.novelId,
+          chapterId: params.chapterId,
+          targetType: 'agentRun',
+          targetId: runId,
+          agentRunId: runId,
+          turn: null,
+          modelTier: modelRuntime.tier,
+          multiplierBps: modelRuntime.multiplierBps,
+        },
+      })
+      addUsage(usage, wrapUp.usage)
+      const cleanWrapUp = humanizeAgentVisibleText(stripAgentProtocolArtifacts(wrapUp.content))
+      if (wrapUp.content) {
+        bus.emit({ type: 'text.final', messageId: wrapMessageId, text: cleanWrapUp, asReasoning: false })
+      }
+      if (cleanWrapUp) {
+        await persistMessage(wrapMessageId, runId, params.sessionId, 'assistant', [
+          { type: 'text', text: cleanWrapUp },
+        ])
+      }
+      // 待办未完成时以 failed 收尾：前端据此展示「继续执行」按钮，一键接着跑完剩余待办
+      const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
+      if (todoLeft > 0) {
+        await finalizeRun(
+          runId,
+          bus,
+          'failed',
+          usage,
+          turn,
+          cleanWrapUp.slice(0, 300),
+          `${reasonText}待办还剩 ${todoLeft} 项未完成。点击「继续执行」让 Agent 接着跑完。`,
+        )
+        return
+      }
+      await finalizeRun(runId, bus, 'succeeded', usage, turn, `${reasonText}：${cleanWrapUp.slice(0, 300)}`)
+    }
+
+    /** P4 检查点式自动续跑：预算片/轮次片耗尽不是终止条件，四条件全满足则同 run 内压缩上下文+刷新片继续跑；
+     * 条件 b（区间内必须有新写类进展）兼作 compaction 防 loop：无进展则禁止再压缩，直接走 wrap-up，
+     * 杜绝 codex #31351 式「压缩→丢进展→重复计划→再压缩」死循环 */
+    const tryCheckpointResume = (trigger: 'budget' | 'turns'): boolean => {
+      const checkpoint = evaluateCheckpoint({
+        todoLeft: todoItems.filter((item) => item.status !== 'completed').length,
+        writeProgress: writeProgressCount,
+        writeBaseline: checkpointWriteBaseline,
+        resumeCount,
+        compactionCount,
+        elapsedMs: Date.now() - runStartedAt,
+        longWallClockLimitMs: env.agentRunWallClockLongMinutes * 60_000,
+      })
+      if (!checkpoint.ok) return false
+      resumeCount += 1
+      compactionCount += 1
+      checkpointWriteBaseline = writeProgressCount
+      runTokenBudget = Math.min(env.agentRunTokenBudgetCeiling, runTokenBudget + CHECKPOINT_BUDGET_SLICE)
+      maxTurns += CHECKPOINT_TURN_SLICE
+      // compaction：久远工具输出压成短摘要释放窗口（旧内容可用读取类工具重新取回）
+      slimEarlyToolOutputs(messages)
+      const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
+      const notice = `已到检查点 ${resumeCount}/${CHECKPOINT_MAX_RESUMES}（${trigger === 'budget' ? '预算片用尽' : '轮次片用尽'}） · 累计消耗 ${(usage.totalTokens / 10_000).toFixed(0)} 万 tokens · 剩余待办 ${todoLeft} 项 · 自动续跑中`
+      // 检查点可见性：落库+直播的系统行，刷新后仍在（产品化参照 codex 的自动 compaction 提示）
+      const noticeId = randomUUID()
+      bus.emit({ type: 'message.start', messageId: noticeId, role: 'assistant' })
+      bus.emit({ type: 'text.delta', messageId: noticeId, delta: notice })
+      void persistMessage(noticeId, runId, params.sessionId, 'assistant', [{ type: 'text', text: notice }]).catch(() => {})
+      messages.push({
+        role: 'user',
+        content: `[系统] ${notice}。上下文已压缩，待办清单是唯一进展依据。立即继续执行下一条未完成待办：不要复述已完成工作、不要重新规划、不要询问作者是否继续。`,
+      })
+      return true
+    }
+
+    // 轮次片耗尽时在 while 条件里做检查点续跑（成功则 maxTurns 已刷新、继续循环），不可续跑才落入下方收尾
+    while (turn < maxTurns || tryCheckpointResume('turns')) {
       turn += 1
+
+      // P2 墙钟双条件：总帽（发生过自动续跑后切长任务帽，默认 60→180 分钟）+ 空转帽（默认 10 分钟）。
+      // 空转判定只看轮边界：流式增量与工具完成都会刷新 lastActivityAt，模型/工具执行中不会误杀
+      const wallClockLimitMs = (resumeCount > 0 ? env.agentRunWallClockLongMinutes : env.agentRunWallClockMinutes) * 60_000
+      if (Date.now() - runStartedAt > wallClockLimitMs) {
+        await wrapUpAndFinish(`任务运行时长已达上限（${Math.round(wallClockLimitMs / 60_000)} 分钟）。`)
+        return
+      }
+      if (Date.now() - lastActivityAt > env.agentRunIdleMinutes * 60_000) {
+        await wrapUpAndFinish(`任务已空转超过 ${env.agentRunIdleMinutes} 分钟没有任何进展输出。`)
+        return
+      }
+      lastActivityAt = Date.now()
 
       // A4 长上下文防稀释：超过阈值后每轮把提醒刷新到队尾，拉回系统约束注意力
       const reminderIndex = messages.indexOf(contextReminder)
@@ -1091,12 +1266,21 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           if (chunk.type === 'text-delta') {
             // 正文与 reasoning 都逐 token 实时播出，但只播清洗后的安全增量；轮末由 text.final 统一结算整段
             if (liveTurn) liveTurn.streamedText += chunk.delta
+            lastActivityAt = Date.now()
             const textIncrement = visibleTextStreamer.push(chunk.delta)
-            if (textIncrement) bus.emit({ type: 'text.delta', messageId, delta: textIncrement })
+            if (textIncrement) {
+              bus.emit({ type: 'text.delta', messageId, delta: textIncrement })
+              // P1：对清洗后的可见增量做重复检测（避免英文协议残留干扰判定）
+              handleRepeatHit(repeatDetector.push(textIncrement))
+            }
           } else if (chunk.type === 'reasoning-delta') {
             if (liveTurn) liveTurn.streamedReasoning += chunk.delta
+            lastActivityAt = Date.now()
             const reasoningIncrement = visibleReasoningStreamer.push(chunk.delta)
-            if (reasoningIncrement) bus.emit({ type: 'reasoning.delta', messageId, delta: reasoningIncrement })
+            if (reasoningIncrement) {
+              bus.emit({ type: 'reasoning.delta', messageId, delta: reasoningIncrement })
+              handleRepeatHit(repeatDetector.push(reasoningIncrement))
+            }
           } else if (chunk.type === 'tool-call-start') {
             // name 可能分片累加到达：每次变化都重发，前端 upsert 后标题自动修正
             if (chunk.id && announcedToolNames.get(chunk.id) !== chunk.name) {
@@ -1245,7 +1429,40 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         if (controller.signal.aborted) {
           throw new DOMException('run aborted', 'AbortError')
         }
+        // P0 重复签名熔断：同工具+同参数已连续成功 2 次后，第 3 次相同调用不执行只回提示；
+        // 模型仍坚持（第 4 次相同调用）则本轮工具执行完强制收尾。滑窗只记成功：失败后同签名正当重试不计次
+        const signature = toolSignature(call.name, call.arguments)
+        if (signature === lastSuccessSig && successRepeat >= REPEAT_SIGNATURE_BLOCK_AFTER_SUCCESSES) {
+          blockedRepeat += 1
+          if (blockedRepeat >= 2) {
+            forceWrapUpReason = '同一工具与参数被连续重复调用已熔断终止（防空转循环）。'
+          }
+          const blockTitle = getToolByName(call.name)?.title ?? call.name
+          const blockSummary = '与前两次调用完全相同（工具与参数一致），未执行'
+          bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: blockTitle, args: null })
+          bus.emit({ type: 'tool.result', messageId, callId: call.id, toolName: call.name, ok: false, summary: blockSummary, durationMs: 0 })
+          parts.push({ type: 'tool-call', callId: call.id, toolName: call.name, title: blockTitle, args: null, status: 'failed', summary: blockSummary })
+          messages.push({
+            role: 'tool',
+            toolCallId: call.id,
+            content: '[系统] 重复调用熔断：本次调用与前两次工具与参数完全相同，未执行。请换参数、换工具或改用其他方式推进；立即停止重复同一调用。',
+          })
+          if (forceWrapUpReason) break
+          continue
+        }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
+        lastActivityAt = Date.now()
+        // 滑窗更新：只记成功执行；失败不碰窗口（同签名重试不会被误杀）
+        if (outcome.part.status === 'success') {
+          if (signature === lastSuccessSig) {
+            successRepeat += 1
+          } else {
+            lastSuccessSig = signature
+            successRepeat = 1
+          }
+          blockedRepeat = 0
+          if (WRITE_PROGRESS_TOOLS.has(call.name)) writeProgressCount += 1
+        }
         if (call.name === 'plan_save' && outcome.part.status === 'success') {
           planSavePerformed = true
         }
@@ -1285,70 +1502,23 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         return
       }
 
+      // P0/P1 熔断收尾：结构熔断优先级更高（上方已 return），这里处理重复签名第 4 次/复读二次命中
+      if (forceWrapUpReason) {
+        const reason = forceWrapUpReason
+        forceWrapUpReason = null
+        await wrapUpAndFinish(reason)
+        return
+      }
+
       if (usage.totalTokens >= runTokenBudget) {
-        messages.push({
-          role: 'user',
-          content: '[系统] 本次运行的 token 预算已用尽，请立即停止调用工具，用一段话总结目前的进展与剩余工作。',
-        })
-        const wrapUp = await chatWithTools({
-          messages,
-          tools: [],
-          model: runtimeModelName,
-          providerBaseUrl: modelRuntime.baseUrl,
-          providerApiKey: modelRuntime.apiKey,
-          provider: modelRuntime.provider,
-          reasoningEffort: modelRuntime.reasoningEffort,
-          temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
-          onChunk: (chunk) => {
-            if (chunk.type === 'text-delta') {
-              const wrapUpIncrement = visibleTextStreamer.push(chunk.delta)
-              if (wrapUpIncrement) bus.emit({ type: 'text.delta', messageId, delta: wrapUpIncrement })
-            }
-          },
-          signal: controller.signal,
-          usageLog: {
-            userId: params.userId,
-            action: 'agentLoopWrapUp',
-            novelId: params.novelId,
-            chapterId: params.chapterId,
-            targetType: 'agentRun',
-            targetId: runId,
-            agentRunId: runId,
-            turn: null,
-            modelTier: modelRuntime.tier,
-            multiplierBps: modelRuntime.multiplierBps,
-          },
-        })
-        addUsage(usage, wrapUp.usage)
-        const cleanWrapUp = humanizeAgentVisibleText(stripAgentProtocolArtifacts(wrapUp.content))
-        if (wrapUp.content) {
-          bus.emit({ type: 'text.final', messageId, text: cleanWrapUp, asReasoning: false })
-        }
-        if (cleanWrapUp) {
-          await persistMessage(randomUUID(), runId, params.sessionId, 'assistant', [
-            { type: 'text', text: cleanWrapUp },
-          ])
-        }
-        // 待办未完成时以 failed 收尾：前端据此展示「继续执行」按钮，一键接着跑完剩余待办
-        const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
-        if (todoLeft > 0) {
-          await finalizeRun(
-            runId,
-            bus,
-            'failed',
-            usage,
-            turn,
-            cleanWrapUp.slice(0, 300),
-            `本次运行的 token 预算已用尽，待办还剩 ${todoLeft} 项未完成。点击「继续执行」让 Agent 接着跑完。`,
-          )
-          return
-        }
-        await finalizeRun(runId, bus, 'succeeded', usage, turn, `已达 token 预算上限：${cleanWrapUp.slice(0, 300)}`)
+        // P4：预算片耗尽不是终止条件——先做检查点评估，有真实进展且待办未完则同 run 自动续跑
+        if (tryCheckpointResume('budget')) continue
+        await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
         return
       }
     }
 
-    // 轮次上限：优雅收尾而非硬报错
+    // 轮次上限（检查点续跑也不可用）：优雅收尾而非硬报错
     await finalizeRun(
       runId,
       bus,
@@ -1356,7 +1526,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       usage,
       turn,
       lastAssistantText.slice(0, 300),
-      `已达最大轮次上限（${env.agentMaxTurns} 轮），任务未完成。可点击"继续"让 Agent 接着执行。`,
+      `已达最大轮次上限（${maxTurns} 轮），任务未完成。可点击"继续"让 Agent 接着执行。`,
     )
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) {
