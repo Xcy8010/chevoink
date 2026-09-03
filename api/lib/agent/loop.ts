@@ -37,8 +37,8 @@ import { getToolByName, toOpenAITools } from './tools/registry.js'
 import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
-import { ORCHESTRATION_TOOL_NAMES, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
-import { humanizeAgentVisibleText } from './visible-text.js'
+import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
+import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
@@ -623,6 +623,12 @@ export async function handleToolCall(
     return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。${chapterHint}本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
   }
 
+  // 续跑协作硬约束：命中中断续跑协作且子窗口未收尾时，主窗口正文写入被拦回 task_send/task_wait
+  const orchestrationBlock = await assertOrchestrationResumeGuard(runId, ctx.sessionId, tool.name)
+  if (orchestrationBlock) {
+    return fail('续跑协作约束', orchestrationBlock, 'failed')
+  }
+
   // 审批：'ask' 且未被会话级“总是允许”覆盖时，挂起等待前端批复；
   // 全权限开关（默认开）短路审批：产品决策为 agent 自主判断所有动作，翻 env 可回退
   const needAsk =
@@ -775,8 +781,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     const live = liveTurn
     if (!live) return
     const fallbackParts: AgentMessagePart[] = []
-    if (live.streamedReasoning.trim()) fallbackParts.push({ type: 'reasoning', text: live.streamedReasoning })
-    if (live.streamedText.trim()) fallbackParts.push({ type: 'text', text: live.streamedText })
+    if (live.streamedReasoning.trim()) fallbackParts.push({ type: 'reasoning', text: humanizeAgentVisibleText(live.streamedReasoning) })
+    if (live.streamedText.trim()) fallbackParts.push({ type: 'text', text: humanizeAgentVisibleText(live.streamedText) })
     // 优先用正式组装的 parts（含工具卡片）；模型流式中断、parts 尚未组装时退化为已流式原文
     const partsToSave = live.parts.length > 0 ? live.parts : fallbackParts
     if (partsToSave.length === 0) return
@@ -912,7 +918,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
     // 中断续跑协作提醒：上一轮异常终止且存在派生子窗口时，强制主控用 task_send/task_wait 续协作，
     // 避免作者一句「继续」被理解成「在本窗口把子窗口没干完的活重干一遍」
-    const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId)
+    const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId, Boolean(params.resume))
     if (orchestrationResumeNote) {
       messages.push({ role: 'user', content: orchestrationResumeNote })
     }
@@ -1067,6 +1073,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const announcedToolNames = new Map<string, string>()
       const toolArgsProgress = new Map<string, { chars: number; lastEmitted: number }>()
       const streamingToolArgs = new Map<string, string>()
+      // 可见信道流式清洗：正文/思考逐 token 清洗后只下发安全增量，尾部未完成标识符先扣留，
+      // 从源头杜绝「先播英文、轮末再修正成中文」的二次闪变（作者明确不要二次修正观感）
+      const visibleTextStreamer = createVisibleTextStreamer()
+      const visibleReasoningStreamer = createVisibleTextStreamer()
 
       const result = await chatWithTools({
         messages,
@@ -1079,12 +1089,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
-            // 正文与 reasoning 都逐 token 实时播出，轮末由 text.final 统一归一化
+            // 正文与 reasoning 都逐 token 实时播出，但只播清洗后的安全增量；轮末由 text.final 统一结算整段
             if (liveTurn) liveTurn.streamedText += chunk.delta
-            bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })
+            const textIncrement = visibleTextStreamer.push(chunk.delta)
+            if (textIncrement) bus.emit({ type: 'text.delta', messageId, delta: textIncrement })
           } else if (chunk.type === 'reasoning-delta') {
             if (liveTurn) liveTurn.streamedReasoning += chunk.delta
-            bus.emit({ type: 'reasoning.delta', messageId, delta: chunk.delta })
+            const reasoningIncrement = visibleReasoningStreamer.push(chunk.delta)
+            if (reasoningIncrement) bus.emit({ type: 'reasoning.delta', messageId, delta: reasoningIncrement })
           } else if (chunk.type === 'tool-call-start') {
             // name 可能分片累加到达：每次变化都重发，前端 upsert 后标题自动修正
             if (chunk.id && announcedToolNames.get(chunk.id) !== chunk.name) {
@@ -1159,7 +1171,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const parts: AgentMessagePart[] = []
       if (liveTurn) liveTurn.parts = parts
       if (result.reasoning) {
-        parts.push({ type: 'reasoning', text: result.reasoning })
+        // 思考信道作者可见：落库同样清洗，避免刷新后历史思考行里残留英文协议词汇
+        parts.push({ type: 'reasoning', text: humanizeAgentVisibleText(result.reasoning) })
       }
       if (cleanContent) {
         parts.push({ type: 'text', text: cleanContent })
@@ -1288,7 +1301,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
           onChunk: (chunk) => {
             if (chunk.type === 'text-delta') {
-              bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })
+              const wrapUpIncrement = visibleTextStreamer.push(chunk.delta)
+              if (wrapUpIncrement) bus.emit({ type: 'text.delta', messageId, delta: wrapUpIncrement })
             }
           },
           signal: controller.signal,
