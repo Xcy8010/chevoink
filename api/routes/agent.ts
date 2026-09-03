@@ -750,6 +750,7 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       modelTier: body.modelTier ?? 'speed',
       customModelId: body.customModelId,
       reasoningEffort: body.reasoningEffort,
+      pinnedSkillIds: body.pinnedSkillIds,
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {

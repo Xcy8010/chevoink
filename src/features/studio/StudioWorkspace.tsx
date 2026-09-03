@@ -4340,6 +4340,20 @@ export default function StudioWorkspace() {
           hideHeader={false}
           referenceOptions={composerReferenceOptions}
           onOpenStudioSettings={(section) => { setStudioSettingsSection(section); setStudioSettingsOpen(true) }}
+          onOpenSkills={() => {
+            // 「+」菜单里的“管理技能”：按当前视角把技能面板所在的侧栏直接展开
+            if (mobileIntegratedHeader) {
+              setMobileView('skills')
+              return
+            }
+            if (workspacePerspective === 'work') {
+              setWorkInspectorTab('skills')
+              setWorkRightOpen(true)
+              return
+            }
+            setIdeSidebarTab('skills')
+            setIdeTreeOpen(true)
+          }}
         />
       )
   }

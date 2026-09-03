@@ -137,6 +137,7 @@ export async function startLoopRun(
     reasoningEffort: modelRuntime.reasoningEffort,
     agentType: input.agentProfile ?? 'orchestrator',
     tokenBudget: input.tokenBudget,
+    pinnedSkillIds: input.pinnedSkillIds ?? [],
   })
 
   return {

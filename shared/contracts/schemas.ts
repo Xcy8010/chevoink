@@ -129,6 +129,8 @@ export const startAgentLoopRunSchema = z.object({
   modelTier: z.enum(['speed', 'standard', 'performance', 'ultimate', 'custom']).optional(),
   customModelId: z.string().trim().min(1).max(64).optional(),
   reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  /** 作者手动指定的技能；上限 3 个，避免一次性把上下文填满。 */
+  pinnedSkillIds: z.array(z.string().trim().min(1).max(120)).max(3).optional(),
 })
 
 /** POST /api/agent/runs/:runId/approvals（原校验：callId 真值 + approved 为布尔） */

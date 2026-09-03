@@ -370,6 +370,8 @@ export interface StartAgentLoopRunRequest {
   customModelId?: EntityId
   /** 用户为当前模型选择的推理强度；后端按该模型允许档位校验，不信任客户端。 */
   reasoningEffort?: import('./credits.js').ModelReasoningEffort
+  /** 作者在输入框里手动指定本轮要用的技能 id；后端只接受当前作品已启用的技能。 */
+  pinnedSkillIds?: EntityId[]
   /** 服务端子 Agent 调度使用；普通创作请求保持 orchestrator。 */
   agentProfile?: 'orchestrator' | 'research' | 'continuity' | 'quality' | 'lore'
   /** 单次子任务硬预算；服务端还会与全局预算取较小值。 */

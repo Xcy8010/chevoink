@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Pencil, Plus, Rocket, Scale, Settings2, Square, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 import {
@@ -18,6 +18,7 @@ import {
   type AgentAttachmentMeta,
 } from '../../../../../shared/contracts/agent-attachments.js'
 import type {
+  AgentSkillListItem,
   CreditModelOption,
   CreditModelTier,
   CustomModelView,
@@ -58,7 +59,7 @@ type AgentComposerProps = {
   running: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
-  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode) => Promise<void> | void
+  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => Promise<void> | void
   onStop: () => void
   creativeFreedom: CreativeFreedom
   onCreativeFreedomChange: (value: CreativeFreedom) => void
@@ -73,6 +74,10 @@ type AgentComposerProps = {
   onReasoningEffortChange: (modelKey: string, effort: ModelReasoningEffort) => void
   onOpenModelSettings: () => void
   referenceOptions: Array<Omit<ComposerReference, 'offset'>>
+  /** 当前作品已启用的技能：供作者在“+”菜单里手动指定本轮要用哪个。 */
+  skills?: AgentSkillListItem[]
+  /** 打开技能区：作者在菜单里发现要新建/导入/启用技能时直达。 */
+  onOpenSkillManager?: () => void
 }
 
 type ParsedComposerContent = {
@@ -88,6 +93,26 @@ const CREATIVE_MODES: Array<{ value: CreativeFreedom; label: string; description
 
 const REASONING_ORDER: ModelReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const REASONING_LABELS: Record<ModelReasoningEffort, string> = { none: '关闭', minimal: '轻度', low: '低', medium: '中', high: '高', xhigh: '极高', max: 'Max' }
+
+/** 与技能区保持一致的阶段中文名 */
+const SKILL_PHASE_LABELS: Record<string, string> = {
+  research: '调研', plan: '规划', scene: '场景', draft: '正文', critique: '审阅', revision: '修订', commit: '落库',
+}
+/** 手动指定上限：与后端 startAgentLoopRunSchema 一致 */
+const MAX_PINNED_SKILLS = 3
+
+function skillSourceLabel(source: AgentSkillListItem['source']): string | null {
+  if (source === 'user') return '自建'
+  if (source === 'agent') return 'Agent'
+  if (source === 'third_party') return '导入'
+  return null
+}
+
+function skillHintLine(skill: AgentSkillListItem): string {
+  const phases = skill.phases.map((phase) => SKILL_PHASE_LABELS[phase] ?? phase).join('/')
+  const triggers = skill.triggerLabels.slice(0, 2).join('、')
+  return [phases, triggers ? `适用：${triggers}` : skill.description].filter(Boolean).join(' · ')
+}
 
 function orderedReasoningEfforts(efforts: ModelReasoningEffort[]) {
   return [...new Set(efforts)].sort((left, right) => REASONING_ORDER.indexOf(left) - REASONING_ORDER.indexOf(right))
@@ -210,6 +235,8 @@ export function AgentComposer({
   onReasoningEffortChange,
   onOpenModelSettings,
   referenceOptions,
+  skills = [],
+  onOpenSkillManager,
 }: AgentComposerProps) {
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
@@ -222,12 +249,17 @@ export function AgentComposer({
   const addComposerReference = useAgentStore((state) => state.addComposerReference)
   const uploading = useAgentStore((state) => state.composerUploading)
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
+  // 手动指定的技能同样提升到全局：面板重挂载后选中态不丢
+  const pinnedSkillIds = useAgentStore((state) => state.composerSkillIds)
+  const toggleComposerSkill = useAgentStore((state) => state.toggleComposerSkill)
+  const setComposerSkillIds = useAgentStore((state) => state.setComposerSkillIds)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
   const [sending, setSending] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [attachError, setAttachError] = useState<string | null>(null)
   const [referencePickerOpen, setReferencePickerOpen] = useState(false)
   const [referenceSearch, setReferenceSearch] = useState('')
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false)
   const [editingReasoningTier, setEditingReasoningTier] = useState<Exclude<CreditModelTier, 'custom'> | null>(null)
   // 手机端模型二级列表改为受控视图：触屏没有 hover，靠 focus-within 显示会残留/溢出，
   // 点击「模型」行进入模型列表、返回或选中后回到根视图；桌面端仍走 hover/focus 行为完全不变
@@ -405,6 +437,11 @@ export function AgentComposer({
     return !keyword || reference.name.toLocaleLowerCase('zh-CN').includes(keyword)
   })
 
+  // 技能可能被在技能区关闭或删除：只信当前可用列表，避免发送陈旧 id
+  const pinnedSkills = pinnedSkillIds
+    .map((skillId) => skills.find((skill) => skill.id === skillId))
+    .filter((skill): skill is AgentSkillListItem => Boolean(skill))
+
   const handleSend = async () => {
     const current = syncComposerFromDom()
     if ((!current.draft.trim() && current.references.length === 0) || running || disabled || sending || uploading > 0) {
@@ -412,11 +449,13 @@ export function AgentComposer({
     }
     const effectivePrompt = buildComposerPrompt(current.draft, current.references)
     const pending = attachments
+    const pinned = pinnedSkills.map((skill) => skill.id)
     setSending(true)
     try {
-      await onSend(effectivePrompt, pending, creativeFreedom, qualityMode)
+      await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned)
       setComposerContent('', [])
       setAttachments([])
+      setComposerSkillIds([])
       setAttachError(null)
     } catch {
       // 面板已展示错误提示；保留草稿与附件供用户重试
@@ -462,6 +501,28 @@ export function AgentComposer({
       className={`relative z-[80] rounded-[20px] border bg-[var(--surface-default)] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
     >
       {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加引用、图片或文件</div> : null}
+      {pinnedSkills.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
+          {pinnedSkills.map((skill) => (
+            <span
+              key={skill.id}
+              title={`本轮指定技能：${skill.name}`}
+              className="inline-flex max-w-[min(16rem,70vw)] items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-primary)]"
+            >
+              <Wrench className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate">{skill.name}</span>
+              <button
+                type="button"
+                onClick={() => toggleComposerSkill(skill.id)}
+                aria-label={`取消指定技能 ${skill.name}`}
+                className="shrink-0 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {(attachments.length > 0 || uploading > 0) && (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
           {attachments.map((attachment) =>
@@ -558,11 +619,11 @@ export function AgentComposer({
               onClick={(event) => { if (running || disabled) event.preventDefault() }}
               className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] group-data-[disabled=true]/attach:pointer-events-none group-data-[disabled=true]/attach:opacity-40 [&::-webkit-details-marker]:hidden"
               aria-label="添加内容"
-              title="添加图片、文件或作品引用"
+              title="添加图片、文件、作品引用，或指定本轮技能"
             >
               <Plus className="h-4 w-4 transition-transform group-open/attach:rotate-45" />
             </summary>
-            <div className="absolute bottom-full left-0 z-50 mb-2 w-56 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
+            <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
               <button
                 type="button"
                 disabled={imageFull}
@@ -620,6 +681,71 @@ export function AgentComposer({
                     )) : <p className="px-2 py-4 text-center text-[11px] text-[var(--text-tertiary)]">没有匹配的作品内容</p>}
                   </div>
                 </div>
+              ) : null}
+              {/* 技能分组：不选时服务端自动路由，选了就是作者明确指令，本轮必定加载 */}
+              {(skills.length > 0 || onOpenSkillManager) ? (
+                <>
+                  <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />
+                  <button
+                    type="button"
+                    onClick={() => setSkillPickerOpen((value) => !value)}
+                    className="flex w-full items-start gap-3 px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)]"
+                    aria-expanded={skillPickerOpen}
+                  >
+                    <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium text-[var(--text-primary)]">
+                        技能{pinnedSkills.length > 0 ? `（已选 ${pinnedSkills.length}/${MAX_PINNED_SKILLS}）` : ''}
+                      </span>
+                      <span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-tertiary)]">不选时由 Agent 自动判断；点选后本轮必定调用。</span>
+                    </span>
+                    <ChevronDown className={`mt-0.5 h-3.5 w-3.5 transition-transform ${skillPickerOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {skillPickerOpen ? (
+                    <div className="border-t border-[var(--border-subtle)] px-2 pb-2 pt-1">
+                      <div className="max-h-52 overflow-y-auto [scrollbar-width:thin]">
+                        {skills.length > 0 ? skills.map((skill) => {
+                          const picked = pinnedSkillIds.includes(skill.id)
+                          const sourceLabel = skillSourceLabel(skill.source)
+                          return (
+                            <button
+                              key={skill.id}
+                              type="button"
+                              onClick={() => toggleComposerSkill(skill.id)}
+                              aria-pressed={picked}
+                              className="flex w-full items-start gap-2 px-2 py-2 text-left text-[11px] text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"
+                            >
+                              <span className={cn('mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border', picked ? 'border-transparent bg-[var(--surface-contrast)] text-[var(--text-contrast)]' : 'border-[var(--border-strong)]')}>
+                                {picked ? <Check className="h-2.5 w-2.5" /> : null}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="truncate font-medium">{skill.name}</span>
+                                  {sourceLabel ? <span className="shrink-0 rounded-[4px] border border-[var(--border-subtle)] px-1 text-[9px] leading-4 text-[var(--text-tertiary)]">{sourceLabel}</span> : null}
+                                </span>
+                                <span className="mt-0.5 block truncate text-[10px] leading-4 text-[var(--text-tertiary)]">{skillHintLine(skill)}</span>
+                              </span>
+                            </button>
+                          )
+                        }) : <p className="px-2 py-4 text-center text-[11px] text-[var(--text-tertiary)]">当前作品还没有启用的技能</p>}
+                      </div>
+                      {onOpenSkillManager ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            attachmentMenuRef.current?.removeAttribute('open')
+                            setSkillPickerOpen(false)
+                            onOpenSkillManager()
+                          }}
+                          className="mt-1 flex w-full items-center gap-1.5 border-t border-[var(--border-subtle)] px-2 pt-2 text-left text-[11px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+                        >
+                          <Settings2 className="h-3.5 w-3.5" />
+                          <span>管理技能（新建、导入、启用）</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
               ) : null}
             </div>
           </details>

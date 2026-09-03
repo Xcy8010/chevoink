@@ -70,6 +70,8 @@ export type ExecuteAgentRunParams = {
   customModelId?: string | null
   reasoningEffort?: import('../../../shared/contracts/index.js').ModelReasoningEffort
   tokenBudget?: number
+  /** 作者在输入框里手动指定本轮要用的技能 id。 */
+  pinnedSkillIds?: string[]
 }
 
 const emptyUsage = (): AgentTokenUsage => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
@@ -777,6 +779,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       taskSpec,
       modelTier: modelRuntime.tier,
       modelName: modelRuntime.modelName,
+      pinnedSkillIds: params.pinnedSkillIds ?? [],
     })
     const messages: ChatMessage[] = assembledContext.messages
     // 子 Agent 目录注入：主控据此按触发条件用 subagent_run 像调工具一样内嵌调用子 Agent（codex/Zcode 模式）

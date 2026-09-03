@@ -142,6 +142,7 @@ export function customSkillToRuntime(input: {
       reasonCode: 'CUSTOM_TRIGGER',
       weight: 34,
     })),
+    triggerLabels: triggerPhrases,
     negativeTriggers: negativePhrases.map((phrase) => new RegExp(escapeRegExp(phrase), 'i')),
     synopsis: typeof manifest.description === 'string' ? manifest.description : input.description,
     resources: Object.fromEntries(

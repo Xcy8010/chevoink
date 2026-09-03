@@ -386,6 +386,8 @@ export type AssembleContextInput = {
   modelTier: CreditModelTier
   /** 当前主模型的真实模型名：仅自定义档（作者自己接入的 API）会如实告知作者。 */
   modelName?: string | null
+  /** 作者在输入框里手动指定本轮要用的技能 id。 */
+  pinnedSkillIds?: string[]
 }
 
 export type AssembledAgentContext = {
@@ -421,14 +423,18 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const runtimeSkills = skillFeatureEnabled
     ? await resolveEnabledRuntimeSkills(input.userId, input.novelId)
     : null
+  // 作者手动指定的技能必须真实存在于本作品已启用目录，避免前端传入陈旧 id 或越权 id。
+  const enabledSkillIds = runtimeSkills ? new Set(runtimeSkills.map((skill) => skill.id)) : null
+  const pinnedSkillIds = (input.pinnedSkillIds ?? []).filter((skillId) => enabledSkillIds?.has(skillId) ?? false)
   const skillRoute = skillFeatureEnabled
     ? routeSkills({
         mode: input.mode,
         prompt: input.prompt,
         intent: input.taskSpec.intent,
         freedom: input.taskSpec.creativeFreedom,
-        enabledSkillIds: runtimeSkills ? new Set(runtimeSkills.map((skill) => skill.id)) : undefined,
+        enabledSkillIds: enabledSkillIds ?? undefined,
         catalog: runtimeSkills ?? undefined,
+        pinnedSkillIds: pinnedSkillIds.length > 0 ? new Set(pinnedSkillIds) : undefined,
       })
     : null
   const genreDigest = input.mode === 'build' ? buildGenreWritingDigest(novelTags?.tagNames ?? []) : null
@@ -436,7 +442,12 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
 
   // 逐轮可变内容的 digest 统一收集，全部进尾部快照；system 只留任务内稳定的固定规则
   const skillDigest = skillRoute
-    ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom)
+    ? buildSkillExecutionDigest(skillRoute, input.taskSpec.creativeFreedom, {
+        // 已启用但本轮未加载的技能对模型公开元数据：作者自建、尤其是导入的技能
+        // 否则永远不会被想起来，也就无从判断“什么时候该用”。
+        availableSkills: runtimeSkills ?? undefined,
+        pinnedSkillIds,
+      })
     : 'Skill OS 当前未对该账号启用；直接遵从作者目标，不得自行套用未知写作模板。'
   const checkpointDigest = checkpointState.checkpoint ? renderCheckpointDigest(checkpointState.checkpoint) : null
   const directiveDigest = renderDirectiveDigest(directives)

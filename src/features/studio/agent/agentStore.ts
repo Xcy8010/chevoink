@@ -105,6 +105,15 @@ export type ComposerReference = {
   offset: number
 }
 
+/** 本轮服务端技能路由结果的可视化投影：作者需要看见 Agent 到底用了哪些技能。 */
+export type AgentSkillRouteState = {
+  runId: string
+  phase: string
+  selected: Array<{ id: string; name: string }>
+  /** 本轮含 MANUAL_PIN 时说明是作者手动指定而不是自动召回。 */
+  reasonCodes: string[]
+}
+
 /** 会对工作区（章节树/正文/作品信息）产生写入的工具集合 */
 export const WORKSPACE_WRITE_TOOLS = new Set([
   'chapter_create',
@@ -206,6 +215,10 @@ type AgentStoreState = {
   composerReferences: ComposerReference[]
   /** 正在上传中的附件数量：上传完成前禁止发送 */
   composerUploading: number
+  /** 输入框里手动指定的技能 id；同草稿提升全局，面板重挂载不丢 */
+  composerSkillIds: string[]
+  /** 本轮技能路由：仅 live 事件写入，给作者一个“何时调用了哪些技能”的可见答案 */
+  skillRoute: AgentSkillRouteState | null
   /** 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文（默认开启） */
   autoFollow: boolean
   /** 当前任务窗口（会话）累计的工作区写入活动（变更区） */
@@ -246,6 +259,9 @@ type AgentStoreState = {
   clearComposerReferences: () => void
   setComposerContent: (draft: string, references: ComposerReference[]) => void
   bumpComposerUploading: (delta: number) => void
+  setComposerSkillIds: (ids: string[]) => void
+  /** 输入框“+”菜单里勾选/取消一个技能；上限与后端 schema 一致为 3 个。 */
+  toggleComposerSkill: (skillId: string) => void
   setAutoFollow: (value: boolean) => void
   requestToolNavigation: (toolName: string, args: unknown, display?: AgentToolDisplayPayload) => void
   clearToolNavigationRequest: () => void
@@ -489,6 +505,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   composerAttachments: [],
   composerReferences: [],
   composerUploading: 0,
+  composerSkillIds: [],
+  skillRoute: null,
   autoFollow: readStoredAutoFollow(),
   workspaceActivities: [],
   activitiesVersion: 0,
@@ -513,6 +531,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       errorCode: null,
       liveToolDrafts: {},
       toolNavigationRequest: null,
+      // 新一轮重新路由技能：上一轮的技能标识不能留到本轮
+      skillRoute: null,
       // 新 run 开跑：登记运行中供侧栏展示；同一会话的旧终态信号视为已消费
       ...(sessionId
         ? {
@@ -635,6 +655,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       todos: [],
       liveToolDrafts: {},
       toolNavigationRequest: null,
+      skillRoute: null,
       // 切换会话视为“离开旧对话”：清空消息，由渲染层按「未水合」展示图标流光；
       // 同会话重挂载/续活走早退路径（loadedSessionId 命中）不会经过这里
       messages: [],
@@ -725,6 +746,18 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   bumpComposerUploading: (delta) =>
     set((state) => ({ composerUploading: Math.max(0, state.composerUploading + delta) })),
 
+  setComposerSkillIds: (ids) => set({ composerSkillIds: ids.slice(0, 3) }),
+
+  toggleComposerSkill: (skillId) =>
+    set((state) => {
+      if (state.composerSkillIds.includes(skillId)) {
+        return { composerSkillIds: state.composerSkillIds.filter((id) => id !== skillId) }
+      }
+      // 超过上限时丢掉最早选的一个，避免作者先去取消才能换
+      const next = [...state.composerSkillIds, skillId]
+      return { composerSkillIds: next.slice(-3) }
+    }),
+
   setAutoFollow: (value) => {
     writeStoredAutoFollow(value)
     set({ autoFollow: value })
@@ -774,6 +807,18 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       switch (event.type) {
         case 'run.started':
           return { ...base, phase: 'running', agentTitle: event.agent.title }
+
+        // 技能路由已由服务端完成：落到 store 才能告诉作者本轮到底用了哪些技能
+        case 'skill.route':
+          return {
+            ...base,
+            skillRoute: {
+              runId: event.runId,
+              phase: event.phase,
+              selected: event.selected.map(({ id, name }) => ({ id, name })),
+              reasonCodes: event.reasonCodes,
+            },
+          }
 
         case 'message.start':
           return {

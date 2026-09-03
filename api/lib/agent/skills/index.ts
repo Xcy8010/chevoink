@@ -15,6 +15,7 @@ export type SkillReasonCode =
   | 'CONTINUITY_AUDIT'
   | 'REPETITION_RISK'
   | 'CUSTOM_TRIGGER'
+  | 'MANUAL_PIN'
 
 type SkillTrigger = {
   pattern: RegExp
@@ -36,6 +37,8 @@ export type AgentSkill = {
   phases: SkillPhase[]
   strength: 'soft'
   triggers: SkillTrigger[]
+  /** 触发短语的可读形式，用于技能清单与前端展示；内置技能用正则，故通常只有作者技能有值。 */
+  triggerLabels?: string[]
   negativeTriggers: RegExp[]
   synopsis: string
   resources: Partial<Record<SkillPhase, string>>
@@ -289,9 +292,27 @@ function uniqueReasonCodes(candidates: SkillRouteCandidate[]): SkillReasonCode[]
   return [...new Set(candidates.flatMap((candidate) => candidate.reasonCodes))]
 }
 
+/**
+ * 取技能在当前阶段的说明；作者自建或导入的技能常常只写了一个阶段，
+ * 手动指定后不能因为阶段不匹配就装载成空内容，这里回退到该技能自己声明的首个可用阶段。
+ */
+export function resolveSkillResource(skill: AgentSkill, phase: SkillPhase): { phase: SkillPhase; resource: string } | null {
+  const direct = skill.resources[phase]
+  if (direct) return { phase, resource: direct }
+  for (const fallbackPhase of skill.phases) {
+    const resource = skill.resources[fallbackPhase]
+    if (resource) return { phase: fallbackPhase, resource }
+  }
+  return null
+}
+
 function estimateLoadedTokens(skills: AgentSkill[], phase: SkillPhase): number {
-  const chars = skills.reduce((total, skill) => total + (skill.resources[phase]?.length ?? 0), 0)
+  const chars = skills.reduce((total, skill) => total + (resolveSkillResource(skill, phase)?.resource.length ?? 0), 0)
   return Math.ceil(chars / 2.2)
+}
+
+function isAuthorSkill(skill: AgentSkill): boolean {
+  return skill.owner !== 'chevoink'
 }
 
 export function routeSkills(input: {
@@ -302,21 +323,34 @@ export function routeSkills(input: {
   freedom: CreativeFreedom
   enabledSkillIds?: ReadonlySet<string>
   catalog?: readonly AgentSkill[]
+  /** 作者在输入框里手动指定的技能；它们绕过意图/阶段/评分门槛，必需装载。 */
+  pinnedSkillIds?: ReadonlySet<string>
 }): SkillRouteDecision {
   const phase = input.phase ?? inferSkillPhase(input.intent)
   const normalizedPrompt = input.prompt.trim()
+  const catalog = input.catalog ?? skillCatalog
+  const isEnabled = (skill: AgentSkill): boolean => input.enabledSkillIds?.has(skill.id) ?? true
+
+  const pinnedCandidates: SkillRouteCandidate[] = input.pinnedSkillIds?.size
+    ? catalog
+        .filter((skill) => input.pinnedSkillIds?.has(skill.id) && skill.status === 'active' && isEnabled(skill) && Boolean(resolveSkillResource(skill, phase)))
+        .map((skill) => ({ skill, score: 1_000 + skill.priority / 100, reasonCodes: ['MANUAL_PIN'] as SkillReasonCode[] }))
+    : []
+  const pinnedIds = new Set(pinnedCandidates.map((candidate) => candidate.skill.id))
+
   const skipMinorEdit = input.intent === 'revise' && MINOR_EDIT_PATTERN.test(normalizedPrompt)
   const skipOperation = ['global_transform', 'structure'].includes(input.intent) && NON_CREATIVE_PATTERN.test(normalizedPrompt)
 
-  if (skipMinorEdit || skipOperation) {
+  // 手动指定是作者的明确指令，优先于“非创作操作”早退。
+  if (pinnedCandidates.length === 0 && (skipMinorEdit || skipOperation)) {
     return {
       routerVersion: '3.0.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
       estimatedTokens: 0, skippedReason: 'NON_CREATIVE_OPERATION',
     }
   }
 
-  const candidates = (input.catalog ?? skillCatalog)
-    .filter((skill) => (input.enabledSkillIds?.has(skill.id) ?? true) && skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
+  const scored = catalog
+    .filter((skill) => !pinnedIds.has(skill.id) && isEnabled(skill) && skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
       skill.phases.includes(phase) && !skill.negativeTriggers.some((pattern) => pattern.test(normalizedPrompt)))
     .map((skill) => {
       const matchedTriggers = skill.triggers.filter((trigger) => trigger.pattern.test(normalizedPrompt))
@@ -324,9 +358,15 @@ export function routeSkills(input: {
       const score = baseIntentScore(skill, input.intent) + matchedTriggers.reduce((total, trigger) => total + trigger.weight, 0) + skill.priority / 100
       return { skill, score, reasonCodes }
     })
-    .filter((candidate) => candidate.score >= 30)
     .sort((left, right) => right.score - left.score || right.skill.priority - left.skill.priority)
-    .slice(0, 8)
+
+  const primaryCandidates = scored.filter((candidate) => candidate.score >= 30).slice(0, 8)
+  // 作者自建与导入的技能基准分只有 18，没字面命中触发词时永远进不了候选；
+  // 只要它声明了本轮意图与阶段，就应该有机会被看到。
+  const authorFallbackCandidates = scored
+    .filter((candidate) => isAuthorSkill(candidate.skill) && candidate.score < 30 && candidate.score >= 18)
+    .slice(0, 3)
+  const candidates = [...pinnedCandidates, ...primaryCandidates, ...authorFallbackCandidates]
 
   if (candidates.length === 0) {
     return {
@@ -335,7 +375,7 @@ export function routeSkills(input: {
     }
   }
 
-  const explicitSignals = candidates.filter((candidate) => candidate.reasonCodes.length > 0).length
+  const explicitSignals = primaryCandidates.filter((candidate) => candidate.reasonCodes.length > 0).length
   const maxLoaded = explicitSignals >= 2 || input.intent === 'write' || input.intent === 'plan' ? 3 : 2
   const selectedCandidates: SkillRouteCandidate[] = []
   const foundationIds = new Set(['cn-webfiction-draft.v3', 'cn-scene-task.v3'])
@@ -345,18 +385,27 @@ export function routeSkills(input: {
     return candidate.score
   }
   const explicitlyMatchedSpecialists = input.intent === 'write'
-    ? candidates
+    ? primaryCandidates
         .filter((candidate) => candidate.reasonCodes.length > 0 && candidate.score >= 40 && !foundationIds.has(candidate.skill.id))
         .sort((left, right) => specialistReasonPriority(right) - specialistReasonPriority(left) || right.score - left.score)
         .slice(0, maxLoaded - 1)
     : []
+  // 内置基础技法基准分高达 46~52，不给作者技能保底槽位的话它们会被永远挤出。
+  const authorPool = [...primaryCandidates, ...authorFallbackCandidates].filter((candidate) => isAuthorSkill(candidate.skill))
+  const authorReserved = authorPool.slice(0, authorPool.some((candidate) => candidate.reasonCodes.length > 0) ? 2 : 1)
   const orderedCandidates = [
-    ...explicitlyMatchedSpecialists,
-    ...candidates.filter((candidate) => !explicitlyMatchedSpecialists.includes(candidate)),
+    ...pinnedCandidates,
+    ...authorReserved,
+    ...explicitlyMatchedSpecialists.filter((candidate) => !authorReserved.includes(candidate)),
+    ...primaryCandidates.filter((candidate) => !authorReserved.includes(candidate) && !explicitlyMatchedSpecialists.includes(candidate)),
+    ...authorFallbackCandidates.filter((candidate) => !authorReserved.includes(candidate)),
   ]
+  const hardCap = Math.min(6, maxLoaded + pinnedCandidates.length + authorReserved.length)
   for (const candidate of orderedCandidates) {
-    if (selectedCandidates.length >= maxLoaded) break
-    const conflicts = selectedCandidates.some((selected) => selected.skill.conflicts.includes(candidate.skill.id) || candidate.skill.conflicts.includes(selected.skill.id))
+    if (selectedCandidates.length >= hardCap) break
+    // 手动指定不参与冲突让位：作者已经表态要用它。
+    const pinnedCandidate = pinnedIds.has(candidate.skill.id)
+    const conflicts = !pinnedCandidate && selectedCandidates.some((selected) => selected.skill.conflicts.includes(candidate.skill.id) || candidate.skill.conflicts.includes(selected.skill.id))
     if (!conflicts) selectedCandidates.push(candidate)
   }
 
@@ -380,26 +429,76 @@ export function buildSkillManifestDigest(skills: AgentSkill[], freedom: Creative
   return `${freedomGuidance(freedom)}\n本轮 Skill Router 候选：\n${listed}`
 }
 
-export function buildSkillExecutionDigest(decision: SkillRouteDecision, freedom: CreativeFreedom): string {
+export type SkillDigestOptions = {
+  /** 当前作品已启用的全部技能；传入后会向模型公开“本轮未加载”的技能清单。 */
+  availableSkills?: readonly AgentSkill[]
+  /** 作者本轮手动指定的技能 id。 */
+  pinnedSkillIds?: readonly string[]
+}
+
+function skillOwnerLabel(skill: AgentSkill): string {
+  if (skill.owner === 'chevoink') return '内置技能'
+  if (skill.owner === 'user') return '作者技能'
+  if (skill.owner === 'agent') return 'Agent 创建'
+  return '导入技能'
+}
+
+/**
+ * 作者自建、尤其是导入的技能，如果本轮没被路由命中，模型对它们零感知，
+ * 也就永远不知道什么时候应该用。这里把它们以元数据形式公开，并给出加载判断规则。
+ */
+function buildUnloadedSkillGuide(decision: SkillRouteDecision, options: SkillDigestOptions): string | null {
+  const available = options.availableSkills
+  if (!available || available.length === 0) return null
+  const loadedIds = new Set(decision.selected.map((skill) => skill.id))
+  const rest = available.filter((skill) => !loadedIds.has(skill.id) && skill.status === 'active' && Boolean(resolveSkillResource(skill, decision.phase)))
+  if (rest.length === 0) return null
+
+  const lines = [...rest]
+    .sort((left, right) => Number(isAuthorSkill(right)) - Number(isAuthorSkill(left)) || right.priority - left.priority)
+    .slice(0, 14)
+    .map((skill) => {
+      const triggers = (skill.triggerLabels ?? []).slice(0, 3)
+      const triggerText = triggers.length ? `｜适用：${triggers.join('、')}` : ''
+      return `- ${skill.id}@${skill.version}（${skill.name}｜${skillOwnerLabel(skill)}｜阶段 ${skill.phases.join('/')}${triggerText}）：${skill.synopsis}`
+    })
+
+  return `本轮未加载、但当前作品已启用的技能：
+${lines.join('\n')}
+使用判断：作者点名某个技能，或本轮需求与某条技能的描述/适用场景明确吻合时，先用 skill_load 按当前阶段 ${decision.phase} 加载它再动手；同类能力下作者技能与导入技能优先于内置技能。不要为了展示能力批量加载。`
+}
+
+export function buildSkillExecutionDigest(decision: SkillRouteDecision, freedom: CreativeFreedom, options: SkillDigestOptions = {}): string {
+  const unloadedGuide = buildUnloadedSkillGuide(decision, options)
   if (decision.selected.length === 0) {
-    return `${freedomGuidance(freedom)}\n本轮没有命中需要加载的创作 Skill；不得为了展示能力强行套用写作模板。`
+    return [
+      `${freedomGuidance(freedom)}\n本轮没有命中需要加载的创作 Skill；不得为了展示能力强行套用写作模板。`,
+      unloadedGuide,
+    ].filter((block): block is string => Boolean(block)).join('\n\n')
   }
 
+  const pinned = new Set(options.pinnedSkillIds ?? [])
   const loaded = decision.selected.map((skill) => {
-    const resource = skill.resources[decision.phase]
-    return resource ? `[Skill ${skill.id}@${skill.version} / ${decision.phase} / soft]\n${resource}` : null
+    const resolved = resolveSkillResource(skill, decision.phase)
+    if (!resolved) return null
+    const phaseLabel = resolved.phase === decision.phase ? decision.phase : `${resolved.phase}（本轮阶段 ${decision.phase} 未提供专用说明）`
+    const pinnedMark = pinned.has(skill.id) ? ' / 作者本轮手动指定' : ''
+    return `[Skill ${skill.id}@${skill.version} / ${phaseLabel} / soft${pinnedMark}]\n${resolved.resource}`
   }).filter((item): item is string => Boolean(item)).join('\n\n')
 
-  return `${freedomGuidance(freedom)}
+  const head = `${freedomGuidance(freedom)}
 以下 Skill 已由服务端确定性路由并完整加载。它们是本轮工作方法，不是可忽略的候选，也不是逐项照抄到正文的检查表：
 ${loaded}
 共同边界：不得覆盖作者硬约束、故事事实、权限与版本校验；发生冲突时作者要求与有来源的故事证据优先。`
+
+  return [head, unloadedGuide].filter((block): block is string => Boolean(block)).join('\n\n')
 }
 
 export function loadSkill(skillId: string, phase: SkillPhase, freedom: CreativeFreedom, catalog: readonly AgentSkill[] = skillCatalog): string | null {
   const resolvedId = legacySkillAliases[skillId] ?? skillId
   const skill = catalog.find((item) => item.id === resolvedId)
-  const resource = skill?.resources[phase]
-  if (!skill || !resource) return null
-  return `[Skill ${skill.id}@${skill.version} / ${phase} / soft]\n${freedomGuidance(freedom)}\n${resource}\n边界：不得覆盖用户硬约束、故事证据、权限和版本校验；不要把本说明原样写入小说。`
+  if (!skill) return null
+  const resolved = resolveSkillResource(skill, phase)
+  if (!resolved) return null
+  return `[Skill ${skill.id}@${skill.version} / ${resolved.phase} / soft]\n${freedomGuidance(freedom)}\n${resolved.resource}\n边界：不得覆盖用户硬约束、故事证据、权限和版本校验；不要把本说明原样写入小说。`
 }

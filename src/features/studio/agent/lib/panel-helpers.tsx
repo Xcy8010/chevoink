@@ -17,6 +17,17 @@ export const phaseLabel: Record<string, string> = {
   cancelled: '已取消',
 }
 
+/** 技能阶段文案：与技能区、输入框「+」菜单保持同一套中文名 */
+export const skillPhaseLabel: Record<string, string> = {
+  research: '调研',
+  plan: '规划',
+  scene: '场景',
+  draft: '正文',
+  critique: '审阅',
+  revision: '修订',
+  commit: '落库',
+}
+
 /** 提取消息纯文本（复制用） */
 export function getMessageText(parts: AgentUIMessage['parts']): string {
   return parts

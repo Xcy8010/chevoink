@@ -17,6 +17,7 @@ import {
   SquarePen,
   Trash2,
   Undo2,
+  Wrench,
   X,
 } from 'lucide-react'
 
@@ -41,6 +42,7 @@ import InviteCreditsDialog from '@/features/account/InviteCreditsDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import DangerConfirmDialog from '../../components/DangerConfirmDialog'
 import ImageLightbox from '../../components/ImageLightbox'
+import { getNovelSkills } from '../../api'
 
 import {
   AgentApiError,
@@ -58,7 +60,7 @@ import {
   stopAgentLoopRun,
 } from '../agentApi'
 import { isRunActive, readSessionMessagesCache, useAgentStore, type ComposerReference } from '../agentStore'
-import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages } from '../lib/panel-helpers'
+import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages, skillPhaseLabel } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
@@ -129,6 +131,8 @@ type AgentPanelProps = {
       期间 sessionId 尚未定案，禁止渲染空态欢迎页，避免欢迎页在中间态显示数百毫秒 */
   sessionResolving?: boolean
   onOpenStudioSettings?: (section: 'general' | 'models' | 'operations' | 'archives') => void
+  /** 打开技能区：输入框「+」菜单里发现需要新建/导入/启用技能时直达。 */
+  onOpenSkills?: () => void
 }
 
 /** 无缓存首次拉取时图标流光的保底展示时长（一个完整扫光周期），避免快请求下只闪一下 */
@@ -167,6 +171,7 @@ export function AgentPanel({
   showEmptySuggestions = true,
   sessionResolving = false,
   onOpenStudioSettings,
+  onOpenSkills,
   referenceOptions = [],
 }: AgentPanelProps) {
   const runId = useAgentStore((state) => state.runId)
@@ -182,6 +187,8 @@ export function AgentPanel({
   const activitiesVersion = useAgentStore((state) => state.activitiesVersion)
   const todos = useAgentStore((state) => state.todos)
   const todosVersion = useAgentStore((state) => state.todosVersion)
+  // 本轮服务端技能路由结果：让作者看得见 Agent 到底用了哪些技能
+  const skillRoute = useAgentStore((state) => state.skillRoute)
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
 
@@ -294,6 +301,18 @@ export function AgentPanel({
     enabled: inviteDialogOpen || quotaDialogOpen,
   })
   const customModelsQuery = useQuery({ queryKey: ['credits', 'custom-models'], queryFn: fetchCustomModels, staleTime: 30_000 })
+  // 与技能区共享同一份缓存；skill2 未开通时接口直接报错，此处静默让「+」菜单不展示技能分组
+  const skillsQuery = useQuery({
+    queryKey: ['studio', novelId, 'skills'],
+    queryFn: () => getNovelSkills(novelId),
+    staleTime: 30_000,
+    retry: false,
+  })
+  // 只列出真正可被路由装载的技能：未启用或未发布的版本手动指定也不会生效
+  const pinnableSkills = useMemo(
+    () => (skillsQuery.data?.items ?? []).filter((skill) => skill.enabled && skill.status === 'active'),
+    [skillsQuery.data],
+  )
   // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
   const awaiting =
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
@@ -656,7 +675,7 @@ export function AgentPanel({
   useKeyboardPushScroll(scrollRef)
 
   const handleSend = useCallback(
-    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode) => {
+    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => {
       setActionError(null)
       // 用户主动发言视为回到对话最新处，重新开启自动跟随
       pinnedToBottomRef.current = true
@@ -681,6 +700,8 @@ export function AgentPanel({
             modelTier,
             customModelId: modelTier === 'custom' ? customModelId ?? undefined : undefined,
             reasoningEffort: selectedReasoningEffort,
+            // 作者在「+」菜单里点选的技能：本轮绕过评分门槛必定装载
+            pinnedSkillIds: pinnedSkillIds.length > 0 ? pinnedSkillIds : undefined,
           })
         let result: Awaited<ReturnType<typeof startAgentLoopRun>>
         try {
@@ -1474,6 +1495,14 @@ export function AgentPanel({
       ) : null}
 
       {/* 输入区 */}
+      {skillRoute && skillRoute.selected.length > 0 ? (
+        <div className="mx-4 mb-2 flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
+          <Wrench className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 flex-1 truncate" title={`${skillPhaseLabel[skillRoute.phase] ?? skillRoute.phase}阶段已装载：${skillRoute.selected.map((skill) => skill.name).join('、')}`}>
+            本轮技能：{skillRoute.selected.map((skill) => skill.name).join('、')}
+          </span>
+        </div>
+      ) : null}
       {showCreditWarning && creditWarning ? (
         <div className="mx-4 mb-2 border-l-2 border-amber-500 bg-[var(--surface-muted)] px-3 py-2.5 text-xs text-[var(--text-secondary)]">
           <div className="flex items-start gap-3">
@@ -1495,7 +1524,7 @@ export function AgentPanel({
           novelId={novelId}
           running={active}
           disabled={conversationLoading}
-          onSend={(prompt, attachments, freedom, selectedQualityMode) => void handleSend(prompt, attachments, freedom, selectedQualityMode)}
+          onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds) => void handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
           qualityMode={qualityMode}
@@ -1513,6 +1542,8 @@ export function AgentPanel({
           reasoningSelections={reasoningSelections}
           onReasoningEffortChange={(modelKey, effort) => setReasoningSelections((value) => ({ ...value, [modelKey]: effort }))}
           referenceOptions={referenceOptions}
+          skills={pinnableSkills}
+          onOpenSkillManager={onOpenSkills}
           onOpenModelSettings={() => onOpenStudioSettings?.('models')}
           onStop={() => void handleStop()}
         />
