@@ -4,17 +4,17 @@
 
 An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.0** organizes genre research, Story Charter, Skill OS, scene tasks, long-form memory, a human-quality gate, and versioned tool execution into one traceable creative workflow. Readers can discover, follow, listen to, and discuss books. The product is available on the web and as an Android app (Capacitor shell + in-app updates).
 
-🌐 Live site: <https://chevoink.chevolink.com>
+Live site: <https://chevoink.chevolink.com>
 
 [![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#-license)
-[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#%EF%B8%8F-tech-stack)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#%EF%B8%8F-tech-stack)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#license)
+[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#tech-stack)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#tech-stack)
 [![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
 [![QQ Group](https://img.shields.io/badge/QQ%20Group-158443235-blue?logo=tencentqq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
 
-## 🖥️ Product Preview
+## Product Preview
 
 **Desktop**
 
@@ -34,7 +34,7 @@ An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.
   </tr>
 </table>
 
-## 🤖 Chevoink Agent 3.0
+## Chevoink Agent 3.0
 
 Agent 3.0 is a stateful creative agent that keeps working with one novel rather than a one-shot prompt generator. It identifies the task and story phase, loads two or three relevant Skills on demand, builds a cacheable Research Dossier when research is justified, and uses the Story Compiler to turn reader promises, character desires, obstacles, choices, costs, and state transitions into a scene task. Continuity and human-quality checks run before a revision-guarded atomic write, ChangeSet, and durable event stream commit the result to the workspace.
 
@@ -91,7 +91,7 @@ flowchart LR
     SSE[SSE Event Stream<br/>persistence·resume·replay]
   end
   subgraph Data[Data]
-    PG[(PostgreSQL<br/>85 Models·48 Migrations)]
+    PG[(PostgreSQL<br/>86 Models·54 Migrations)]
     FILES[(Managed uploads and exports)]
   end
   subgraph Providers[Providers]
@@ -120,22 +120,26 @@ flowchart LR
 
 The deterministic evaluation suite freezes 24 Chinese web-fiction scenarios across six genres, nine task classes, and twelve quality signals. CI stores a report carrying the dataset hash, code SHA, model, and Skill version. Automated metrics diagnose regressions; they do not replace real author outcomes or anonymous review by at least three target-genre readers/editors.
 
-## 🧭 Quick Navigation
+### Long-running tasks
+
+The Agent keeps working on long tasks such as "write the whole book": as long as the task is unfinished and real progress is being made, it resumes automatically. Built-in multi-layer runaway protection prevents repeated work and wasted Credits.
+
+## Quick Navigation
 
 | What you want | Where to go |
 | --- | --- |
 | Try the product now | [Live site](https://chevoink.chevolink.com) (web, no install needed) |
-| Install the Android app | [Download & install guide](#-download--install-android-app) · [Releases page](https://github.com/Xcy8010/chevoink/releases) |
-| Learn how to use it | [User guide](#-user-guide) |
-| Explore features | [Feature overview](#-feature-overview) |
-| Understand Agent 3.0 | [Runtime flow & architecture](#-chevoink-agent-30) · [Agent 3.0 proposal (Chinese)](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |
-| Run it locally | [Quick start](#-quick-start) |
-| Understand the architecture | [Tech stack](#%EF%B8%8F-tech-stack) · [Directory structure](#-directory-structure) |
+| Install the Android app | [Download & install guide](#download--install-android-app) · [Releases page](https://github.com/Xcy8010/chevoink/releases) |
+| Learn how to use it | [User guide](#user-guide) |
+| Explore features | [Feature overview](#feature-overview) |
+| Understand Agent 3.0 | [Runtime flow & architecture](#chevoink-agent-30) · [Agent 3.0 proposal (Chinese)](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |
+| Run it locally | [Quick start](#quick-start) |
+| Understand the architecture | [Tech stack](#tech-stack) · [Directory structure](#directory-structure) |
 | Deep engineering details | [Engineering Documentation](./docs/ENGINEERING.en.md) ([中文](./docs/ENGINEERING.md)) · [Development Standards](./docs/DEVELOPMENT-STANDARDS.en.md) ([中文](./docs/DEVELOPMENT-STANDARDS.md)) · [Agent evaluation guide (Chinese)](./tests/agent-evals/README.md) |
-| Deploy to production | [Deployment & releases](#-deployment--releases) · [Environment variables](#-environment-variables) |
-| Chat with us | [QQ group 158443235](#-community) |
+| Deploy to production | [Deployment & releases](#deployment--releases) · [Environment variables](#environment-variables) |
+| Chat with us | [QQ group 158443235](#community) |
 
-## 📥 Download & Install (Android App)
+## Download & Install (Android App)
 
 Pick either channel:
 
@@ -148,7 +152,7 @@ Pick either channel:
 
 No manual upgrades needed afterwards: the app checks for new versions on launch, and the in-app banner / settings page will prompt and guide the update. Web users always get the latest version by opening the live site.
 
-## 📖 User Guide
+## User Guide
 
 ### Readers
 
@@ -177,7 +181,7 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 - Studio warns at 20%, 10%, and 5% remaining. Exhaustion safely stops the task; [`/account/usage`](/account/usage) shows the plan, balances, and itemized ledger.
 - The Agent defaults to the Speed tier (1.0x) with high reasoning. Each built-in or custom model exposes only its supported effort levels. Standard 1.1x, Performance 1.8x, and Ultimate 4.8x remain unavailable until an administrator fully configures their URL, API key, and model. Authors may also use an OpenAI-compatible BYOK model; its key is encrypted and never revealed again.
 
-## ✨ Feature Overview
+## Feature Overview
 
 - **Reading**: bookstore home (carousels, rankings, category picks), cloud-synced bookshelf & reading progress, immersive reader, TTS narration
 - **Studio**: Codex-inspired Work/IDE workspace; Agent 3.0 with Research Dossier, Skill OS, Story Compiler, Chapter Bridge, human-quality gate, licensed craft retrieval, work-private Style DNA, first-three-chapter prototyping, and blind-review pipeline; cross-novel task search/pin/archive; branch/diff/conflict-safe merge; embedded subagents; schedules; permission sandbox; replay; multimodal attachments; web/in-platform research; cross-session memory; relationship graph; AI covers; and scoped ZIP export
@@ -186,18 +190,18 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 - **Admin console**: data dashboard, user/novel/content governance, encrypted built-in-model configuration, single-user and bulk Credits reset/pause controls, token ranking with user/novel/task drill-down, web-search and image-generation call counts, mobile-friendly
 - **Android client**: Capacitor shell loading the remote site, in-app update checks and APK distribution
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 | --- | --- |
 | Frontend | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | Backend | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek text generation · Zhipu GLM-4.1V image understanding · OpenAI-compatible image generation · Edge TTS speech synthesis · Bocha web search (multi-engine fallback) |
-| Agent | Agent 3.0 Runtime (`api/lib/agent`): unified Loop, 98 governed tools, Skill OS 3.0, Story Compiler, layered memory, quality gate, embedded subagents, and durable SSE events |
-| Testing | Vitest + Supertest + Testing Library (unit, PostgreSQL integration, real DOM interaction, and frozen Agent evals; CI runs 63 files / 339 tests with coverage gates) |
+| Agent | Agent 3.0 Runtime (`api/lib/agent`): unified Loop, 98 governed tools, Skill OS 3.0, Story Compiler, layered memory, quality gate, embedded subagents, long-task auto-resume with runaway protection, and durable SSE events |
+| Testing | Vitest + Supertest + Testing Library (unit, PostgreSQL integration, real DOM interaction, and frozen Agent evals; CI runs 70 files / 402 tests with coverage gates) |
 | Deployment | PM2 + nginx (production) · GitHub Actions CI (type check / lint / unit / integration tests on push) · Android Capacitor shell project (separate directory) |
 
-## 📁 Directory Structure
+## Directory Structure
 
 ```
 ├── api/               # Express backend (routes, lib business modules, config)
@@ -206,13 +210,13 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ├── prisma/            # Data model schema, migrations, seed data
 ├── tests/             # Unit, PostgreSQL integration, UI interaction, Chevoink-CN-Fiction-Eval
 ├── docs/              # Engineering docs (ENGINEERING & DEVELOPMENT-STANDARDS, both bilingual)
-├── plan/              # 28 phase proposals + 8 parallel execution checklists
+├── plan/              # 28 phase proposals (incl. Agent budget & loop protection) + 8 parallel execution checklists
 ├── deploy/            # nginx config & server deployment scripts
 ├── scripts/           # Deployment / push / data cleanup scripts
 └── public/            # Static assets
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 # 1. Install dependencies
@@ -243,27 +247,27 @@ Common scripts:
 | `npm run build` | Production build |
 | `npm run deploy:prod` | One-click deploy to the production server |
 
-## 📦 Deployment & Releases
+## Deployment & Releases
 
 - **Production deploy**: `npm run deploy:prod` (local gates: type check → tests → production-dependency security audit → build; then package & upload → remote migrate/build → PM2 reload → health check)
 - **Push to GitHub**: `powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`, supports `-Tag v1.50 -ReleaseAsset <apk path>` to tag and publish a Release (with the Android APK attached)
 - **Android APK**: built by the separate Capacitor shell project, distributed via the in-app update banner / settings-page update check
 
-## 🔐 Environment Variables
+## Environment Variables
 
 All secrets are injected via `.env` (database, session signing, Tencent Cloud SMS, AI services, etc.); the template is at [.env.example](.env.example). Model API keys are encrypted at rest with AES-256-GCM. Production must use a dedicated `MODEL_CONFIG_ENCRYPTION_KEY`; back it up and rotate it deliberately, because losing it makes stored keys undecryptable. Sensitive files such as `.env`, certificates and keystores are excluded by `.gitignore` and never enter the repository.
 
-## 💬 Community
+## Community
 
 Join the **Chevoink community group** (QQ group: `158443235`) to discuss the experience, report issues or contribute:
 
-👉 [Join the QQ group](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
+[Join the QQ group](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
 
-## 📄 License
+## License
 
 This project is open-sourced under the [GNU AGPL-3.0 License](LICENSE): free to use, modify, and distribute. **If you provide it as an online service (SaaS / web server), you must offer the corresponding, modifiable source code to that service's users.** Closed-source commercial deployment requires a separate [commercial licence](./docs/COMMERCIAL-LICENSE.md) from the original author.
 
-## 🙏 Special Thanks
+## Special Thanks
 
 Chevoink is independently designed and implemented. The following open-source projects provided important references during the evolution of Agent 3.0, the novel domain model, and the Studio experience:
 

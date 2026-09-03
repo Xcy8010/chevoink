@@ -4,17 +4,17 @@
 
 这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台。**Chevoink Agent 3.0** 把题材研究、Story Charter、Skill OS、场景任务、长篇记忆、人类感质量门与版本化工具执行组织成一条可追踪创作流水线；读者可以在书城发现、追更、听书，社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
 
-🌐 线上地址：<https://chevoink.chevolink.com>
+线上地址：<https://chevoink.chevolink.com>
 
 [![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#-license)
-[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#-技术栈)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#-技术栈)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#license)
+[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#技术栈)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#技术栈)
 [![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
 [![QQ 交流群](https://img.shields.io/badge/QQ%E4%BA%A4%E6%B5%81%E7%BE%A4-158443235-blue?logo=tencentqq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
 
-## 🖥️ 产品预览
+## 产品预览
 
 **桌面端**
 
@@ -34,7 +34,7 @@
   </tr>
 </table>
 
-## 🤖 Chevoink Agent 3.0
+## Chevoink Agent 3.0
 
 Agent 3.0 不是单次提示词生成器，而是围绕一部作品持续工作的有状态创作 Agent。它会先识别任务和作品阶段，再按需加载 2–3 个 Skill；需要调研时建立可缓存的 Research Dossier，需要写作时由 Story Compiler 把读者承诺、人物欲望、阻力、选择、代价与状态变化编译为场景任务；写后经过连续性与人类感质量检查，最后通过带 revision 的原子写入、ChangeSet 和事件流提交到工作区。
 
@@ -91,7 +91,7 @@ flowchart LR
     SSE[SSE Event Stream<br/>持久化·续传·回放]
   end
   subgraph Data[数据层]
-    PG[(PostgreSQL<br/>85 Models·48 Migrations)]
+    PG[(PostgreSQL<br/>86 Models·54 Migrations)]
     FILES[(受管上传与导出)]
   end
   subgraph Providers[外部能力]
@@ -120,22 +120,26 @@ flowchart LR
 
 自动评测覆盖 24 个冻结中文网文场景、6 类题材、9 类任务和 12 类质量信号；CI 会保存带数据集 Hash、代码 SHA、模型与 Skill 版本的评测快照。自动指标用于回归定位，不能替代真实作者数据和至少三位目标题材读者/编辑的匿名盲评。
 
-## 🧭 快速导航
+### 长任务连续执行
+
+Agent 可以持续执行「写完整本书」这类长任务：任务没做完、还在产出真实进展时会自动续跑；同时内置多层防失控保护，避免重复劳动和 Credits 浪费。
+
+## 快速导航
 
 | 想做什么 | 去哪里 |
 | --- | --- |
 | 直接体验产品 | [线上地址](https://chevoink.chevolink.com)（网页端，无需安装） |
-| 安装安卓 APP | [下载与安装教程](#-下载与安装安卓-app) · [Releases 页面](https://github.com/Xcy8010/chevoink/releases) |
-| 了解怎么用 | [使用教程](#-使用教程) |
-| 了解功能 | [功能一览](#-功能一览) |
-| 了解 Agent 3.0 | [运行流程与系统架构](#-chevoink-agent-30) · [Agent 3.0 方案](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |
-| 本地跑起来 | [快速开始](#-快速开始) |
-| 了解架构 | [技术栈](#-技术栈) · [目录结构](#-目录结构) |
+| 安装安卓 APP | [下载与安装教程](#下载与安装安卓-app) · [Releases 页面](https://github.com/Xcy8010/chevoink/releases) |
+| 了解怎么用 | [使用教程](#使用教程) |
+| 了解功能 | [功能一览](#功能一览) |
+| 了解 Agent 3.0 | [运行流程与系统架构](#chevoink-agent-30) · [Agent 3.0 方案](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |
+| 本地跑起来 | [快速开始](#快速开始) |
+| 了解架构 | [技术栈](#技术栈) · [目录结构](#目录结构) |
 | 深入工程细节 | [工程文档](./docs/ENGINEERING.md)（[English](./docs/ENGINEERING.en.md)）· [开发规范](./docs/DEVELOPMENT-STANDARDS.md)（[English](./docs/DEVELOPMENT-STANDARDS.en.md)）· [Agent 评测说明](./tests/agent-evals/README.md) |
-| 部署上线 | [部署与发布](#-部署与发布) · [环境变量](#-环境变量) |
-| 交流讨论 | [QQ 交流群 158443235](#-交流群) |
+| 部署上线 | [部署与发布](#部署与发布) · [环境变量](#环境变量) |
+| 交流讨论 | [QQ 交流群 158443235](#交流群) |
 
-## 📥 下载与安装（安卓 APP）
+## 下载与安装（安卓 APP）
 
 两种方式任选其一：
 
@@ -148,7 +152,7 @@ flowchart LR
 
 安装后无需手动升级：APP 启动时会自动检测新版本，站内条幅 / 设置页会提示更新并引导下载。网页端用户打开线上地址即是最新版。
 
-## 📖 使用教程
+## 使用教程
 
 ### 读者
 
@@ -177,7 +181,7 @@ flowchart LR
 - 余额低于 20% / 10% / 5% 时创作区提醒；用尽后安全停止任务，并可在 [`/account/usage`](/account/usage) 查看套餐、余额和逐笔记录。
 - Agent 默认使用“极速”档（1.0x）和 high 推理强度；每个内置或自定义模型只显示自身支持的推理档位。标准 1.1x、性能 1.8x、极致 4.8x 需管理员完整配置 URL、API Key 与模型后才可使用。用户也可配置自带密钥的 OpenAI 兼容模型，密钥只加密保存、不可回显。
 
-## ✨ 功能一览
+## 功能一览
 
 - **阅读区**：书城首页（轮播、榜单、分类推荐）、书架与阅读进度云同步、沉浸式阅读器、TTS 听书
 - **创作区**：Codex 风格 Work/IDE 工作区、Agent 3.0（Research Dossier、Skill OS、Story Compiler、Chapter Bridge、人类感质量门、合法技法检索、作者私有 Style DNA、前三章试制与专家盲评链路）、跨作品任务搜索/置顶/归档、分支/差异/冲突安全合并、内嵌子 Agent、定时任务、权限沙箱、运行回放、多模态附件、联网与站内调研、跨会话记忆、作品关系网、AI 封面与范围化 ZIP 导出
@@ -186,18 +190,18 @@ flowchart LR
 - **管理后台**：数据看板、用户/作品/内容治理、内置模型与加密密钥管理、Credits 单用户与批量重置/暂停、Token 用量排行与创作任务下钻、联网/生图调用统计、移动端适配
 - **安卓客户端**：Capacitor 壳加载远程站点，应用内检测更新与 APK 分发
 
-## 🛠️ 技术栈
+## 技术栈
 
 | 层 | 技术 |
 | --- | --- |
 | 前端 | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | 后端 | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek 文本生成 · 智谱 GLM-4.1V 图像理解 · OpenAI 兼容图像生成 · Edge TTS 语音合成 · 博查联网搜索（多引擎降级） |
-| Agent | Agent 3.0 Runtime（`api/lib/agent`）：统一 Loop、98 个受治理工具、Skill OS 3.0、Story Compiler、分层记忆、质量门、内嵌子 Agent 与持久化 SSE 事件流 |
-| 测试 | Vitest + Supertest + Testing Library（单元、PostgreSQL 集成、真实 DOM 交互与冻结 Agent 评测；CI 63 个测试文件 / 339 项测试并执行覆盖率门禁） |
+| Agent | Agent 3.0 Runtime（`api/lib/agent`）：统一 Loop、98 个受治理工具、Skill OS 3.0、Story Compiler、分层记忆、质量门、内嵌子 Agent、长任务自动续跑与防失控保护、持久化 SSE 事件流 |
+| 测试 | Vitest + Supertest + Testing Library（单元、PostgreSQL 集成、真实 DOM 交互与冻结 Agent 评测；CI 70 个测试文件 / 402 项测试并执行覆盖率门禁） |
 | 部署 | PM2 + nginx（生产）· GitHub Actions CI（push 即跑类型检查/lint/单测/集成测试）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
-## 📁 目录结构
+## 目录结构
 
 ```
 ├── api/               # Express 后端（routes 路由、lib 业务模块、config 环境配置）
@@ -206,13 +210,13 @@ flowchart LR
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
 ├── tests/             # 单元、PostgreSQL 集成、UI 交互与 Chevoink-CN-Fiction-Eval
 ├── docs/              # 工程文档（ENGINEERING 与 DEVELOPMENT-STANDARDS，均中英文双语）
-├── plan/              # 28 篇阶段方案快照 + 8 份并行执行清单
+├── plan/              # 28 篇阶段方案快照（含 Agent 预算与防死循环方案）+ 8 份并行执行清单
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
 └── public/            # 静态资源
 ```
 
-## 🚀 快速开始
+## 快速开始
 
 ```bash
 # 1. 安装依赖
@@ -243,27 +247,27 @@ npm run dev
 | `npm run build` | 生产构建 |
 | `npm run deploy:prod` | 一键部署到生产服务器 |
 
-## 📦 部署与发布
+## 部署与发布
 
 - **生产部署**：`npm run deploy:prod`（本地闸门：类型检查 → 测试 → 生产依赖安全审计 → 构建；然后打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
 - **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.50 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
-## 🔐 环境变量
+## 环境变量
 
 所有密钥通过 `.env` 注入（数据库、会话签名、腾讯云短信、AI 服务等），模板见 [.env.example](.env.example)。模型配置的 API Key 使用 AES-256-GCM 加密落库，生产环境应单独设置 `MODEL_CONFIG_ENCRYPTION_KEY`；该密钥只能备份和轮换，不能丢失。`.env`、证书、密钥库等敏感文件均已被 `.gitignore` 排除，不会进入仓库。
 
-## 💬 交流群
+## 交流群
 
 欢迎加入 **启创墨域交流群**（QQ 群号：`158443235`），讨论使用体验、反馈问题或参与共建：
 
-👉 [点击加入 QQ 交流群](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
+[点击加入 QQ 交流群](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
 
-## 📄 License
+## License
 
 本项目基于 [GNU AGPL-3.0 License](LICENSE) 开源：可自由使用、修改与分发；**若作为在线服务（SaaS / 网络服务器）对外提供，须向该服务用户提供对应、可修改的源代码**。需要闭源商业化部署时，请另行取得原作者的[商业授权](./docs/COMMERCIAL-LICENSE.md)。
 
-## 🙏 特别鸣谢
+## 特别鸣谢
 
 Chevoink 是独立设计与实现的开源项目。在 Agent 3.0、小说工程结构和创作区体验的演进过程中，以下优秀开源项目提供了重要参考：
 

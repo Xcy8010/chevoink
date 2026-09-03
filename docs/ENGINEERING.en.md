@@ -4,7 +4,7 @@
 > All content is grounded in the current repository code and the real planning documents under `plan/`, and is updated continuously as the project evolves.
 > `plan/00`–`plan/22` are true planning snapshots of landed phases; `plan/23` defines the Agent 3.0 product and evaluation baseline. For the mapping between historical file paths and the current implementation, see [Section 9](#9-plan-document-index).
 >
-> Last updated: 2026-09-02. Agent 3.0 is in public beta with nearly 200 participants. Engineering scope is frozen; real blind-review, retention, and commercialization metrics remain gated by Section 11.
+> Last updated: 2026-09-04. Agent long-task protection (plan/18) has landed: checkpoint auto-resume, repeat-signature circuit breaker, channel repetition detection, and dual wall clocks (see [1.9](#19-agent-long-running-tasks--runaway-protection-plan18)). Agent 3.0 is in public beta with nearly 200 participants. Engineering scope is frozen; real blind-review, retention, and commercialization metrics remain gated by Section 11.
 >
 > Language: English | [简体中文](./ENGINEERING.md)
 
@@ -60,8 +60,8 @@
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
-                           │ PostgreSQL 16 (85 tables ·          │
-                           │ 48 migrations)                      │
+                           │ PostgreSQL 16 (86 tables ·          │
+                           │ 54 migrations)                      │
                            └─────────────────────────────────────┘
 ```
 
@@ -83,7 +83,7 @@ Frontend and backend share type contracts through `shared/contracts/`, including
 - **Route layer** `api/routes/`: 16 route modules; all inputs are validated via `parseBody` + zod schemas; unified `{ success, data }` / `{ code, message }` response structures.
 - **Data layer** `api/lib/data/`: Prisma access wrappers with data-layer fallback validation (e.g. privacy-level enum fallback).
 - **Agent engine** `api/lib/agent/` (corresponds to `plan/10`, `plan/13`):
-  - `loop.ts` execution kernel (executeAgentRun) + `active-runs.ts` run registry;
+  - `loop.ts` execution kernel (executeAgentRun) + `active-runs.ts` run registry; long-task guard modules `checkpoint.ts` (checkpoint evaluation / budget clamp), `tool-signature.ts` (repeat signatures), and `repeat-detect.ts` (channel repetition) — see [1.9](#19-agent-long-running-tasks--runaway-protection-plan18);
   - `run-service.ts` run lifecycle & session CRUD, `session-messages.ts` messages/rollback, `plan-artifacts.ts` plan artifacts;
   - `tools/`: 98 registered tools (see [1.5](#15-agent-30-tools-and-runtime-pipeline-98-tools)) spanning read/write, research, Skills, Story Compiler, quality governance, subagents, branches, and schedules; `governance.ts` freezes risk classifications and postconditions for every tool;
   - `permissions.ts` permission guards & budgets (per run: ask_user 3 / web search 5 / web deep-read 8 / platform search 5 / platform deep-read 8);
@@ -134,7 +134,7 @@ Every Agent 3.0 run follows a fixed pipeline: task specification → permission/
 
 ### 1.6 Data Model Overview (prisma/schema.prisma)
 
-85 tables, organized by domain (core tables listed below; the schema is authoritative):
+86 tables, organized by domain (core tables listed below; the schema is authoritative):
 
 - **Accounts & Credits**: User, SmsVerificationCode, AdminAuditLog, CreditAccount, CreditLedgerEntry, ReferralCode, ReferralRedemption, CreditSystemSetting, AiModelConfig
 - **Writing & reading**: Novel, Chapter, CoverAsset, ReadingProgress, NovelRead, ParagraphUnderline, NovelFavorite
@@ -163,6 +163,16 @@ Every Agent 3.0 run follows a fixed pipeline: task specification → permission/
 - **Tool sandbox**: sessions store policies for network, content writes, bulk writes, publishing, and destructive actions plus read-only/workspace/full-access tiers. The server filters tools after registry resolution; `ask` becomes runtime approval and `deny` removes the tool from the model schema.
 - **Replay and evaluation**: `AgentEvalComparison` freezes real metrics for 2–4 runs—model tier, reasoning effort, tokens, status, duration, and summary—while detailed replay still reads the canonical `AgentRunEvent` stream.
 
+### 1.9 Agent Long-running Tasks & Runaway Protection (plan/18)
+
+Modeled on codex-style continuous long-task execution (referencing the in-run auto-compaction architecture of openai/codex, hardened against the compaction death-loop incident in its issue #31351):
+
+- **Checkpoint auto-resume (P4)**: exhausting the budget slice (default 2M tokens) or turn slice (default 100 turns) no longer ends the run directly; a deterministic four-condition evaluation runs first: unfinished todos, new write-class progress inside the slice (success-count delta of chapter_write/append/edit_range/create, plan_save, memory_save), resume ≤4 and compaction ≤6, and the long-task wall clock (180 minutes) not exceeded. When all hold, the same run compacts its context (reusing the aged-tool-output slimming path), refreshes the budget slice by +1M (clamped to the hard ceiling) and the turn slice by +50, and persists a checkpoint system line (still present after refresh); any failure falls back to the existing wrap-up (unfinished todos end as failed, keeping the manual “continue execution” entry). Condition b doubles as a compaction-loop guard: no re-compaction without new progress since the last one, killing the “compact → lose progress → re-plan → compact again” death loop. Implementation: `api/lib/agent/checkpoint.ts` (pure functions, unit-tested) + the `loop.ts` main loop.
+- **Repeat-signature circuit breaker (P0)**: call signature = tool name + normalized-argument hash (sorted keys, long strings truncated to the first 200 chars; `api/lib/agent/tool-signature.ts`). The sliding window records successful executions only: after 2 consecutive successes with the same signature, the 3rd identical call is not executed and only returns an observation hint; the 4th forces wrap-up. Same-signature retries after a failure never count (self-healing is not killed by mistake). Coexists with the pre-existing structural breaker (3 consecutive volume/chapter operation failures), which takes priority.
+- **Channel repetition detection (P1)**: sanitized body/reasoning deltas are fed into a detector (`api/lib/agent/repeat-detect.ts`): the same 50-char block appearing ≥3 times within a 2000-char sliding window counts as repetition; whitespace-dominated blocks never count. Two stages: `AGENT_REPEAT_GUARD_MODE=observe` (default) logs only with zero intervention to collect samples; `enforce` injects a reminder on the first hit and forces wrap-up on the second.
+- **Dual wall clocks (P2)**: the total cap defaults to 60 minutes, switching to the 180-minute long-task cap once an auto-resume has occurred; the idle cap defaults to 10 minutes. The activity clock is refreshed by streaming deltas and tool completions; approval/question waits happen inside tool execution and refresh on return, so suspended time is naturally excluded from idle kills.
+- **Budget clamp**: `tokenBudget` moves from “downward-only” to `resolveRunTokenBudget` clamping to the hard ceiling (default 5M, `AGENT_RUN_TOKEN_BUDGET_CEILING`): the 2M default is unchanged, authors may raise it explicitly, and the server caps it against runaway; checkpoint budget refreshes obey the same ceiling, so total chain consumption is capped at 5M.
+
 ---
 
 ## 2. Key Technical Decisions
@@ -186,6 +196,7 @@ Every Agent 3.0 run follows a fixed pipeline: task specification → permission/
 | Large-file governance | Module-level splits move only stateless/pure logic; full tsc is the authoritative verification | Completed in this sprint: run-service 1447→1043 lines, write-tools 826→285, loop 903→837, AgentPanel 1096→1020 |
 | Frontend component split discipline | Never split untested component bodies; only extract module-level pure declarations | Any JSX slicing without coverage is a regression risk; extracted pure functions get guardrail unit tests |
 | One-click export | Server-side dependency-free ZIP writer (store, no compression) + shared Fanqie vocabulary contract | Avoids adding jszip (artifacts are mostly plain text; store mode suffices); the vocabulary lives in `shared/contracts/fanqie-tags.ts` shared by both sides; AI publishing-advice output is clamped to the official vocabulary (no invented tags); AI unavailability degrades to fallback copy without blocking the export |
+| Agent long-task runaway protection | Budget/turn exhaustion downgraded to a checkpoint condition; four deterministic signals decide same-run auto-resume; plus signature breaker, repetition detection, and dual wall clocks | Matches codex long-task capability while fixing its compaction death-loop defect (openai/codex#31351); all deterministic signals, no semantic judgment (`plan/18`) |
 
 ---
 
@@ -193,7 +204,7 @@ Every Agent 3.0 run follows a fixed pipeline: task specification → permission/
 
 ### 3.1 Test Matrix (Vitest + Supertest)
 
-The repository currently has **63 test files and 339 cases**. CI provides PostgreSQL 16 and executes all database integration groups; DB groups auto-skip in local environments without PostgreSQL.
+The repository currently has **70 test files and 402 cases**. CI provides PostgreSQL 16 and executes all database integration groups; DB groups auto-skip in local environments without PostgreSQL.
 
 | Layer | Primary coverage |
 | --- | --- |
@@ -241,7 +252,7 @@ scp upload (fallback to sftp on failure, 3 retries each) → remote extract to /
 ```
 
 - PM2 config: `ecosystem.config.cjs`; remote script: `deploy/deploy-production.sh`.
-- Database migrations go through `prisma migrate deploy` (48 migrations currently).
+- Database migrations go through `prisma migrate deploy` (54 migrations currently).
 - Release tags & APK: `scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk path>`.
 
 ### 4.2 Production Topology
@@ -266,7 +277,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 | Database & session | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `MODEL_CONFIG_ENCRYPTION_KEY` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma connection string, Cookie signing, and the model-key encryption master secret |
 | SMS | `SMS_TENCENT_*` + code policy (length 6 / TTL 300s / cooldown 60s / hourly cap 5) | Tencent Cloud SMS login codes |
 | Text generation | `AI_TEXT_BASE_URL` / `AI_TEXT_API_KEY` / `AI_TEXT_MODEL` / `AI_TEXT_MAX_OUTPUT_TOKENS` | DeepSeek; per-turn output cap defaults to 8192 to avoid long-chapter truncation |
-| Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS` (default 100) / `AGENT_RUN_TOKEN_BUDGET` (default 2M) / `AGENT_AUTO_APPROVE` | Turn & token budgets combined with context slimming to avoid context explosion |
+| Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS` (default 100) / `AGENT_RUN_TOKEN_BUDGET` (default 2M) / `AGENT_RUN_TOKEN_BUDGET_CEILING` (hard ceiling, default 5M) / `AGENT_RUN_WALL_CLOCK_MINUTES` (60) / `AGENT_RUN_WALL_CLOCK_LONG_MINUTES` (180) / `AGENT_RUN_IDLE_MINUTES` (10) / `AGENT_REPEAT_GUARD_MODE` (observe/enforce) / `AGENT_AUTO_APPROVE` | Budget slicing + checkpoint auto-resume power long tasks; wall clocks and circuit breakers prevent runaway (plan/18, see [1.9](#19-agent-long-running-tasks--runaway-protection-plan18)) |
 | Image generation | `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` / `AI_IMAGE_MODEL` | OpenAI-compatible cover generation |
 | Vision | `AI_VISION_*` (timeout 60s / concurrency 4) | GLM-4.1V side-channel; when unconfigured, tools backfill observations without blocking the run |
 | Narration | `TTS_PROVIDER` (edge / disabled) / `TTS_DEFAULT_VOICE` / cache cap 2 GB | Edge TTS, keyless |
@@ -297,7 +308,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 
 ### 5.3 Test Execution Performance
 
-All 63 test files use the local forks pool. CI additionally runs PostgreSQL integration groups, coverage, the Agent 3.0 evaluation snapshot, build, and dependency audit, with a 20-minute workflow timeout.
+All 70 test files use the local forks pool. CI additionally runs PostgreSQL integration groups, coverage, the Agent 3.0 evaluation snapshot, build, and dependency audit, with a 20-minute workflow timeout.
 
 ---
 
@@ -361,6 +372,8 @@ Studio / Agent 2.0 desktop and memory UX landed on 2026-08-26: the Work/IDE comm
 
 Agent 3.0 reached engineering freeze and entered a nearly-200-person public beta on 2026-09-02. Story Compiler makes Story Charters, Reader Promises, Scene Tasks, and Chapter Bridges traceable artifacts. Skill OS adds private Skills, shared invitations, deterministic routing, and positive/negative tests. Research Dossiers, Style DNA, the rights-cleared prose library, and quality reports govern research, style, and prose quality. Subagents, branches, and schedules share the same permission, budget, SSE, and audit chain. Deterministic frozen evaluation now runs in CI; expert blind review, demonstrated improvement over 2.0, retention, cost, and failure-rate acceptance remain governed by Section 11.
 
+Agent long-task protection (2026-09-04, plan/18) has landed: budget slicing + checkpoint auto-resume (chain total capped by the 5M-token hard ceiling / 180-minute long-task wall clock), plus the repeat-signature circuit breaker, channel repetition detection (observe mode by default), and dual wall clocks; mechanism details in [1.9](#19-agent-long-running-tasks--runaway-protection-plan18).
+
 New accumulations from this engineering sprint (2026-08, 85→90 points):
 
 - zod validation canonicalized to cover all write endpoints (copy verbatim-anchored in `tests/integration/p2-validation.test.ts`);
@@ -394,14 +407,14 @@ The `plan/` directory holds true landed-phase snapshots and active implementatio
 | `plan/04` | Three-device adaptation & phased launch | Landed |
 | `plan/06` | Local testing & parallel collaboration norms | Execution norm |
 | `plan/07` · `plan/08` | AI configuration security & long-context proposal · env variable design & secret custody spec | Landed (env list in [4.3](#43-environment-variable-system-envexample)) |
-| `plan/09` | Data model & interface contract draft | Landed (evolved to 85 tables, see [1.6](#16-data-model-overview-prismaschemaprisma)) |
+| `plan/09` | Data model & interface contract draft | Landed (evolved to 86 tables, see [1.6](#16-data-model-overview-prismaschemaprisma)) |
 | `plan/10` · `plan/11` | Writing Agent design · high-fidelity opencode Agent replication | Landed (implementation evolved, see 9.2) |
 | `plan/12` · `plan/16` | Frontend UI/UX product-grade optimization · mobile studio deep optimization | Landed (layout approach evolved, see 9.2) |
 | `plan/13` | Studio Agent deep refactor & frontend product-grade optimization | Landed (including later P3/P4 module-level splits) |
 | `plan/14` | Agent hallucination governance & knowledge-set/Skill deep optimization | Landed |
 | `plan/15` | Release pipeline & Agent experience fixes + site-wide loading optimization | Landed |
 | `plan/17` | Reader TTS narration | Landed |
-| `plan/18` (two docs) | Admin console · community recommendation algorithm & topic system upgrade | Landed |
+| `plan/18` (three docs) | Admin console · community recommendation algorithm & topic system upgrade · Agent task token budget & death-loop protection | Landed (protection doc see [1.9](#19-agent-long-running-tasks--runaway-protection-plan18)) |
 | `plan/19` | Android APK client packaging (Capacitor shell project) | Landed |
 | `plan/20` (three docs) | Site-wide loading performance & Agent-runtime jank fixes · mobile immersive reader refactor · reader fullscreen immersion (Android shell safe-area system refactor) | Landed |
 | `plan/21` | Studio and Agent 2.0 enterprise iteration plan | Landed; revision/governance foundation for 3.0 |
@@ -481,7 +494,7 @@ The external "readers" metric switched from raw PV (+1 per chapter open) to UV (
 
 | Gate | Status on 2026-09-02 | Requirement before broad release |
 | --- | --- | --- |
-| Engineering regression safety | ✅ Established | 63 test files / 339 cases, coverage non-regression, enforced CSP, production dependency audit, and critical UI regressions |
+| Engineering regression safety | ✅ Established | 70 test files / 402 cases, coverage non-regression, enforced CSP, production dependency audit, and critical UI regressions |
 | Frozen-scenario evaluation | 🟡 Framework and CI snapshot established | At least five runs per formal scenario; freeze model, temperature, Skill/retrieval versions, code SHA, and tokens; every failure traceable |
 | Expert blind review | 🟡 Admin capability exists; real sample pending | At least three target-genre readers/editors per sample; anonymous comparison of 2.0, 3.0, and human samples; target ≥65% overall preference for 3.0 over 2.0 |
 | Quality improvement | 🟡 Beta sampling | Target ≥40% relative reduction in “obviously AI/mechanical” marks and ≥35% reduction in average author revision rounds to publishable text |

@@ -4,7 +4,7 @@
 > 全部内容基于当前仓库代码与 `plan/` 目录内的真实方案文档，随工程演进持续更新。
 > `plan/00`–`plan/22` 为已落地阶段的真实规划快照，`plan/23` 是 Agent 3.0 的产品与评测基线；历史路径与当前实现的对应关系见 [第 9 节](#9-plan-方案文档索引)。
 >
-> 最近更新：2026-09-02。Agent 3.0 已进入近 200 人公测，工程能力已冻结，真实盲评、留存与商业化指标仍按第 11 节门禁持续采样。
+> 最近更新：2026-09-04。Agent 长任务防护（plan/18）已落地：检查点自动续跑、重复签名熔断、信道复读检测与双墙钟（见 [1.9](#19-agent-长任务与防失控plan18)）。Agent 3.0 已进入近 200 人公测，工程能力已冻结，真实盲评、留存与商业化指标仍按第 11 节门禁持续采样。
 
 ## 目录
 
@@ -56,7 +56,7 @@
                            └───────────────┬─────────────────────┘
                                            │ Prisma 6
                            ┌───────────────▼─────────────────────┐
-                           │ PostgreSQL 16（85 张表 · 48 次迁移） │
+                           │ PostgreSQL 16（86 张表 · 54 次迁移） │
                            └─────────────────────────────────────┘
 ```
 
@@ -78,7 +78,7 @@
 - **路由层** `api/routes/`：16 个路由模块，统一经 `parseBody` + zod schema 校验入参，统一 `{ success, data }` / `{ code, message }` 错误响应结构。
 - **数据层** `api/lib/data/`：Prisma 访问封装，数据层兜底校验（如隐私级别 enum 兜底）。
 - **Agent 引擎** `api/lib/agent/`（对应 `plan/10`、`plan/13` 方案）：
-  - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；
+  - `loop.ts` 执行内核（executeAgentRun）+ `active-runs.ts` 运行登记表；长任务防护模块 `checkpoint.ts`（检查点评估/预算 clamp）、`tool-signature.ts`（重复签名）、`repeat-detect.ts`（信道复读）见 [1.9](#19-agent-长任务与防失控plan18)；
   - `run-service.ts` run 生命周期与会话 CRUD、`session-messages.ts` 消息/回滚、`plan-artifacts.ts` 计划工件；
   - `tools/`：98 个注册工具（见 [1.5](#15-agent-30-工具与运行管线98-个)），覆盖读写、调研、Skill、Story Compiler、质量治理、子 Agent、版本与定时任务；`governance.ts` 冻结每个工具的风险分类与后置条件；
   - `permissions.ts` 权限守卫与预算（ask_user 3 次 / 联网搜索 5 次 / 网页深读 8 次 / 站内搜索 5 次 / 站内深读 8 次每 run）；
@@ -129,7 +129,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 1.6 数据模型概览（prisma/schema.prisma）
 
-85 张表，按域划分（以下列核心表，完整定义以 schema 为准）：
+86 张表，按域划分（以下列核心表，完整定义以 schema 为准）：
 
 - **账号与额度**：User、SmsVerificationCode、AdminAuditLog、CreditAccount、CreditLedgerEntry、ReferralCode、ReferralRedemption、CreditSystemSetting、AiModelConfig
 - **创作与阅读**：Novel、Chapter、CoverAsset、ReadingProgress、NovelRead、ParagraphUnderline、NovelFavorite
@@ -158,6 +158,16 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 - **权限沙箱**：会话保存网络、正文写入、批量改写、发布、破坏性操作五类策略及 read-only/workspace/full-access 档位；工具列表在服务端生成后再次过滤，`ask` 改写为运行时审批，`deny` 直接不向模型暴露。
 - **回放评测**：`AgentEvalComparison` 固化 2–4 个真实 run 的模型档位、推理强度、Token、状态、耗时与摘要；详细轨迹仍读取同一 `AgentRunEvent` 流。
 
+### 1.9 Agent 长任务与防失控（plan/18）
+
+对标 codex 式长任务连续执行（参考 openai/codex 的 run 内 auto-compaction 架构，并针对其 issue #31351 的 compaction 死循环事故做了防护补强）：
+
+- **检查点自动续跑（P4）**：预算片（默认 200 万 tokens）或轮次片（默认 100 轮）耗尽不再直接终止，先做四条件确定性评估：待办未完结、片内有新写类进展（chapter_write/append/edit_range/create、plan_save、memory_save 成功次数增量）、续跑 ≤4 次且压缩 ≤6 次、长任务墙钟（180 分钟）未超。全满足则同 run 内压缩上下文（复用久远工具输出瘦身链路）、刷新预算片 +100 万（受硬顶 clamp）与轮次片 +50，并落库一条检查点系统行（刷新后仍在）；任一不满足走既有 wrap-up（待办未完以 failed 收尾，保留「继续执行」手动入口）。条件 b 兼作 compaction 防 loop：相邻两次压缩间无新进展则禁止再压缩，杜绝「压缩→丢进展→重复计划→再压缩」死循环。实现：`api/lib/agent/checkpoint.ts`（纯函数，单测覆盖）+ `loop.ts` 主循环。
+- **重复签名熔断（P0）**：调用签名 = 工具名 + 归一化参数哈希（键排序、长字符串取前 200 字符，`api/lib/agent/tool-signature.ts`）。滑窗只记成功执行：同签名连续成功 2 次后第 3 次相同调用不执行只回提示观察，第 4 次强制收尾；失败后同签名重试不计次（不误杀自愈）。与既有结构熔断（卷章操作连续失败 3 次）并存，结构熔断优先。
+- **信道复读检测（P1）**：正文/思考清洗后增量喂入检测器（`api/lib/agent/repeat-detect.ts`），2000 字滑窗内同一 50 字块出现 ≥3 次判重复，空白块不计数。两阶段：`AGENT_REPEAT_GUARD_MODE=observe`（默认）只记日志零干预收样本；`enforce` 首次命中注入提醒、再命中强制收尾。
+- **双墙钟（P2）**：总帽默认 60 分钟，发生过自动续跑后切长任务帽 180 分钟；空转帽默认 10 分钟。活动钟由流式增量与工具完成刷新，审批/提问等待发生在工具执行内部、返回即刷新，天然排除挂起期误杀。
+- **预算 clamp**：`tokenBudget` 从「只能下调」改为 `resolveRunTokenBudget` clamp 到硬顶（默认 500 万，`AGENT_RUN_TOKEN_BUDGET_CEILING`）：默认档 200 万不变，作者可显式上调，服务端封顶防失控；检查点刷新预算片时同受硬顶约束，链总消耗封顶 500 万。
+
 ---
 
 ## 2. 关键技术决策
@@ -181,6 +191,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 | 大文件治理 | 模块级拆分只搬无状态/纯逻辑，tsc 全量为权威验证 | 本轮冲刺完成：run-service 1447→1043 行、write-tools 826→285 行、loop 903→837 行、AgentPanel 1096→1020 行 |
 | 前端组件拆分纪律 | 无测试覆盖的组件本体一律不拆，仅抽模块级纯声明 | 任何 JSX 切割在无覆盖下都是回归风险；拆出的纯函数补护栏单测 |
 | 一键导出 | 服务端零依赖 ZIP writer（store 不压缩）+ 番茄词表共享契约 | 不引入 jszip（产物纯文本为主，store 模式够用）；词表固化于 `shared/contracts/fanqie-tags.ts` 双端共用，AI 发布建议输出强制钳制到官方词表不自创标签；AI 不可用时降级文案不阻断导出 |
+| Agent 长任务防失控 | 预算/轮次耗尽降级为检查点条件，四确定性信号评估后同 run 自动续跑；叠加签名熔断、复读检测与双墙钟 | 对齐 codex 长任务能力同时补上其 compaction 死循环缺陷（openai/codex#31351）；全部用确定性信号，不做语义判定（`plan/18`） |
 
 ---
 
@@ -188,7 +199,7 @@ run 执行期前后端通过 SSE 单向事件流通信，**live 与 replay 同�
 
 ### 3.1 测试矩阵（Vitest + Supertest）
 
-当前共有 **63 个测试文件、339 个用例**。CI 提供 PostgreSQL 16，执行全部数据库集成组；无数据库的本地环境会自动跳过 DB 组。
+当前共有 **70 个测试文件、402 个用例**。CI 提供 PostgreSQL 16，执行全部数据库集成组；无数据库的本地环境会自动跳过 DB 组。
 
 | 层级 | 重点覆盖 |
 | --- | --- |
@@ -236,7 +247,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 ```
 
 - PM2 配置：`ecosystem.config.cjs`；远端脚本：`deploy/deploy-production.sh`。
-- 数据库迁移走 `prisma migrate deploy`（当前 48 次迁移）。
+- 数据库迁移走 `prisma migrate deploy`（当前 54 次迁移）。
 - 发布 Tag 与 APK：`scripts/push-to-github.ps1 -Tag vX.XX -ReleaseAsset <apk路径>`。
 
 ### 4.2 生产环境形态
@@ -261,7 +272,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 | 数据库与会话 | `DATABASE_URL` / `AUTH_SESSION_SECRET` / `MODEL_CONFIG_ENCRYPTION_KEY` / `AUTH_COOKIE_DOMAIN` / `AUTH_COOKIE_SECURE` | Prisma 连接串、Cookie 会话签名与模型密钥加密主密钥 |
 | 短信 | `SMS_TENCENT_*` + 发码策略（长度 6 / 有效期 300s / 冷却 60s / 小时限 5） | 腾讯云 SMS 登录验证码 |
 | 文本生成 | `AI_TEXT_BASE_URL` / `AI_TEXT_API_KEY` / `AI_TEXT_MODEL` / `AI_TEXT_MAX_OUTPUT_TOKENS` | DeepSeek；单轮输出上限默认 8192 防长章截断 |
-| Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS`（默认 100）/ `AGENT_RUN_TOKEN_BUDGET`（默认 200 万）/ `AGENT_AUTO_APPROVE` | 轮次与 token 预算配合上下文瘦身防爆窗 |
+| Agent | `AI_AGENT_MODEL` / `AGENT_MAX_TURNS`（默认 100）/ `AGENT_RUN_TOKEN_BUDGET`（默认 200 万）/ `AGENT_RUN_TOKEN_BUDGET_CEILING`（硬顶默认 500 万）/ `AGENT_RUN_WALL_CLOCK_MINUTES`（60）/ `AGENT_RUN_WALL_CLOCK_LONG_MINUTES`（180）/ `AGENT_RUN_IDLE_MINUTES`（10）/ `AGENT_REPEAT_GUARD_MODE`（observe/enforce）/ `AGENT_AUTO_APPROVE` | 预算切片 + 检查点自动续跑支撑长任务，墙钟与熔断防失控（plan/18，见 [1.9](#19-agent-长任务与防失控plan18)） |
 | 图像生成 | `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` / `AI_IMAGE_MODEL` | OpenAI 兼容封面生成 |
 | 视觉 | `AI_VISION_*`（超时 60s / 并发 4） | GLM-4.1V 旁路，未配置时工具回填观察不阻塞 run |
 | 听书 | `TTS_PROVIDER`（edge / disabled）/ `TTS_DEFAULT_VOICE` / 缓存上限 2 GB | Edge TTS 免密钥 |
@@ -292,7 +303,7 @@ scp 上传（失败降级 sftp，各重试 3 次）→ 远端解压至 /opt/chev
 
 ### 5.3 测试执行性能
 
-全量 63 个测试文件使用本地 forks 池并行执行；CI 额外包含 PostgreSQL 集成组、覆盖率、Agent 3.0 评测快照、构建与依赖审计，工作流超时上限为 20 分钟。
+全量 70 个测试文件使用本地 forks 池并行执行；CI 额外包含 PostgreSQL 集成组、覆盖率、Agent 3.0 评测快照、构建与依赖审计，工作流超时上限为 20 分钟。
 
 ---
 
@@ -372,6 +383,8 @@ Agent 流式写入与用量治理（2026-08-30）已落地：最终答复与长�
 
 Agent 3.0（2026-09-02）已完成工程冻结并进入近 200 人公测：Story Compiler 将创作宪章、读者承诺、场景任务与章节桥接纳入可追踪工件；Skill OS 支持私有技能、共享邀请、确定性路由与正负测试；Research Dossier、Style DNA、合法文笔库和质量报告共同约束研究、风格与正文质量；子 Agent、版本分支和定时任务沿用统一权限、预算、SSE 与审计链路。自动化冻结评测已接入 CI，但专家盲评、相对 2.0 的真实质量提升、留存、成本和失败率仍按第 11 节验收。
 
+Agent 长任务防护（2026-09-04，plan/18）已落地：预算切片化 + 检查点自动续跑（链总封顶硬顶 500 万 tokens / 长任务墙钟 180 分钟），叠加重复签名熔断、信道复读检测（默认观察模式）与双墙钟，机制详见 [1.9](#19-agent-长任务与防失控plan18)。
+
 P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场景至少 5 次的 1.0 基准；结果缺失前不进入 P1，也不在文档中填入推测数据。
 
 本轮工程冲刺（2026-08，85→90 分）新增沉淀：
@@ -414,7 +427,7 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 | `plan/14` | Agent 幻觉治理与知识集/Skill 深度优化 | 已落地 |
 | `plan/15` | 发布链路与 Agent 体验修复及全站加载优化 | 已落地 |
 | `plan/17` | 阅读区听书功能（TTS 朗读） | 已落地 |
-| `plan/18`（两篇） | 后台管理系统 · 社区推荐算法与话题系统升级 | 已落地 |
+| `plan/18`（三篇） | 后台管理系统 · 社区推荐算法与话题系统升级 · Agent 任务 Token 预算与死循环防护优化 | 已落地（防护篇见 [1.9](#19-agent-长任务与防失控plan18)） |
 | `plan/19` | 安卓 APK 客户端打包（Capacitor 壳工程） | 已落地 |
 | `plan/20`（三篇） | 全站加载性能与 Agent 执行期卡顿修复 · 手机端沉浸式阅读区重构 · 阅读区全屏沉浸（安卓壳安全区体系重构） | 已落地 |
 | `plan/21` | 创作区与 Agent 2.0 企业级迭代方案 | 已落地，成为 3.0 的 revision/治理基础 |
@@ -494,7 +507,7 @@ P0 正式门禁仍需在真实模型与可用测试数据库环境执行每场�
 
 | 门禁 | 2026-09-02 状态 | 正式放量要求 |
 | --- | --- | --- |
-| 工程可回归 | ✅ 已建立 | 63 个测试文件、339 个用例；覆盖率防倒退；CSP enforce；生产依赖审计；关键 UI 回归 |
+| 工程可回归 | ✅ 已建立 | 70 个测试文件、402 个用例；覆盖率防倒退；CSP enforce；生产依赖审计；关键 UI 回归 |
 | 冻结场景评测 | 🟡 框架与 CI 快照已建立 | 每个正式场景至少 5 次；冻结模型、温度、Skill/检索版本、代码 SHA 与 token；失败样本可追溯 |
 | 专家盲评 | 🟡 后台能力具备，真实样本待完成 | 每篇至少 3 位目标题材读者/编辑；匿名比较 2.0、3.0 与人类样本；3.0 对 2.0 总体偏好胜率目标 ≥65% |
 | 质量改善 | 🟡 公测采样中 | “明显 AI/机械”标记率相对下降目标 ≥40%；作者改到可发布的平均轮数目标下降 ≥35% |
