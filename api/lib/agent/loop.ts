@@ -667,6 +667,26 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const usage = emptyUsage()
   let turn = 0
 
+  // 进行中的轮次缓冲：中止/崩溃时当前轮消息还没走到轮末落库点，
+  // 不兜底补偿的话作者刷新后会丢掉整个进行中轮次（只看到上一轮为止的进度）
+  let liveTurn: { messageId: string; parts: AgentMessagePart[]; streamedText: string; streamedReasoning: string } | null = null
+  const flushLiveTurn = async () => {
+    const live = liveTurn
+    if (!live) return
+    const fallbackParts: AgentMessagePart[] = []
+    if (live.streamedReasoning.trim()) fallbackParts.push({ type: 'reasoning', text: live.streamedReasoning })
+    if (live.streamedText.trim()) fallbackParts.push({ type: 'text', text: live.streamedText })
+    // 优先用正式组装的 parts（含工具卡片）；模型流式中断、parts 尚未组装时退化为已流式原文
+    const partsToSave = live.parts.length > 0 ? live.parts : fallbackParts
+    if (partsToSave.length === 0) return
+    // 已走到轮末正常落库的轮次不能重复写入：先按主键查一次再补
+    const exists = await prisma.agentMessage
+      .findUnique({ where: { id: live.messageId }, select: { id: true } })
+      .catch(() => null)
+    if (exists) return
+    await persistMessage(live.messageId, runId, params.sessionId, 'assistant', partsToSave).catch(() => {})
+  }
+
   try {
     const modelRuntime = await getModelTierRuntime(params.modelTier ?? 'speed', params.userId, params.customModelId, params.reasoningEffort)
     const runtimeModelName = modelRuntime.modelName ?? agent.model
@@ -905,7 +925,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
       role: 'user',
-      content: `[系统提醒] 对话已较长，重申信道纪律：工具循环中间轮次正文保持为空；正文只写给作者的最终结论（不超过 2 句 80 字）；规划产出走 plan_save，修订带 planId；需要作者决策用 ask_user。当前模式：${params.mode}。`,
+      content: `[系统提醒] 对话已较长，重申信道纪律：正文信道每个关键节点可给作者一句可见进展（刚完成什么、下一步做什么）；收尾时写交付说明（不超过 2 句 80 字）；规划产出走 plan_save，修订带 planId；需要作者决策用 ask_user。当前模式：${params.mode}。`,
     }
 
     while (turn < maxTurns) {
@@ -932,6 +952,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
       const messageId = randomUUID()
       bus.emit({ type: 'message.start', messageId, role: 'assistant' })
+      // 登记本轮缓冲：流式正文/思考与轮末组装的 parts 都记在这里，供中止时补落库
+      liveTurn = { messageId, parts: [], streamedText: '', streamedReasoning: '' }
 
       // 工具执行条提前显示：模型还在流式生成工具参数（写章节正文可能持续分钟级）时
       // 就先播报 tool.call（args 为 null），前端按 callId upsert，执行完毕的正式事件就地更新同一张卡片
@@ -950,10 +972,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         temperature: taskSpec.creativeFreedom === 'stable' ? 0.45 : taskSpec.creativeFreedom === 'bold' ? 0.85 : 0.65,
         onChunk: (chunk) => {
           if (chunk.type === 'text-delta') {
-            // 最终答复与 reasoning 使用同一实时通道逐 token 展示；本轮若随后出现工具调用，
-            // text.final 会把已播出的执行旁白原位归入 reasoning，不留下重复正文。
+            // 正文与 reasoning 都逐 token 实时播出，轮末由 text.final 统一归一化
+            if (liveTurn) liveTurn.streamedText += chunk.delta
             bus.emit({ type: 'text.delta', messageId, delta: chunk.delta })
           } else if (chunk.type === 'reasoning-delta') {
+            if (liveTurn) liveTurn.streamedReasoning += chunk.delta
             bus.emit({ type: 'reasoning.delta', messageId, delta: chunk.delta })
           } else if (chunk.type === 'tool-call-start') {
             // name 可能分片累加到达：每次变化都重发，前端 upsert 后标题自动修正
@@ -1019,23 +1042,19 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       })
 
       const cleanContent = result.content ? stripAgentProtocolArtifacts(result.content) : ''
-      // 只要本轮真实产生工具调用，同行文本就是执行旁白而非最终答复，一律改道思考区。
-      const demoteNarration = effectiveToolCalls.length > 0 && Boolean(cleanContent)
 
+      // 主流 Agent 标准（Codex 等）：任务过程中的进展正文同样是对话正文信道，作者实时可见、刷新后仍在；
+      // 只有模型原生 reasoning 才进思考信道，执行旁白不再改道思考区。
       // text.delta 已实时显示供应商原始流；无论最终是否有干净文本，都要发 text.final 做归一化，
       // 这样 DSML/乱码被清洗成空串时能立即从界面移除，而不是残留到刷新前。
-      if (result.content) bus.emit({ type: 'text.final', messageId, text: cleanContent, asReasoning: demoteNarration })
+      if (result.content) bus.emit({ type: 'text.final', messageId, text: cleanContent, asReasoning: false })
 
       const parts: AgentMessagePart[] = []
-      if (result.reasoning || (demoteNarration && cleanContent)) {
-        parts.push({
-          type: 'reasoning',
-          text: demoteNarration
-            ? [result.reasoning, cleanContent].filter(Boolean).join('\n')
-            : (result.reasoning as string),
-        })
+      if (liveTurn) liveTurn.parts = parts
+      if (result.reasoning) {
+        parts.push({ type: 'reasoning', text: result.reasoning })
       }
-      if (cleanContent && !demoteNarration) {
+      if (cleanContent) {
         parts.push({ type: 'text', text: cleanContent })
         lastAssistantText = cleanContent
       }
@@ -1220,6 +1239,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     )
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) {
+      // 先补落库进行中的轮次再收尾：否则刷新后作者会丢掉被停止那一轮的全部内容
+      await flushLiveTurn()
       await finalizeRun(runId, bus, 'paused', usage, turn, '已被用户停止，可随时继续。')
       return
     }
@@ -1233,6 +1254,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       bus.emit({ type: 'text.delta', messageId, delta: message })
       await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: message }])
       bus.emit({ type: 'error', code: error.code.toLowerCase(), message, recoverable: false })
+      await flushLiveTurn()
       await finalizeRun(runId, bus, 'failed', usage, turn, message, message)
       return
     }
@@ -1240,6 +1262,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     const message = error instanceof Error ? error.message : String(error)
     console.error('[agent-loop] run 执行异常', runId, error)
     bus.emit({ type: 'error', code: 'loop_crashed', message, recoverable: false })
+    await flushLiveTurn()
     await finalizeRun(runId, bus, 'failed', usage, turn, '', message)
   }
 }

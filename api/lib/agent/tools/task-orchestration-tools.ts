@@ -150,13 +150,18 @@ async function latestRunPerSession(userId: string, sessionIds: string[]): Promis
 async function deliveryOf(sessionId: string, runId: string): Promise<string> {
   const run = await prisma.agentRun.findUnique({ where: { id: runId }, select: { outputSummary: true } })
   const summary = run?.outputSummary?.trim() ?? ''
-  const message = await prisma.agentMessage.findFirst({
+  const messages = await prisma.agentMessage.findMany({
     where: { sessionId, runId, role: 'assistant' },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 6,
     select: { parts: true },
   })
-  const text = message ? assistantText((message.parts ?? []) as AgentMessagePart[]) : ''
-  // 末条回复才是交付摘要正体，outputSummary 只是它的截断版，两者都空才算没有产出
+  // 末条回复优先作为交付摘要正体；末条无正文（如以纯工具调用收尾）时回捞近期回复，
+  // 避免把「有产出但末条是工具轮」误判成没有交付
+  const text =
+    messages
+      .map((message) => assistantText((message.parts ?? []) as AgentMessagePart[]))
+      .find((candidate) => candidate.length > 0) ?? ''
   return clipDelivery(text || summary) || '（该窗口没有产出可读的交付内容）'
 }
 
@@ -190,11 +195,13 @@ export const taskSpawnTool = defineTool({
             .string()
             .trim()
             .min(20)
-            .describe('派给该窗口的完整任务提示词：目标章节、篇幅、必须遵守的设定与验收标准，写清楚到该窗口不用回问主控也能开工'),
+            .max(400)
+            .describe('简明任务提示词（硬上限 400 字，建议 200 字内）：目标章节、目标字数、至多 3 条关键约束与验收标准。禁止粘贴长篇设定或剧情梗概——派生窗口会用工具自读作品与计划；brief 过长会导致整包参数被截断、窗口拿到半截任务'),
         }),
       )
       .min(1)
-      .describe('每个元素派生一个窗口，互相之间必须没有写入冲突'),
+      .max(5)
+      .describe('每个元素派生一个窗口，互相之间必须没有写入冲突；单次建议 ≤3 个任务，更多请等这批结束后再派生'),
     inherit: z
       .enum(['brief', 'transcript'])
       .default('brief')
@@ -382,8 +389,12 @@ export const taskWaitTool = defineTool({
         continue
       }
       const summary = done.runId ? await deliveryOf(id, done.runId) : ''
+      // 无交付兜底：多数是任务简报被截断或窗口跑偏，给主控明确的补救路径而不是让它瞎猜
+      const advice = summary.startsWith('（该窗口没有产出可读的交付内容）')
+        ? '该窗口没有可读交付：任务简报可能被截断或执行跑偏。请点进该窗口查看对话，或用 task_send 发送修正指令要求它重做并给出交付摘要。'
+        : ''
       windows.push({ sessionId: id, title: done.title, status: 'succeeded', summary })
-      lines.push(`- ${done.title}（${id}）：已完成。交付摘要：\n${summary}`)
+      lines.push(`- ${done.title}（${id}）：已完成。交付摘要：\n${summary}${advice}`)
     }
 
     const succeeded = windows.filter((item) => item.status === 'succeeded').length

@@ -38,6 +38,9 @@ describe('跨任务并行编排工具', () => {
     // 简报过短会让派生窗口无从下手，只能回问主控，因此在入参层就拦掉
     expect(tool?.parameters.safeParse({ tasks: [{ title: '第 1 章', brief: '写第一章' }] }).success).toBe(false)
     expect(tool?.parameters.safeParse({ tasks: [] }).success).toBe(false)
+    // 简报过长会把整包 tool call 参数顶到输出上限被截断，窗口拿到半截任务，同样在入参层拦掉
+    expect(tool?.parameters.safeParse({ tasks: [{ title: '第 1 章', brief: '字'.repeat(401) }] }).success).toBe(false)
+    expect(tool?.parameters.safeParse({ tasks: Array.from({ length: 6 }, () => ({ title: 'x', brief: '足够长的任务简报内容用于通过最小长度校验' })) }).success).toBe(false)
   })
 
   it('等待默认等全部结束，超时可续等', () => {
