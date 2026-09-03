@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import {
   BookCopy,
+  Brain,
   Network,
   GitCompareArrows,
   PanelLeftClose,
   PanelLeftOpen,
-  ScrollText,
   Wrench,
 } from 'lucide-react'
 
@@ -23,7 +23,7 @@ type Props = {
 const navigationItems = [
   { key: 'work' as const, label: '作品', icon: BookCopy },
   { key: 'memory' as const, label: '关系网', icon: Network },
-  { key: 'context' as const, label: '上下文', icon: ScrollText },
+  { key: 'context' as const, label: '记忆', icon: Brain },
   { key: 'changes' as const, label: '变更', icon: GitCompareArrows },
   { key: 'skills' as const, label: '技能', icon: Wrench },
 ]

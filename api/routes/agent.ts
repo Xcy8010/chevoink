@@ -40,8 +40,8 @@ import { buildError, buildSuccess, createRequestId } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
 import { DataAccessError, prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
-import { compactSessionContext, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
-import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, resolveMemoryReview, startMemoryGraphJob } from '../lib/agent/story-memory.js'
+import { compactSessionContext, getContextDetail, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
+import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, listStoryMemories, resolveMemoryReview, startMemoryGraphJob, updateStoryMemoryEntry } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 import {
   createNovelSkillDraft,
@@ -293,6 +293,22 @@ router.get('/sessions/:sessionId/context-state', async (req: Request, res: Respo
   }
 })
 
+const contextDetailViewSchema = z.enum(['records', 'checkpoints', 'final'])
+
+router.get('/sessions/:sessionId/context-detail', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const view = contextDetailViewSchema.parse(typeof req.query.view === 'string' ? req.query.view : 'records')
+    const page = queryPositiveInt(req.query.page, 1)
+    const pageSize = Math.min(50, queryPositiveInt(req.query.pageSize, 20))
+    const payload = await getContextDetail(userId, req.params.sessionId, view, page, pageSize)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
 router.post('/sessions/:sessionId/compact', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
   try {
@@ -375,6 +391,46 @@ router.post('/memory/:memoryId/review', async (req: Request, res: Response): Pro
     requireAgent2Feature('memory2', userId)
     const body = parseBody(resolveMemoryReviewSchema, req.body, '请明确接受或拒绝该记忆候选。')
     const memory = await resolveMemoryReview(userId, req.params.memoryId, body.accepted)
+    res.status(200).json(buildSuccess(requestId, { memory }))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 记忆中心：白名单校验 memoryType，避免非法枚举直接透传 prisma 报 500
+const storyMemoryTypeSchema = z.enum([
+  'novelSummary', 'worldbuilding', 'characterCard', 'chapterSummary', 'timelineEvent', 'foreshadowing',
+  'stylePreference', 'continuityRule', 'volumeSummary', 'storyArc', 'sceneState', 'relationshipState',
+  'storyBible', 'authorProfile',
+])
+
+const storyMemoryPatchSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  content: z.string().trim().min(1).max(8000).optional(),
+  importance: z.number().int().min(1).max(100).optional(),
+})
+
+router.get('/novels/:novelId/memories', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const rawType = typeof req.query.memoryType === 'string' ? req.query.memoryType.trim() : ''
+    const memoryType = rawType ? storyMemoryTypeSchema.parse(rawType) : undefined
+    const page = queryPositiveInt(req.query.page, 1)
+    const pageSize = Math.min(50, queryPositiveInt(req.query.pageSize, 12))
+    const payload = await listStoryMemories(userId, req.params.novelId, { memoryType, page, pageSize })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.patch('/memory/:memoryId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const body = parseBody(storyMemoryPatchSchema, req.body, '请提供要修改的记忆卡片内容。')
+    const memory = await updateStoryMemoryEntry(userId, req.params.memoryId, body)
     res.status(200).json(buildSuccess(requestId, { memory }))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -911,6 +967,11 @@ router.get('/exports/:exportId', async (req: Request, res: Response): Promise<vo
 
 function queryNovelId(req: Request): string {
   return typeof req.query.novelId === 'string' ? req.query.novelId.trim() : ''
+}
+
+function queryPositiveInt(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback
 }
 
 router.get('/branches', async (req, res) => {

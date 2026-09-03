@@ -133,7 +133,7 @@ function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
   const chip = document.createElement('span')
   chip.dataset.composerReference = reference.id
   chip.contentEditable = 'false'
-  chip.title = `${reference.name} · 第 ${referenceLineLabel(reference)} 行`
+  chip.title = reference.kind === 'memory' ? `${reference.name} · 记忆卡片` : `${reference.name} · 第 ${referenceLineLabel(reference)} 行`
   chip.className = 'group mx-0.5 inline-flex h-7 max-w-[min(18rem,75vw)] select-none items-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 align-middle text-[11px] leading-none text-[var(--text-primary)]'
 
   const remove = document.createElement('button')
@@ -145,7 +145,7 @@ function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
 
   const fileIcon = document.createElement('span')
   fileIcon.className = 'block text-[10px] font-semibold text-sky-500 group-hover:hidden'
-  fileIcon.textContent = reference.kind === 'catalog' ? '目' : reference.kind === 'plan' ? '计' : '章'
+  fileIcon.textContent = reference.kind === 'catalog' ? '目' : reference.kind === 'plan' ? '计' : reference.kind === 'memory' ? '忆' : '章'
   const removeIcon = document.createElement('span')
   removeIcon.className = 'hidden text-sm leading-none group-hover:block'
   removeIcon.textContent = '×'
@@ -156,8 +156,10 @@ function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
   name.textContent = reference.name
   const lines = document.createElement('span')
   lines.className = 'ml-1 shrink-0 text-[var(--text-tertiary)]'
-  lines.textContent = referenceLineLabel(reference)
-  chip.setAttribute('aria-label', `${referenceKindLabel(reference)}引用：${reference.name}，第 ${referenceLineLabel(reference)} 行`)
+  lines.textContent = reference.kind === 'memory' ? '卡片' : referenceLineLabel(reference)
+  chip.setAttribute('aria-label', reference.kind === 'memory'
+    ? `记忆引用：${reference.name}`
+    : `${referenceKindLabel(reference)}引用：${reference.name}，第 ${referenceLineLabel(reference)} 行`)
   chip.append(remove, name, lines)
   return chip
 }

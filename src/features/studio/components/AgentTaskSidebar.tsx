@@ -160,7 +160,9 @@ export function AgentConversationRail({
       </div>
       <div
         className={cn(
-          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[var(--surface-contrast)] px-3.5 py-3 text-left text-[var(--text-contrast)] shadow-[0_18px_50px_rgba(15,23,42,0.24)] transition-opacity duration-200 ease-out',
+          // 预览卡内部文字是硬编码的白色系（text-white/xx），卡片必须始终深色实底：
+          // 之前用 --surface-contrast 在深色模式下反转为白底，白字白底完全看不清
+          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[#17212d] px-3.5 py-3 text-left text-white shadow-[0_18px_50px_rgba(8,12,20,0.45)] ring-1 ring-white/10 transition-opacity duration-200 ease-out',
           preview ? 'opacity-100' : 'opacity-0',
         )}
         style={{ top: displayPreview?.top ?? 8 }}

@@ -12,7 +12,7 @@ export function parseComposerReferenceTransfer(value: string): Omit<ComposerRefe
     const item = JSON.parse(value) as Partial<ComposerReference>
     if (
       typeof item.id !== 'string'
-      || (item.kind !== 'chapter' && item.kind !== 'plan' && item.kind !== 'catalog')
+      || (item.kind !== 'chapter' && item.kind !== 'plan' && item.kind !== 'catalog' && item.kind !== 'memory')
       || typeof item.name !== 'string'
       || typeof item.text !== 'string'
       || typeof item.startLine !== 'number'
@@ -32,14 +32,27 @@ export function parseComposerReferenceTransfer(value: string): Omit<ComposerRefe
 }
 
 function referenceLineLabel(reference: ComposerReference): string {
+  // 记忆卡片没有行号概念，标签置空，由 referencePositionLabel 统一给出「卡片」文案
+  if (reference.kind === 'memory') return ''
   return reference.startLine === reference.endLine
     ? `${reference.startLine}`
     : `${reference.startLine}-${reference.endLine}`
 }
 
+/** 引用 chip 右侧的位置文案：行号或「卡片」 */
+export function referencePositionLabel(reference: ComposerReference): string {
+  return reference.kind === 'memory' ? '卡片' : referenceLineLabel(reference)
+}
+
+/** 提示词中的引用后缀：记忆引用不带 L 行号 */
+function referencePromptSuffix(reference: ComposerReference): string {
+  return reference.kind === 'memory' ? '' : ` L${referenceLineLabel(reference)}`
+}
+
 export function referenceKindLabel(reference: ComposerReference): string {
   if (reference.kind === 'catalog') return '目录'
   if (reference.kind === 'plan') return '计划'
+  if (reference.kind === 'memory') return '记忆'
   return '章节'
 }
 
@@ -51,7 +64,7 @@ export function buildComposerPrompt(draft: string, references: ComposerReference
   for (const reference of ordered) {
     const offset = Math.max(cursor, Math.min(draft.length, reference.offset))
     parts.push(draft.slice(cursor, offset))
-    parts.push(`\n\n[${referenceKindLabel(reference)}引用：${reference.name} L${referenceLineLabel(reference)}]\n${reference.text}\n\n`)
+    parts.push(`\n\n[${referenceKindLabel(reference)}引用：${reference.name}${referencePromptSuffix(reference)}]\n${reference.text}\n\n`)
     cursor = offset
   }
   parts.push(draft.slice(cursor))

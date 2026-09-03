@@ -28,6 +28,10 @@ type SaveMemoryInput = {
   confidence: number
   status: StoryMemoryStatus
   evidence: EvidenceInput
+  /** 定向修订：传原卡片 id 时就地覆盖，不走同名匹配与冲突箱（作者明确改设定时的主路径） */
+  memoryId?: string | null
+  /** 作者确认式覆盖：同名旧卡直接就地替换，不进冲突审核箱 */
+  overwrite?: boolean
 }
 
 function normalize(value: string): string {
@@ -99,6 +103,29 @@ export async function saveStoryMemory(input: SaveMemoryInput): Promise<{ id: str
   if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权写入记忆。')
   const title = input.title.trim()
   const content = input.content.trim()
+
+  // 定向修订：作者/Agent 明确指定原卡片 id 时就地覆盖（记录修订历史），避免同名卡泛滥
+  if (input.memoryId) {
+    const target = await prisma.projectMemoryEntry.findFirst({ where: { id: input.memoryId, novelId: input.novelId } })
+    if (target) {
+      if (normalize(target.content) !== normalize(content) || target.title !== title) {
+        await prisma.$transaction([
+          prisma.memoryRevision.create({ data: { memoryId: target.id, before: target.content, after: content, reason: 'targeted_update' } }),
+          prisma.projectMemoryEntry.update({
+            where: { id: target.id },
+            data: {
+              title, content, importance: input.importance, confidence: input.confidence, status: input.status,
+              reviewStatus: 'none', runId: input.runId ?? target.runId, sourceChapterId: input.sourceChapterId ?? target.sourceChapterId,
+              version: { increment: 1 }, embedding: hashVector(`${title}\n${content}`),
+            },
+          }),
+        ])
+      }
+      await addEvidence(target.id, input.evidence)
+      return { id: target.id, action: 'updated', status: input.status }
+    }
+  }
+
   const existing = await prisma.projectMemoryEntry.findFirst({
     where: { novelId: input.novelId, memoryType: input.memoryType, title, status: { notIn: ['superseded', 'invalid'] } },
     orderBy: { updatedAt: 'desc' },
@@ -135,10 +162,11 @@ export async function saveStoryMemory(input: SaveMemoryInput): Promise<{ id: str
   }
 
   const sameVersionedSource = existing.evidence.length > 0
-  const canReplace = sameVersionedSource || existing.status === 'inferred' && input.status === 'confirmed'
+  // overwrite=true：作者确认式覆盖（改设定场景），同名旧卡就地替换而不是再建一张进审核箱
+  const canReplace = sameVersionedSource || input.overwrite === true || existing.status === 'inferred' && input.status === 'confirmed'
   if (canReplace) {
     await prisma.$transaction([
-      prisma.memoryRevision.create({ data: { memoryId: existing.id, before: existing.content, after: content, reason: sameVersionedSource ? 'source_revision_advanced' : 'author_confirmation' } }),
+      prisma.memoryRevision.create({ data: { memoryId: existing.id, before: existing.content, after: content, reason: input.overwrite === true ? 'author_overwrite' : sameVersionedSource ? 'source_revision_advanced' : 'author_confirmation' } }),
       prisma.projectMemoryEntry.update({
         where: { id: existing.id },
         data: {
@@ -656,10 +684,100 @@ export async function getMemoryGraph(userId: string, novelId: string): Promise<M
 export async function resolveMemoryReview(userId: string, memoryId: string, accepted: boolean) {
   const memory = await prisma.projectMemoryEntry.findFirst({ where: { id: memoryId, novel: { authorId: userId } } })
   if (!memory) throw new DataAccessError(404, 'MEMORY_NOT_FOUND', '记忆候选不存在。')
-  return prisma.projectMemoryEntry.update({
-    where: { id: memory.id },
-    data: { reviewStatus: accepted ? 'accepted' : 'rejected', status: accepted ? 'confirmed' : 'invalid', confidence: accepted ? 1 : memory.confidence },
-  })
+  return prisma.$transaction([
+    prisma.projectMemoryEntry.update({
+      where: { id: memory.id },
+      data: { reviewStatus: accepted ? 'accepted' : 'rejected', status: accepted ? 'confirmed' : 'invalid', confidence: accepted ? 1 : memory.confidence },
+    }),
+    // 接受候选即代表新事实生效：同名单卡旧版本一律 superseded，避免新旧设定同时参与检索造成混乱
+    ...(accepted
+      ? [prisma.projectMemoryEntry.updateMany({
+        where: {
+          novelId: memory.novelId, memoryType: memory.memoryType, title: memory.title, id: { not: memory.id },
+          status: { notIn: ['superseded', 'invalid'] },
+        },
+        data: { status: 'superseded' },
+      })]
+      : []),
+  ])
+}
+
+/** 创作记忆卡片列表（记忆中心可视化用）：只返回生效中的卡片，按更新时间倒序分页 */
+export async function listStoryMemories(userId: string, novelId: string, input: { memoryType?: ProjectMemoryType; page: number; pageSize: number }) {
+  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权查看记忆。')
+  const where = {
+    novelId,
+    status: { in: ['confirmed', 'inferred'] as StoryMemoryStatus[] },
+    reviewStatus: { not: 'rejected' as const },
+    ...(input.memoryType ? { memoryType: input.memoryType } : {}),
+  }
+  const [total, rows, typeGroups] = await Promise.all([
+    prisma.projectMemoryEntry.count({ where }),
+    prisma.projectMemoryEntry.findMany({
+      where,
+      orderBy: [{ updatedAt: 'desc' }],
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+    prisma.projectMemoryEntry.groupBy({ by: ['memoryType'], where: { novelId, status: { in: ['confirmed', 'inferred'] }, reviewStatus: { not: 'rejected' } }, _count: { _all: true } }),
+  ])
+  return {
+    total,
+    items: rows.map((item) => ({
+      id: item.id,
+      memoryType: item.memoryType,
+      layer: item.layer,
+      title: item.title,
+      content: item.content,
+      importance: item.importance,
+      status: item.status,
+      version: item.version,
+      createdAt: item.createdAt.toISOString(),
+      updatedAt: item.updatedAt.toISOString(),
+    })),
+    typeCounts: typeGroups.reduce<Record<string, number>>((acc, group) => {
+      acc[group.memoryType] = group._count._all
+      return acc
+    }, {}),
+  }
+}
+
+/** 作者在记忆中心直接编辑卡片：就地更新并记录修订历史，保证后续写作按最新设定召回 */
+export async function updateStoryMemoryEntry(userId: string, memoryId: string, patch: { title?: string; content?: string; importance?: number }) {
+  const memory = await prisma.projectMemoryEntry.findFirst({ where: { id: memoryId, novel: { authorId: userId } } })
+  if (!memory) throw new DataAccessError(404, 'MEMORY_NOT_FOUND', '记忆卡片不存在。')
+  const title = (patch.title ?? memory.title).trim().slice(0, 160)
+  const content = (patch.content ?? memory.content).trim()
+  if (!title || !content) throw new DataAccessError(400, 'MEMORY_INVALID_PATCH', '标题与内容不能为空。')
+  const importance = patch.importance === undefined ? memory.importance : Math.min(100, Math.max(1, Math.round(patch.importance)))
+  const changed = title !== memory.title || content !== memory.content || importance !== memory.importance
+  if (changed) {
+    await prisma.$transaction([
+      prisma.memoryRevision.create({ data: { memoryId: memory.id, before: memory.content, after: content, reason: 'author_edit' } }),
+      prisma.projectMemoryEntry.update({
+        where: { id: memory.id },
+        data: { title, content, importance, version: { increment: 1 }, embedding: hashVector(`${title}\n${content}`) },
+      }),
+    ])
+    // 角色卡同步人物图谱描述，避免记忆中心与关系网展示两份设定
+    if (memory.memoryType === 'characterCard') {
+      await prisma.storyEntity.updateMany({ where: { novelId: memory.novelId, entityType: 'character', canonicalName: memory.title }, data: { description: content } })
+    }
+  }
+  const updated = await prisma.projectMemoryEntry.findFirstOrThrow({ where: { id: memory.id } })
+  return {
+    id: updated.id,
+    memoryType: updated.memoryType,
+    layer: updated.layer,
+    title: updated.title,
+    content: updated.content,
+    importance: updated.importance,
+    status: updated.status,
+    version: updated.version,
+    createdAt: updated.createdAt.toISOString(),
+    updatedAt: updated.updatedAt.toISOString(),
+  }
 }
 
 export async function saveEntityRelation(input: {

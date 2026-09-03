@@ -93,10 +93,10 @@ export type ToolNavigationRequest = {
   display?: AgentToolDisplayPayload
 }
 
-/** 从章节/计划查看器选入输入框的结构化引用；正文独立保存，避免删除引用时污染草稿换行。 */
+/** 从章节/计划查看器或记忆卡片选入输入框的结构化引用；正文独立保存，避免删除引用时污染草稿换行。 */
 export type ComposerReference = {
   id: string
-  kind: 'chapter' | 'catalog' | 'plan'
+  kind: 'chapter' | 'catalog' | 'plan' | 'memory'
   name: string
   startLine: number
   endLine: number

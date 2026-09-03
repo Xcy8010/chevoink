@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArchiveRestore, CheckCircle2, LoaderCircle, MessageSquareText, RefreshCw, ShieldCheck } from 'lucide-react'
+import { ArchiveRestore, CheckCircle2, ChevronRight, LoaderCircle, MessageSquareText, RefreshCw, ShieldCheck } from 'lucide-react'
 
 import { compactAgentContext, fetchAgentContextState } from '../agentApi'
 import { formatContextTokenCount } from '../lib/context-format'
@@ -8,6 +8,10 @@ import type { ContextState } from '../../../../../shared/contracts/index.js'
 type Props = {
   sessionId: string | null
   active?: boolean
+  /** 记忆中心组合时由外层提供单一滚动容器，面板自身不再滚动 */
+  scrollable?: boolean
+  /** 占用卡右上角「查看详情」：打开上下文记录/压缩记录/最终上下文弹窗 */
+  onOpenDetail?: () => void
 }
 
 function SummaryList({ title, items }: { title: string; items: string[] }) {
@@ -21,7 +25,7 @@ function SummaryList({ title, items }: { title: string; items: string[] }) {
 }
 
 /** 当前用户与 Agent 会话的真实上下文窗口，不混入作品树或编辑器选区。 */
-export default function AgentContextPanel({ sessionId, active = false }: Props) {
+export default function AgentContextPanel({ sessionId, active = false, scrollable = true, onOpenDetail }: Props) {
   const [state, setState] = useState<ContextState | null>(null)
   const [loading, setLoading] = useState(false)
   const [compacting, setCompacting] = useState(false)
@@ -84,9 +88,9 @@ export default function AgentContextPanel({ sessionId, active = false }: Props) 
     }
   }
 
-  if (!sessionId) return <div className="flex h-full items-center justify-center px-6 text-center text-xs leading-6 text-[var(--text-secondary)]">发送第一条消息后，这里会显示当前任务的对话上下文与压缩进度。</div>
+  if (!sessionId) return <div className={`${scrollable ? 'flex h-full items-center justify-center' : 'py-10 text-center'} px-6 text-xs leading-6 text-[var(--text-secondary)]`}>发送第一条消息后，这里会显示当前任务的对话上下文与压缩进度。</div>
 
-  return <div className="h-full overflow-y-auto px-4 py-4">
+  return <div className={`${scrollable ? 'h-full overflow-y-auto' : ''} px-4 py-4`}>
     <div className="flex items-start gap-3">
       <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)] text-[var(--text-secondary)]"><MessageSquareText className="h-4 w-4" /></span>
       <div className="min-w-0 flex-1">
@@ -97,8 +101,14 @@ export default function AgentContextPanel({ sessionId, active = false }: Props) 
     </div>
 
     {loading && !state ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />读取上下文状态…</div> : state ? <>
-      <section className="mt-5 rounded-[14px] bg-[var(--surface-muted)] p-3.5">
-        <div className="flex items-end justify-between gap-3"><div><p className="text-[11px] text-[var(--text-secondary)]">上下文占用</p><p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">{percent}%</p></div><p className="pb-1 text-right text-[10px] tabular-nums text-[var(--text-tertiary)]">{formatContextTokenCount(state.estimatedTokens)} / {formatContextTokenCount(state.contextWindowTokens)}</p></div>
+      <section className="relative mt-5 rounded-[14px] bg-[var(--surface-muted)] p-3.5">
+        {onOpenDetail ? <button
+          type="button"
+          onClick={onOpenDetail}
+          className="absolute right-2.5 top-2.5 inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)]"
+          aria-label="查看上下文详情"
+        >查看详情<ChevronRight className="h-3 w-3" /></button> : null}
+        <div className="flex items-end justify-between gap-3"><div><p className="text-[11px] text-[var(--text-secondary)]">上下文占用</p><p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--text-primary)]">{percent}%</p></div><p className="pb-1 pr-16 text-right text-[10px] tabular-nums text-[var(--text-tertiary)]">{formatContextTokenCount(state.estimatedTokens)} / {formatContextTokenCount(state.contextWindowTokens)}</p></div>
         <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-[var(--surface-default)]">
           <div className={`h-full rounded-full transition-[width] duration-500 ${state.usageRatio >= state.compactionThreshold ? 'bg-rose-500' : state.usageRatio >= state.warningThreshold ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${cappedPercent}%` }} />
           <span className="absolute inset-y-0 w-px bg-[var(--text-tertiary)]/70" style={{ left: `${Math.min(100, state.compactionThreshold * 100)}%` }} />

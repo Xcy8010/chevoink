@@ -16,7 +16,7 @@ export const memorySaveTool = defineTool({
   name: 'memory_save',
   title: '沉淀创作记忆',
   description:
-    '把重要的设定、角色卡、章节摘要、伏笔或时间线事件保存为长期记忆，供后续 memory_search 检索。只沉淀已被确认的事实，试写内容不要沉淀。',
+    '把重要的设定、角色卡、章节摘要、伏笔或时间线事件保存为长期记忆，供后续 memory_search 检索。只沉淀已被确认的事实，试写内容不沉淀。作者要求修改/覆盖既有设定或角色卡时：先 memory_search 找到原卡片 id，再传 memoryId 就地覆盖（或传 overwrite=true 按同名覆盖），严禁新建同名卡片、严禁把作者明确的修订丢进冲突审核箱。',
   parameters: z.object({
     memoryType: z
       .enum([
@@ -40,6 +40,8 @@ export const memorySaveTool = defineTool({
     content: z.string().min(1).max(4000).describe('记忆内容，事实化、结构化表述'),
     importance: z.number().int().min(1).max(100).describe('重要性 1-100：核心主角/主线设定 80+，一般设定 50-70'),
     sourceChapterId: z.string().optional().describe('来源章节 ID（章节摘要必填）'),
+    memoryId: z.string().optional().describe('要就地修订的既有记忆卡片 id（来自 memory_search 命中或记忆中心）；作者改设定时必传，禁止另建新卡'),
+    overwrite: z.boolean().optional().describe('作者确认式覆盖：同名旧卡直接就地替换，不进冲突审核箱；仅当作者明确要求改设定且拿不到 memoryId 时使用'),
   }),
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
@@ -80,6 +82,8 @@ export const memorySaveTool = defineTool({
       layer: ['novelSummary', 'storyBible', 'authorProfile', 'continuityRule'].includes(args.memoryType) ? 'L3' : ['chapterSummary', 'volumeSummary', 'storyArc', 'sceneState', 'relationshipState'].includes(args.memoryType) ? 'L2' : 'L1',
       title: args.title, content: args.content, importance: args.importance,
       confidence: 1, status: 'confirmed',
+      memoryId: args.memoryId ?? null,
+      overwrite: args.overwrite === true,
       evidence: {
         sourceType: args.sourceChapterId ? 'chapter' : 'author_input',
         sourceId: args.sourceChapterId ?? ctx.runId,
@@ -89,7 +93,7 @@ export const memorySaveTool = defineTool({
     return {
       output: result.action === 'conflict'
         ? `检测到记忆冲突：[${args.memoryType}] ${args.title} 未覆盖旧事实，候选 ${result.id} 已进入作者审核箱。`
-        : `已${result.action === 'created' ? '保存' : '更新'}记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}，含来源证据）。`,
+        : `已${result.action === 'created' ? '保存' : '在原卡片上更新'}记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}，含来源证据）。`,
       summary: result.action === 'conflict' ? `记忆冲突「${args.title}」` : `沉淀记忆「${args.title}」`,
     }
   },

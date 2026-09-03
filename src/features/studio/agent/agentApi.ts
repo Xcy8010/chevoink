@@ -5,11 +5,14 @@ import type {
   AgentSessionRunStatusPayload,
   AgentUIMessage,
   ApiResponse,
+  ContextDetail,
   ContextState,
   ResolveAgentApprovalRequest,
   ResolveAgentQuestionRequest,
   StartAgentLoopRunRequest,
   StartAgentLoopRunResponse,
+  StoryMemoryCard,
+  StoryMemoryList,
   UploadAgentAttachmentRequest,
   UploadAgentAttachmentResponse,
   AgentEvalComparisonView,
@@ -164,6 +167,41 @@ export function compactAgentContext(sessionId: string): Promise<{ checkpoint: Co
     `/api/agent/sessions/${sessionId}/compact`,
     { method: 'POST' },
   )
+}
+
+/** 上下文详情弹窗：三视图分页拉取（records 倒序 / checkpoints 倒序 / final 窗口正序） */
+export function fetchAgentContextDetail(
+  sessionId: string,
+  view: 'records' | 'checkpoints' | 'final',
+  page: number,
+  pageSize = 20,
+): Promise<ContextDetail> {
+  return requestData<ContextDetail>(
+    `/api/agent/sessions/${sessionId}/context-detail?view=${view}&page=${page}&pageSize=${pageSize}`,
+  )
+}
+
+/** 记忆中心：分页拉取 Agent 沉淀的创作记忆卡片 */
+export function fetchStoryMemories(
+  novelId: string,
+  options?: { memoryType?: string; page?: number; pageSize?: number },
+): Promise<StoryMemoryList> {
+  const query = new URLSearchParams()
+  if (options?.memoryType) query.set('memoryType', options.memoryType)
+  query.set('page', String(options?.page ?? 1))
+  query.set('pageSize', String(options?.pageSize ?? 12))
+  return requestData<StoryMemoryList>(`/api/agent/novels/${novelId}/memories?${query.toString()}`)
+}
+
+/** 记忆中心：作者就地编辑卡片（后端记录修订历史并重算向量，后续写作按最新设定召回） */
+export function updateStoryMemory(
+  memoryId: string,
+  patch: { title?: string; content?: string; importance?: number },
+): Promise<{ memory: StoryMemoryCard }> {
+  return requestData<{ memory: StoryMemoryCard }>(`/api/agent/memory/${memoryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
 }
 
 export type MemoryReviewItem = {

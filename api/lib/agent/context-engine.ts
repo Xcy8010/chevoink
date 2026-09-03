@@ -4,6 +4,8 @@ import type {
   AgentMessagePart,
   ContextCheckpoint,
   ContextCheckpointSummary,
+  ContextDetail,
+  ContextDetailRecord,
   ContextState,
   TaskSpec,
   UserDirective,
@@ -233,4 +235,76 @@ export async function getContextState(userId: string, sessionId: string): Promis
 export async function loadContextCheckpoint(sessionId: string): Promise<{ checkpoint: ContextCheckpoint | null; sourceEndedAt: Date | null }> {
   const record = await prisma.contextCheckpoint.findFirst({ where: { sessionId }, orderBy: { createdAt: 'desc' } })
   return { checkpoint: record ? checkpointRecord(record) : null, sourceEndedAt: record?.sourceEndedAt ?? null }
+}
+
+function detailRecord(record: { id: string; role: string; parts: unknown; createdAt: Date }, sourceEndedAt: Date | null): ContextDetailRecord {
+  const text = messageText(record.parts)
+  return {
+    id: record.id,
+    role: record.role,
+    createdAt: record.createdAt.toISOString(),
+    estimatedTokens: estimateTokens(text),
+    excerpt: text.slice(0, 160),
+    inWindow: sourceEndedAt ? record.createdAt > sourceEndedAt : true,
+  }
+}
+
+/** 上下文详情弹窗数据源：records/checkpoints 走 DB 倒序分页；final 视图与占用卡同口径，窗口消息内存正序切片分页 */
+export async function getContextDetail(
+  userId: string,
+  sessionId: string,
+  view: 'records' | 'checkpoints' | 'final',
+  page: number,
+  pageSize: number,
+): Promise<ContextDetail> {
+  const session = await prisma.agentSession.findFirst({ where: { id: sessionId, userId }, select: { novelId: true } })
+  if (!session) throw new DataAccessError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent 会话不存在。')
+  const skip = (page - 1) * pageSize
+
+  if (view === 'checkpoints') {
+    const [total, rows] = await Promise.all([
+      prisma.contextCheckpoint.count({ where: { sessionId } }),
+      prisma.contextCheckpoint.findMany({ where: { sessionId }, orderBy: { createdAt: 'desc' }, skip, take: pageSize }),
+    ])
+    return { view, items: rows.map(checkpointRecord), total, page, pageSize }
+  }
+
+  const checkpoint = await prisma.contextCheckpoint.findFirst({ where: { sessionId }, orderBy: { createdAt: 'desc' } })
+
+  if (view === 'records') {
+    const [total, rows] = await Promise.all([
+      prisma.agentMessage.count({ where: { sessionId } }),
+      prisma.agentMessage.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: pageSize,
+        select: { id: true, role: true, parts: true, createdAt: true },
+      }),
+    ])
+    return { view, items: rows.map((item) => detailRecord(item, checkpoint?.sourceEndedAt ?? null)), total, page, pageSize }
+  }
+
+  const [directives, windowRows] = await Promise.all([
+    listActiveDirectives(userId, session.novelId),
+    prisma.agentMessage.findMany({
+      where: checkpoint
+        ? { sessionId, createdAt: { gt: checkpoint.sourceEndedAt } }
+        : { sessionId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, role: true, parts: true, createdAt: true },
+    }),
+  ])
+  const sourceEndedAt = checkpoint?.sourceEndedAt ?? null
+  const items = windowRows.map((item) => detailRecord(item, sourceEndedAt))
+  const windowTokens = estimateTokens(windowRows.map((item) => messageText(item.parts)).join('\n'))
+  const checkpointTokens = checkpoint?.summaryTokens ?? 0
+  return {
+    view: 'final',
+    estimatedTokens: windowTokens + checkpointTokens,
+    checkpointTokens,
+    checkpointDigest: checkpoint ? renderCheckpointDigest(checkpointRecord(checkpoint)) : null,
+    directiveDigest: renderDirectiveDigest(directives),
+    window: { items: items.slice(skip, skip + pageSize), total: items.length, page, pageSize },
+  }
 }

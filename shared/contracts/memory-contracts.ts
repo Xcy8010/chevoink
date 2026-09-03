@@ -78,6 +78,29 @@ export type MemoryGraph = z.infer<typeof memoryGraphSchema>
 export const memoryGraphJobStatusSchema = z.enum(['pending', 'running', 'completed', 'failed'])
 export type MemoryGraphJobStatus = z.infer<typeof memoryGraphJobStatusSchema>
 
+/** 记忆中心卡片：Agent 沉淀的创作记忆（人物/世界观/情节等）的只读投影 + 作者就地编辑入口。 */
+export const storyMemoryCardSchema = z.object({
+  id: z.string().min(1),
+  memoryType: z.string().min(1),
+  layer: z.enum(['L0', 'L1', 'L2', 'L3']),
+  title: z.string(),
+  content: z.string(),
+  importance: z.number().int().min(0).max(100),
+  status: storyMemoryStatusSchema,
+  version: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+})
+
+export const storyMemoryListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  items: z.array(storyMemoryCardSchema),
+  typeCounts: z.record(z.string(), z.number().int().nonnegative()),
+})
+
+export type StoryMemoryCard = z.infer<typeof storyMemoryCardSchema>
+export type StoryMemoryList = z.infer<typeof storyMemoryListSchema>
+
 export const memoryGraphJobSchema = z.object({
   jobId: z.string().min(1),
   novelId: z.string().min(1),

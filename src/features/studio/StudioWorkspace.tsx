@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, BookOpenText, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, SlidersHorizontal, Trash2, Upload, Wrench } from 'lucide-react'
+import { BookOpen, BookOpenText, Brain, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, SlidersHorizontal, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import BottomSheet from '@/components/ui/BottomSheet'
@@ -46,7 +46,8 @@ import SkillsPanel from './components/SkillsPanel'
 import { AgentPanel } from './agent/components/AgentPanel'
 import { fetchAgentSessions, updateAgentSessionSettings } from './agent/agentApi'
 import { AgentActivityBar } from './agent/components/AgentActivityBar'
-import AgentContextPanel from './agent/components/AgentContextPanel'
+import AgentMemoryCenter from './agent/components/AgentMemoryCenter'
+import ContextDetailDialog from './agent/components/ContextDetailDialog'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
 import { getMessageText } from './agent/lib/panel-helpers'
 import { PanelResizeHandle } from './panel-resize'
@@ -157,6 +158,8 @@ export default function StudioWorkspace() {
   const [novelLastSavedAt, setNovelLastSavedAt] = useState<string | null>(null)
   const [novelMessage, setNovelMessage] = useState('作品设置支持自动保存，也可以手动点击保存。')
   const [mobileView, setMobileView] = useState<MobileView>('assistant')
+  // 上下文详情弹窗（上下文记录/压缩记录/最终上下文）：由记忆面板占用卡「查看详情」打开
+  const [contextDetailOpen, setContextDetailOpen] = useState(false)
   const [workspacePerspective, setWorkspacePerspective] = useState<'work' | 'ide'>(() => {
     if (typeof window === 'undefined') return 'work'
     return window.localStorage.getItem(`chevoink:perspective:${activeNovelId}`) === 'ide' ? 'ide' : 'work'
@@ -4491,7 +4494,7 @@ export default function StudioWorkspace() {
                   返回
                 </button>
                 <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-[var(--text-primary)]">
-                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '小说关系网' : mobileView === 'context' ? '会话上下文' : mobileView === 'skills' ? '作品技能' : '作品设置'}
+                  {mobileView === 'cover' ? '封面工坊' : mobileView === 'memory' ? '小说关系网' : mobileView === 'context' ? '记忆' : mobileView === 'skills' ? '作品技能' : '作品设置'}
                 </p>
               </>
             ) : (
@@ -4627,8 +4630,8 @@ export default function StudioWorkspace() {
             ) : null}
 
             {mobileView === 'context' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] p-3">
-                <AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)]">
+                <AgentMemoryCenter sessionId={agentSessionId} novelId={currentNovel.id} active={agentRunState.active} scrollable={false} onOpenDetail={() => setContextDetailOpen(true)} />
               </div>
             ) : null}
 
@@ -4732,7 +4735,7 @@ export default function StudioWorkspace() {
                   ...(featureFlags.memory2
                     ? [{ key: 'memory', label: '关系网', icon: Network, action: () => setMobileView('memory') }]
                     : []),
-                  { key: 'context', label: '会话上下文', icon: MessageSquareText, action: () => setMobileView('context') },
+                  { key: 'context', label: '记忆', icon: Brain, action: () => setMobileView('context') },
                   { key: 'skills', label: '作品技能', icon: Wrench, action: () => setMobileView('skills') },
                   { key: 'publish', label: novelForm?.status === 'published' ? '更新发布' : '发布作品', icon: Upload, action: () => handlePublishNovel() },
                   ...(novelForm?.status && novelForm.status !== 'archived' ? [{ key: 'completion', label: novelForm.status === 'completed' ? '继续连载' : '完结作品', icon: Flag, action: () => handleToggleNovelCompletion() }] : []),
@@ -4915,7 +4918,7 @@ export default function StudioWorkspace() {
                   taskCount={agentTaskSidebarItems.length}
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
                   skillsPanel={<SkillsPanel novelId={currentNovel.id} chapters={chapters} />}
-                  contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
+                  contextPanel={<AgentMemoryCenter sessionId={agentSessionId} novelId={currentNovel.id} active={agentRunState.active} onOpenDetail={() => setContextDetailOpen(true)} />}
                   compactNavigation={panelWidths.workInspector < 300}
                 />}
                 viewer={workViewer ? <StudioChapterViewer
@@ -5018,7 +5021,7 @@ export default function StudioWorkspace() {
                     activeTaskTitle={agentTaskSidebarItems.find((task) => task.id === activeAgentTaskWindowId)?.title ?? null}
                     taskCount={agentTaskSidebarItems.length}
                     skillsPanel={<SkillsPanel novelId={currentNovel.id} chapters={chapters} />}
-                    contextPanel={<AgentContextPanel sessionId={agentSessionId} active={agentRunState.active} />}
+                    contextPanel={<AgentMemoryCenter sessionId={agentSessionId} novelId={currentNovel.id} active={agentRunState.active} onOpenDetail={() => setContextDetailOpen(true)} />}
                   />}
                 />
                 {ideTreeOpen ? <PanelResizeHandle
@@ -5249,6 +5252,7 @@ export default function StudioWorkspace() {
       /> : null}
       {/* 手机端「更多」面板的反馈入口（桌面端由侧栏账户菜单与 IDE 顶栏「…」菜单各自持有） */}
       <FeedbackDialog open={feedbackKind !== null} kind={feedbackKind ?? 'bug'} source="studio-mobile" onClose={() => setFeedbackKind(null)} />
+      {contextDetailOpen && agentSessionId ? <ContextDetailDialog sessionId={agentSessionId} onClose={() => setContextDetailOpen(false)} /> : null}
     </>
   )
 }

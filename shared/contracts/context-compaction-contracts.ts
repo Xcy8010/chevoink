@@ -56,7 +56,39 @@ export const contextStateSchema = z.object({
   checkpoint: contextCheckpointSchema.nullable(),
 })
 
+/** 上下文详情弹窗的单条对话记录：token 估算 + 是否在当前上下文窗口内 */
+export const contextDetailRecordSchema = z.object({
+  id: z.string().min(1),
+  role: z.string().min(1),
+  createdAt: z.string().datetime(),
+  estimatedTokens: z.number().int().nonnegative(),
+  excerpt: z.string(),
+  inWindow: z.boolean(),
+})
+
+const contextDetailPageMeta = {
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+}
+
+/** 上下文详情三视图：上下文记录 / 压缩记录 / 最终上下文（大量数据均分页返回） */
+export const contextDetailSchema = z.discriminatedUnion('view', [
+  z.object({ view: z.literal('records'), items: z.array(contextDetailRecordSchema), ...contextDetailPageMeta }),
+  z.object({ view: z.literal('checkpoints'), items: z.array(contextCheckpointSchema), ...contextDetailPageMeta }),
+  z.object({
+    view: z.literal('final'),
+    estimatedTokens: z.number().int().nonnegative(),
+    checkpointTokens: z.number().int().nonnegative(),
+    checkpointDigest: z.string().nullable(),
+    directiveDigest: z.string().nullable(),
+    window: z.object({ items: z.array(contextDetailRecordSchema), ...contextDetailPageMeta }),
+  }),
+])
+
 export type UserDirective = z.infer<typeof userDirectiveSchema>
 export type ContextCheckpointSummary = z.infer<typeof contextCheckpointSummarySchema>
 export type ContextCheckpoint = z.infer<typeof contextCheckpointSchema>
 export type ContextState = z.infer<typeof contextStateSchema>
+export type ContextDetailRecord = z.infer<typeof contextDetailRecordSchema>
+export type ContextDetail = z.infer<typeof contextDetailSchema>
