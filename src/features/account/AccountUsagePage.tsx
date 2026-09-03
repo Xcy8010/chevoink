@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, Gift, LoaderCircle, RefreshCcw, Sparkles } from 'lucide-react'
+import { CalendarDays, Gift, LoaderCircle, RefreshCcw, UserPlus } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
 import { fetchCreditUsage, fetchReferral } from './credits-api'
 import InviteCreditsDialog from './InviteCreditsDialog'
 import { formatCreditAmount, roundCreditAmount } from './credit-format'
+import { ledgerLabel } from './ledger-label'
 import AccountLayout from './AccountLayout'
 import type { CreditLedgerItem } from '../../../shared/contracts'
-
-const SOURCE_LABELS: Record<string, string> = {
-  model_tokens: '文本模型', image_generation: '图片生成', web_search: '联网搜索',
-  referral_inviter: '邀请奖励', referral_invitee: '受邀奖励', admin_reset: '管理员重置', admin_reset_all: '管理员全体重置',
-}
 
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
@@ -30,7 +26,7 @@ function LedgerRow({ item }: { item: CreditLedgerItem }) {
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-[#efefec] px-5 py-4 last:border-b-0 dark:border-[var(--border-subtle)]">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{item.kind === 'refund' ? '失败调用返还' : SOURCE_LABELS[item.sourceType] ?? item.sourceType}</p>
+        <p className="truncate text-sm font-medium">{ledgerLabel(item)}</p>
         <p className="mt-1 text-xs text-[var(--text-tertiary)]">
           {formatDateTime(item.createdAt)}
           {item.requestTokens !== null || item.responseTokens !== null ? ` · 输入 ${new Intl.NumberFormat('zh-CN').format(item.requestTokens ?? 0)} / 输出 ${new Intl.NumberFormat('zh-CN').format(item.responseTokens ?? 0)}` : ''}
@@ -145,7 +141,7 @@ export default function AccountUsagePage() {
                 <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">每位成功注册的新好友为你增加 300 Credits，不受每日重置影响。</p>
               </div>
             </div>
-            <Button variant="primary" onClick={() => void openInvite()} className="sm:shrink-0"><Sparkles className="h-4 w-4" />邀请好友</Button>
+            <Button variant="primary" onClick={() => void openInvite()} className="sm:shrink-0"><UserPlus className="h-4 w-4" />邀请好友</Button>
           </section>
           <section className="mt-10">
             <div className="flex flex-wrap items-end justify-between gap-4">

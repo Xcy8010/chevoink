@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Gift } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import { formatCreditAmount, formatCreditResetLabel } from '@/features/account/credit-format'
 import { fetchCreditSummary, fetchReferral } from '@/features/account/credits-api'
@@ -15,7 +14,6 @@ import { useShellStore } from '@/store/useShellStore'
  * 剩余用量与邀请入口只能落在这里：放面板最顶部，展开即一眼可见。
  */
 export default function StudioMobileAccountCard() {
-  const navigate = useNavigate()
   const sessionUser = useShellStore((state) => state.sessionUser)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteCopied, setInviteCopied] = useState(false)
@@ -65,7 +63,8 @@ export default function StudioMobileAccountCard() {
       </div>
       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-tertiary)]">
         <span className="truncate">每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits · {formatCreditResetLabel(summary?.resetsAt)}</span>
-        <button type="button" onClick={() => navigate('/account/usage')} className="-mr-1 inline-flex min-h-[32px] shrink-0 items-center px-1 font-medium text-[var(--text-secondary)]">用量明细 →</button>
+        {/* 新窗口打开账户页，保留创作区当前状态方便回来继续写 */}
+        <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="-mr-1 inline-flex min-h-[32px] shrink-0 items-center px-1 font-medium text-[var(--text-secondary)]">用量明细 →</button>
       </div>
     </div>
     {/* 邀请弹窗 z-[140] 盖在底部面板（z-[70]）之上，不必先收起面板，关掉弹窗还能继续操作 */}

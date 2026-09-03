@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Bug, ChevronDown, Gauge, Gift, Lightbulb, MoreHorizontal, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import { formatCreditAmount, formatCreditResetLabel } from '@/features/account/credit-format'
 import { fetchCreditSummary, fetchReferral } from '@/features/account/credits-api'
@@ -21,7 +20,6 @@ type Props = {
  * 这里把用量、邀请、创作区设置与反馈入口收纳到返回首页左侧。
  */
 export default function StudioMoreMenu(props: Props) {
-  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [usageExpanded, setUsageExpanded] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -102,7 +100,8 @@ export default function StudioMoreMenu(props: Props) {
             <span>每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits</span>
             <span>{formatCreditResetLabel(summary?.resetsAt)}</span>
           </div>
-          <button type="button" onClick={() => navigate('/account/usage')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button>
+          {/* 新窗口打开账户页，创作区界面原样保留，看完直接切回来 */}
+          <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button>
         </div> : null}
         <button type="button" onClick={openInvite} className={item}><Gift className="h-3.5 w-3.5" />邀请好友</button>
         {props.onOpenStudioSettings ? <button type="button" onClick={() => { setOpen(false); props.onOpenStudioSettings?.('general') }} className={item}><Settings2 className="h-3.5 w-3.5" />创作区设置</button> : null}

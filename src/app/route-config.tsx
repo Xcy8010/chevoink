@@ -42,6 +42,7 @@ const SettingsPage = lazyPage(() => import('@/app/routes/SettingsPage'))
 const AccountUsagePage = lazyPage(() => import('@/features/account/AccountUsagePage'))
 const AccountProfilePage = lazyPage(() => import('@/features/account/AccountProfilePage'))
 const AccountPostsPage = lazyPage(() => import('@/features/account/AccountPostsPage'))
+const AccountBillingPage = lazyPage(() => import('@/features/account/AccountBillingPage'))
 const AccountPlanPage = lazyPage(() => import('@/features/account/AccountPlanPage'))
 const AccountDocsPage = lazyPage(() => import('@/features/account/AccountDocsPage'))
 const AuthorPage = lazyPage(() => import('@/pages/AuthorPage'))
@@ -287,6 +288,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <RequireAuthRoute title="登录后查看我的发布" description="登录后即可查看你在社区发布的全部讨论。">
         <AccountPostsPage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/account/billing',
+    title: '查看 ChevoInk Credits 月度账单',
+    description: '按自然月汇总 Credits 消耗与获得，展开可查看逐条明细。',
+    element: (
+      <RequireAuthRoute title="登录后查看账单" description="登录后即可查看你的 Credits 月度账单。">
+        <AccountBillingPage />
       </RequireAuthRoute>
     ),
     useShell: false,

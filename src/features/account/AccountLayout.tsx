@@ -1,14 +1,19 @@
-import { ChevronDown, CircleGauge, LogOut, Newspaper, PenLine, Settings2, UserRound } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { ChevronDown, CircleGauge, LogOut, Newspaper, PanelLeftClose, PanelLeftOpen, PenLine, ReceiptText, Settings2, UserRound } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { requestJson } from '@/app/api-client'
 import AppImage from '@/components/ui/AppImage'
 import Avatar from '@/features/community/components/Avatar'
+import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
+import { FEEDBACK_QQ_GROUP_URL, type FeedbackKind } from '../../../shared/contracts'
+import { fetchReferral } from './credits-api'
+import InviteCreditsDialog from './InviteCreditsDialog'
 
-export type AccountNavId = 'profile' | 'usage' | 'posts'
+export type AccountNavId = 'profile' | 'usage' | 'posts' | 'billing'
 
 type Props = {
   active?: AccountNavId
@@ -17,7 +22,13 @@ type Props = {
   children: ReactNode
 }
 
-type NavCardItem = { title: string; desc: string; to: string }
+/** 悬停卡片条目：站内路由 / 外链 / 邀请弹窗 / 反馈弹窗四种落点 */
+type NavCardItem = { title: string; desc: string } & (
+  | { to: string }
+  | { external: string }
+  | { action: 'invite' }
+  | { action: 'feedback'; kind: FeedbackKind }
+)
 
 /** 顶栏悬停卡片：对照参考站导航，把站内入口按意图分组 */
 const NAV_CARDS: { id: string; label: string; items: NavCardItem[] }[] = [
@@ -35,9 +46,9 @@ const NAV_CARDS: { id: string; label: string; items: NavCardItem[] }[] = [
     id: 'partner',
     label: '合作',
     items: [
-      { title: '邀请计划', desc: '邀请好友注册，获得长期有效的 Credits', to: '/account/usage' },
-      { title: '作者入驻', desc: '开通创作中心，发布你的第一部作品', to: '/studio' },
-      { title: '反馈与建议', desc: '到社区聊聊使用感受与产品建议', to: '/community' },
+      { title: '邀请计划', desc: '邀请好友注册，获得长期有效的 Credits', action: 'invite' },
+      { title: '商业合作', desc: '内容授权、品牌联动等商务洽谈入口', external: FEEDBACK_QQ_GROUP_URL },
+      { title: '反馈与建议', desc: '把使用感受与产品建议直接告诉我们', action: 'feedback', kind: 'suggestion' },
     ],
   },
   {
@@ -55,7 +66,7 @@ const NAV_CARDS: { id: string; label: string; items: NavCardItem[] }[] = [
       { title: '文档', desc: '了解如何使用启创墨域', to: '/account/docs' },
       { title: '常见问题', desc: '获取常见问题的清晰解答', to: '/account/docs?doc=faq' },
       { title: '更新日志', desc: '了解最新功能发布与改进', to: '/account/docs?doc=changelog' },
-      { title: '社区互助', desc: '与其他创作者交流心得', to: '/community' },
+      { title: '问题反馈', desc: '遇到异常？带上截图直接提交', action: 'feedback', kind: 'bug' },
     ],
   },
 ]
@@ -64,7 +75,10 @@ const SIDEBAR_NAV: { id: AccountNavId; label: string; href: string; icon: typeof
   { id: 'profile', label: '个人信息', href: '/account/profile', icon: UserRound },
   { id: 'usage', label: '用量明细', href: '/account/usage', icon: CircleGauge },
   { id: 'posts', label: '我的发布', href: '/account/posts', icon: Newspaper },
+  { id: 'billing', label: '我的账单', href: '/account/billing', icon: ReceiptText },
 ]
+
+const SIDEBAR_COLLAPSE_KEY = 'chevoink:account-sidebar-collapsed'
 
 const menuItemClass =
   'flex items-center justify-between gap-3 rounded-[10px] px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[#f4f4f2] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]'
@@ -74,6 +88,32 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
   const setGuest = useShellStore((state) => state.setGuest)
   const navigate = useNavigate()
 
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1')
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
+  const referralQuery = useQuery({ queryKey: ['credits', 'referral'], queryFn: fetchReferral, staleTime: 60_000 })
+
+  useEffect(() => { if (!inviteOpen) setCopied(false) }, [inviteOpen])
+  const copyInviteLink = useCallback(async () => {
+    const url = referralQuery.data?.inviteUrl
+    if (!url || !navigator.clipboard) return
+    await navigator.clipboard.writeText(url)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1800)
+  }, [referralQuery.data?.inviteUrl])
+  const openInvite = useCallback(() => {
+    setInviteOpen(true)
+    if (referralQuery.data?.inviteUrl && navigator.clipboard) void navigator.clipboard.writeText(referralQuery.data.inviteUrl).then(() => setCopied(true)).catch(() => undefined)
+  }, [referralQuery.data?.inviteUrl])
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      localStorage.setItem(SIDEBAR_COLLAPSE_KEY, current ? '0' : '1')
+      return !current
+    })
+  }
+
   async function handleLogout() {
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
@@ -82,6 +122,28 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
     }
     setGuest()
     navigate('/login', { replace: true })
+  }
+
+  function renderCardItem(item: NavCardItem) {
+    const body = (
+      <>
+        <span className="block text-sm font-medium">{item.title}</span>
+        <span className="mt-0.5 block text-xs leading-5 text-[var(--text-tertiary)]">{item.desc}</span>
+      </>
+    )
+    const itemClass = 'block w-full rounded-[10px] px-3 py-2.5 text-left transition-colors hover:bg-[#f4f4f2] dark:hover:bg-[var(--surface-muted)]'
+    if ('to' in item) return <Link key={item.title} to={item.to} className={itemClass}>{body}</Link>
+    if ('external' in item) {
+      return (
+        <a key={item.title} href={item.external} target="_blank" rel="noopener,noreferrer" className={itemClass}>
+          {body}
+        </a>
+      )
+    }
+    if (item.action === 'invite') {
+      return <button key={item.title} type="button" onClick={() => openInvite()} className={itemClass}>{body}</button>
+    }
+    return <button key={item.title} type="button" onClick={() => setFeedbackKind(item.kind)} className={itemClass}>{body}</button>
   }
 
   return (
@@ -104,16 +166,7 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
                 </button>
                 <div className="pointer-events-none absolute left-0 top-full z-50 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
                   <div className="w-[300px] rounded-[14px] border border-[#e7e7e4] bg-white p-1.5 shadow-[0_16px_40px_rgba(23,27,36,0.12)] dark:border-[var(--border-subtle)] dark:bg-[var(--surface-elevated)]">
-                    {card.items.map((item) => (
-                      <Link
-                        key={`${item.to}-${item.title}`}
-                        to={item.to}
-                        className="block rounded-[10px] px-3 py-2.5 transition-colors hover:bg-[#f4f4f2] dark:hover:bg-[var(--surface-muted)]"
-                      >
-                        <span className="block text-sm font-medium">{item.title}</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-[var(--text-tertiary)]">{item.desc}</span>
-                      </Link>
-                    ))}
+                    {card.items.map((item) => renderCardItem(item))}
                   </div>
                 </div>
               </div>
@@ -153,32 +206,65 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
       </header>
       <div className="flex min-h-[calc(100%-3.5rem)] items-stretch">
         {withSidebar ? (
-          <aside className="hidden w-[264px] shrink-0 border-r border-[#e8e8e5] lg:block dark:border-[var(--border-subtle)]">
-            <div className="sticky top-14 px-4 py-7">
-              <div className="px-2">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                  <span className="truncate">{user?.nickname ?? '创作者'}</span>
-                  <span className="shrink-0 rounded-full bg-emerald-600/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">公测版</span>
-                </p>
-                <p className="mt-1 truncate text-xs text-[var(--text-tertiary)]">{user?.email ?? user?.phone ?? '启创墨域账户'}</p>
+          <aside className={cn('hidden shrink-0 border-r border-[#e8e8e5] transition-[width] duration-200 lg:block dark:border-[var(--border-subtle)]', collapsed ? 'w-[64px]' : 'w-[264px]')}>
+            <div className={cn('sticky top-14 py-7', collapsed ? 'px-2' : 'px-4')}>
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text-tertiary)] transition-colors hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]"
+                  aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+                  title={collapsed ? '展开侧栏' : '折叠侧栏'}
+                >
+                  {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+                </button>
               </div>
-              <nav className="mt-7 space-y-1">
-                {SIDEBAR_NAV.map(({ id, label, href, icon: Icon }) => (
-                  <Link
-                    key={id}
-                    to={href}
-                    className={cn(
-                      'flex h-10 items-center gap-2.5 rounded-[10px] px-3 text-sm transition-colors',
-                      active === id
-                        ? 'bg-[#ececea] font-medium text-[var(--text-primary)] dark:bg-[var(--surface-muted)]'
-                        : 'text-[var(--text-secondary)] hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]',
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {label}
-                  </Link>
-                ))}
-              </nav>
+              {collapsed ? (
+                <nav className="mt-5 space-y-1">
+                  {SIDEBAR_NAV.map(({ id, label, href, icon: Icon }) => (
+                    <Link
+                      key={id}
+                      to={href}
+                      title={label}
+                      className={cn(
+                        'flex h-10 items-center justify-center rounded-[10px] transition-colors',
+                        active === id
+                          ? 'bg-[#ececea] text-[var(--text-primary)] dark:bg-[var(--surface-muted)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]',
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </Link>
+                  ))}
+                </nav>
+              ) : (
+                <>
+                  <div className="mt-4 px-2">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <span className="truncate">{user?.nickname ?? '创作者'}</span>
+                      <span className="shrink-0 rounded-full bg-emerald-600/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">公测版</span>
+                    </p>
+                    <p className="mt-1 truncate text-xs text-[var(--text-tertiary)]">{user?.email ?? user?.phone ?? '启创墨域账户'}</p>
+                  </div>
+                  <nav className="mt-7 space-y-1">
+                    {SIDEBAR_NAV.map(({ id, label, href, icon: Icon }) => (
+                      <Link
+                        key={id}
+                        to={href}
+                        className={cn(
+                          'flex h-10 items-center gap-2.5 rounded-[10px] px-3 text-sm transition-colors',
+                          active === id
+                            ? 'bg-[#ececea] font-medium text-[var(--text-primary)] dark:bg-[var(--surface-muted)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[#f1f1ef] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]',
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {label}
+                      </Link>
+                    ))}
+                  </nav>
+                </>
+              )}
             </div>
           </aside>
         ) : null}
@@ -204,6 +290,14 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
           {children}
         </main>
       </div>
+      <InviteCreditsDialog
+        open={inviteOpen}
+        referral={referralQuery.data ?? null}
+        copied={copied}
+        onCopy={() => void copyInviteLink()}
+        onClose={() => setInviteOpen(false)}
+      />
+      <FeedbackDialog open={feedbackKind !== null} kind={feedbackKind ?? 'suggestion'} source="account" onClose={() => setFeedbackKind(null)} />
     </div>
   )
 }
