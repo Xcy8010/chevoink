@@ -451,7 +451,13 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
     return () => window.removeEventListener('keydown', onKey)
   }, [suspended, flipped, items.length, onClose])
 
-  const hasMore = state ? state.items.length < state.total : false
+  // 自动翻页加载：拨牌接近末尾两张时无声加载下一页，不设手动按钮（作者要求流畅自然）
+  useEffect(() => {
+    if (!state || state.loading || state.loadingMore || state.error) return
+    if (items.length >= state.total) return
+    if (focus >= items.length - 2) onLoadMore()
+  }, [focus, items.length, state, onLoadMore])
+
   const step = (delta: number) => {
     setFlipped(false)
     setFocus((current) => Math.max(0, Math.min(Math.max(items.length - 1, 0), current + delta)))
@@ -566,17 +572,6 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
 
       <footer className="flex shrink-0 flex-col items-center gap-1.5 px-5 pb-5 pt-1" onClick={(event) => event.stopPropagation()}>
         <p className="text-[10px] text-white/50">← → 拨牌翻阅 · 点击卡片翻面读全文 · 右键编辑/引用 · Esc 收叠</p>
-        {hasMore ? (
-          <button
-            type="button"
-            onClick={onLoadMore}
-            disabled={state?.loadingMore}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-white/60 transition-colors duration-200 hover:bg-white/10 hover:text-white disabled:opacity-50"
-          >
-            {state?.loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-            {state?.loadingMore ? '加载中…' : '加载更多'}
-          </button>
-        ) : null}
       </footer>
     </div>,
     document.body,

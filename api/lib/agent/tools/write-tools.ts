@@ -67,6 +67,15 @@ export const memorySaveTool = defineTool({
     else if (typeof result.content === 'number' || typeof result.content === 'boolean') result.content = String(result.content)
     if (typeof result.title === 'number') result.title = String(result.title)
     if (typeof result.title === 'string') result.title = result.title.trim().slice(0, 120)
+    // title 漏填兜底：取正文首句作标题，避免整轮工具调用因参数校验失败作废（作者明确要求兜底）
+    if (typeof result.title !== 'string' || !result.title.trim()) {
+      const content = typeof result.content === 'string' ? result.content.trim() : ''
+      if (content) {
+        const firstLine = content.split(/\r?\n/)[0].trim()
+        const firstSentence = firstLine.split(/[。！？；!?;]/)[0].trim()
+        result.title = (firstSentence || firstLine).slice(0, 40)
+      }
+    }
     if (typeof result.content === 'string') result.content = result.content.trim().slice(0, 4000)
     const importance = Number(result.importance)
     result.importance = Number.isFinite(importance) ? Math.min(100, Math.max(1, Math.round(importance))) : 70

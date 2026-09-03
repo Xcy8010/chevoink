@@ -42,16 +42,18 @@ async function normalizeLegacyViewedImageUrls(userId: string, parts: AgentMessag
   })
 }
 
-/** 刷新后「继续执行」按钮的数据来源：当前无活跃 run 时，取最近一个 failed/paused 的 run 供前端续跑。
- * activeRunId 只看内存里的活体 run（进程重启/刷新即丢），resumeRunId 从 DB 派生终态，二者互补。 */
+/** 刷新后「继续执行」按钮的数据来源：当前无活跃 run 时，仅当会话「最近一个」run 停在 failed/paused 才供前端续跑。
+ * 不能取历史任意 failed run：旧 run 失败后作者已开新 run 并正常收尾时，任务已闭环，
+ * 刷新后不应再冒「继续执行」按钮（作者反馈：收尾完成后刷新仍见按钮）。 */
 async function getResumeRunIdBySession(sessionId: string): Promise<string | null> {
   if (getActiveRunIdBySession(sessionId)) return null
   const run = await prisma.agentRun.findFirst({
-    where: { sessionId, status: { in: ['failed', 'paused'] } },
+    where: { sessionId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true },
+    select: { id: true, status: true },
   })
-  return run?.id ?? null
+  if (!run) return null
+  return run.status === 'failed' || run.status === 'paused' ? run.id : null
 }
 
 /** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；

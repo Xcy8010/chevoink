@@ -37,9 +37,18 @@ const CAMEL_CASE_IDENTIFIER = /\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b/g
 /** 不透明编号（cuid/uuid 形态 16 位起纯小写字母数字）：编号原文等同泄漏，统一遮罩 */
 const OPAQUE_IDENTIFIER = /\b[a-z0-9]{16,}\b/g
 
+/** 等式左边的标识符/参数名形态（清洗前英文标识符与清洗后中文参数名两种形态都覆盖） */
+const PROTOCOL_EQ_SUBJECT = '(?:[a-zA-Z][A-Za-z0-9]*(?:[_A-Z][A-Za-z0-9]*)+|章节编号|场景任务编号|任务窗口编号|作品编号|任务编号|编译编号|对应参数|对应工具|编号)'
+/** 协议残留括注：模型把 ID/参数等式写进正文（chapterId=cmt…），清洗后会变成「（章节编号=编号）」
+ *  这类天书括注——对作者不携带任何可理解信息，整段删除（作者明确要求信道输出人人都能看懂） */
+const PROTOCOL_PARENTHETICAL = new RegExp(`[（(]\\s*${PROTOCOL_EQ_SUBJECT}\\s*[=＝:：]\\s*[^()（）]*?[)）]`, 'g')
+/** 尾部未闭合的协议括注（等式已出现、闭括号未到）：流式期间扣留，避免先播「（章节编号=」再收回 */
+const OPEN_PROTOCOL_PARENTHETICAL = new RegExp(`[（(]\\s*${PROTOCOL_EQ_SUBJECT}\\s*[=＝:：]\\s*[^()（）]*$`)
+
 export function humanizeAgentVisibleText(text: string): string {
   if (!text) return text
-  let out = text.replace(OPAQUE_IDENTIFIER, '编号')
+  let out = text.replace(PROTOCOL_PARENTHETICAL, '')
+  out = out.replace(OPAQUE_IDENTIFIER, '编号')
   out = out.replace(SNAKE_CASE_IDENTIFIER, (name) => TOOL_LABEL_BY_NAME.get(name) ?? '对应工具')
   out = out.replace(CAMEL_CASE_IDENTIFIER, (name) => PARAM_LABEL_BY_NAME[name] ?? '对应参数')
   for (const [pattern, label] of INTERNAL_NAME_ALIASES) {
@@ -66,6 +75,8 @@ const GROWING_OPAQUE = /^[a-z0-9]{6,15}$/
 
 /** 返回文本尾部需要扣留的字符数：尾部标识符仍可能长成已知英文名或编号时，先不播出 */
 function holdbackTail(text: string): number {
+  const openParen = text.match(OPEN_PROTOCOL_PARENTHETICAL)
+  if (openParen) return openParen[0].length
   const match = text.match(TRAILING_TOKEN)
   const token = match?.[0]
   if (!token) return 0

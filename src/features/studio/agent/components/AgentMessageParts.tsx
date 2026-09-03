@@ -898,6 +898,9 @@ const ToolCallCard = memo(function ToolCallCard({
   const spotlightType = part.status === 'success' ? memorySpotlightType(part.toolName, part.args) : null
   const spotlightTitle = spotlightType && typeof argsRecord?.title === 'string' ? argsRecord.title : ''
   const rowExpandable = spotlightType === null && (expandable || collapsible)
+  // 质量报告：默认折叠、点击头部展开回看（报告条目多，平铺会把对话流冲得很长）
+  const qualityReport = part.display?.kind === 'qualityReport'
+  const [workflowExpanded, setWorkflowExpanded] = useState(false)
   const webSearchQuery =
     part.toolName === 'web_search' && typeof argsRecord?.query === 'string' ? argsRecord.query : ''
   const platformSearchQuery =
@@ -926,7 +929,9 @@ const ToolCallCard = memo(function ToolCallCard({
       part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
     )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
     <span className="shrink-0">{toolStatusIcon[part.status]}</span>
-    {spotlightType !== null ? (
+    {qualityReport ? (
+      <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', workflowExpanded && 'rotate-180')} />
+    ) : spotlightType !== null ? (
       <SquareStack className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)]" />
     ) : rowExpandable ? <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', expanded && 'rotate-180')} /> : null}
   </>
@@ -942,7 +947,17 @@ const ToolCallCard = memo(function ToolCallCard({
         <span aria-hidden className="agent-tool-progress pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[var(--text-secondary)]/55" />
       ) : null}
       {workflowDisplay
-        ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
+        ? qualityReport ? (
+          <div className="group relative flex w-full items-center gap-2 py-2 text-left">
+            <button
+              type="button"
+              onClick={() => setWorkflowExpanded((value) => !value)}
+              aria-label={workflowExpanded ? '收起质量报告' : '展开质量报告'}
+              className="absolute inset-0 z-0"
+            />
+            {headerContent}
+          </div>
+        ) : <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
         : <div className="group relative flex w-full items-center gap-2 py-2 text-left">
             {spotlightType !== null ? (
               <button
@@ -973,7 +988,7 @@ const ToolCallCard = memo(function ToolCallCard({
           {argumentRows.map((row, index) => <div key={`${row.label}-${index}`} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-2"><dt className="text-[var(--text-tertiary)]">{row.label}</dt><dd className="min-w-0 break-words text-[var(--text-secondary)]">{row.value}</dd></div>)}
         </dl>
       ) : null}
-      {part.display && workflowDisplayHasBody && (!collapsible || expanded) ? (
+      {part.display && workflowDisplayHasBody && (!collapsible || expanded) && (!qualityReport || workflowExpanded) ? (
         <div className={cn(workflowDisplay ? 'pb-2' : 'pb-3 pt-1 pl-[22px]')}>
           <ToolDisplayRenderer
             display={part.display}
