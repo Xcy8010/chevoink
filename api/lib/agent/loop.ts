@@ -38,6 +38,7 @@ import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES } from './tools/task-orchestration-tools.js'
+import { humanizeAgentVisibleText } from './visible-text.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
@@ -368,6 +369,13 @@ function parseToolArgsTolerant(raw: string): unknown {
 
   for (const candidate of [...attempts]) {
     attempts.push(repairSingleQuoteStrings(candidate))
+  }
+
+  // 复合损伤（字符串内裸换行 + 截断未闭括号同时存在）在长参数场景很常见，
+  // 上面的单项修复候选都只治一种，这里补两个顺序组合候选兜底
+  for (const candidate of [...attempts]) {
+    attempts.push(repairTruncated(escapeControlChars(candidate)))
+    attempts.push(escapeControlChars(repairTruncated(candidate)))
   }
 
   for (const candidate of attempts) {
@@ -1041,7 +1049,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         toolCalls: effectiveToolCalls.length > 0 ? effectiveToolCalls : undefined,
       })
 
-      const cleanContent = result.content ? stripAgentProtocolArtifacts(result.content) : ''
+      const cleanContent = humanizeAgentVisibleText(result.content ? stripAgentProtocolArtifacts(result.content) : '')
 
       // 主流 Agent 标准（Codex 等）：任务过程中的进展正文同样是对话正文信道，作者实时可见、刷新后仍在；
       // 只有模型原生 reasoning 才进思考信道，执行旁白不再改道思考区。
@@ -1199,7 +1207,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           },
         })
         addUsage(usage, wrapUp.usage)
-        const cleanWrapUp = stripAgentProtocolArtifacts(wrapUp.content)
+        const cleanWrapUp = humanizeAgentVisibleText(stripAgentProtocolArtifacts(wrapUp.content))
         if (wrapUp.content) {
           bus.emit({ type: 'text.final', messageId, text: cleanWrapUp, asReasoning: false })
         }

@@ -303,7 +303,12 @@ export const sceneTaskBuildTool = defineTool({
   }),
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
-    let source = raw as Record<string, unknown>
+    // 协议层兜底先行：模型偶发把参数包进 {"arguments": "<字符串化 JSON>"} 信封或 [{name,value}] 列表，
+    // 不解包就会直接 zod 失败重试一轮（该工具的高频失败点）
+    const unwrapped = coerceToolArgumentEnvelope(raw)
+    let source = (unwrapped && typeof unwrapped === 'object' && !Array.isArray(unwrapped)
+      ? unwrapped
+      : raw) as Record<string, unknown>
     for (const key of ['arguments', 'args', 'params', 'parameters'] as const) {
       const wrapped = source[key]
       if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {

@@ -1175,6 +1175,7 @@ export const AgentMessageParts = memo(function AgentMessageParts({
   summaryCount,
   summaryExpanded = false,
   onToggleSummary,
+  textCollapsible = false,
 }: {
   parts: AgentMessagePart[]
   streaming: boolean
@@ -1187,6 +1188,8 @@ export const AgentMessageParts = memo(function AgentMessageParts({
   /** 摘要是否已展开（回看全部思考/动作） */
   summaryExpanded?: boolean
   onToggleSummary?: (blockId: string) => void
+  /** 折叠态下本消息正文是否可收起（块内非最后一条）：run 结束后过程进展正文折进摘要行 */
+  textCollapsible?: boolean
 }) {
   const showSummary = !runActive && (summaryCount ?? 0) > 0
   const collapsed = !runActive && !summaryExpanded
@@ -1227,6 +1230,8 @@ export const AgentMessageParts = memo(function AgentMessageParts({
         const isLast = index === parts.length - 1
 
         if (part.type === 'text') {
+          // 折叠态且可收起：过程进展正文折进「已处理 n 个操作」，只留结尾总结的正文可见
+          if (collapsed && textCollapsible) return null
           return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast} />
         }
 

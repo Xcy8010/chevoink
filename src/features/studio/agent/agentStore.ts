@@ -219,6 +219,9 @@ type AgentStoreState = {
   composerSkillIds: string[]
   /** 本轮技能路由：仅 live 事件写入，给作者一个“何时调用了哪些技能”的可见答案 */
   skillRoute: AgentSkillRouteState | null
+  /** 正文已定稿（text.final 已到达）的消息 id：定稿后正文尾部不再画流式光标，
+      避免等作者答题/审批或工具执行期间光标在已完成正文后常闪 */
+  finalizedTextIds: string[]
   /** 自动追踪：Agent 写入章节时编辑器自动跳转到对应正文（默认开启） */
   autoFollow: boolean
   /** 当前任务窗口（会话）累计的工作区写入活动（变更区） */
@@ -507,6 +510,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   composerUploading: 0,
   composerSkillIds: [],
   skillRoute: null,
+  finalizedTextIds: [],
   autoFollow: readStoredAutoFollow(),
   workspaceActivities: [],
   activitiesVersion: 0,
@@ -533,6 +537,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       toolNavigationRequest: null,
       // 新一轮重新路由技能：上一轮的技能标识不能留到本轮
       skillRoute: null,
+      finalizedTextIds: [],
       // 新 run 开跑：登记运行中供侧栏展示；同一会话的旧终态信号视为已消费
       ...(sessionId
         ? {
@@ -656,6 +661,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       liveToolDrafts: {},
       toolNavigationRequest: null,
       skillRoute: null,
+      finalizedTextIds: [],
       // 切换会话视为“离开旧对话”：清空消息，由渲染层按「未水合」展示图标流光；
       // 同会话重挂载/续活走早退路径（loadedSessionId 命中）不会经过这里
       messages: [],
@@ -846,6 +852,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         case 'text.final':
           return {
             ...base,
+            // 正文定稿：登记 id，渲染层即刻停掉该消息正文尾部的流式光标
+            finalizedTextIds: state.finalizedTextIds.includes(event.messageId)
+              ? state.finalizedTextIds
+              : [...state.finalizedTextIds, event.messageId],
             messages: updateMessageParts(state.messages, event.messageId, (parts) => {
               const withoutText = parts.filter((part) => part.type !== 'text')
               if (!event.text) return withoutText

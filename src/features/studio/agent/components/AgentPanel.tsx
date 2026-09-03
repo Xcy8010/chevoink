@@ -177,6 +177,8 @@ export function AgentPanel({
   const runId = useAgentStore((state) => state.runId)
   const phase = useAgentStore((state) => state.phase)
   const messages = useAgentStore((state) => state.messages)
+  // 正文已定稿的消息 id：定稿后不再画流式光标（等答题/审批/工具执行期间光标不应常闪）
+  const finalizedTextIds = useAgentStore((state) => state.finalizedTextIds)
   const pendingApproval = useAgentStore((state) => state.pendingApproval)
   const pendingQuestion = useAgentStore((state) => state.pendingQuestion)
   const usage = useAgentStore((state) => state.usage)
@@ -1379,12 +1381,14 @@ export function AgentPanel({
                 >
                   <AgentMessageParts
                     parts={message.parts}
-                    streaming={messageRunActive && message.id === lastAssistantId}
+                    streaming={messageRunActive && message.id === lastAssistantId && !finalizedTextIds.includes(message.id)}
                     runActive={messageRunActive}
                     blockId={block?.firstId}
                     summaryCount={isBlockFirst ? block?.ops : undefined}
                     summaryExpanded={blockExpanded}
                     onToggleSummary={handleToggleBlockSummary}
+                    // 折叠态下过程进展正文一并收进「已处理 n 个操作」，只留块内最后一条（结尾总结）的正文
+                    textCollapsible={!isBlockLast && (block?.ops ?? 0) > 0}
                   />
                   {/* 结论操作条：每个对话块结尾均提供复制与创建分支（纯 icon，悬停 title 说明，流式进行中不显示） */}
                   {isBlockLast && !messageRunActive && getMessageText(message.parts) ? (
