@@ -41,6 +41,9 @@ function lazyPage(load: () => Promise<{ default: ComponentType }>) {
 const SettingsPage = lazyPage(() => import('@/app/routes/SettingsPage'))
 const AccountUsagePage = lazyPage(() => import('@/features/account/AccountUsagePage'))
 const AccountProfilePage = lazyPage(() => import('@/features/account/AccountProfilePage'))
+const AccountPostsPage = lazyPage(() => import('@/features/account/AccountPostsPage'))
+const AccountPlanPage = lazyPage(() => import('@/features/account/AccountPlanPage'))
+const AccountDocsPage = lazyPage(() => import('@/features/account/AccountDocsPage'))
 const AuthorPage = lazyPage(() => import('@/pages/AuthorPage'))
 const CommunityPage = lazyPage(() => import('@/pages/CommunityPage'))
 const DiscoverPage = lazyPage(() => import('@/pages/DiscoverPage'))
@@ -273,6 +276,39 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <RequireAuthRoute title="登录后查看额度" description="登录后即可查看公测 Credits 用量、记录和邀请奖励。">
         <AccountUsagePage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/account/posts',
+    title: '管理你在社区发布的讨论',
+    description: '集中查看你发布的全部讨论与审核状态。',
+    element: (
+      <RequireAuthRoute title="登录后查看我的发布" description="登录后即可查看你在社区发布的全部讨论。">
+        <AccountPostsPage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/account/plan',
+    title: 'ChevoInk 套餐与价格',
+    description: '查看公测版套餐权益与后续套餐规划。',
+    element: (
+      <RequireAuthRoute title="登录后查看套餐" description="登录后即可查看当前套餐权益与规划。">
+        <AccountPlanPage />
+      </RequireAuthRoute>
+    ),
+    useShell: false,
+  },
+  {
+    path: '/account/docs',
+    title: 'ChevoInk 产品文档',
+    description: '产品概述、创作中心、阅读社区与账户额度的完整使用文档。',
+    element: (
+      <RequireAuthRoute title="登录后查看文档" description="登录后即可浏览启创墨域的完整产品文档。">
+        <AccountDocsPage />
       </RequireAuthRoute>
     ),
     useShell: false,
