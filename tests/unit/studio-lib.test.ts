@@ -340,7 +340,7 @@ describe('plan-review：计划文件与待审持久化', () => {
   })
 
   it('buildServerPlanFile：id 加 server- 前缀', () => {
-    const file = buildServerPlanFile({ id: 'p1', runId: 'r1', title: ' ', content: ' 内容 ', createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z' })
+    const file = buildServerPlanFile({ id: 'p1', runId: 'r1', title: ' ', content: ' 内容 ', orderIndex: null, createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z' })
     expect(file.id).toBe('server-p1')
     expect(file.backendArtifactId).toBe('p1')
     expect(file.title).toBe('创作计划')
