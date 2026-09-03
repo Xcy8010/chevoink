@@ -217,6 +217,20 @@ export async function listPostsData(
 
 
 
+/** 社区面板统计：讨论总数/关联作品数/最近发帖时间，独立于分页口径保证数字准确 */
+export async function getPostStatsData() {
+  const [totalPosts, linkedNovelCount, latest] = await prisma.$transaction([
+    prisma.post.count(),
+    prisma.post.count({ where: { relatedNovelId: { not: null } } }),
+    prisma.post.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+  ])
+  return {
+    totalPosts,
+    linkedNovelCount,
+    lastPostAt: latest ? latest.createdAt.toISOString() : null,
+  }
+}
+
 export async function getPostDetailData(postId: string, viewerUserId?: string | null): Promise<PostDetailPayload | null> {
   const post = await prisma.post.findUnique({
     where: { id: postId },

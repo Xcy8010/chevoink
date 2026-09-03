@@ -148,7 +148,8 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
 
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-[#f6f6f4] text-[var(--text-primary)] [scrollbar-gutter:stable] dark:bg-[var(--app-bg)]">
-      <header className="sticky top-0 z-40 border-b border-[#e8e8e5] bg-[#f6f6f4]/95 backdrop-blur-xl dark:border-[var(--border-subtle)] dark:bg-[color:var(--app-bg)]/95">
+      {/* 注意：Tailwind v3 不支持 var() 颜色加 alpha 修饰符（类不生成），深色顶栏必须用实底变量 */}
+      <header className="sticky top-0 z-40 border-b border-[#e8e8e5] bg-[#f6f6f4]/95 backdrop-blur-xl dark:border-[var(--border-subtle)] dark:bg-[var(--app-bg)]">
         <div className="flex h-16 items-center gap-1 px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 pr-3">
             <AppImage src="/chevoink-agent.png" alt="" className="h-8 w-8 rounded-[9px]" />

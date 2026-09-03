@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { prisma } from '../../prisma.js'
 import { ALL_NOVEL_TAGS, MAX_NOVEL_TAGS } from '../../../../shared/contracts/novel-tags.js'
+import { enforceCoverTitleInPrompt } from './cover-prompt.js'
 import { defineTool } from './types.js'
 
 /**
@@ -177,28 +178,35 @@ export const novelUpdateMetaTool = defineTool({
 export const coverPromptSetTool = defineTool({
   name: 'cover_prompt_set',
   title: '设置封面提示词',
-  description: '把设计好的封面提示词写入当前作品，供后续生成封面使用。提示词需适配 3:4 竖版书封构图。',
+  description: '把设计好的封面提示词写入当前作品，供后续生成封面使用。提示词需适配 3:4 竖版书封构图，并要求画面包含书名标题文字。',
   parameters: z.object({
-    prompt: z.string().min(4).max(2000).describe('封面提示词（中文，含主体/氛围/构图/风格关键词）'),
+    prompt: z
+      .string()
+      .min(4)
+      .max(2000)
+      .describe('封面提示词（中文，含主体/氛围/构图/风格关键词）。平台规定书封必须带作品名：提示词必须要求画面包含书名标题文字，严禁写「无文字/没有文字/no text」类负向约束（服务端也会强制纠正）'),
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
     const novel = await prisma.novel.findFirst({
       where: { id: ctx.novelId, authorId: ctx.userId },
-      select: { coverPrompt: true },
+      select: { coverPrompt: true, title: true, displayTitle: true },
     })
 
     if (!novel) {
       return { output: '未找到当前作品。' }
     }
 
-    await prisma.novel.update({ where: { id: ctx.novelId }, data: { coverPrompt: args.prompt.trim() } })
+    // 服务端强制保险：与 cover_generate 同一口径，落库的提示词必须要求封面带书名标题文字
+    const finalPrompt = enforceCoverTitleInPrompt(args.prompt.trim(), novel.title, novel.displayTitle)
+
+    await prisma.novel.update({ where: { id: ctx.novelId }, data: { coverPrompt: finalPrompt } })
 
     return {
       output: '封面提示词已保存到作品设置。',
       summary: '保存封面提示词',
-      display: { kind: 'markdown', markdown: `**封面提示词**\n\n${args.prompt.trim()}` },
+      display: { kind: 'markdown', markdown: `**封面提示词**\n\n${finalPrompt}` },
       snapshot: { target: 'novel', targetId: ctx.novelId, field: 'coverPrompt', previousValue: novel.coverPrompt },
     }
   },

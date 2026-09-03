@@ -283,6 +283,13 @@ export type ListPostsResponse = ApiSuccess<{
   snapshotAt?: string
 }>
 
+/** 社区面板统计：独立于分页的准确总数口径 */
+export type PostStatsResponse = ApiSuccess<{
+  totalPosts: number
+  linkedNovelCount: number
+  lastPostAt: string | null
+}>
+
 export type GetPostDetailResponse = ApiSuccess<PostDetailPayload>
 
 export type GetTopicsResponse = ApiSuccess<{

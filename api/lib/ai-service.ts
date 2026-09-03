@@ -808,7 +808,7 @@ export async function chapterAssistData(userId: string, input: ChapterAssistRequ
 }
 
 export async function generateCoverPromptData(userId: string, input: GenerateCoverPromptRequest) {
-  const systemPrompt = '你是一名小说封面提示词设计师，请输出适合图像模型的中文封面提示词。'
+  const systemPrompt = '你是一名小说封面提示词设计师，请输出适合图像模型的中文封面提示词。平台规定书封必须带作品名：提示词必须要求画面包含书名标题文字，严禁输出「无文字/没有文字/no text」类负向约束。'
   const userPrompt = [
     `作品名：${input.novelTitle}`,
     `简介：${input.summary}`,
@@ -816,6 +816,7 @@ export async function generateCoverPromptData(userId: string, input: GenerateCov
     input.protagonist ? `主角：${input.protagonist}` : '',
     input.stylePreference ? `风格：${input.stylePreference}` : '',
     '画面必须适配竖版书籍封面构图，保持稳定的 3:4 书封比例。',
+    `封面画面必须包含书名标题文字「${input.novelTitle}」，字体清晰端正、与画面风格协调。`,
     '请输出一段主提示词，并附带 4 到 8 个视觉关键词。',
   ]
     .filter(Boolean)

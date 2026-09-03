@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express'
 
 import { createPostSchema } from '../../shared/contracts/index.js'
 import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
-import { createPostData, deletePostData, getPostDetailData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
+import { createPostData, deletePostData, getPostDetailData, getPostStatsData, listPostsData, setPostBookmarkData, setPostLikeData } from '../lib/data-access.js'
 import { buildError, buildSuccess, createRequestId, parsePositiveInt } from '../lib/http.js'
 import { parseBody } from '../lib/parse-body.js'
 import { MAX_POST_IMAGE_COUNT, storePostImageDataUrls } from '../lib/post-image-storage.js'
@@ -21,6 +21,18 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
   try {
     const payload = await listPostsData(page, pageSize, topicId, getSessionUserId(req), authorId, sort, snapshotAt)
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+// 统计路由必须注册在 /:postId 之前，否则 stats 会被当作 postId 解析
+router.get('/stats', async (_req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+
+  try {
+    const payload = await getPostStatsData()
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

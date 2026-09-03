@@ -49,6 +49,13 @@ export default function MessagesPage() {
   const [followBackSubmitting, setFollowBackSubmitting] = useState(false)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
 
+  // 会话列表分页：15s 轮询只刷第 1 页（query 缓存），翻出来的更早页放独立 state 渲染时去重合并，
+  // 避免轮询把用户已加载的分页冲掉
+  const [conversationPages, setConversationPages] = useState<Record<number, Conversation[]>>({})
+  const [conversationHasMore, setConversationHasMore] = useState(false)
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
+  const conversationLoadingRef = useRef(false)
+
   const meQuery = useQuery({
     queryKey: ['community', 'me'],
     queryFn: getMe,
@@ -56,12 +63,46 @@ export default function MessagesPage() {
 
   const conversationsQuery = useQuery({
     queryKey: ['community', 'conversations'],
-    queryFn: () => listConversations(30),
+    queryFn: () => listConversations(20, 1),
     // 方案 6.1：15s 轻轮询，保持会话列表/未读数新鲜
     refetchInterval: 15_000,
   })
 
-  const allConversations = conversationsQuery.data?.items ?? []
+  // 首页加载后同步分页元信息（第 2 页从这里的 hasMore/total 推导）
+  useEffect(() => {
+    const pagination = conversationsQuery.data?.pagination
+    if (pagination) setConversationHasMore(pagination.hasMore)
+  }, [conversationsQuery.data])
+
+  const loadMoreConversations = () => {
+    if (conversationLoadingRef.current || !conversationHasMore) return
+    conversationLoadingRef.current = true
+    setLoadingMoreConversations(true)
+    const nextPage = Object.keys(conversationPages).length + 2
+    listConversations(20, nextPage)
+      .then((data) => {
+        setConversationPages((current) => ({ ...current, [nextPage]: data.items }))
+        setConversationHasMore(data.pagination?.hasMore ?? false)
+      })
+      .catch(() => {
+        // 加载失败不打断列表，下次触底重试
+      })
+      .finally(() => {
+        conversationLoadingRef.current = false
+        setLoadingMoreConversations(false)
+      })
+  }
+
+  // 第 1 页（轮询保鲜）+ 更早页去重合并，合并后仍按最近消息时间倒序
+  const allConversations = useMemo(() => {
+    const firstPage = conversationsQuery.data?.items ?? []
+    const olderPages = Object.keys(conversationPages)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .flatMap((page) => conversationPages[page])
+    const seen = new Set(firstPage.map((item) => item.id))
+    return [...firstPage, ...olderPages.filter((item) => !seen.has(item.id) && Boolean(seen.add(item.id)))]
+  }, [conversationsQuery.data, conversationPages])
 
   // 互关好友与最新粉丝：登录后拉取自己的粉丝列表（含 followedByViewer/followsViewer 标记）
   const followersQuery = useQuery({
@@ -102,10 +143,66 @@ export default function MessagesPage() {
 
   const messagesQuery = useQuery({
     queryKey: ['community', 'messages', selectedConversationId],
-    queryFn: () => listMessages(selectedConversationId, 50),
+    queryFn: () => listMessages(selectedConversationId, 20, 1),
     enabled: Boolean(selectedConversationId),
     refetchInterval: 15_000,
   })
+
+  // 消息分页：第 1 页 = 最新 20 条（后端倒序分页，轮询只刷这页），更早的历史页放独立 state 往前拼接
+  const [olderMessagesByConversation, setOlderMessagesByConversation] = useState<
+    Record<string, { items: Message[]; page: number; hasMore: boolean }>
+  >({})
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
+  const olderMessagesLoadingRef = useRef(false)
+  // 加载更早消息后跳过一次「滚到底部」，避免覆盖刚恢复的滚动位置
+  const skipScrollToBottomRef = useRef(false)
+
+  // 是否还有更早的历史消息：已翻过页时以更早页的 hasMore 为准，否则看第 1 页的分页信息
+  const hasMoreMessages = selectedConversationId
+    ? (olderMessagesByConversation[selectedConversationId]?.hasMore ?? messagesQuery.data?.pagination?.hasMore ?? false)
+    : false
+
+  const loadEarlierMessages = () => {
+    const conversationId = selectedConversationId
+    if (!conversationId || !hasMoreMessages) return
+    if (olderMessagesLoadingRef.current) return
+    olderMessagesLoadingRef.current = true
+    setLoadingOlderMessages(true)
+    const state = olderMessagesByConversation[conversationId]
+    const nextPage = (state?.page ?? 1) + 1
+    listMessages(conversationId, 20, nextPage)
+      .then((data) => {
+        // 加载前记录内容高度，渲染后按高度差恢复滚动位置，视口停留在原消息上
+        const element = messageScrollRef.current
+        const previousScrollHeight = element?.scrollHeight ?? 0
+        setOlderMessagesByConversation((current) => {
+          const existing = current[conversationId]?.items ?? []
+          const existingIds = new Set(existing.map((item) => item.id))
+          return {
+            ...current,
+            [conversationId]: {
+              items: [...data.items.filter((item) => !existingIds.has(item.id)), ...existing],
+              page: nextPage,
+              hasMore: data.pagination?.hasMore ?? false,
+            },
+          }
+        })
+        requestAnimationFrame(() => {
+          const node = messageScrollRef.current
+          if (node && previousScrollHeight > 0) {
+            skipScrollToBottomRef.current = true
+            node.scrollTop = node.scrollHeight - previousScrollHeight
+          }
+        })
+      })
+      .catch(() => {
+        // 历史消息加载失败不打断聊天，下次触顶重试
+      })
+      .finally(() => {
+        olderMessagesLoadingRef.current = false
+        setLoadingOlderMessages(false)
+      })
+  }
 
   // 进入会话即标记已读：本地未读数归零 + 刷新全局未读统计；
   // 依赖最新消息 id，停留在聊天中收到新消息时也持续上报已读，对方的「已读」状态才能半实时刷新
@@ -203,7 +300,14 @@ export default function MessagesPage() {
     allConversations.find((item) => item.id === selectedConversationId) ??
     messagesQuery.data?.conversation ??
     null
-  const activeMessages = messagesQuery.data?.items ?? []
+  // 更早历史页（时间正序）拼在第 1 页前面，按 id 去重
+  const activeMessages = useMemo(() => {
+    const firstPage = messagesQuery.data?.items ?? []
+    const older = selectedConversationId ? (olderMessagesByConversation[selectedConversationId]?.items ?? []) : []
+    if (older.length === 0) return firstPage
+    const firstPageIds = new Set(firstPage.map((item) => item.id))
+    return [...older.filter((item) => !firstPageIds.has(item.id)), ...firstPage]
+  }, [messagesQuery.data, olderMessagesByConversation, selectedConversationId])
   const activePending = selectedConversationId ? (pendingByConversation[selectedConversationId] ?? []) : []
   const activeDraft = selectedConversation ? (draftByConversationId[selectedConversation.id] ?? '') : ''
   const currentUserId = meQuery.data?.user?.id ?? ''
@@ -229,13 +333,23 @@ export default function MessagesPage() {
     activePending.filter((item) => item.status !== 'failed').length
   const strangerQuotaLeft = isStrangerConversation ? Math.max(0, 3 - sentByMeCount) : Infinity
 
-  // 新消息到达后滚动到底部
+  // 新消息到达后滚动到底部（加载更早消息触发的长度变化除外，保持视口停留在原消息上）
   useEffect(() => {
+    if (skipScrollToBottomRef.current) {
+      skipScrollToBottomRef.current = false
+      return
+    }
     const element = messageScrollRef.current
     if (element) {
       element.scrollTop = element.scrollHeight
     }
   }, [selectedConversationId, activeMessages.length, activePending.length])
+
+  // 消息区滚动接近顶部时自动加载更早的历史消息
+  const handleMessageScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    if (!hasMoreMessages || loadingOlderMessages) return
+    if (event.currentTarget.scrollTop <= 80) loadEarlierMessages()
+  }
 
   // 键盘弹起时微信/QQ 式把聊天对话顶上去（消息区加载完成后才挂载，ready 翻真重绑）
   useKeyboardPushScroll(messageScrollRef, !messagesQuery.isLoading && !messagesQuery.isError)
@@ -398,6 +512,9 @@ export default function MessagesPage() {
             followersUnseen={followersUnseen}
             onOpenFriend={(userId) => void handleOpenFriend(userId)}
             openingFriendId={openingFriendId}
+            hasMoreConversations={conversationHasMore}
+            loadingMoreConversations={loadingMoreConversations}
+            onLoadMoreConversations={loadMoreConversations}
           />
         </aside>
       ) : null}
@@ -493,7 +610,20 @@ export default function MessagesPage() {
                   className="min-h-0 flex-1 border-0 shadow-none"
                 />
               ) : (
-                <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-y-auto">
+                <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-y-auto" onScroll={handleMessageScroll}>
+                  {/* 历史消息分页：触顶自动加载，也保留手动按钮兑底 */}
+                  {hasMoreMessages ? (
+                    <div className="flex justify-center pt-3">
+                      <button
+                        type="button"
+                        onClick={loadEarlierMessages}
+                        disabled={loadingOlderMessages}
+                        className="press-feedback rounded-[var(--radius-pill)] bg-[var(--surface-muted)] px-3 py-1 text-[11px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-60"
+                      >
+                        {loadingOlderMessages ? '正在加载更早的消息...' : '加载更早的消息'}
+                      </button>
+                    </div>
+                  ) : null}
                   <MessageBubbleList
                     messages={activeMessages}
                     pendingMessages={activePending}

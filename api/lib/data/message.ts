@@ -4,7 +4,6 @@
  * 本文件为 api/lib/data-access.ts 桶文件的重导出源，禁止绕过桶文件新增消费者。
  */
 import type { Conversation, Message, SendMessageRequest } from '../../../shared/contracts/index.js'
-import { paginate } from '../http.js'
 import { storeMessageImageDataUrl } from '../message-image-storage.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { attachDirectFollowRelations, attachMessageCards, buildPagination, conversationInclude, ensureConversationMember, ensureNonEmptyText, ensureUserExists, toConversation, toMessage } from './internal.js'
@@ -133,23 +132,24 @@ export async function markConversationReadData(
 export async function listMessagesData(userId: string, conversationId: string, page: number, pageSize: number) {
   const conversation = await ensureConversationMember(userId, conversationId)
 
-  const [items, total] = await prisma.$transaction([
-    prisma.message.findMany({
-      where: { conversationId },
-      orderBy: [{ createdAt: 'asc' }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-    prisma.message.count({
-      where: { conversationId },
-    }),
-  ])
+  const total = await prisma.message.count({
+    where: { conversationId },
+  })
+  // 倒序分页：page 1 = 最新 pageSize 条（聊天窗口默认落在最新对话），page 2 起往前翻历史；
+  // 取回后反转回时间正序供前端直接渲染（此前正序 skip 导致长会话永远看不到最新消息）
+  const rows = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  })
+  const items = rows.reverse()
 
   const [conversationPayload] = await attachDirectFollowRelations([toConversation(conversation, userId)], userId)
 
   return {
     conversation: conversationPayload,
-    ...paginate(await attachMessageCards(items.map(toMessage)), page, pageSize),
+    items: await attachMessageCards(items.map(toMessage)),
     pagination: buildPagination(page, pageSize, total),
   }
 }

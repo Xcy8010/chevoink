@@ -24,6 +24,12 @@ type ConversationListProps = {
   followersUnseen: number
   onOpenFriend: (userId: string) => void
   openingFriendId: string | null
+  /** 会话分页：是否还有更早的会话可加载 */
+  hasMoreConversations: boolean
+  /** 会话分页：正在加载下一页 */
+  loadingMoreConversations: boolean
+  /** 会话分页：滚动触底时加载下一页 */
+  onLoadMoreConversations: () => void
 }
 
 function formatUnreadBadge(count: number) {
@@ -70,10 +76,22 @@ export default function ConversationList({
   followersUnseen,
   onOpenFriend,
   openingFriendId,
+  hasMoreConversations,
+  loadingMoreConversations,
+  onLoadMoreConversations,
 }: ConversationListProps) {
   const navigate = useNavigate()
   // 陌生消息子列表视图：主列表 ↔ 陌生会话列表
   const [view, setView] = useState<'main' | 'strangers'>('main')
+
+  // 滚动触底自动加载下一页会话（参照社交媒体的无限流体验）
+  const handleListScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    if (!hasMoreConversations || loadingMoreConversations) return
+    const element = event.currentTarget
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 80) {
+      onLoadMoreConversations()
+    }
+  }
 
   const systemConversations = conversations.filter((item) => item.type === 'system')
   const directConversations = conversations.filter((item) => item.type !== 'system')
@@ -190,7 +208,7 @@ export default function ConversationList({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto" onScroll={handleListScroll}>
         {/* 互关好友横向栏：点击头像直接发起/进入私聊 */}
         {mutualFriends.length > 0 ? (
           <div className="border-b border-[var(--border-subtle)] py-2">
@@ -364,6 +382,11 @@ export default function ConversationList({
           ) : (
             friendConversations.map(renderDirectRow)
           )}
+
+          {/* 会话分页：加载中提示（触底自动加载下一页） */}
+          {loadingMoreConversations ? (
+            <p className="px-2 py-3 text-center text-xs text-[var(--text-tertiary)]">正在加载更多会话...</p>
+          ) : null}
         </div>
       </div>
     </div>

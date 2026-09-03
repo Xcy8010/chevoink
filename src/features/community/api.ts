@@ -30,6 +30,7 @@ import type {
   MarkConversationReadResponse,
   MarkInteractionSeenRequest,
   MarkInteractionSeenResponse,
+  PostStatsResponse,
   RemoveParagraphUnderlineResponse,
   RemoveReadingProgressResponse,
   SaveParagraphUnderlineRequest,
@@ -384,14 +385,19 @@ export function deleteComment(commentId: string) {
   })
 }
 
-export function listConversations(pageSize = 20) {
-  return requestData<ListConversationsResponse['data']>(`/api/conversations?page=1&pageSize=${pageSize}`)
+export function listConversations(pageSize = 20, page = 1) {
+  return requestData<ListConversationsResponse['data']>(`/api/conversations?page=${page}&pageSize=${pageSize}`)
 }
 
-export function listMessages(conversationId: string, pageSize = 50) {
+export function listMessages(conversationId: string, pageSize = 20, page = 1) {
   return requestData<ListMessagesResponse['data']>(
-    `/api/conversations/${conversationId}/messages?page=1&pageSize=${pageSize}`,
+    `/api/conversations/${conversationId}/messages?page=${page}&pageSize=${pageSize}`,
   )
+}
+
+/** 社区面板统计：独立于分页的准确总数口径 */
+export function getPostStats() {
+  return requestData<PostStatsResponse['data']>('/api/posts/stats')
 }
 
 export async function sendMessage(

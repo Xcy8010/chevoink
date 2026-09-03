@@ -1,13 +1,13 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, Flame } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useDevice } from '@/components/layout/device-context'
 import AppState from '@/components/ui/AppState'
 import { PostListSkeleton } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/toast-context'
-import { createPost, listPosts, listTopics } from '@/features/community/api'
+import { createPost, getPostStats, listPosts, listTopics } from '@/features/community/api'
 import PostCard from '@/features/community/components/PostCard'
 import PostComposer from '@/features/community/components/PostComposer'
 import TopicChannelBar, { type CommunityTopic } from '@/features/community/components/TopicChannelBar'
@@ -49,10 +49,11 @@ export default function CommunityPage() {
 
   // 话题筛选走后端 topicId 过滤 + hasMore 翻页（方案 6.2）；
   // 排序服务端化（方案 18 §1）：推荐流用快照式游标，同一轮浏览榜单冻结不跳位，刷新重算
+  // 每页 10 条 + 上拉自动加载（参照 X 等社交媒体的无限流体验）
   const postsQuery = useInfiniteQuery({
     queryKey: ['community', 'posts', activeTopicId, activeFeedMode],
     queryFn: ({ pageParam }) =>
-      listPosts(30, {
+      listPosts(10, {
         page: pageParam.page,
         topicId: activeTopicId === 'all' ? undefined : activeTopicId,
         sort: activeFeedMode,
@@ -85,16 +86,15 @@ export default function CommunityPage() {
 
   const rawPosts = useMemo(() => postsQuery.data?.pages.flatMap((page) => page.items) ?? [], [postsQuery.data])
 
-  // 「全部」计数必须用未过滤口径：帖子流查询带 topicId 筛选，复用它的 pagination.total
-  // 会导致切到别的频道后「全部」变成筛选后的条数。这里独立发一次不带筛选的轻量请求只取 total；
-  // queryKey 以 ['community','posts'] 开头，发帖/删帖等现有 invalidate 会顺带刷新它
-  const allTotalQuery = useQuery({
-    queryKey: ['community', 'posts', 'all-total'],
-    queryFn: () => listPosts(1, { page: 1, sort: 'latest' }),
+  // 社区面板与「全部」计数必须用未过滤的准确总数：独立 stats 接口（count 口径），
+  // 不随当前分页/频道筛选跳动；queryKey 以 ['community','posts'] 开头，发帖/删帖等现有 invalidate 会顺带刷新
+  const statsQuery = useQuery({
+    queryKey: ['community', 'posts', 'stats'],
+    queryFn: getPostStats,
     staleTime: 60_000,
   })
   const totalPosts =
-    allTotalQuery.data?.pagination.total ?? postsQuery.data?.pages[0]?.pagination.total ?? rawPosts.length
+    statsQuery.data?.totalPosts ?? postsQuery.data?.pages[0]?.pagination.total ?? rawPosts.length
 
   const topics = useMemo<CommunityTopic[]>(() => {
     const items = topicsQuery.data?.items ?? []
@@ -117,15 +117,35 @@ export default function CommunityPage() {
   const communityStats = useMemo(
     () => [
       { id: 'total', label: '讨论总数', value: `${totalPosts}` },
-      { id: 'linked', label: '关联作品', value: `${rawPosts.filter((post) => post.relatedNovel).length}` },
+      { id: 'linked', label: '关联作品', value: `${statsQuery.data?.linkedNovelCount ?? 0}` },
       {
         id: 'recent',
         label: '最近活跃',
-        value: rawPosts[0]?.createdAt ? formatRelativeTime(rawPosts[0].createdAt) : '刚刚',
+        value: statsQuery.data?.lastPostAt ? formatRelativeTime(statsQuery.data.lastPostAt) : '刚刚',
       },
     ],
-    [totalPosts, rawPosts],
+    [totalPosts, statsQuery.data],
   )
+
+  // 上拉自动加载更多：哨兵进入视口（提前 240px）即翻下一页，按钮保留作兑底
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null)
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = postsQuery
+  useEffect(() => {
+    const element = feedSentinelRef.current
+    if (!element || !hasNextPage) {
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !isFetchingNextPage) {
+          void fetchNextPage()
+        }
+      },
+      { rootMargin: '240px 0px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   if (postsQuery.isLoading) {
     return <PostListSkeleton />
@@ -185,6 +205,8 @@ export default function CommunityPage() {
           ))}
         </div>
         {loadMoreButton}
+        {/* 无限流哨兵：进入视口即自动翻下一页 */}
+        {postsQuery.hasNextPage ? <div ref={feedSentinelRef} aria-hidden="true" className="h-1" /> : null}
       </>
     ) : (
       <AppState
@@ -211,7 +233,7 @@ export default function CommunityPage() {
         {composer}
         <div className="flex items-center justify-between">
           {sortTabs}
-          <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
+          <span className="text-xs text-[var(--text-tertiary)]">{totalPosts} 条讨论</span>
         </div>
         {postFeed()}
       </div>
@@ -230,7 +252,7 @@ export default function CommunityPage() {
           {composer}
           <div className="flex items-center justify-between">
             {sortTabs}
-            <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
+            <span className="text-xs text-[var(--text-tertiary)]">{totalPosts} 条讨论</span>
           </div>
           {postFeed(true)}
         </div>
@@ -250,7 +272,7 @@ export default function CommunityPage() {
         {composer}
         <div className="flex items-center justify-between">
           {sortTabs}
-          <span className="text-xs text-[var(--text-tertiary)]">{posts.length} 条讨论</span>
+          <span className="text-xs text-[var(--text-tertiary)]">{totalPosts} 条讨论</span>
         </div>
         {postFeed()}
       </div>

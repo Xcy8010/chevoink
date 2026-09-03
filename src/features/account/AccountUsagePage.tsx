@@ -54,6 +54,11 @@ export default function AccountUsagePage() {
     () => (usage?.ledger ?? []).filter((item) => (ledgerFilter === 'earned' ? roundCreditAmount(item.delta) > 0 : roundCreditAmount(item.delta) <= 0)),
     [ledgerFilter, usage?.ledger],
   )
+  // 记录增量渲染：初始只展示 20 条，点「加载更多」每次 +20，避免一次性全量渲染卡顿
+  const [visibleLedgerCount, setVisibleLedgerCount] = useState(20)
+  useEffect(() => { setVisibleLedgerCount(20) }, [ledgerFilter])
+  const visibleLedger = useMemo(() => filteredLedger.slice(0, visibleLedgerCount), [filteredLedger, visibleLedgerCount])
+  const hasMoreLedger = filteredLedger.length > visibleLedgerCount
 
   useEffect(() => { if (!inviteOpen) setCopied(false) }, [inviteOpen])
   const copyInviteLink = useCallback(async () => {
@@ -147,7 +152,7 @@ export default function AccountUsagePage() {
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
                 <h2 className="text-xl font-semibold tracking-[-.02em]">Credits 记录</h2>
-                <p className="mt-1 text-xs text-[var(--text-tertiary)]">最近 {usage.ledger.length} 条记录</p>
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">已显示 {visibleLedger.length} / 最近 {filteredLedger.length} 条记录</p>
               </div>
               <div className="inline-flex rounded-[9px] bg-[#ececea] p-1 dark:bg-[var(--surface-muted)]">
                 <button type="button" onClick={() => setLedgerFilter('used')} className={`h-8 rounded-[7px] px-3 text-xs transition-colors ${ledgerFilter === 'used' ? 'bg-white font-medium shadow-sm dark:bg-[var(--surface-default)]' : 'text-[var(--text-secondary)]'}`}>已使用</button>
@@ -156,7 +161,20 @@ export default function AccountUsagePage() {
             </div>
             <div className="mt-4 overflow-hidden rounded-[16px] border border-[#e9e9e6] bg-white dark:border-[var(--border-subtle)] dark:bg-[var(--surface-default)]">
               {filteredLedger.length > 0 ? (
-                <ul>{filteredLedger.map((item) => <LedgerRow key={item.id} item={item} />)}</ul>
+                <>
+                  <ul>{visibleLedger.map((item) => <LedgerRow key={item.id} item={item} />)}</ul>
+                  {hasMoreLedger ? (
+                    <div className="border-t border-[#efefec] p-3 dark:border-[var(--border-subtle)]">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleLedgerCount((count) => count + 20)}
+                        className="h-9 w-full rounded-[9px] text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[#f4f4f2] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]"
+                      >
+                        加载更多记录（还剩 {filteredLedger.length - visibleLedgerCount} 条）
+                      </button>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="py-12 text-center text-sm text-[var(--text-tertiary)]">暂无{ledgerFilter === 'used' ? '使用' : '获得'}记录</div>
               )}
