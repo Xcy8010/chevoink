@@ -210,6 +210,7 @@ export default function StudioWorkspace() {
   const setAutoFollow = useAgentStore((state) => state.setAutoFollow)
   const toolNavigationRequest = useAgentStore((state) => state.toolNavigationRequest)
   const clearToolNavigationRequest = useAgentStore((state) => state.clearToolNavigationRequest)
+  const memorySpotlight = useAgentStore((state) => state.memorySpotlight)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   // 创作区内滚动条静止时隐藏，滚动中才显示
@@ -1675,6 +1676,23 @@ export default function StudioWorkspace() {
     }
     clearToolNavigationRequest()
   }, [clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective])
+
+  // 记忆沉淀卡点击：把记忆面板切到可见位置，由当前可见的记忆中心实例开覆层闪卡
+  useEffect(() => {
+    if (!memorySpotlight) return
+    if (Date.now() - memorySpotlight.nonce > 8000) return
+    if (window.innerWidth < 1024) {
+      setMobileView('context')
+      return
+    }
+    if (workspacePerspective === 'ide') {
+      setIdeSidebarTab('context')
+      setIdeTreeOpen(true)
+    } else {
+      setWorkInspectorTab('context')
+      setWorkRightOpen(true)
+    }
+  }, [memorySpotlight, workspacePerspective])
 
   // 当前计划文档命中审查态时，正文区呈现绿(新增)/红(删除) diff（与章节审查一致，fix1）
   const activePlanPendingReview = useMemo(() => {

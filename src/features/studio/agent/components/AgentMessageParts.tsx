@@ -17,6 +17,7 @@ import {
   LoaderCircle,
   Search,
   ShieldX,
+  SquareStack,
   Wrench,
 } from 'lucide-react'
 
@@ -851,6 +852,15 @@ const WRITE_TOOL_NAMES = new Set([
 ])
 const NAVIGABLE_TOOL_NAMES = new Set(['chapter_create', 'chapter_write', 'chapter_append', 'chapter_edit_range', 'plan_save', 'plan_rename'])
 
+/** 沉淀单张记忆卡的写工具：点击不展开参数，而是去记忆中心定位闪一下对应卡片 */
+function memorySpotlightType(toolName: string, args: unknown): string | null {
+  if (toolName === 'memory_event_save') return 'timelineEvent'
+  if (toolName === 'memory_relation_save') return 'relationshipState'
+  if (toolName !== 'memory_save') return null
+  const record = typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : null
+  return typeof record?.memoryType === 'string' ? record.memoryType : null
+}
+
 /** 工具真实执行耗时：不足 1 秒的瞬时操作不展示，避免满屏无意义的 0.0s */
 function formatToolDuration(durationMs: number | undefined): string | null {
   if (typeof durationMs !== 'number' || durationMs < 1000) {
@@ -869,6 +879,7 @@ const ToolCallCard = memo(function ToolCallCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const requestToolNavigation = useAgentStore((state) => state.requestToolNavigation)
+  const requestMemorySpotlight = useAgentStore((state) => state.requestMemorySpotlight)
   const argumentRows = useMemo(() => describeToolArguments(part.args), [part.args])
   const durationLabel = formatToolDuration(part.durationMs)
   const running = part.status === 'running'
@@ -879,11 +890,14 @@ const ToolCallCard = memo(function ToolCallCard({
   // 深读卡：执行结束后默认折叠、点击头部展开回看；按 toolName 精确门控（cover_prompt_set 同样产出 markdown，不能误折）
   const collapsible = part.toolName === 'web_read' && !!part.display
   const expandable = !workflowDisplay && argumentRows.length > 0
-  const rowExpandable = expandable || collapsible
   const navigable = NAVIGABLE_TOOL_NAMES.has(part.toolName)
   const targetTitle = navigable ? getToolTargetTitle(part.display, part.args) : null
   // 联网搜索过程态：复用 tool.call args 里的 query，免新增事件类型
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
+  // 记忆沉淀卡：去掉参数展开，点击整行去记忆中心看对应卡片
+  const spotlightType = part.status === 'success' ? memorySpotlightType(part.toolName, part.args) : null
+  const spotlightTitle = spotlightType && typeof argsRecord?.title === 'string' ? argsRecord.title : ''
+  const rowExpandable = spotlightType === null && (expandable || collapsible)
   const webSearchQuery =
     part.toolName === 'web_search' && typeof argsRecord?.query === 'string' ? argsRecord.query : ''
   const platformSearchQuery =
@@ -912,7 +926,9 @@ const ToolCallCard = memo(function ToolCallCard({
       part.status === 'success' ? 'text-emerald-600' : part.status === 'denied' ? 'text-amber-500' : 'text-rose-500',
     )}>{part.status === 'success' ? (part.accepted ? '已接受' : '已完成') : part.status === 'denied' ? '已拒绝' : '失败'}</span> : null}
     <span className="shrink-0">{toolStatusIcon[part.status]}</span>
-    {rowExpandable ? <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', expanded && 'rotate-180')} /> : null}
+    {spotlightType !== null ? (
+      <SquareStack className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)]" />
+    ) : rowExpandable ? <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform', expanded && 'rotate-180')} /> : null}
   </>
 
   return (
@@ -928,7 +944,15 @@ const ToolCallCard = memo(function ToolCallCard({
       {workflowDisplay
         ? <div className="relative flex w-full items-center gap-2 py-2 text-left">{headerContent}</div>
         : <div className="group relative flex w-full items-center gap-2 py-2 text-left">
-            {rowExpandable ? <button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? '收起工具详情' : '展开工具详情'} className="absolute inset-0 z-0" /> : null}
+            {spotlightType !== null ? (
+              <button
+                type="button"
+                onClick={() => requestMemorySpotlight(spotlightType, spotlightTitle)}
+                aria-label="在记忆中心查看这张卡片"
+                title="在记忆中心查看这张卡片"
+                className="absolute inset-0 z-0"
+              />
+            ) : rowExpandable ? <button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? '收起工具详情' : '展开工具详情'} className="absolute inset-0 z-0" /> : null}
             {headerContent}
           </div>}
       {part.summary ? (

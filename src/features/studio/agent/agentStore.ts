@@ -86,6 +86,13 @@ export type WorkspaceActivity = {
   accepted?: boolean
 }
 
+/** 记忆工具卡点击请求：记忆中心打开对应卡片集并定位闪一下该卡片 */
+export type MemorySpotlightRequest = {
+  nonce: number
+  memoryType: string
+  title: string
+}
+
 export type ToolNavigationRequest = {
   nonce: number
   toolName: string
@@ -239,6 +246,8 @@ type AgentStoreState = {
   liveToolDrafts: Record<string, AgentToolDraft>
   /** 工具卡点击后的内容导航请求，由 StudioWorkspace 消费。 */
   toolNavigationRequest: ToolNavigationRequest | null
+  /** 记忆工具卡点击后的卡片定位请求，由 StudioWorkspace（切页签）与 AgentMemoryCards（开覆层闪卡）消费。 */
+  memorySpotlight: MemorySpotlightRequest | null
   /** 事件 reducer：live 与 replay 共用同一构建逻辑 */
   applyEvent: (event: AgentStreamEvent) => void
   beginRun: (runId: string, userPrompt: string, sessionId: string | null, attachments?: AgentAttachmentMeta[]) => void
@@ -273,6 +282,7 @@ type AgentStoreState = {
   setAutoFollow: (value: boolean) => void
   requestToolNavigation: (toolName: string, args: unknown, display?: AgentToolDisplayPayload) => void
   clearToolNavigationRequest: () => void
+  requestMemorySpotlight: (memoryType: string, title: string) => void
   /** 将刚通过作者审查的写入活动标记为已接受；执行成功本身仍只是已完成。 */
   markWorkspaceActivitiesAccepted: (criteria: { chapterId?: string; toolNames?: string[]; all?: boolean }) => void
 }
@@ -524,6 +534,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   todosVersion: 0,
   liveToolDrafts: {},
   toolNavigationRequest: null,
+  memorySpotlight: null,
 
   beginRun: (runId, userPrompt, sessionId, attachments) =>
     set((state) => ({
@@ -788,6 +799,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   }),
 
   clearToolNavigationRequest: () => set({ toolNavigationRequest: null }),
+
+  requestMemorySpotlight: (memoryType, title) => set({
+    memorySpotlight: { nonce: Date.now(), memoryType, title },
+  }),
 
   markWorkspaceActivitiesAccepted: (criteria) =>
     set((state) => {

@@ -79,12 +79,17 @@ export default function AgentMemoryCards({ novelId }: Props) {
   const [detail, setDetail] = useState<StoryMemoryCard | null>(null)
   const [editing, setEditing] = useState<StoryMemoryCard | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [fanSpotlight, setFanSpotlight] = useState<{ index: number; nonce: number } | null>(null)
+  const sectionRef = useRef<HTMLElement | null>(null)
+  const lastSpotlightNonceRef = useRef(0)
+  const pendingSpotlightRef = useRef<{ nonce: number; memoryType: string; title: string } | null>(null)
   const novelIdRef = useRef(novelId)
   novelIdRef.current = novelId
   const toastTimerRef = useRef<number | null>(null)
 
   const addComposerReference = useAgentStore((state) => state.addComposerReference)
   const composerDraft = useAgentStore((state) => state.composerDraft)
+  const memorySpotlight = useAgentStore((state) => state.memorySpotlight)
 
   const loadSets = useCallback(async () => {
     setLoading(true)
@@ -159,6 +164,30 @@ export default function AgentMemoryCards({ novelId }: Props) {
     setOverlayType(memoryType)
     if (!setCards[memoryType]) void loadSetCards(memoryType, 1)
   }
+  const openSetRef = useRef(openSet)
+  openSetRef.current = openSet
+
+  // 记忆沉淀卡点击：仅当前可见实例响应（隐藏实例 offsetParent 为 null），开对应卡片集等待定位
+  useEffect(() => {
+    if (!memorySpotlight) return
+    if (memorySpotlight.nonce === lastSpotlightNonceRef.current) return
+    if (Date.now() - memorySpotlight.nonce > 8000) return
+    if (!sectionRef.current || sectionRef.current.offsetParent === null) return
+    lastSpotlightNonceRef.current = memorySpotlight.nonce
+    pendingSpotlightRef.current = memorySpotlight
+    openSetRef.current(memorySpotlight.memoryType)
+  }, [memorySpotlight])
+
+  // 卡片集首页回来后定位沉淀卡：标题精确匹配优先，否则取最近更新一张（沉淀动作刚刷新 updatedAt）
+  useEffect(() => {
+    const pending = pendingSpotlightRef.current
+    if (!pending || overlayType !== pending.memoryType) return
+    const state = setCards[pending.memoryType]
+    if (!state || state.loading || state.items.length === 0) return
+    const matched = state.items.findIndex((item) => item.title === pending.title)
+    pendingSpotlightRef.current = null
+    setFanSpotlight({ index: matched >= 0 ? matched : 0, nonce: pending.nonce })
+  }, [overlayType, setCards])
 
   const applyToComposer = (card: StoryMemoryCard) => {
     addComposerReference({
@@ -197,7 +226,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
   const overlaySuspended = Boolean(menu) || Boolean(detail) || Boolean(editing)
 
   return (
-    <section className="px-4 pb-6 pt-1">
+    <section ref={sectionRef} className="px-4 pb-6 pt-1">
       <style>{`
         @keyframes memory-card-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes memory-pop-in { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
@@ -233,6 +262,10 @@ export default function AgentMemoryCards({ novelId }: Props) {
           box-shadow: 0 18px 44px rgba(15,23,42,0.14);
         }
         .fan-card { transition: transform 420ms cubic-bezier(0.22,1,0.36,1), opacity 320ms ease-out; }
+        @keyframes fan-flash {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(148,163,184,0); }
+          22%, 55% { box-shadow: 0 0 0 3px rgba(148,163,184,0.6), 0 24px 64px rgba(15,23,42,0.35); }
+        }
         .fan-flip { transition: transform 520ms cubic-bezier(0.22,1,0.36,1); }
         .fan-flipped { transform: rotateY(180deg); }
         .fan-face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
@@ -292,8 +325,9 @@ export default function AgentMemoryCards({ novelId }: Props) {
         <MemoryFanOverlay
           set={overlaySet}
           state={setCards[overlaySet.memoryType]}
+          spotlight={fanSpotlight}
           suspended={overlaySuspended}
-          onClose={() => setOverlayType(null)}
+          onClose={() => { setOverlayType(null); setFanSpotlight(null) }}
           onLoadMore={() => {
             const state = setCards[overlaySet.memoryType]
             if (state) void loadSetCards(overlaySet.memoryType, state.page + 1)
@@ -366,6 +400,8 @@ export default function AgentMemoryCards({ novelId }: Props) {
 type FanOverlayProps = {
   set: StoryMemorySet
   state: SetCardsState | undefined
+  /** 工具卡定位请求：打开后聚焦到该张并闪一下 */
+  spotlight: { index: number; nonce: number } | null
   /** 右键菜单/详情/编辑打开时挂起键盘监听，避免 Esc 一次关两层 */
   suspended: boolean
   onClose: () => void
@@ -376,12 +412,21 @@ type FanOverlayProps = {
 }
 
 /** 覆层手牌模式：整叠牌扇形摊在模糊覆层中央，← → 拨牌、点击翻面读全文、Esc 收叠回封面墙 */
-function MemoryFanOverlay({ set, state, suspended, onClose, onLoadMore, onMenu, onQuote, onEdit }: FanOverlayProps) {
+function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMore, onMenu, onQuote, onEdit }: FanOverlayProps) {
   const meta = typeMeta(set.memoryType)
   const Icon = meta.icon
   const items = state?.items ?? []
   const [focus, setFocus] = useState(0)
   const [flipped, setFlipped] = useState(false)
+  const [flash, setFlash] = useState<{ index: number; nonce: number } | null>(null)
+
+  // 工具卡定位：聚焦到沉淀卡并闪一下
+  useEffect(() => {
+    if (!spotlight) return
+    setFocus(Math.min(spotlight.index, Math.max(items.length - 1, 0)))
+    setFlipped(false)
+    setFlash(spotlight)
+  }, [spotlight, items.length])
 
   // 卡片数量变化（加载更多/切换作品）时把焦点钳回有效范围
   useEffect(() => {
@@ -453,11 +498,12 @@ function MemoryFanOverlay({ set, state, suspended, onClose, onLoadMore, onMenu, 
                 const style: React.CSSProperties = away
                   ? { transform: `translateX(${offset > 0 ? 480 : -480}px) translateY(56px) rotate(${offset > 0 ? 16 : -16}deg) scale(0.72)`, opacity: 0, zIndex: 10, pointerEvents: 'none' }
                   : { transform: `translateX(${offset * 76}px) translateY(${Math.abs(offset) * 12}px) rotate(${offset * 5}deg) scale(${1 - Math.abs(offset) * 0.05})`, opacity: 1 - Math.abs(offset) * 0.15, zIndex: 40 - Math.abs(offset) }
+                const isFlash = flash?.index === index
                 return (
                   <div
-                    key={card.id}
+                    key={isFlash ? `${card.id}-f${flash?.nonce}` : card.id}
                     className="fan-card absolute cursor-pointer"
-                    style={style}
+                    style={isFlash ? { ...style, animation: 'fan-flash 1.6s cubic-bezier(0.22,1,0.36,1)' } : style}
                     onClick={() => {
                       if (offset === 0) setFlipped((current) => !current)
                       else { setFlipped(false); setFocus(index) }
