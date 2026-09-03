@@ -1367,8 +1367,11 @@ export function AgentPanel({
               const messageRunActive = active && message.runId === runId
               const blockCollapsed = !messageRunActive && !blockExpanded
               const hasTextPart = message.parts.some((part) => part.type === 'text')
-              // 折叠态下块内非首条且无文本的消息不贡献任何内容，不渲染空壳（避免 flex gap 多出空隙）
-              if (blockCollapsed && !isBlockFirst && !hasTextPart) {
+              // 折叠态下块内非最后一条的过程正文会折进摘要行（与传给 AgentMessageParts 的口径一致）
+              const textCollapsible = !isBlockLast && (block?.ops ?? 0) > 0
+              // 折叠态下块内非首条且不再贡献任何内容的消息不渲染空壳（避免 flex gap 在空壳间叠出大段空白）：
+              // 无文本的消息、以及正文被折叠收起后只剩空 div 的消息都属此类
+              if (blockCollapsed && !isBlockFirst && (!hasTextPart || textCollapsible)) {
                 return null
               }
 
@@ -1388,7 +1391,7 @@ export function AgentPanel({
                     summaryExpanded={blockExpanded}
                     onToggleSummary={handleToggleBlockSummary}
                     // 折叠态下过程进展正文一并收进「已处理 n 个操作」，只留块内最后一条（结尾总结）的正文
-                    textCollapsible={!isBlockLast && (block?.ops ?? 0) > 0}
+                    textCollapsible={textCollapsible}
                   />
                   {/* 结论操作条：每个对话块结尾均提供复制与创建分支（纯 icon，悬停 title 说明，流式进行中不显示） */}
                   {isBlockLast && !messageRunActive && getMessageText(message.parts) ? (
