@@ -37,6 +37,22 @@ export const AGENT_TOOL_GOVERNANCE = {
   session_message_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'message_scope_verified'] },
   task_context_list: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'metadata_only'] },
   task_context_read: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'raw_transcript_preserved'] },
+  task_spawn: {
+    category: 'workflow',
+    risk: 'medium',
+    postconditions: [
+      'session_owner_verified',
+      'spawn_lineage_recorded',
+      'orchestration_concurrency_capped',
+      'spawned_window_cannot_respawn',
+    ],
+  },
+  task_wait: { category: 'read', risk: 'low', postconditions: ['session_owner_verified', 'wait_bounded_by_timeout'] },
+  task_send: {
+    category: 'workflow',
+    risk: 'medium',
+    postconditions: ['session_owner_verified', 'target_idle_verified', 'self_send_rejected'],
+  },
   story_charter_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'active_promises_only'] },
   chapter_bridge_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'bridge_revision_reported'] },
   quality_report_get: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified', 'chapter_revision_reported'] },

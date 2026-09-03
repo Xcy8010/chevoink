@@ -56,7 +56,7 @@ import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterD
 
 
 import { buildArtifactsFromHistory, mergeRestoredArtifactsWithSnapshot, readStoredAgentWorkspace } from './lib/agent-persistence.js'
-import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, resolveNovelTitleState, shouldDisplayListedAgentSession, shouldShowWorkspaceNovel } from './lib/agent-session.js'
+import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, pickFallbackAgentTaskWindow, resolveNovelTitleState, shouldDisplayListedAgentSession, shouldShowWorkspaceNovel } from './lib/agent-session.js'
 import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdatePayload, buildProjectNotes, createIdleAgentRunState, isNovelFormDirty } from './lib/form-state.js'
 import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
@@ -1220,6 +1220,40 @@ export default function StudioWorkspace() {
         void queryClient.invalidateQueries({ queryKey: ['studio', activeNovelId, 'memory-graph'] })
       }
 
+      // 跨任务编排新增的运行中窗口（task_spawn 派生 / task_send 投递）：
+      // 立即登记进侧栏并亮起运行中标记，但不抢当前窗口的焦点（主控窗口还在跑）
+      if (event.type === 'task.spawned') {
+        const spawnedHere = event.sessions.filter((item) => item.novelId === activeNovelId)
+        if (spawnedHere.length > 0) {
+          setAgentTaskWindows((current) =>
+            dedupeAgentTaskWindows([
+              ...current,
+              ...spawnedHere.map((item) =>
+                createLocalAgentTaskWindow({
+                  id: item.sessionId,
+                  sessionId: item.sessionId,
+                  title: item.title,
+                  temporary: false,
+                  customNamed: true,
+                  createdAt: event.ts,
+                  updatedAt: event.ts,
+                }),
+              ),
+            ]),
+          )
+        }
+        // 复用远端运行状态同步通道：不用等 10s 轮询，派生窗口的运行中小点当帧就亮
+        useAgentStore.getState().syncRemoteRunStatuses(
+          Object.fromEntries(
+            event.sessions.map((item) => [
+              item.sessionId,
+              { runId: item.runId, status: 'running' as const, finishedAt: null },
+            ]),
+          ),
+        )
+        void queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] })
+      }
+
       // plan_save：把规划文档直接写进左侧「计划」文件夹并选中，无需用户手动存入
       if (event.type === 'tool.result' && event.ok && event.display?.kind === 'planFile') {
         const display = event.display
@@ -1589,8 +1623,10 @@ export default function StudioWorkspace() {
     : undefined
   const selectChapterFromToolRef = useRef(handleSelectChapter)
   const selectPlanFromToolRef = useRef(handleSelectPlanFromTree)
+  const selectAgentTaskWindowFromToolRef = useRef(handleSelectAgentTaskWindow)
   selectChapterFromToolRef.current = handleSelectChapter
   selectPlanFromToolRef.current = handleSelectPlanFromTree
+  selectAgentTaskWindowFromToolRef.current = handleSelectAgentTaskWindow
 
   useEffect(() => {
     if (!toolNavigationRequest) return
@@ -1626,6 +1662,12 @@ export default function StudioWorkspace() {
           setIdeTreeOpen(true)
           setIdeSidebarTab('work')
         }
+      }
+    } else if (display?.kind === 'taskOrchestration') {
+      // 编排卡片里点某个并行窗口：直接切到那个任务窗口（主控还在跑时由切窗逻辑自己拦下来）
+      const targetSessionId = typeof args.sessionId === 'string' ? args.sessionId : null
+      if (targetSessionId) {
+        void selectAgentTaskWindowFromToolRef.current(targetSessionId)
       }
     }
     clearToolNavigationRequest()
@@ -3615,7 +3657,7 @@ export default function StudioWorkspace() {
     navigate(`/studio/novel/${novelId}?session=new`)
   }
 
-  /** 侧栏删除任务：移除任务窗口；删掉的是当前窗口时补一个新对话，避免创作区空白 */
+  /** 侧栏删除任务：移除任务窗口；删掉的是当前窗口时回落到最近一个有记录的任务，全删完了才补空白窗口 */
   function handleAgentTaskDeleted(deletedTaskId: string) {
     const wasActive = activeAgentTaskWindowId === deletedTaskId || agentSessionId === deletedTaskId
     setAgentTaskWindows((current) =>
@@ -3628,8 +3670,16 @@ export default function StudioWorkspace() {
       return
     }
 
+    // 回落目标从删除前的列表里算（setState 异步），已排除被删的那个
+    const fallbackTaskWindow = pickFallbackAgentTaskWindow(agentTaskWindows, deletedTaskId)
+    if (fallbackTaskWindow) {
+      // 走 loadAgentTaskWindow 而非直接 apply：后者不会补载历史工件，作者会看到空壳任务
+      void loadAgentTaskWindow(fallbackTaskWindow.id)
+      return
+    }
+
     const nextTaskWindow = createLocalAgentTaskWindow()
-    setAgentTaskWindows((current) => [nextTaskWindow, ...current])
+    setAgentTaskWindows([nextTaskWindow])
     applyAgentTaskWindowState(nextTaskWindow)
   }
 
@@ -4304,12 +4354,9 @@ export default function StudioWorkspace() {
             setActiveAgentTaskWindowId(nextSessionId)
           }}
           onSessionDeleted={(deletedSessionId) => {
-            // 删除会话成功后同步移除对应任务窗口，避免僵尸 sessionId 写回本地快照后反复 404
-            setAgentTaskWindows((current) =>
-              current.filter(
-                (taskWindow) => taskWindow.sessionId !== deletedSessionId && taskWindow.id !== deletedSessionId,
-              ),
-            )
+            // 删除会话成功后统一走侧栏同一条善后路径：移除任务窗口（避免僵尸 sessionId 写回快照后反复 404），
+            // 删的是当前窗口则回落到最近一个有记录的任务，而不是直接开一个空白对话
+            handleAgentTaskDeleted(deletedSessionId)
           }}
           onTaskForked={handleAgentTaskForked}
           onNewSession={() => {

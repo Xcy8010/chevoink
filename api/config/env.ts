@@ -120,6 +120,13 @@ export const env = {
   agent2RolloutUserIds: parseCsv(process.env.AGENT2_ROLLOUT_USER_IDS),
   agentApprovalTimeoutMs: parsePositiveNumber(process.env.AGENT_APPROVAL_TIMEOUT_MS, 600000),
   agentUserMaxConcurrent: parsePositiveNumber(process.env.AGENT_USER_MAX_CONCURRENT, 2),
+  // 单次 task_spawn 最多派生的并行任务窗口数（作者拍板：5）
+  agentSpawnMaxParallel: parsePositiveNumber(process.env.AGENT_SPAWN_MAX_PARALLEL, 5),
+  // 跨任务编排期间的用户总并发上限：主控窗口 1 + 派生窗口 5；
+  // 普通交互 run 仍受 agentUserMaxConcurrent 约束，避免手工连点把额度打满
+  agentOrchestrationMaxConcurrent: parsePositiveNumber(process.env.AGENT_ORCHESTRATION_MAX_CONCURRENT, 6),
+  // task_wait 单次等待的最长时长上限：超过即返回「仍在执行」，由模型决定是否续等
+  agentTaskWaitMaxSeconds: parsePositiveNumber(process.env.AGENT_TASK_WAIT_MAX_SECONDS, 900),
   aiImageProvider: process.env.AI_IMAGE_PROVIDER ?? 'openai-compatible',
   aiImageBaseUrl:
     process.env.AI_IMAGE_BASE_URL ?? 'https://your-image-provider.example.com/v1/images/generations',

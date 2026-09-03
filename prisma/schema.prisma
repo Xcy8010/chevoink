@@ -1125,6 +1125,11 @@ model AgentSession {
   forkedFromMessageId String?            @map("forked_from_message_id") @db.VarChar(64)
   /** 切分支的时刻：晚于它的消息即分支内新增对话，用于收起「从聊天中继续」提示 */
   forkedAt           DateTime?           @map("forked_at")
+  // 跨任务编排派生溯源：非空即该任务窗口由另一任务的 task_spawn 创建，
+  // loop 组装工具时据此剥除编排工具，防止派生窗口再派生形成并发爆炸
+  spawnedFromSessionId String?           @map("spawned_from_session_id") @db.VarChar(64)
+  /** 派生它的那个 run：供作者回溯是哪轮编排拉起的分支 */
+  spawnedFromRunId   String?             @map("spawned_from_run_id") @db.VarChar(64)
   createdAt          DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")
   user               User                @relation(fields: [userId], references: [id])
@@ -1139,6 +1144,7 @@ model AgentSession {
   @@index([userId, novelId])
   @@index([novelId, updatedAt])
   @@index([forkedFromSessionId])
+  @@index([spawnedFromSessionId])
   @@map("agent_sessions")
 }
 

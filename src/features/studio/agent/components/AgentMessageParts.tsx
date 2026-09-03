@@ -639,6 +639,78 @@ function TaskContextCard({
   )
 }
 
+const ORCHESTRATION_STATUS_LABEL: Record<
+  Extract<AgentToolDisplayPayload, { kind: 'taskOrchestration' }>['windows'][number]['status'],
+  string
+> = {
+  running: '执行中',
+  succeeded: '已完成',
+  failed: '执行失败',
+  cancelled: '已取消',
+  awaiting: '待作者处理',
+  timeout: '仍在执行',
+}
+
+const ORCHESTRATION_MODE_LABEL: Record<'spawn' | 'wait' | 'send', string> = {
+  spawn: '并行任务窗口',
+  wait: '等待任务窗口',
+  send: '投递提示词',
+}
+
+/** 跨任务编排卡片：折叠行 = 并行窗口概况，展开列出每个窗口的状态与交付摘要，点标题直接切到那个任务窗口 */
+function TaskOrchestrationCard({
+  display,
+}: {
+  display: Extract<AgentToolDisplayPayload, { kind: 'taskOrchestration' }>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const requestToolNavigation = useAgentStore((state) => state.requestToolNavigation)
+  const headline = display.detail.trim()
+    || `${ORCHESTRATION_MODE_LABEL[display.mode]} · ${display.windows.length} 个`
+
+  return (
+    <div className="border-t border-[var(--border-subtle)]">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="group flex w-full items-center gap-1.5 py-1.5 text-left"
+      >
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]">{headline}</span>
+        <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)]"><GitBranch className={cn('h-3.5 w-3.5 transition-opacity', !expanded && 'group-hover:opacity-0')} /><ChevronDown className={cn('absolute h-3.5 w-3.5 transition-[opacity,transform]', expanded ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100')} /></span>
+      </button>
+      {expanded ? (
+        <div className="max-h-72 overflow-y-auto border-t border-[var(--border-subtle)] py-1.5 pl-5">
+          <ul>
+            {display.windows.map((taskWindow) => (
+              <li key={taskWindow.sessionId} className="py-1">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => requestToolNavigation('task_open', { sessionId: taskWindow.sessionId }, display)}
+                    className="min-w-0 flex-1 truncate text-left text-xs text-[var(--text-primary)] hover:underline"
+                  >
+                    {taskWindow.title}
+                  </button>
+                  <span className="shrink-0 text-[10px] text-[var(--text-secondary)]">
+                    {ORCHESTRATION_STATUS_LABEL[taskWindow.status]}
+                    {taskWindow.inherit === 'transcript' ? ' · 分支副本' : ''}
+                  </span>
+                </div>
+                {taskWindow.summary ? (
+                  <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-[var(--text-secondary)]">
+                    {taskWindow.summary}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ToolDisplayRenderer({
   display,
   onNavigateTarget,
@@ -669,6 +741,8 @@ function ToolDisplayRenderer({
       return <MarkdownCard display={display} />
     case 'taskContext':
       return <TaskContextCard display={display} />
+    case 'taskOrchestration':
+      return <TaskOrchestrationCard display={display} />
     case 'chapterRef':
       return (
         <p className="text-[11px] text-[var(--text-secondary)]">

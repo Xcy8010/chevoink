@@ -209,3 +209,39 @@ export function shouldDisplayListedAgentSession(
   const normalizedTitle = session.title.trim()
   return Boolean(session.lastRunAt) || (normalizedTitle && normalizedTitle !== DEFAULT_AGENT_TASK_TITLE)
 }
+
+
+
+/** 「有记录」的判据：已落库的会话，或本地临时窗口里已经产生过对话/产物 */
+function hasAgentTaskRecord(taskWindow: AgentTaskWindowState) {
+  return (
+    Boolean(taskWindow.sessionId)
+    || taskWindow.firstPromptSubmitted
+    || taskWindow.prompt.trim().length > 0
+    || taskWindow.artifacts.length > 0
+  )
+}
+
+
+
+/**
+ * 删除任务窗口后应该回落到哪个窗口：优先最近一个「有记录」的任务，
+ * 剩下的全是空白临时窗口时取最近的那个，一个都不剩才返回 null（由调用方补空白窗口）。
+ * 修复点：此前删任务直接新建空白窗口，作者删一个就被丢到欢迎页，看不到上一个任务。
+ */
+export function pickFallbackAgentTaskWindow(
+  taskWindows: AgentTaskWindowState[],
+  deletedTaskId: string,
+): AgentTaskWindowState | null {
+  const candidates = taskWindows.filter(
+    (taskWindow) => taskWindow.id !== deletedTaskId && taskWindow.sessionId !== deletedTaskId,
+  )
+  const recorded = candidates.filter(hasAgentTaskRecord)
+  const pool = recorded.length > 0 ? recorded : candidates
+
+  return (
+    [...pool].sort(
+      (left, right) => getAgentTaskWindowTimestamp(right) - getAgentTaskWindowTimestamp(left),
+    )[0] ?? null
+  )
+}

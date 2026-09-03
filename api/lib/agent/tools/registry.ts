@@ -75,6 +75,7 @@ import {
 } from './skill-tools.js'
 import { sessionHistorySearchTool, sessionMessageReadTool } from './session-history-tools.js'
 import { taskContextListTool, taskContextReadTool } from './task-context-tools.js'
+import { taskSendTool, taskSpawnTool, taskWaitTool } from './task-orchestration-tools.js'
 import {
   chapterBridgeCommitTool,
   chapterBridgeGetTool,
@@ -140,6 +141,9 @@ export const allTools: AgentTool<any>[] = [
   sessionMessageReadTool,
   taskContextListTool,
   taskContextReadTool,
+  taskSpawnTool,
+  taskWaitTool,
+  taskSendTool,
   storyCharterGetTool,
   chapterBridgeGetTool,
   qualityReportGetTool,

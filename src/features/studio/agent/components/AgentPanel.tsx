@@ -964,10 +964,9 @@ export function AgentPanel({
       if (confirmAction.kind === 'deleteSession') {
         await deleteAgentSession(confirmAction.sessionId)
         setSessions((current) => current.filter((item) => item.id !== confirmAction.sessionId))
+        // 删当前会话的善后全交给宿主（onSessionDeleted 会回落到最近一个有记录的任务）；
+        // 这里再调 onNewSession 会抢先插一个空白窗口，把作者丢到欢迎页
         onSessionDeleted?.(confirmAction.sessionId)
-        if (confirmAction.sessionId === sessionId) {
-          onNewSession?.()
-        }
       } else if (sessionId) {
         // 刚发出的用户消息在本地是临时 id（local-*），服务端落库用的是另一个 uuid：
         // 直接拿临时 id 调删除/回退会 404「消息不存在或已被删除」，先按 runId 对齐到真实 id
@@ -1011,7 +1010,7 @@ export function AgentPanel({
     } finally {
       setConfirmBusy(false)
     }
-  }, [confirmAction, sessionId, onSessionDeleted, onNewSession, onWorkspaceRollback, reloadMessages])
+  }, [confirmAction, sessionId, onSessionDeleted, onWorkspaceRollback, reloadMessages])
 
   const confirmDialogCopy = confirmAction
     ? confirmAction.kind === 'deleteSession'

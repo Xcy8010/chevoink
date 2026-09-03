@@ -46,9 +46,19 @@ import { isDefaultSessionTitle } from './session-title.js'
  * 阶段 P3：计划产物拆至 plan-artifacts.ts、会话消息/删除/回滚拆至 session-messages.ts。
  */
 
+export type StartLoopRunOptions = {
+  /**
+   * 并发额度作用域：interactive=作者手工发起（受 agentUserMaxConcurrent 约束）；
+   * orchestration=task_spawn / task_send 拉起的跨任务编排，改用编排专用上限（主控 + 派生窗口）。
+   * 分开的理由：不能为了并行编排而放宽普通交互的额度，否则手工连点就能把模型并发打满。
+   */
+  concurrencyScope?: 'interactive' | 'orchestration'
+}
+
 export async function startLoopRun(
   userId: string,
   input: StartAgentLoopRunRequest,
+  options: StartLoopRunOptions = {},
 ): Promise<StartAgentLoopRunResponse> {
   const session = await prisma.agentSession.findFirst({
     where: { id: input.sessionId, userId },
@@ -71,8 +81,12 @@ export async function startLoopRun(
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行，请先停止或等待完成。')
   }
 
-  if (countActiveRunsByUser(userId) >= env.agentUserMaxConcurrent) {
-    throw new DataAccessError(409, 'RUN_LIMIT', `同时进行的任务数已达上限（${env.agentUserMaxConcurrent}），请稍后再试。`)
+  const concurrencyLimit = options.concurrencyScope === 'orchestration'
+    ? Math.max(env.agentUserMaxConcurrent, env.agentOrchestrationMaxConcurrent)
+    : env.agentUserMaxConcurrent
+
+  if (countActiveRunsByUser(userId) >= concurrencyLimit) {
+    throw new DataAccessError(409, 'RUN_LIMIT', `同时进行的任务数已达上限（${concurrencyLimit}），请稍后再试。`)
   }
 
   const chapterId = input.chapterId?.trim() || null

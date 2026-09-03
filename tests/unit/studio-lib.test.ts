@@ -14,6 +14,7 @@ import {
   getAgentTaskWindowTimestamp,
   getAgentWorkspaceStorageKey,
   isBootstrapNovel,
+  pickFallbackAgentTaskWindow,
   resolveNovelTitleState,
   shouldDisplayListedAgentSession,
 } from '../../src/features/studio/lib/agent-session.js'
@@ -170,6 +171,32 @@ describe('agent-session：任务窗构造与去重', () => {
     expect(shouldDisplayListedAgentSession(session, false)).toBe(false)
     expect(shouldDisplayListedAgentSession({ ...session, title: '我的会话' }, false)).toBe(true)
     expect(shouldDisplayListedAgentSession({ ...session, lastRunAt: '2026-08-16' }, false)).toBe(true)
+  })
+
+  it('pickFallbackAgentTaskWindow：删除后优先回落到最近一个有记录的任务，而不是更新的空白窗口', () => {
+    const deleted = createLocalAgentTaskWindow({ id: 'del', sessionId: 'session-del', updatedAt: '2026-09-03T10:00:00.000Z', createdAt: '2026-09-03T10:00:00.000Z' })
+    const blankNewer = createLocalAgentTaskWindow({ id: 'blank', updatedAt: '2026-09-03T09:00:00.000Z', createdAt: '2026-09-03T09:00:00.000Z' })
+    const recordedOlder = createLocalAgentTaskWindow({ id: 'kept', sessionId: 'session-kept', temporary: false, updatedAt: '2026-09-03T08:00:00.000Z', createdAt: '2026-09-03T08:00:00.000Z' })
+
+    expect(pickFallbackAgentTaskWindow([deleted, blankNewer, recordedOlder], 'del')?.id).toBe('kept')
+    // 侧栏传回的可能是 sessionId，也要能排除被删的那个窗口
+    expect(pickFallbackAgentTaskWindow([deleted, recordedOlder], 'session-del')?.id).toBe('kept')
+  })
+
+  it('pickFallbackAgentTaskWindow：剩下的全是空白窗口时取最近的，一个不剩才返回 null', () => {
+    const blankOlder = createLocalAgentTaskWindow({ id: 'b1', updatedAt: '2026-09-01T00:00:00.000Z', createdAt: '2026-09-01T00:00:00.000Z' })
+    const blankNewer = createLocalAgentTaskWindow({ id: 'b2', updatedAt: '2026-09-02T00:00:00.000Z', createdAt: '2026-09-02T00:00:00.000Z' })
+
+    expect(pickFallbackAgentTaskWindow([blankOlder, blankNewer], 'del')?.id).toBe('b2')
+    expect(pickFallbackAgentTaskWindow([blankOlder], 'b1')).toBeNull()
+    expect(pickFallbackAgentTaskWindow([], 'del')).toBeNull()
+  })
+
+  it('pickFallbackAgentTaskWindow：未落库但已有对话的临时窗口也算有记录', () => {
+    const blankNewer = createLocalAgentTaskWindow({ id: 'blank', updatedAt: '2026-09-03T09:00:00.000Z', createdAt: '2026-09-03T09:00:00.000Z' })
+    const promptedOlder = createLocalAgentTaskWindow({ id: 'prompted', prompt: '写第三章', updatedAt: '2026-09-03T08:00:00.000Z', createdAt: '2026-09-03T08:00:00.000Z' })
+
+    expect(pickFallbackAgentTaskWindow([blankNewer, promptedOlder], 'del')?.id).toBe('prompted')
   })
 })
 

@@ -195,6 +195,23 @@ export type AgentToolDisplayPayload =
       }>
       excerpts: Array<{ role: string; createdAt: string; text: string }>
     }
+  | {
+      /** 跨任务并行编排：派生/等待/投递任务窗口的结果卡片，作者可点进对应窗口核对产出 */
+      kind: 'taskOrchestration'
+      /** spawn=派生并行任务窗口；wait=等待窗口产出；send=向窗口投递提示词 */
+      mode: 'spawn' | 'wait' | 'send'
+      detail: string
+      windows: Array<{
+        sessionId: EntityId
+        title: string
+        /** running=执行中；succeeded/failed/cancelled=终态；awaiting=等作者处理；timeout=等待超时但仍在跑 */
+        status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'awaiting' | 'timeout'
+        /** 该窗口的交付摘要：等待完成后回填 */
+        summary?: string
+        /** 上下文继承方式：brief=只给简报提示词；transcript=当前任务的分支副本 */
+        inherit?: 'brief' | 'transcript'
+      }>
+    }
 
 /** 工具调用的回滚快照（写操作自动记录） */
 export interface AgentRollbackSnapshot {
@@ -256,6 +273,22 @@ export type AgentStreamEventBody =
       callId: string
       step: number
       message: string
+    }
+  | {
+      /** 跨任务编排新增了运行中的任务窗口（task_spawn 派生 / task_send 投递）：
+       *  前端据此把窗口登记进侧栏并标记运行中，不用等 10s 轮询 */
+      type: 'task.spawned'
+      messageId: string
+      /** 所属编排工具调用的 callId */
+      callId: string
+      sessions: Array<{
+        sessionId: EntityId
+        runId: EntityId
+        novelId: EntityId
+        title: string
+        /** 上下文继承方式；task_send 投递到已有窗口时为空 */
+        inherit?: 'brief' | 'transcript'
+      }>
     }
   | {
       /** 工具参数流式生成中的进度：模型仍在产出参数（如章节正文），argsChars 为已生成的参数字符数 */

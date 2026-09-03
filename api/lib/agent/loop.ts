@@ -37,6 +37,7 @@ import { getToolByName, toOpenAITools } from './tools/registry.js'
 import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
+import { ORCHESTRATION_TOOL_NAMES } from './tools/task-orchestration-tools.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
@@ -854,10 +855,15 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
 
     const featureFlags = resolveAgent2FeatureFlags(params.userId)
-    const sessionPolicy = await prisma.agentSession.findUnique({ where: { id: params.sessionId }, select: { toolPolicy: true, sandboxMode: true } })
+    const sessionPolicy = await prisma.agentSession.findUnique({ where: { id: params.sessionId }, select: { toolPolicy: true, sandboxMode: true, spawnedFromSessionId: true } })
     const scopedTools = getToolsForAgent(agent, params.mode, featureFlags)
+    // 派生窗口禁用跨任务编排：否则 b 再派生 e、e 再派生 f 会指数级打爆并发与额度，
+    // 而且互相等待还会直接死锁；派生窗口的职责就是干完自己那一份并交回摘要
+    const orchestrationScopedTools = sessionPolicy?.spawnedFromSessionId
+      ? scopedTools.filter((tool) => !ORCHESTRATION_TOOL_NAMES.has(tool.name))
+      : scopedTools
     const tools = applySessionToolPolicy(
-      scopedTools,
+      orchestrationScopedTools,
       params.mode,
       sessionPolicy?.toolPolicy,
       sessionPolicy?.sandboxMode === 'read_only' || sessionPolicy?.sandboxMode === 'full_access' ? sessionPolicy.sandboxMode : 'workspace',
