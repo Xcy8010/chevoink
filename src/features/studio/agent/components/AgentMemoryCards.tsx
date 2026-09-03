@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, GripVertical, LoaderCircle, PencilLine, Quote, X } from 'lucide-react'
+import {
+  BookMarked, BookOpen, ChevronLeft, ChevronRight, Clapperboard, Feather, Globe, HeartHandshake,
+  History, Library, LoaderCircle, PenLine, PencilLine, Quote, Route, ScrollText, ShieldCheck,
+  Telescope, UserRound, X,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 import { fetchStoryMemories, fetchStoryMemorySets, updateStoryMemory } from '../agentApi'
-import { COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer } from '../composer-content'
 import { useAgentStore } from '../agentStore'
 import type { StoryMemoryCard, StoryMemorySet } from '../../../../../shared/contracts/index.js'
 
@@ -13,26 +17,26 @@ type Props = {
 
 const PAGE_SIZE = 12
 
-/** 14 种记忆类型：中文名 + 封面单字水印（墨色低透明，不用彩色图标，保持纸牌质感） */
-const MEMORY_TYPE_META: Record<string, { label: string; glyph: string }> = {
-  characterCard: { label: '人物', glyph: '人' },
-  worldbuilding: { label: '世界观', glyph: '世' },
-  novelSummary: { label: '作品概要', glyph: '书' },
-  chapterSummary: { label: '章节摘要', glyph: '章' },
-  volumeSummary: { label: '卷摘要', glyph: '卷' },
-  timelineEvent: { label: '时间线', glyph: '时' },
-  foreshadowing: { label: '伏笔', glyph: '伏' },
-  stylePreference: { label: '文风偏好', glyph: '文' },
-  continuityRule: { label: '连贯性规则', glyph: '规' },
-  storyArc: { label: '故事线', glyph: '线' },
-  sceneState: { label: '场景状态', glyph: '景' },
-  relationshipState: { label: '人物关系', glyph: '系' },
-  storyBible: { label: '设定集', glyph: '典' },
-  authorProfile: { label: '作者画像', glyph: '笔' },
+/** 14 种记忆类型：中文名 + 专属线性图标（低饱和细描边，封面与覆层共用同一视觉语言） */
+const MEMORY_TYPE_META: Record<string, { label: string; icon: LucideIcon }> = {
+  characterCard: { label: '人物', icon: UserRound },
+  worldbuilding: { label: '世界观', icon: Globe },
+  novelSummary: { label: '作品概要', icon: BookOpen },
+  chapterSummary: { label: '章节摘要', icon: ScrollText },
+  volumeSummary: { label: '卷摘要', icon: Library },
+  timelineEvent: { label: '时间线', icon: History },
+  foreshadowing: { label: '伏笔', icon: Telescope },
+  stylePreference: { label: '文风偏好', icon: Feather },
+  continuityRule: { label: '连贯性规则', icon: ShieldCheck },
+  storyArc: { label: '故事线', icon: Route },
+  sceneState: { label: '场景状态', icon: Clapperboard },
+  relationshipState: { label: '人物关系', icon: HeartHandshake },
+  storyBible: { label: '设定集', icon: BookMarked },
+  authorProfile: { label: '作者画像', icon: PenLine },
 }
 
 function typeMeta(memoryType: string) {
-  return MEMORY_TYPE_META[memoryType] ?? { label: memoryType, glyph: '忆' }
+  return MEMORY_TYPE_META[memoryType] ?? { label: memoryType, icon: BookMarked }
 }
 
 /** 堆边厚度档位：单卡无堆边，1-9 薄、10-29 中、30+ 厚，一眼看出哪类记忆沉淀得多 */
@@ -62,14 +66,14 @@ type SetCardsState = {
 
 /**
  * 创作记忆卡片集画廊：一个类型一叠牌，默认封面墙全收起（一屏看全记忆版图）；
- * 点击封面就地展开为该集头部条 + 摊开的堆叠卡片，再点收起。
- * 单卡保留悬停翻出、点击详情、右键编辑/引用、拖拽进输入框。
+ * 点击封面进入覆层手牌模式——整叠牌在模糊覆层中扇形摊开，← → 拨牌、点击翻面读全文、Esc 收叠。
+ * 单卡保留右键编辑/引用入口。
  */
 export default function AgentMemoryCards({ novelId }: Props) {
   const [sets, setSets] = useState<StoryMemorySet[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<Record<string, true>>({})
+  const [overlayType, setOverlayType] = useState<string | null>(null)
   const [setCards, setSetCards] = useState<Record<string, SetCardsState>>({})
   const [menu, setMenu] = useState<MenuState>(null)
   const [detail, setDetail] = useState<StoryMemoryCard | null>(null)
@@ -99,7 +103,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
 
   useEffect(() => {
     setSets([])
-    setExpanded({})
+    setOverlayType(null)
     setSetCards({})
     void loadSets()
   }, [novelId, loadSets])
@@ -151,17 +155,9 @@ export default function AgentMemoryCards({ novelId }: Props) {
     }
   }, [novelId])
 
-  const expandSet = (memoryType: string) => {
-    setExpanded((current) => ({ ...current, [memoryType]: true }))
+  const openSet = (memoryType: string) => {
+    setOverlayType(memoryType)
     if (!setCards[memoryType]) void loadSetCards(memoryType, 1)
-  }
-
-  const collapseSet = (memoryType: string) => {
-    setExpanded((current) => {
-      const next = { ...current }
-      delete next[memoryType]
-      return next
-    })
   }
 
   const applyToComposer = (card: StoryMemoryCard) => {
@@ -177,6 +173,14 @@ export default function AgentMemoryCards({ novelId }: Props) {
     showToast(`「${card.title}」已加入输入框引用`)
   }
 
+  /** 引用后收叠覆层，让用户直接看到输入框里的引用 chip */
+  const quoteAndClose = (card: StoryMemoryCard) => {
+    applyToComposer(card)
+    setOverlayType(null)
+    setDetail(null)
+    setMenu(null)
+  }
+
   const handleContextMenu = (event: React.MouseEvent, card: StoryMemoryCard) => {
     event.preventDefault()
     const width = 168
@@ -188,19 +192,9 @@ export default function AgentMemoryCards({ novelId }: Props) {
     })
   }
 
-  const handleDragStart = (event: React.DragEvent, card: StoryMemoryCard) => {
-    event.dataTransfer.setData(COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer({
-      id: `memory:${card.id}`,
-      kind: 'memory',
-      name: card.title,
-      startLine: 0,
-      endLine: 0,
-      text: card.content.slice(0, 4000),
-    }))
-    event.dataTransfer.effectAllowed = 'copy'
-  }
-
   const totalCards = sets.reduce((sum, set) => sum + set.count, 0)
+  const overlaySet = overlayType ? sets.find((set) => set.memoryType === overlayType) ?? null : null
+  const overlaySuspended = Boolean(menu) || Boolean(detail) || Boolean(editing)
 
   return (
     <section className="px-4 pb-6 pt-1">
@@ -238,6 +232,11 @@ export default function AgentMemoryCards({ novelId }: Props) {
           transform: translateY(-7px) rotate(-1deg) scale(1.02);
           box-shadow: 0 18px 44px rgba(15,23,42,0.14);
         }
+        .fan-card { transition: transform 420ms cubic-bezier(0.22,1,0.36,1), opacity 320ms ease-out; }
+        .fan-flip { transition: transform 520ms cubic-bezier(0.22,1,0.36,1); }
+        .fan-flipped { transform: rotateY(180deg); }
+        .fan-face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+        .fan-back { transform: rotateY(180deg); }
       `}</style>
 
       <div className="flex items-baseline justify-between gap-3">
@@ -245,7 +244,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
           创作记忆
           {totalCards > 0 ? <span className="text-[10px] font-normal tabular-nums text-[var(--text-tertiary)]">{sets.length} 集 · {totalCards} 张</span> : null}
         </h3>
-        <p className="shrink-0 text-[9px] text-[var(--text-tertiary)]">点封面摊开卡片集 · 单卡右键/拖拽/点击</p>
+        <p className="shrink-0 text-[9px] text-[var(--text-tertiary)]">点封面进入手牌审阅 · 点击翻面 · Esc 收叠</p>
       </div>
 
       {loading ? (
@@ -261,73 +260,22 @@ export default function AgentMemoryCards({ novelId }: Props) {
         <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-3 gap-y-5">
           {sets.map((set, index) => {
             const meta = typeMeta(set.memoryType)
-            if (expanded[set.memoryType]) {
-              const state = setCards[set.memoryType]
-              const hasMore = state ? state.items.length < state.total : false
-              return (
-                <section key={set.memoryType} className="col-span-full" style={{ animation: 'memory-card-in 320ms cubic-bezier(0.22,1,0.36,1) both' }}>
-                  <header className="flex items-center gap-2 pb-3">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-muted)] text-[13px] text-[var(--text-secondary)]">{meta.glyph}</span>
-                    <span className="text-xs font-medium text-[var(--text-primary)]">{meta.label}</span>
-                    <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{set.count} 张</span>
-                    <button
-                      type="button"
-                      onClick={() => collapseSet(set.memoryType)}
-                      className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)]"
-                    ><ChevronDown className="h-3 w-3 rotate-180" />收起</button>
-                  </header>
-                  {!state || state.loading ? (
-                    <div className="flex items-center justify-center gap-2 py-8 text-xs text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />摊开卡片…</div>
-                  ) : state.error ? (
-                    <div className="py-6 text-center">
-                      <p className="text-xs text-[var(--text-secondary)]">{state.error}</p>
-                      <button type="button" onClick={() => void loadSetCards(set.memoryType, 1)} className="mt-2 text-[11px] text-[var(--text-primary)] underline underline-offset-4">重试</button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-x-3 gap-y-5">
-                        {state.items.map((card, cardIndex) => (
-                          <MemoryCardTile
-                            key={card.id}
-                            card={card}
-                            index={cardIndex}
-                            onOpen={setDetail}
-                            onMenu={handleContextMenu}
-                            onDragStart={handleDragStart}
-                          />
-                        ))}
-                      </div>
-                      {hasMore ? (
-                        <div className="mt-4 flex justify-center">
-                          <button
-                            type="button"
-                            onClick={() => void loadSetCards(set.memoryType, state.page + 1)}
-                            disabled={state.loadingMore}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)] disabled:opacity-50"
-                          >
-                            {state.loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-                            {state.loadingMore ? '加载中…' : '加载更多'}
-                          </button>
-                        </div>
-                      ) : null}
-                    </>
-                  )}
-                </section>
-              )
-            }
+            const Icon = meta.icon
             return (
               <div key={set.memoryType} className="memory-stack" data-thick={thicknessTier(set.count)} style={{ animationDelay: `${Math.min(index, 11) * 40}ms` }}>
                 <article
                   role="button"
                   tabIndex={0}
-                  onClick={() => expandSet(set.memoryType)}
-                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); expandSet(set.memoryType) } }}
-                  className="memory-card group flex h-[132px] cursor-pointer flex-col overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-3 pt-2.5"
-                  title={`${meta.label} ${set.count} 张 · 点击摊开`}
-                  aria-label={`${meta.label}卡片集 ${set.count} 张，点击摊开`}
+                  onClick={() => openSet(set.memoryType)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSet(set.memoryType) } }}
+                  className="memory-card group flex h-[136px] cursor-pointer flex-col overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-3 pt-2.5"
+                  title={`${meta.label} ${set.count} 张 · 点击摊开手牌`}
+                  aria-label={`${meta.label}卡片集 ${set.count} 张，点击摊开手牌`}
                 >
-                  <span aria-hidden className="pointer-events-none absolute inset-0 flex select-none items-center justify-center text-[46px] font-semibold text-[var(--text-primary)] opacity-[0.07]">{meta.glyph}</span>
                   <p className="relative truncate text-[10px] text-[var(--text-tertiary)]">{set.previews[0] ?? '暂无卡片'}</p>
+                  <span className="relative mx-auto mt-2 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] transition-colors duration-300 group-hover:border-[var(--text-tertiary)]">
+                    <Icon className="h-[18px] w-[18px] opacity-70" strokeWidth={1.5} />
+                  </span>
                   <div className="relative mt-auto flex items-baseline justify-between gap-2">
                     <span className="truncate text-xs font-medium text-[var(--text-primary)]">{meta.label}</span>
                     <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-tertiary)]">{set.count} 张</span>
@@ -339,6 +287,22 @@ export default function AgentMemoryCards({ novelId }: Props) {
           })}
         </div>
       )}
+
+      {overlaySet ? (
+        <MemoryFanOverlay
+          set={overlaySet}
+          state={setCards[overlaySet.memoryType]}
+          suspended={overlaySuspended}
+          onClose={() => setOverlayType(null)}
+          onLoadMore={() => {
+            const state = setCards[overlaySet.memoryType]
+            if (state) void loadSetCards(overlaySet.memoryType, state.page + 1)
+          }}
+          onMenu={handleContextMenu}
+          onQuote={quoteAndClose}
+          onEdit={(card) => { setEditing(card); setMenu(null) }}
+        />
+      ) : null}
 
       {menu ? createPortal(
         <div
@@ -359,7 +323,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
           ><PencilLine className="h-3.5 w-3.5 text-[var(--text-secondary)]" />编辑卡片</button>
           <button
             type="button"
-            onClick={() => { applyToComposer(menu.card); setMenu(null) }}
+            onClick={() => quoteAndClose(menu.card)}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-muted)]"
           ><Quote className="h-3.5 w-3.5 text-[var(--text-secondary)]" />引用到对话</button>
         </div>,
@@ -370,7 +334,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
         card={detail}
         onClose={() => setDetail(null)}
         onEdit={() => { setEditing(detail); setDetail(null) }}
-        onQuote={() => { applyToComposer(detail); setDetail(null) }}
+        onQuote={() => quoteAndClose(detail)}
       /> : null}
 
       {editing ? <MemoryCardEditDialog
@@ -399,40 +363,177 @@ export default function AgentMemoryCards({ novelId }: Props) {
   )
 }
 
-type TileProps = {
-  card: StoryMemoryCard
-  index: number
-  onOpen: (card: StoryMemoryCard) => void
+type FanOverlayProps = {
+  set: StoryMemorySet
+  state: SetCardsState | undefined
+  /** 右键菜单/详情/编辑打开时挂起键盘监听，避免 Esc 一次关两层 */
+  suspended: boolean
+  onClose: () => void
+  onLoadMore: () => void
   onMenu: (event: React.MouseEvent, card: StoryMemoryCard) => void
-  onDragStart: (event: React.DragEvent, card: StoryMemoryCard) => void
+  onQuote: (card: StoryMemoryCard) => void
+  onEdit: (card: StoryMemoryCard) => void
 }
 
-/** 单张记忆牌：悬停翻出堆顶、点击详情、右键菜单、拖拽引用 */
-function MemoryCardTile({ card, index, onOpen, onMenu, onDragStart }: TileProps) {
-  const meta = typeMeta(card.memoryType)
-  return (
-    <div className="memory-stack" data-thick={1} style={{ animationDelay: `${Math.min(index, 11) * 40}ms` }}>
-      <article
-        draggable
-        onDragStart={(event) => onDragStart(event, card)}
-        onContextMenu={(event) => onMenu(event, card)}
-        onClick={() => onOpen(card)}
-        className="memory-card group flex h-[152px] cursor-pointer flex-col rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-2.5 pt-3"
-        title={card.title}
-      >
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-[9px] tracking-wide text-[var(--text-tertiary)]">{meta.label}</span>
-          {card.version > 1 ? <span className="shrink-0 text-[9px] tabular-nums text-[var(--text-tertiary)]">v{card.version}</span> : null}
-          <GripVertical className="ml-auto h-3 w-3 shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity duration-300 group-hover:opacity-60" />
-        </div>
-        <h4 className="mt-2 truncate text-xs font-medium text-[var(--text-primary)]">{card.title}</h4>
-        <p className="mt-1.5 line-clamp-3 text-[11px] leading-[1.7] text-[var(--text-secondary)]">{card.content}</p>
-        <div className="mt-auto flex items-center justify-between pt-2 text-[9px] text-[var(--text-tertiary)]">
-          <span>重要性 {card.importance}</span>
-          <span>{formatMemoryDate(card.updatedAt)}</span>
-        </div>
-      </article>
-    </div>
+/** 覆层手牌模式：整叠牌扇形摊在模糊覆层中央，← → 拨牌、点击翻面读全文、Esc 收叠回封面墙 */
+function MemoryFanOverlay({ set, state, suspended, onClose, onLoadMore, onMenu, onQuote, onEdit }: FanOverlayProps) {
+  const meta = typeMeta(set.memoryType)
+  const Icon = meta.icon
+  const items = state?.items ?? []
+  const [focus, setFocus] = useState(0)
+  const [flipped, setFlipped] = useState(false)
+
+  // 卡片数量变化（加载更多/切换作品）时把焦点钳回有效范围
+  useEffect(() => {
+    setFocus((current) => Math.min(current, Math.max(items.length - 1, 0)))
+  }, [items.length])
+
+  useEffect(() => {
+    if (suspended) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (flipped) setFlipped(false)
+        else onClose()
+      } else if (event.key === 'ArrowLeft') {
+        setFlipped(false)
+        setFocus((current) => Math.max(0, current - 1))
+      } else if (event.key === 'ArrowRight') {
+        setFlipped(false)
+        setFocus((current) => Math.min(Math.max(items.length - 1, 0), current + 1))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [suspended, flipped, items.length, onClose])
+
+  const hasMore = state ? state.items.length < state.total : false
+  const step = (delta: number) => {
+    setFlipped(false)
+    setFocus((current) => Math.max(0, Math.min(Math.max(items.length - 1, 0), current + delta)))
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[165] flex flex-col bg-[rgba(15,23,42,0.5)] backdrop-blur-md"
+      style={{ animation: 'memory-fade-in 200ms ease-out' }}
+      onClick={onClose}
+    >
+      <header className="flex shrink-0 items-center gap-2.5 px-5 pb-1 pt-4" onClick={(event) => event.stopPropagation()}>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/25 text-white/85">
+          <Icon className="h-4 w-4" strokeWidth={1.5} />
+        </span>
+        <span className="text-sm font-medium text-white">{meta.label}</span>
+        <span className="text-[10px] tabular-nums text-white/60">{set.count} 张</span>
+        <span className="ml-auto text-[10px] tabular-nums text-white/60">{items.length ? focus + 1 : 0} / {state?.total ?? 0}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="收叠手牌"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+        ><X className="h-4 w-4" /></button>
+      </header>
+
+      <div className="relative min-h-0 flex-1" onClick={(event) => event.stopPropagation()}>
+        {!state || state.loading ? (
+          <div className="flex h-full items-center justify-center gap-2 text-xs text-white/70"><LoaderCircle className="h-4 w-4 animate-spin" />摊开手牌…</div>
+        ) : state.error ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2">
+            <p className="text-xs text-white/70">{state.error}</p>
+            <button type="button" onClick={onLoadMore} className="text-[11px] text-white underline underline-offset-4">重试</button>
+          </div>
+        ) : items.length === 0 ? (
+          <p className="flex h-full items-center justify-center text-xs text-white/60">这一集暂时没有卡片。</p>
+        ) : (
+          <>
+            <div className="flex h-full items-center justify-center [perspective:1400px]">
+              {items.map((card, index) => {
+                const offset = index - focus
+                const away = Math.abs(offset) > 3
+                const cardMeta = typeMeta(card.memoryType)
+                const style: React.CSSProperties = away
+                  ? { transform: `translateX(${offset > 0 ? 480 : -480}px) translateY(56px) rotate(${offset > 0 ? 16 : -16}deg) scale(0.72)`, opacity: 0, zIndex: 10, pointerEvents: 'none' }
+                  : { transform: `translateX(${offset * 76}px) translateY(${Math.abs(offset) * 12}px) rotate(${offset * 5}deg) scale(${1 - Math.abs(offset) * 0.05})`, opacity: 1 - Math.abs(offset) * 0.15, zIndex: 40 - Math.abs(offset) }
+                return (
+                  <div
+                    key={card.id}
+                    className="fan-card absolute cursor-pointer"
+                    style={style}
+                    onClick={() => {
+                      if (offset === 0) setFlipped((current) => !current)
+                      else { setFlipped(false); setFocus(index) }
+                    }}
+                    onContextMenu={(event) => onMenu(event, card)}
+                  >
+                    <div className={`fan-flip relative h-[380px] w-[300px] [transform-style:preserve-3d] ${flipped && offset === 0 ? 'fan-flipped' : ''}`}>
+                      <article className="fan-face flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-5 pb-4 pt-4 shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-[9px] tracking-wide text-[var(--text-tertiary)]">{cardMeta.label}</span>
+                          {card.version > 1 ? <span className="shrink-0 text-[9px] tabular-nums text-[var(--text-tertiary)]">v{card.version}</span> : null}
+                          <span className="ml-auto shrink-0 text-[9px] text-[var(--text-tertiary)]">点击翻面</span>
+                        </div>
+                        <h4 className="mt-2.5 line-clamp-2 break-words text-sm font-semibold leading-6 text-[var(--text-primary)]">{card.title}</h4>
+                        <p className="mt-2 line-clamp-[11] text-xs leading-6 text-[var(--text-secondary)]">{card.content}</p>
+                        <div className="mt-auto flex items-center justify-between pt-3 text-[9px] text-[var(--text-tertiary)]">
+                          <span>重要性 {card.importance}</span>
+                          <span>{formatMemoryDate(card.updatedAt)}</span>
+                        </div>
+                      </article>
+                      <article className="fan-face fan-back flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
+                        <header className="shrink-0 px-5 pb-2.5 pt-4">
+                          <p className="flex items-center gap-2 text-[9px] tracking-wide text-[var(--text-tertiary)]">
+                            {cardMeta.label}
+                            {card.version > 1 ? <span className="tabular-nums">v{card.version}</span> : null}
+                            <span>重要性 {card.importance}</span>
+                          </p>
+                          <h4 className="mt-1.5 line-clamp-2 break-words text-sm font-semibold leading-6 text-[var(--text-primary)]">{card.title}</h4>
+                        </header>
+                        <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-subtle)] px-5 py-3.5">
+                          <p className="whitespace-pre-wrap break-words text-xs leading-6 text-[var(--text-secondary)]">{card.content}</p>
+                        </div>
+                        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-2.5">
+                          <button type="button" onClick={() => onQuote(card)} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Quote className="h-3.5 w-3.5" />引用到对话</button>
+                          <button type="button" onClick={() => onEdit(card)} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><PencilLine className="h-3.5 w-3.5" />编辑卡片</button>
+                        </footer>
+                      </article>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => step(-1)}
+              disabled={focus <= 0}
+              aria-label="上一张"
+              className="absolute left-5 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 text-white/70 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-25"
+            ><ChevronLeft className="h-4 w-4" /></button>
+            <button
+              type="button"
+              onClick={() => step(1)}
+              disabled={focus >= items.length - 1}
+              aria-label="下一张"
+              className="absolute right-5 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 text-white/70 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-25"
+            ><ChevronRight className="h-4 w-4" /></button>
+          </>
+        )}
+      </div>
+
+      <footer className="flex shrink-0 flex-col items-center gap-1.5 px-5 pb-5 pt-1" onClick={(event) => event.stopPropagation()}>
+        <p className="text-[10px] text-white/50">← → 拨牌翻阅 · 点击卡片翻面读全文 · 右键编辑/引用 · Esc 收叠</p>
+        {hasMore ? (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={state?.loadingMore}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-white/60 transition-colors duration-200 hover:bg-white/10 hover:text-white disabled:opacity-50"
+          >
+            {state?.loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            {state?.loadingMore ? '加载中…' : '加载更多'}
+          </button>
+        ) : null}
+      </footer>
+    </div>,
+    document.body,
   )
 }
 
@@ -453,7 +554,7 @@ function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote }: DetailDialog
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[160] flex items-center justify-center bg-[rgba(15,23,42,0.32)] px-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[175] flex items-center justify-center bg-[rgba(15,23,42,0.32)] px-4 backdrop-blur-[3px]"
       style={{ animation: 'memory-fade-in 180ms ease-out' }}
       onClick={onClose}
     >
@@ -531,7 +632,7 @@ function MemoryCardEditDialog({ card, onClose, onSaved }: EditDialogProps) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[160] flex items-center justify-center bg-[rgba(15,23,42,0.32)] px-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[175] flex items-center justify-center bg-[rgba(15,23,42,0.32)] px-4 backdrop-blur-[3px]"
       style={{ animation: 'memory-fade-in 180ms ease-out' }}
       onClick={() => { if (!saving) onClose() }}
     >
