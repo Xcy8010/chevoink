@@ -37,7 +37,7 @@ import { getToolByName, toOpenAITools } from './tools/registry.js'
 import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
-import { ORCHESTRATION_TOOL_NAMES } from './tools/task-orchestration-tools.js'
+import { ORCHESTRATION_TOOL_NAMES, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { humanizeAgentVisibleText } from './visible-text.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
@@ -202,7 +202,7 @@ type ToolCallOutcome = {
  * 1. 字符串内部出现未转义的控制字符（真换行/制表符）
  * 2. 参数被 ```json 围栏或前后多余文本包裹
  * 3. 输出被 length 截断导致字符串/花括号未闭合 */
-function parseToolArgsTolerant(raw: string): unknown {
+export function parseToolArgsTolerant(raw: string): unknown {
   const attempts: string[] = [raw]
 
   // 剥离 Markdown 围栏与前后多余文本：取第一个 { 到最后一个 } 之间
@@ -285,6 +285,85 @@ function parseToolArgsTolerant(raw: string): unknown {
     while (stack.length > 0) {
       repaired += stack.pop()
     }
+    return repaired
+  }
+
+  // 深度截断修复：朴素补括号救不了截断留下的悬垂逗号/冒号/悬垂键/尾部孤反斜杠
+  // （如 {...,"mode": 或 {"a":"x\ 截断），这些残尾会让补完后的 JSON 依旧非法
+  const repairTruncatedDeep = (input: string): string => {
+    let inString = false
+    let stringStart = -1
+    let prevSignificant = ''
+    // 对象上下文里「已闭合但还没等到冒号/值」的键起点：EOF 时仍是悬垂键则连键一起切掉
+    let pendingKeyStart: number | null = null
+    const stack: string[] = []
+    for (let i = 0; i < input.length; i += 1) {
+      const char = input[i]
+      if (inString) {
+        if (char === '\\') {
+          i += 1
+        } else if (char === '"') {
+          inString = false
+          prevSignificant = '"'
+        }
+        continue
+      }
+      if (char === '"') {
+        inString = true
+        stringStart = i
+        pendingKeyStart = stack[stack.length - 1] === '}' && (prevSignificant === '{' || prevSignificant === ',') ? i : null
+      } else if (char === '{' || char === '[') {
+        stack.push(char === '{' ? '}' : ']')
+        prevSignificant = char
+        pendingKeyStart = null
+      } else if (char === '}' || char === ']') {
+        stack.pop()
+        prevSignificant = char
+        pendingKeyStart = null
+      } else if (char === ':') {
+        prevSignificant = char
+        // 冒号坐实了前面的字符串是键：保留 pending，等值出现再清
+      } else if (char === ',') {
+        prevSignificant = char
+        pendingKeyStart = null
+      } else if (char.trim()) {
+        prevSignificant = char
+        pendingKeyStart = null
+      }
+    }
+    let body = input
+    const trailingBackslashes = body.match(/\\+$/)?.[0].length ?? 0
+    if (inString) {
+      // 尾部孤反斜杠会把补上的闭引号转义掉，先切掉
+      if (trailingBackslashes % 2 === 1) body = body.slice(0, -1)
+      const isKey = prevSignificant === '{' || prevSignificant === ','
+      if (isKey) {
+        body = body.slice(0, stringStart)
+      } else {
+        body += '"'
+      }
+    } else if (trailingBackslashes % 2 === 1) {
+      body = body.slice(0, -1)
+    }
+    body = body.replace(/[\s,:]+$/, '')
+    if (!inString && pendingKeyStart != null) {
+      body = body.slice(0, pendingKeyStart).replace(/[\s,]+$/, '')
+    }
+    const closers: string[] = []
+    let inStr = false
+    for (let i = 0; i < body.length; i += 1) {
+      const char = body[i]
+      if (inStr) {
+        if (char === '\\') i += 1
+        else if (char === '"') inStr = false
+        continue
+      }
+      if (char === '"') inStr = true
+      else if (char === '{' || char === '[') closers.push(char === '{' ? '}' : ']')
+      else if (char === '}' || char === ']') closers.pop()
+    }
+    let repaired = body
+    while (closers.length > 0) repaired += closers.pop()
     return repaired
   }
 
@@ -376,6 +455,20 @@ function parseToolArgsTolerant(raw: string): unknown {
   for (const candidate of [...attempts]) {
     attempts.push(repairTruncated(escapeControlChars(candidate)))
     attempts.push(escapeControlChars(repairTruncated(candidate)))
+  }
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // 继续下一个候选
+    }
+  }
+
+  // 二遍兜底：一遍候选全失败才进深度修复（正常路径零开销），
+  // 专救截断残尾（悬垂逗号/冒号/悬垂键/孤反斜杠）这类朴素补括号救不了的损伤
+  for (const candidate of [...attempts]) {
+    attempts.push(repairTruncatedDeep(candidate))
   }
 
   for (const candidate of attempts) {
@@ -816,6 +909,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const { renderSubagentCatalog } = await import('./productivity.js')
       const catalog = await renderSubagentCatalog(params.userId, params.novelId)
       insertSubagentCatalog(messages, catalog)
+    }
+    // 中断续跑协作提醒：上一轮异常终止且存在派生子窗口时，强制主控用 task_send/task_wait 续协作，
+    // 避免作者一句「继续」被理解成「在本窗口把子窗口没干完的活重干一遍」
+    const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId)
+    if (orchestrationResumeNote) {
+      messages.push({ role: 'user', content: orchestrationResumeNote })
     }
     if (directVisionEnabled) {
       for (let index = messages.length - 1; index >= 0; index -= 1) {

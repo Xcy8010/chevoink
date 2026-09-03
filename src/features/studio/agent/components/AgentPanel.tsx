@@ -176,6 +176,7 @@ export function AgentPanel({
 }: AgentPanelProps) {
   const runId = useAgentStore((state) => state.runId)
   const phase = useAgentStore((state) => state.phase)
+  const resumeableRunId = useAgentStore((state) => state.resumeableRunId)
   const messages = useAgentStore((state) => state.messages)
   // 正文已定稿的消息 id：定稿后不再画流式光标（等答题/审批/工具执行期间光标不应常闪）
   const finalizedTextIds = useAgentStore((state) => state.finalizedTextIds)
@@ -555,6 +556,8 @@ export function AgentPanel({
           connect(activeRunId, 0)
         } else {
           useAgentStore.getState().restoreMessages(history, sessionId)
+          // 无活跃 run：若服务端派生出可续跑的 failed/paused run，刷新后仍保留「继续执行」按钮
+          useAgentStore.getState().noteResumeableRun(payload.resumeRunId ?? null)
         }
       })
       .catch(() => {
@@ -757,18 +760,19 @@ export function AgentPanel({
   }, [runId])
 
   const handleContinue = useCallback(async () => {
-    if (!runId) {
+    const targetRunId = runId ?? resumeableRunId
+    if (!targetRunId) {
       return
     }
     setActionError(null)
     try {
-      const result = await continueAgentLoopRun(runId)
+      const result = await continueAgentLoopRun(targetRunId)
       useAgentStore.getState().beginRun(result.runId, '请继续完成之前的任务。', sessionId)
       connect(result.runId)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '续跑失败，请稍后再试。')
     }
-  }, [runId, sessionId, connect])
+  }, [runId, resumeableRunId, sessionId, connect])
 
   const handleResolveApproval = useCallback(
     async (approved: boolean, alwaysAllow: boolean) => {
@@ -806,7 +810,7 @@ export function AgentPanel({
   )
 
   const lastAssistantId = [...messages].reverse().find((message) => message.role === 'assistant')?.id
-  const canContinue = Boolean(runId) && (phase === 'paused' || phase === 'failed')
+  const canContinue = (Boolean(runId) && (phase === 'paused' || phase === 'failed')) || (!runId && Boolean(resumeableRunId))
   const combinedError = actionError ?? errorMessage
 
   const handleCopyText = useCallback(async (id: string, text: string) => {

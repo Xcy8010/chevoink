@@ -43,6 +43,26 @@ describe('跨任务并行编排工具', () => {
     expect(tool?.parameters.safeParse({ tasks: Array.from({ length: 6 }, () => ({ title: 'x', brief: '足够长的任务简报内容用于通过最小长度校验' })) }).success).toBe(false)
   })
 
+  it('coerceArgs 兜底：超额任务裁剪到 5、超长简报/标题截断后仍能过校验，而不是整包打回白耗重试轮', () => {
+    const tool = getToolByName('task_spawn')
+    const raw = {
+      tasks: Array.from({ length: 6 }, (_, i) => ({
+        title: `第 ${i + 1} 章正文`.padEnd(80, '标'),
+        brief: '写正文'.padEnd(450, '字'),
+      })),
+    }
+    // 原始入参超额 + 超长，裸 schema 会打回
+    expect(tool?.parameters.safeParse(raw).success).toBe(false)
+    // 走真实链路：先 coerceArgs 兜底再校验，应截断/裁剪后通过
+    const coerced = tool?.coerceArgs?.(raw) as { tasks: Array<{ title: string; brief: string }> }
+    expect(coerced.tasks).toHaveLength(5)
+    for (const task of coerced.tasks) {
+      expect(task.title.length).toBeLessThanOrEqual(60)
+      expect(task.brief.length).toBeLessThanOrEqual(400)
+    }
+    expect(tool?.parameters.safeParse(coerced).success).toBe(true)
+  })
+
   it('等待默认等全部结束，超时可续等', () => {
     const tool = getToolByName('task_wait')
     const parsed = tool?.parameters.safeParse({ sessionIds: ['session-b', 'session-c'] })

@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+
+import { parseToolArgsTolerant } from '../../api/lib/agent/loop.js'
+
+/**
+ * 截断残尾深度修复：模型输出被 length 截断时，除未闭括号外还会留下
+ * 悬垂逗号/冒号、悬垂键、尾部孤反斜杠，朴素补括号救不了，需 repairTruncatedDeep 兜底。
+ */
+describe('parseToolArgsTolerant 深度截断修复', () => {
+  it('悬垂逗号：截断留下的尾部逗号被清理后补齐括号仍可解析', () => {
+    const raw = '{"mode":"build","tasks":[{"title":"第 1 章","brief":"写正文",'
+    const parsed = parseToolArgsTolerant(raw) as { mode: string; tasks: Array<{ title: string; brief: string }> }
+    expect(parsed.mode).toBe('build')
+    expect(parsed.tasks[0].title).toBe('第 1 章')
+    expect(parsed.tasks[0].brief).toBe('写正文')
+  })
+
+  it('悬垂键：只有键和冒号还没等到值时，连键一起切掉保住前面的完整字段', () => {
+    const raw = '{"title":"第 2 章","brief":"写第二章正文","mode":'
+    const parsed = parseToolArgsTolerant(raw) as { title: string; brief: string; mode?: unknown }
+    expect(parsed.title).toBe('第 2 章')
+    expect(parsed.brief).toBe('写第二章正文')
+    expect(parsed.mode).toBeUndefined()
+  })
+
+  it('截断在键名中间：悬垂的半个键被切掉，朴素补括号会留下无值的键而失败', () => {
+    const raw = '{"title":"第 3 章","brief"'
+    const parsed = parseToolArgsTolerant(raw) as { title: string; brief?: unknown }
+    expect(parsed.title).toBe('第 3 章')
+    expect(parsed.brief).toBeUndefined()
+  })
+
+  it('合法 JSON 原样解析，深度修复不改变正常参数语义', () => {
+    const raw = '{"mode":"build","tasks":[{"title":"第 3 章","brief":"写第三章正文，约 3000 字。"}]}'
+    const parsed = parseToolArgsTolerant(raw) as { mode: string; tasks: Array<{ title: string }> }
+    expect(parsed.mode).toBe('build')
+    expect(parsed.tasks).toHaveLength(1)
+    expect(parsed.tasks[0].title).toBe('第 3 章')
+  })
+})

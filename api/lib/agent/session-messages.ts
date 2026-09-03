@@ -42,6 +42,18 @@ async function normalizeLegacyViewedImageUrls(userId: string, parts: AgentMessag
   })
 }
 
+/** 刷新后「继续执行」按钮的数据来源：当前无活跃 run 时，取最近一个 failed/paused 的 run 供前端续跑。
+ * activeRunId 只看内存里的活体 run（进程重启/刷新即丢），resumeRunId 从 DB 派生终态，二者互补。 */
+async function getResumeRunIdBySession(sessionId: string): Promise<string | null> {
+  if (getActiveRunIdBySession(sessionId)) return null
+  const run = await prisma.agentRun.findFirst({
+    where: { sessionId, status: { in: ['failed', 'paused'] } },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+  return run?.id ?? null
+}
+
 /** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；
  * 附带 activeRunId：前端刷新后据此续接进行中的任务直播。
  * 分页模式（传 runLimit）：按 run 轮次分组取页，整轮返回永不截半轮；
@@ -60,6 +72,8 @@ export async function listLoopSessionMessages(
 ): Promise<{
   messages: AgentUIMessage[]
   activeRunId: string | null
+  /** 无活跃 run 但存在可续跑的 failed/paused run：前端据此在刷新后仍显示「继续执行」按钮 */
+  resumeRunId: string | null
   pagination: { hasMore: boolean; earliestRunStartedAt: string | null }
   /** 分支溯源：非空时前端在复制过来的对话下方渲染「从聊天中继续」分隔线 */
   fork: { forkedFromSessionId: string; forkedFromMessageId: string | null; forkedAt: string | null } | null
@@ -120,6 +134,7 @@ export async function listLoopSessionMessages(
     return {
       messages: pagedMessages,
       activeRunId: getActiveRunIdBySession(sessionId),
+      resumeRunId: await getResumeRunIdBySession(sessionId),
       pagination: {
         hasMore,
         earliestRunStartedAt: pageRuns.length ? pageRuns[pageRuns.length - 1].createdAt.toISOString() : null,
@@ -176,6 +191,7 @@ export async function listLoopSessionMessages(
   return {
     messages,
     activeRunId: getActiveRunIdBySession(sessionId),
+    resumeRunId: await getResumeRunIdBySession(sessionId),
     pagination: { hasMore: false, earliestRunStartedAt: null },
     fork,
   }

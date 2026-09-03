@@ -10,6 +10,7 @@ import type {
 import { env } from '../../../config/env.js'
 import { prisma } from '../../prisma.js'
 import { countActiveRunsByUser, hasActiveRunInSession } from '../active-runs.js'
+import { coerceToolArgumentEnvelope } from './argument-coercion.js'
 import { defineTool, type ToolContext } from './types.js'
 
 /**
@@ -101,6 +102,41 @@ async function assertNotSpawnedWindow(sessionId: string): Promise<string | null>
   })
   if (!session?.spawnedFromSessionId) return null
   return '当前窗口本身是主控窗口派生出来的并行分支，按并发治理规则不能再派生或调度其他窗口。请把需要协作的部分写进交付摘要，交回主控窗口处理。'
+}
+
+/** 中断续跑协作提醒：上一轮异常终止且存在派生子窗口时，要求主控先用 task_send/task_wait 续协作，
+ * 防止作者一句「继续」被模型理解成「在本窗口把子窗口没干完的活重干一遍」 */
+export async function buildOrchestrationResumeNote(sessionId: string, currentRunId: string): Promise<string> {
+  const lastRun = await prisma.agentRun.findFirst({
+    where: { sessionId, id: { not: currentRunId } },
+    orderBy: { createdAt: 'desc' },
+    select: { status: true },
+  })
+  if (!lastRun || (lastRun.status !== 'failed' && lastRun.status !== 'paused' && lastRun.status !== 'cancelled')) {
+    return ''
+  }
+  const children = await prisma.agentSession.findMany({
+    where: { spawnedFromSessionId: sessionId },
+    orderBy: { createdAt: 'desc' },
+    take: 8,
+    select: { id: true, title: true },
+  })
+  if (children.length === 0) return ''
+  const lines: string[] = []
+  for (const child of children) {
+    const childRun = await prisma.agentRun.findFirst({
+      where: { sessionId: child.id },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true },
+    })
+    const status = !childRun ? '未开始' : (TERMINAL_STATUS[childRun.status] ?? 'running')
+    lines.push(`- ${child.title || '未命名窗口'}（${child.id}）：${status}`)
+  }
+  return [
+    '[系统提醒] 上一轮任务异常中断且未完成。本会话曾派生以下子任务窗口，当前状态：',
+    ...lines,
+    '续跑协作规则：状态 running 的子窗口直接用 task_wait 收交付；状态 failed / cancelled / awaiting 的子窗口先用 task_send 投递续跑指令（写明从何处继续、交付要求）再 task_wait；状态 succeeded 的直接取其交付摘要审查。严禁在本窗口直接重做子窗口未完成的工作；本窗口只负责调度、审查与最终向作者汇报结果。',
+  ].join('\n')
 }
 
 /** 派生 run 跟随主控窗口的模型档位，避免并行窗口偷偷降档或用错自定义模型 */
@@ -208,6 +244,28 @@ export const taskSpawnTool = defineTool({
       .describe('brief=只给上面的任务提示词（省 token，适合任务自包含）；transcript=复制当前窗口的完整对话作为分支副本（适合依赖本窗口讨论过的大量设定）'),
     mode: z.enum(['plan', 'build', 'review']).default('build').describe('派生窗口的执行模式，写正文用 build'),
   }),
+  coerceArgs(raw) {
+    // 校验前兜底：信封解包 + 超长截断 + 超额任务裁剪，不让 zod 失败白耗重试轮
+    // （brief 超 400 字是派生失败的高频原因，截断保留前 400 字比整包打回更符合作者意图）
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    const unwrapped = coerceToolArgumentEnvelope(raw)
+    const source = (unwrapped && typeof unwrapped === 'object' && !Array.isArray(unwrapped)
+      ? unwrapped
+      : raw) as Record<string, unknown>
+    const next = { ...source }
+    if (Array.isArray(next.tasks)) {
+      next.tasks = next.tasks.slice(0, 5).map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+        const task = { ...(item as Record<string, unknown>) }
+        if (typeof task.brief === 'string') task.brief = task.brief.trim().slice(0, 400)
+        if (typeof task.title === 'string') task.title = task.title.trim().slice(0, 60)
+        return task
+      })
+    } else if (next.tasks && typeof next.tasks === 'object') {
+      next.tasks = [next.tasks]
+    }
+    return next
+  },
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {

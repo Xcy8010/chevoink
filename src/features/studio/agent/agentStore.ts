@@ -185,6 +185,9 @@ const WRITE_TOOL_LABELS: Record<string, string> = {
 
 type AgentStoreState = {
   runId: string | null
+  /** 刷新后从 DB 派生的可续跑 run（无活跃 run 但上一轮 failed/paused）：
+      支撑「继续执行」按钮在刷新后仍显示，不依赖活体 store 状态 */
+  resumeableRunId: string | null
   phase: AgentRunPhase
   agentTitle: string
   messages: AgentUIMessage[]
@@ -241,6 +244,8 @@ type AgentStoreState = {
   beginRun: (runId: string, userPrompt: string, sessionId: string | null, attachments?: AgentAttachmentMeta[]) => void
   /** 续接服务端仍在进行的 run（刷新后恢复）：不追加用户消息，从 seq 0 重放事件重建直播 */
   resumeRun: (runId: string, sessionId: string | null) => void
+  /** 记录刷新后从服务端派生的可续跑 run（拉历史消息时写入，续跑成功后清空） */
+  noteResumeableRun: (runId: string | null) => void
   restoreMessages: (messages: AgentUIMessage[], sessionId?: string | null) => void
   /** 加载更早对话：把更早轮次前插合并（按 id 去重），不触碰进行中的 run */
   prependMessages: (messages: AgentUIMessage[]) => void
@@ -488,6 +493,7 @@ export function readSessionMessagesCache(sessionId: string): AgentUIMessage[] | 
 
 export const useAgentStore = create<AgentStoreState>((set, get) => ({
   runId: null,
+  resumeableRunId: null,
   phase: 'idle',
   agentTitle: '写作主控',
   messages: [],
@@ -538,6 +544,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       // 新一轮重新路由技能：上一轮的技能标识不能留到本轮
       skillRoute: null,
       finalizedTextIds: [],
+      // 开新 run 后旧的「可续跑」派生状态失效，避免按钮误留
+      resumeableRunId: null,
       // 新 run 开跑：登记运行中供侧栏展示；同一会话的旧终态信号视为已消费
       ...(sessionId
         ? {
@@ -573,6 +581,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   resumeRun: (runId, sessionId) =>
     set((state) => ({
       runId,
+      resumeableRunId: null,
       phase: 'starting',
       activeSessionId: sessionId,
       loadedSessionId: sessionId,
@@ -604,6 +613,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       messages: restored,
       phase: 'idle',
       runId: null,
+      resumeableRunId: null,
       activeSessionId: null,
       loadedSessionId: sessionId,
       pendingApproval: null,
@@ -645,6 +655,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     writeSessionMessagesCache(leavingSessionId, leavingMessages)
     set({
       runId: null,
+      resumeableRunId: null,
       phase: 'idle',
       activeSessionId: null,
       loadedSessionId: null,
@@ -669,6 +680,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   },
 
   clearError: () => set({ errorMessage: null, errorCode: null }),
+
+  noteResumeableRun: (runId) =>
+    set((state) => (state.resumeableRunId === runId ? {} : { resumeableRunId: runId })),
 
   dismissSessionSignal: (sessionId) =>
     set((state) => {
