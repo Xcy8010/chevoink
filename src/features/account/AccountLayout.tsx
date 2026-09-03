@@ -148,7 +148,7 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
 
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-[#f6f6f4] text-[var(--text-primary)] [scrollbar-gutter:stable] dark:bg-[var(--app-bg)]">
-      <header className="sticky top-0 z-40 border-b border-[#e8e8e5] bg-[#f6f6f4]/95 backdrop-blur-xl dark:border-[var(--border-subtle)] dark:bg-[color:var(--app-bg)]/94">
+      <header className="sticky top-0 z-40 border-b border-[#e8e8e5] bg-[#f6f6f4]/95 backdrop-blur-xl dark:border-[var(--border-subtle)] dark:bg-[color:var(--app-bg)]/95">
         <div className="flex h-16 items-center gap-1 px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 pr-3">
             <AppImage src="/chevoink-agent.png" alt="" className="h-8 w-8 rounded-[9px]" />
@@ -165,7 +165,7 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
                   <ChevronDown className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180" />
                 </button>
                 <div className="pointer-events-none absolute left-0 top-full z-50 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
-                  <div className="w-[300px] rounded-[14px] border border-[#e7e7e4] bg-white p-1.5 shadow-[0_16px_40px_rgba(23,27,36,0.12)] dark:border-[var(--border-subtle)] dark:bg-[var(--surface-elevated)]">
+                  <div className="w-[300px] rounded-[14px] border border-[#e7e7e4] bg-white p-1.5 shadow-[0_16px_40px_rgba(23,27,36,0.12)] dark:border-[var(--border-strong)] dark:bg-[var(--surface-elevated)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
                     {card.items.map((item) => renderCardItem(item))}
                   </div>
                 </div>
@@ -177,7 +177,7 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
               <Avatar name={user?.nickname ?? '创作者'} src={user?.avatarUrl} size="sm" className="h-8 w-8" />
             </button>
             <div className="pointer-events-none absolute right-0 top-full z-50 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
-              <div className="w-[252px] rounded-[14px] border border-[#e7e7e4] bg-white p-1.5 shadow-[0_16px_40px_rgba(23,27,36,0.12)] dark:border-[var(--border-subtle)] dark:bg-[var(--surface-elevated)]">
+              <div className="w-[252px] rounded-[14px] border border-[#e7e7e4] bg-white p-1.5 shadow-[0_16px_40px_rgba(23,27,36,0.12)] dark:border-[var(--border-strong)] dark:bg-[var(--surface-elevated)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
                 <div className="rounded-[10px] bg-[#f4f4f2] px-3 py-2.5 dark:bg-[var(--surface-muted)]">
                   <p className="flex items-center gap-2 text-sm font-semibold">
                     <span className="truncate">{user?.nickname ?? '创作者'}</span>

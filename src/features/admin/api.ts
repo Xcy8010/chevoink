@@ -271,13 +271,25 @@ export function getAdminCreationRecords(userId: string): Promise<AdminCreationRe
   return requestJson<AdminCreationRecordsPayload>(`/api/admin/users/${userId}/creation-records`)
 }
 
-/** 免搜索创作记录：仅列出有 Agent 会话记录的作者 */
-export function getAdminCreationRecordsIndex(search?: string): Promise<AdminCreationRecordsIndexPayload> {
-  return requestJson<AdminCreationRecordsIndexPayload>(`/api/admin/creation-records${buildQueryString({ search })}`)
+/** 免搜索创作记录：仅列出有 Agent 会话记录的作者；分页加载避免一次性拉全量创作者 */
+export function getAdminCreationRecordsIndex(
+  search?: string,
+  page = 1,
+  pageSize = 24,
+): Promise<AdminCreationRecordsIndexPayload> {
+  return requestJson<AdminCreationRecordsIndexPayload>(
+    `/api/admin/creation-records${buildQueryString({ search, page, pageSize })}`,
+  )
 }
 
-export function getAdminAgentSessionMessages(sessionId: string): Promise<AdminAgentSessionMessagesPayload> {
-  return requestJson<AdminAgentSessionMessagesPayload>(`/api/admin/agent-sessions/${sessionId}/messages`)
+/** 单个会话聊天记录：按 run 轮次游标分页，before 传本页最早 run id 加载更早一轮 */
+export function getAdminAgentSessionMessages(
+  sessionId: string,
+  options?: { before?: string; pageSize?: number },
+): Promise<AdminAgentSessionMessagesPayload> {
+  return requestJson<AdminAgentSessionMessagesPayload>(
+    `/api/admin/agent-sessions/${sessionId}/messages${buildQueryString({ before: options?.before, pageSize: options?.pageSize })}`,
+  )
 }
 
 export function banAdminUser(userId: string): Promise<{ ok: boolean }> {

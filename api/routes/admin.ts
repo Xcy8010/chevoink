@@ -622,7 +622,11 @@ router.get('/creation-records', async (req: Request, res: Response): Promise<voi
   try {
     await requireAdmin(req)
     const search = typeof req.query.search === 'string' ? req.query.search : undefined
-    const payload = await getAdminCreationRecordsIndexData({ search })
+    const payload = await getAdminCreationRecordsIndexData({
+      search,
+      page: parsePositiveInt(req.query.page, 1),
+      pageSize: parsePositiveInt(req.query.pageSize, 24),
+    })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -650,7 +654,10 @@ router.get('/agent-sessions/:sessionId/messages', async (req: Request, res: Resp
 
   try {
     await requireAdmin(req)
-    const payload = await getAdminAgentSessionMessagesData(req.params.sessionId)
+    const payload = await getAdminAgentSessionMessagesData(req.params.sessionId, {
+      before: typeof req.query.before === 'string' && req.query.before ? req.query.before : undefined,
+      pageSize: parsePositiveInt(req.query.pageSize, 20),
+    })
     if (!payload) {
       res.status(404).json(buildError(requestId, 'NOT_FOUND', '会话不存在。'))
       return

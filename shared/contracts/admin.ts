@@ -271,6 +271,11 @@ export type AdminCreationRecordsIndexRow = {
 
 export type AdminCreationRecordsIndexPayload = {
   items: AdminCreationRecordsIndexRow[]
+  /** 符合筛选条件的创作者总数（用于管理端分页） */
+  total: number
+  page: number
+  pageSize: number
+  hasMore: boolean
 }
 
 /** 管理端查看单个 Agent 会话的聊天记录：run 与消息 */
@@ -303,6 +308,10 @@ export type AdminAgentSessionMessagesPayload = {
     createdAt: string
   }
   runs: AdminAgentRunRow[]
+  /** 是否还有更早的 run（轮次分页） */
+  hasMore: boolean
+  /** 加载更早一轮时回传的游标（本页最早 run 的 id） */
+  nextCursor: string | null
 }
 
 export type AdminTokenManagementPayload = {

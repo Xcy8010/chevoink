@@ -669,45 +669,69 @@ export async function listAdminUserFavoriteNovelsData(
 
 
 
-/** 管理端创作记录索引：仅列出有 Agent 会话记录的作者，支持按昵称/手机号/邮箱过滤 */
+/** 管理端创作记录索引：仅列出有 Agent 会话记录的作者，支持按昵称/手机号/邮箱过滤；
+ *  按用户聚合会话统计（每人一行）后内存排序分页，避免把全部会话拉进内存 */
 export async function getAdminCreationRecordsIndexData(input: {
   search?: string
+  page?: number
+  pageSize?: number
 }): Promise<AdminCreationRecordsIndexPayload> {
-  const where: Prisma.UserWhereInput = { agentSessions: { some: {} } }
-  if (input.search?.trim()) {
-    const keyword = input.search.trim()
-    where.OR = [
-      { nickname: { contains: keyword, mode: 'insensitive' } },
-      { phone: { contains: keyword } },
-      { email: { contains: keyword, mode: 'insensitive' } },
-    ]
+  const page = Math.max(1, input.page ?? 1)
+  const pageSize = Math.min(100, Math.max(1, input.pageSize ?? 24))
+
+  const sessionGroups = await prisma.agentSession.groupBy({
+    by: ['userId'],
+    _max: { updatedAt: true },
+    _count: { _all: true },
+  })
+
+  let groups = sessionGroups
+  const keyword = input.search?.trim()
+  if (keyword) {
+    const matched = await prisma.user.findMany({
+      where: {
+        OR: [
+          { nickname: { contains: keyword, mode: 'insensitive' } },
+          { phone: { contains: keyword } },
+          { email: { contains: keyword, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+    })
+    const matchedIds = new Set(matched.map((user) => user.id))
+    groups = sessionGroups.filter((group) => matchedIds.has(group.userId))
   }
 
+  groups.sort(
+    (a, b) => (b._max.updatedAt ?? new Date(0)).getTime() - (a._max.updatedAt ?? new Date(0)).getTime(),
+  )
+  const total = groups.length
+  const pageGroups = groups.slice((page - 1) * pageSize, page * pageSize)
+
   const users = await prisma.user.findMany({
-    where,
-    select: {
-      id: true,
-      nickname: true,
-      avatarUrl: true,
-      novelCount: true,
-      agentSessions: { select: { updatedAt: true } },
-    },
+    where: { id: { in: pageGroups.map((group) => group.userId) } },
+    select: { id: true, nickname: true, avatarUrl: true, novelCount: true },
   })
+  const userById = new Map(users.map((user) => [user.id, user]))
 
-  const items = users.map((user) => {
-    const sorted = user.agentSessions.map((session) => session.updatedAt).sort((a, b) => b.getTime() - a.getTime())
-    return {
-      id: user.id,
-      nickname: user.nickname,
-      avatarUrl: user.avatarUrl,
-      novelCount: user.novelCount,
-      sessionCount: user.agentSessions.length,
-      lastSessionAt: sorted.length > 0 ? sorted[0].toISOString() : null,
+  const items = pageGroups.flatMap((group) => {
+    const user = userById.get(group.userId)
+    if (!user) {
+      return []
     }
+    return [
+      {
+        id: user.id,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl,
+        novelCount: user.novelCount,
+        sessionCount: group._count._all,
+        lastSessionAt: group._max.updatedAt ? group._max.updatedAt.toISOString() : null,
+      },
+    ]
   })
-  items.sort((a, b) => (b.lastSessionAt ?? '').localeCompare(a.lastSessionAt ?? ''))
 
-  return { items }
+  return { items, total, page, pageSize, hasMore: page * pageSize < total }
 }
 
 /** 管理端：某用户的创作记录（按作品分组，作品下挂 Agent 会话列表，不含具体消息） */
@@ -763,41 +787,60 @@ export async function getAdminCreationRecordsData(userId: string): Promise<Admin
 
 
 
-/** 管理端：查看单个 Agent 会话的完整聊天记录（run + 消息） */
+/** 管理端：查看单个 Agent 会话的聊天记录（run + 消息）；按 run 轮次游标分页，
+ *  默认返回最新 pageSize 轮，before 传本页最早 run id 加载更早一轮，避免长会话一次性拉全量消息 */
 export async function getAdminAgentSessionMessagesData(
   sessionId: string,
+  input: { before?: string; pageSize?: number } = {},
 ): Promise<AdminAgentSessionMessagesPayload | null> {
-  const record = await prisma.agentSession.findUnique({
-    where: { id: sessionId },
-    select: {
-      id: true,
-      title: true,
-      createdAt: true,
-      novel: { select: { id: true, title: true, displayTitle: true } },
-      runs: {
-        orderBy: { createdAt: 'asc' },
-        select: {
-          id: true,
-          mode: true,
-          action: true,
-          status: true,
-          inputSummary: true,
-          outputSummary: true,
-          errorMessage: true,
-          createdAt: true,
-          finishedAt: true,
-          usage: true,
-          messages: {
-            orderBy: { createdAt: 'asc' },
-            select: { id: true, runId: true, role: true, parts: true, createdAt: true },
+  const pageSize = Math.min(50, Math.max(1, input.pageSize ?? 20))
+  const cursor = input.before ? { id: input.before } : undefined
+  const loadRecord = (withCursor: boolean) =>
+    prisma.agentSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        title: true,
+        createdAt: true,
+        novel: { select: { id: true, title: true, displayTitle: true } },
+        runs: {
+          // 倒序多取一条判断 hasMore；游标存在时从该 run 往前（不含自身）
+          orderBy: { createdAt: 'desc' },
+          ...(withCursor && cursor ? { cursor, skip: 1 } : {}),
+          take: pageSize + 1,
+          select: {
+            id: true,
+            mode: true,
+            action: true,
+            status: true,
+            inputSummary: true,
+            outputSummary: true,
+            errorMessage: true,
+            createdAt: true,
+            finishedAt: true,
+            usage: true,
+            messages: {
+              orderBy: { createdAt: 'asc' },
+              select: { id: true, runId: true, role: true, parts: true, createdAt: true },
+            },
           },
         },
       },
-    },
+    })
+
+  const record = await loadRecord(true).catch((error: unknown) => {
+    // 游标 run 已被用户删除等场景：回退首页重新加载，避免管理端查看直接报错
+    if (cursor) {
+      return loadRecord(false)
+    }
+    throw error
   })
   if (!record) {
     return null
   }
+
+  const hasMore = record.runs.length > pageSize
+  const runs = record.runs.slice(0, pageSize).reverse()
 
   return {
     session: {
@@ -807,7 +850,7 @@ export async function getAdminAgentSessionMessagesData(
       displayTitle: record.novel.displayTitle,
       createdAt: record.createdAt.toISOString(),
     },
-    runs: record.runs.map((run) => ({
+    runs: runs.map((run) => ({
       id: run.id,
       mode: run.mode,
       action: run.action,
@@ -826,6 +869,8 @@ export async function getAdminAgentSessionMessagesData(
         createdAt: message.createdAt.toISOString(),
       })),
     })),
+    hasMore,
+    nextCursor: runs.length > 0 ? runs[0].id : null,
   }
 }
 

@@ -37,6 +37,8 @@
   --surface-default: rgba(255, 252, 247, 0.94);
   --surface-solid: #fffcf7;
   --surface-muted: #ede7de;
+  /* 浮层表面（下拉卡片 / 弹层节点）：始终实底，避免透出下层内容 */
+  --surface-elevated: #ffffff;
   --surface-contrast: #17212d;
   --surface-contrast-hover: #1f2d3d;
   --text-primary: #111827;
@@ -93,6 +95,7 @@ html.dark {
   --surface-default: rgba(22, 26, 33, 0.94);
   --surface-solid: #161a21;
   --surface-muted: #171b22;
+  --surface-elevated: #1e232d;
   --surface-contrast: #f2f4f7;
   --surface-contrast-hover: #ffffff;
   --text-primary: #f3f5f7;
@@ -119,6 +122,7 @@ html.dark {
   --surface-default: #ffffff;
   --surface-solid: #ffffff;
   --surface-muted: #e9ebef;
+  --surface-elevated: #ffffff;
   --surface-contrast: #1a1d23;
   --surface-contrast-hover: #101216;
   --text-primary: #171a20;
@@ -134,6 +138,7 @@ html.dark .studio-workspace {
   --surface-default: #15181e;
   --surface-solid: #15181e;
   --surface-muted: #1d2129;
+  --surface-elevated: #21262f;
   --surface-contrast: #eef1f5;
   --surface-contrast-hover: #ffffff;
   --text-primary: #edf0f4;
