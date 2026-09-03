@@ -101,6 +101,21 @@ export const storyMemoryListSchema = z.object({
 export type StoryMemoryCard = z.infer<typeof storyMemoryCardSchema>
 export type StoryMemoryList = z.infer<typeof storyMemoryListSchema>
 
+/** 记忆卡片集封面：一个类型一叠牌，封面墙一次拿全，避免 N+1 */
+export const storyMemorySetSchema = z.object({
+  memoryType: z.string().min(1),
+  count: z.number().int().nonnegative(),
+  latestUpdatedAt: z.string().datetime(),
+  previews: z.array(z.string()),
+})
+
+export const storyMemorySetsSchema = z.object({
+  sets: z.array(storyMemorySetSchema),
+})
+
+export type StoryMemorySet = z.infer<typeof storyMemorySetSchema>
+export type StoryMemorySets = z.infer<typeof storyMemorySetsSchema>
+
 export const memoryGraphJobSchema = z.object({
   jobId: z.string().min(1),
   novelId: z.string().min(1),

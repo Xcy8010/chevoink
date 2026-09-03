@@ -752,6 +752,39 @@ export async function listStoryMemories(userId: string, novelId: string, input: 
   }
 }
 
+/** 记忆卡片集封面墙：每类型一叠牌的数量/最近更新/前两张标题预览，单查询聚合避免 N+1 */
+export async function listStoryMemorySets(userId: string, novelId: string) {
+  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+  if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权查看记忆。')
+  const [rows, chapterRows] = await Promise.all([
+    prisma.projectMemoryEntry.findMany({
+      where: { novelId, status: { in: ['confirmed', 'inferred'] as StoryMemoryStatus[] }, reviewStatus: { not: 'rejected' as const } },
+      orderBy: { updatedAt: 'desc' },
+      select: { memoryType: true, title: true, updatedAt: true },
+    }),
+    prisma.chapter.findMany({ where: { novelId }, select: { id: true, title: true } }),
+  ])
+  const chapterTitles = new Map(chapterRows.map((item) => [item.id, item.title]))
+  const order: string[] = []
+  const aggregated = new Map<string, { count: number; latestUpdatedAt: Date; previews: string[] }>()
+  for (const row of rows) {
+    let current = aggregated.get(row.memoryType)
+    if (!current) {
+      current = { count: 0, latestUpdatedAt: row.updatedAt, previews: [] }
+      aggregated.set(row.memoryType, current)
+      order.push(row.memoryType)
+    }
+    current.count += 1
+    if (current.previews.length < 2) current.previews.push(displayMemoryTitle(row.title, chapterTitles))
+  }
+  return {
+    sets: order.map((memoryType) => {
+      const item = aggregated.get(memoryType)!
+      return { memoryType, count: item.count, latestUpdatedAt: item.latestUpdatedAt.toISOString(), previews: item.previews }
+    }),
+  }
+}
+
 /** 作者在记忆中心直接编辑卡片：就地更新并记录修订历史，保证后续写作按最新设定召回 */
 export async function updateStoryMemoryEntry(userId: string, memoryId: string, patch: { title?: string; content?: string; importance?: number }) {
   const memory = await prisma.projectMemoryEntry.findFirst({ where: { id: memoryId, novel: { authorId: userId } } })

@@ -13,6 +13,7 @@ import type {
   StartAgentLoopRunResponse,
   StoryMemoryCard,
   StoryMemoryList,
+  StoryMemorySets,
   UploadAgentAttachmentRequest,
   UploadAgentAttachmentResponse,
   AgentEvalComparisonView,
@@ -191,6 +192,11 @@ export function fetchStoryMemories(
   query.set('page', String(options?.page ?? 1))
   query.set('pageSize', String(options?.pageSize ?? 12))
   return requestData<StoryMemoryList>(`/api/agent/novels/${novelId}/memories?${query.toString()}`)
+}
+
+/** 记忆卡片集封面墙：每类型一叠牌的数量/最近更新/标题预览，一次拿全 */
+export function fetchStoryMemorySets(novelId: string): Promise<StoryMemorySets> {
+  return requestData<StoryMemorySets>(`/api/agent/novels/${novelId}/memory-sets`)
 }
 
 /** 记忆中心：作者就地编辑卡片（后端记录修订历史并重算向量，后续写作按最新设定召回） */

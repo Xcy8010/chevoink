@@ -41,7 +41,7 @@ import { parseBody } from '../lib/parse-body.js'
 import { DataAccessError, prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextDetail, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
-import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, listStoryMemories, resolveMemoryReview, startMemoryGraphJob, updateStoryMemoryEntry } from '../lib/agent/story-memory.js'
+import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, listStoryMemories, listStoryMemorySets, resolveMemoryReview, startMemoryGraphJob, updateStoryMemoryEntry } from '../lib/agent/story-memory.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 import {
   createNovelSkillDraft,
@@ -419,6 +419,17 @@ router.get('/novels/:novelId/memories', async (req: Request, res: Response): Pro
     const page = queryPositiveInt(req.query.page, 1)
     const pageSize = Math.min(50, queryPositiveInt(req.query.pageSize, 12))
     const payload = await listStoryMemories(userId, req.params.novelId, { memoryType, page, pageSize })
+    res.status(200).json(buildSuccess(requestId, payload))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/novels/:novelId/memory-sets', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const payload = await listStoryMemorySets(userId, req.params.novelId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

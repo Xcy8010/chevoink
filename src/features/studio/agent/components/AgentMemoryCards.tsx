@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { GripVertical, LoaderCircle, PencilLine, Quote, X } from 'lucide-react'
+import { ChevronDown, GripVertical, LoaderCircle, PencilLine, Quote, X } from 'lucide-react'
 
-import { fetchStoryMemories, updateStoryMemory } from '../agentApi'
+import { fetchStoryMemories, fetchStoryMemorySets, updateStoryMemory } from '../agentApi'
 import { COMPOSER_REFERENCE_MIME, serializeComposerReferenceTransfer } from '../composer-content'
 import { useAgentStore } from '../agentStore'
-import type { StoryMemoryCard } from '../../../../../shared/contracts/index.js'
+import type { StoryMemoryCard, StoryMemorySet } from '../../../../../shared/contracts/index.js'
 
 type Props = {
   novelId: string
@@ -13,26 +13,34 @@ type Props = {
 
 const PAGE_SIZE = 12
 
-/** 14 种记忆类型的中文名：仅作文案区分，不做彩色标记，保持整轨低饱和的纸牌质感 */
-const MEMORY_TYPE_LABELS: Record<string, string> = {
-  characterCard: '人物',
-  worldbuilding: '世界观',
-  novelSummary: '作品概要',
-  chapterSummary: '章节摘要',
-  volumeSummary: '卷摘要',
-  timelineEvent: '时间线',
-  foreshadowing: '伏笔',
-  stylePreference: '文风偏好',
-  continuityRule: '连贯性规则',
-  storyArc: '故事线',
-  sceneState: '场景状态',
-  relationshipState: '人物关系',
-  storyBible: '设定集',
-  authorProfile: '作者画像',
+/** 14 种记忆类型：中文名 + 封面单字水印（墨色低透明，不用彩色图标，保持纸牌质感） */
+const MEMORY_TYPE_META: Record<string, { label: string; glyph: string }> = {
+  characterCard: { label: '人物', glyph: '人' },
+  worldbuilding: { label: '世界观', glyph: '世' },
+  novelSummary: { label: '作品概要', glyph: '书' },
+  chapterSummary: { label: '章节摘要', glyph: '章' },
+  volumeSummary: { label: '卷摘要', glyph: '卷' },
+  timelineEvent: { label: '时间线', glyph: '时' },
+  foreshadowing: { label: '伏笔', glyph: '伏' },
+  stylePreference: { label: '文风偏好', glyph: '文' },
+  continuityRule: { label: '连贯性规则', glyph: '规' },
+  storyArc: { label: '故事线', glyph: '线' },
+  sceneState: { label: '场景状态', glyph: '景' },
+  relationshipState: { label: '人物关系', glyph: '系' },
+  storyBible: { label: '设定集', glyph: '典' },
+  authorProfile: { label: '作者画像', glyph: '笔' },
 }
 
-function typeLabel(memoryType: string): string {
-  return MEMORY_TYPE_LABELS[memoryType] ?? memoryType
+function typeMeta(memoryType: string) {
+  return MEMORY_TYPE_META[memoryType] ?? { label: memoryType, glyph: '忆' }
+}
+
+/** 堆边厚度档位：单卡无堆边，1-9 薄、10-29 中、30+ 厚，一眼看出哪类记忆沉淀得多 */
+function thicknessTier(count: number): number {
+  if (count <= 1) return 0
+  if (count < 10) return 1
+  if (count < 30) return 2
+  return 3
 }
 
 function formatMemoryDate(value: string): string {
@@ -43,19 +51,26 @@ function formatMemoryDate(value: string): string {
 
 type MenuState = { x: number; y: number; card: StoryMemoryCard } | null
 
+type SetCardsState = {
+  items: StoryMemoryCard[]
+  page: number
+  total: number
+  loading: boolean
+  loadingMore: boolean
+  error: string | null
+}
+
 /**
- * 创作记忆牌堆：Agent 沉淀的人物/世界观/情节等记忆以「牌堆」形式平铺。
- * 每排张数随面板宽度自适应；悬停时顶牌翻出牌堆浮到最上层；点击看详情、右键编辑/引用、拖拽进输入框。
+ * 创作记忆卡片集画廊：一个类型一叠牌，默认封面墙全收起（一屏看全记忆版图）；
+ * 点击封面就地展开为该集头部条 + 摊开的堆叠卡片，再点收起。
+ * 单卡保留悬停翻出、点击详情、右键编辑/引用、拖拽进输入框。
  */
 export default function AgentMemoryCards({ novelId }: Props) {
-  const [items, setItems] = useState<StoryMemoryCard[]>([])
-  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({})
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [typeFilter, setTypeFilter] = useState<string | null>(null)
+  const [sets, setSets] = useState<StoryMemorySet[]>([])
   const [loading, setLoading] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Record<string, true>>({})
+  const [setCards, setSetCards] = useState<Record<string, SetCardsState>>({})
   const [menu, setMenu] = useState<MenuState>(null)
   const [detail, setDetail] = useState<StoryMemoryCard | null>(null)
   const [editing, setEditing] = useState<StoryMemoryCard | null>(null)
@@ -67,34 +82,27 @@ export default function AgentMemoryCards({ novelId }: Props) {
   const addComposerReference = useAgentStore((state) => state.addComposerReference)
   const composerDraft = useAgentStore((state) => state.composerDraft)
 
-  const load = useCallback(async (targetPage: number, memoryType: string | null) => {
-    if (targetPage === 1) setLoading(true)
-    else setLoadingMore(true)
+  const loadSets = useCallback(async () => {
+    setLoading(true)
     setError(null)
     try {
-      const result = await fetchStoryMemories(novelIdRef.current, { memoryType: memoryType ?? undefined, page: targetPage, pageSize: PAGE_SIZE })
+      const result = await fetchStoryMemorySets(novelIdRef.current)
       if (novelIdRef.current !== novelId) return
-      setItems((current) => (targetPage === 1 ? result.items : [...current, ...result.items.filter((item) => !current.some((existing) => existing.id === item.id))]))
-      setTypeCounts(result.typeCounts)
-      setTotal(result.total)
-      setPage(targetPage)
+      setSets(result.sets)
     } catch (loadError) {
       if (novelIdRef.current !== novelId) return
-      setError(loadError instanceof Error ? loadError.message : '记忆卡片读取失败。')
+      setError(loadError instanceof Error ? loadError.message : '记忆卡片集读取失败。')
     } finally {
-      if (novelIdRef.current === novelId) {
-        setLoading(false)
-        setLoadingMore(false)
-      }
+      if (novelIdRef.current === novelId) setLoading(false)
     }
   }, [novelId])
 
   useEffect(() => {
-    setItems([])
-    setTotal(0)
-    setTypeFilter(null)
-    void load(1, null)
-  }, [novelId, load])
+    setSets([])
+    setExpanded({})
+    setSetCards({})
+    void loadSets()
+  }, [novelId, loadSets])
 
   useEffect(() => () => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
@@ -119,6 +127,41 @@ export default function AgentMemoryCards({ novelId }: Props) {
     setToast(message)
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200)
+  }
+
+  const loadSetCards = useCallback(async (memoryType: string, targetPage: number) => {
+    const patch = (updater: (current: SetCardsState) => SetCardsState) => {
+      setSetCards((current) => ({ ...current, [memoryType]: updater(current[memoryType] ?? { items: [], page: 0, total: 0, loading: false, loadingMore: false, error: null }) }))
+    }
+    patch((state) => ({ ...state, error: null, ...(targetPage === 1 ? { loading: true } : { loadingMore: true }) }))
+    try {
+      const result = await fetchStoryMemories(novelIdRef.current, { memoryType, page: targetPage, pageSize: PAGE_SIZE })
+      if (novelIdRef.current !== novelId) return
+      patch((state) => ({
+        items: targetPage === 1 ? result.items : [...state.items, ...result.items.filter((item) => !state.items.some((existing) => existing.id === item.id))],
+        page: targetPage,
+        total: result.total,
+        loading: false,
+        loadingMore: false,
+        error: null,
+      }))
+    } catch (loadError) {
+      if (novelIdRef.current !== novelId) return
+      patch((state) => ({ ...state, loading: false, loadingMore: false, error: loadError instanceof Error ? loadError.message : '卡片读取失败。' }))
+    }
+  }, [novelId])
+
+  const expandSet = (memoryType: string) => {
+    setExpanded((current) => ({ ...current, [memoryType]: true }))
+    if (!setCards[memoryType]) void loadSetCards(memoryType, 1)
+  }
+
+  const collapseSet = (memoryType: string) => {
+    setExpanded((current) => {
+      const next = { ...current }
+      delete next[memoryType]
+      return next
+    })
   }
 
   const applyToComposer = (card: StoryMemoryCard) => {
@@ -157,8 +200,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
     event.dataTransfer.effectAllowed = 'copy'
   }
 
-  const hasMore = items.length < total
-  const filterChips = Object.entries(typeCounts).sort((left, right) => right[1] - left[1])
+  const totalCards = sets.reduce((sum, set) => sum + set.count, 0)
 
   return (
     <section className="px-4 pb-6 pt-1">
@@ -179,6 +221,11 @@ export default function AgentMemoryCards({ novelId }: Props) {
         }
         .memory-stack::before { transform: rotate(1.3deg); opacity: 0.7; }
         .memory-stack::after { transform: rotate(-1.1deg); opacity: 0.4; }
+        .memory-stack[data-thick="0"]::before, .memory-stack[data-thick="0"]::after { content: none; }
+        .memory-stack[data-thick="2"]::before { bottom: -8px; }
+        .memory-stack[data-thick="2"]::after { bottom: -12px; }
+        .memory-stack[data-thick="3"]::before { bottom: -9px; transform: rotate(1.8deg); }
+        .memory-stack[data-thick="3"]::after { bottom: -14px; transform: rotate(-1.6deg); }
         .memory-stack:hover { z-index: 30; }
         .memory-stack:hover::before { transform: rotate(2.4deg) translateY(3px); }
         .memory-stack:hover::after { transform: rotate(-2.2deg) translateY(3px); }
@@ -196,82 +243,102 @@ export default function AgentMemoryCards({ novelId }: Props) {
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="flex items-baseline gap-2 text-[13px] font-semibold text-[var(--text-primary)]">
           创作记忆
-          {total > 0 ? <span className="text-[10px] font-normal tabular-nums text-[var(--text-tertiary)]">{total} 张</span> : null}
+          {totalCards > 0 ? <span className="text-[10px] font-normal tabular-nums text-[var(--text-tertiary)]">{sets.length} 集 · {totalCards} 张</span> : null}
         </h3>
-        <p className="shrink-0 text-[9px] text-[var(--text-tertiary)]">点击看详情 · 右键编辑/引用 · 拖到输入框</p>
+        <p className="shrink-0 text-[9px] text-[var(--text-tertiary)]">点封面摊开卡片集 · 单卡右键/拖拽/点击</p>
       </div>
-
-      {filterChips.length > 1 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1">
-          <button
-            type="button"
-            onClick={() => { setTypeFilter(null); void load(1, null) }}
-            className={`border-b pb-0.5 text-[10px] transition-colors duration-200 ${typeFilter === null ? 'border-[var(--text-primary)] font-medium text-[var(--text-primary)]' : 'border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'}`}
-          >全部</button>
-          {filterChips.map(([type, count]) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => { setTypeFilter(type); void load(1, type) }}
-              className={`border-b pb-0.5 text-[10px] transition-colors duration-200 ${typeFilter === type ? 'border-[var(--text-primary)] font-medium text-[var(--text-primary)]' : 'border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'}`}
-            >{typeLabel(type)} <span className="tabular-nums opacity-70">{count}</span></button>
-          ))}
-        </div>
-      ) : null}
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-10 text-xs text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />读取创作记忆…</div>
       ) : error ? (
         <div className="py-8 text-center">
           <p className="text-xs text-[var(--text-secondary)]">{error}</p>
-          <button type="button" onClick={() => void load(1, typeFilter)} className="mt-2 text-[11px] text-[var(--text-primary)] underline underline-offset-4">重试</button>
+          <button type="button" onClick={() => void loadSets()} className="mt-2 text-[11px] text-[var(--text-primary)] underline underline-offset-4">重试</button>
         </div>
-      ) : items.length === 0 ? (
-        <p className="py-8 text-center text-[11px] leading-6 text-[var(--text-secondary)]">
-          {typeFilter ? '该类型下还没有记忆卡片。' : 'Agent 工作时会把人物设定、世界观、伏笔等沉淀为记忆卡片，集中显示在这里。'}
-        </p>
+      ) : sets.length === 0 ? (
+        <p className="py-8 text-center text-[11px] leading-6 text-[var(--text-secondary)]">Agent 工作时会把人物设定、世界观、伏笔等沉淀为记忆卡片集，集中显示在这里。</p>
       ) : (
-        <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-x-3 gap-y-5">
-          {items.map((card, index) => (
-            <div key={card.id} className="memory-stack" style={{ animationDelay: `${Math.min(index, 11) * 40}ms` }}>
-              <article
-                draggable
-                onDragStart={(event) => handleDragStart(event, card)}
-                onContextMenu={(event) => handleContextMenu(event, card)}
-                onClick={() => setDetail(card)}
-                className="memory-card group flex h-[152px] cursor-pointer flex-col rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-2.5 pt-3"
-                title={card.title}
-              >
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate text-[9px] tracking-wide text-[var(--text-tertiary)]">{typeLabel(card.memoryType)}</span>
-                  {card.version > 1 ? <span className="shrink-0 text-[9px] tabular-nums text-[var(--text-tertiary)]">v{card.version}</span> : null}
-                  <GripVertical className="ml-auto h-3 w-3 shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity duration-300 group-hover:opacity-60" />
-                </div>
-                <h4 className="mt-2 truncate text-xs font-medium text-[var(--text-primary)]">{card.title}</h4>
-                <p className="mt-1.5 line-clamp-3 text-[11px] leading-[1.7] text-[var(--text-secondary)]">{card.content}</p>
-                <div className="mt-auto flex items-center justify-between pt-2 text-[9px] text-[var(--text-tertiary)]">
-                  <span>重要性 {card.importance}</span>
-                  <span>{formatMemoryDate(card.updatedAt)}</span>
-                </div>
-              </article>
-            </div>
-          ))}
+        <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-3 gap-y-5">
+          {sets.map((set, index) => {
+            const meta = typeMeta(set.memoryType)
+            if (expanded[set.memoryType]) {
+              const state = setCards[set.memoryType]
+              const hasMore = state ? state.items.length < state.total : false
+              return (
+                <section key={set.memoryType} className="col-span-full" style={{ animation: 'memory-card-in 320ms cubic-bezier(0.22,1,0.36,1) both' }}>
+                  <header className="flex items-center gap-2 pb-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-muted)] text-[13px] text-[var(--text-secondary)]">{meta.glyph}</span>
+                    <span className="text-xs font-medium text-[var(--text-primary)]">{meta.label}</span>
+                    <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{set.count} 张</span>
+                    <button
+                      type="button"
+                      onClick={() => collapseSet(set.memoryType)}
+                      className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)]"
+                    ><ChevronDown className="h-3 w-3 rotate-180" />收起</button>
+                  </header>
+                  {!state || state.loading ? (
+                    <div className="flex items-center justify-center gap-2 py-8 text-xs text-[var(--text-secondary)]"><LoaderCircle className="h-4 w-4 animate-spin" />摊开卡片…</div>
+                  ) : state.error ? (
+                    <div className="py-6 text-center">
+                      <p className="text-xs text-[var(--text-secondary)]">{state.error}</p>
+                      <button type="button" onClick={() => void loadSetCards(set.memoryType, 1)} className="mt-2 text-[11px] text-[var(--text-primary)] underline underline-offset-4">重试</button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-x-3 gap-y-5">
+                        {state.items.map((card, cardIndex) => (
+                          <MemoryCardTile
+                            key={card.id}
+                            card={card}
+                            index={cardIndex}
+                            onOpen={setDetail}
+                            onMenu={handleContextMenu}
+                            onDragStart={handleDragStart}
+                          />
+                        ))}
+                      </div>
+                      {hasMore ? (
+                        <div className="mt-4 flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => void loadSetCards(set.memoryType, state.page + 1)}
+                            disabled={state.loadingMore}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)] disabled:opacity-50"
+                          >
+                            {state.loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+                            {state.loadingMore ? '加载中…' : '加载更多'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </section>
+              )
+            }
+            return (
+              <div key={set.memoryType} className="memory-stack" data-thick={thicknessTier(set.count)} style={{ animationDelay: `${Math.min(index, 11) * 40}ms` }}>
+                <article
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => expandSet(set.memoryType)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); expandSet(set.memoryType) } }}
+                  className="memory-card group flex h-[132px] cursor-pointer flex-col overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-3 pt-2.5"
+                  title={`${meta.label} ${set.count} 张 · 点击摊开`}
+                  aria-label={`${meta.label}卡片集 ${set.count} 张，点击摊开`}
+                >
+                  <span aria-hidden className="pointer-events-none absolute inset-0 flex select-none items-center justify-center text-[46px] font-semibold text-[var(--text-primary)] opacity-[0.07]">{meta.glyph}</span>
+                  <p className="relative truncate text-[10px] text-[var(--text-tertiary)]">{set.previews[0] ?? '暂无卡片'}</p>
+                  <div className="relative mt-auto flex items-baseline justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-[var(--text-primary)]">{meta.label}</span>
+                    <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-tertiary)]">{set.count} 张</span>
+                  </div>
+                  <p className="relative mt-0.5 text-[9px] text-[var(--text-tertiary)]">更新于 {formatMemoryDate(set.latestUpdatedAt)}</p>
+                </article>
+              </div>
+            )
+          })}
         </div>
       )}
-
-      {hasMore ? (
-        <div className="mt-4 flex justify-center">
-          <button
-            type="button"
-            onClick={() => void load(page + 1, typeFilter)}
-            disabled={loadingMore}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[10px] text-[var(--text-tertiary)] transition-colors duration-200 hover:bg-[var(--surface-muted)] hover:text-[var(--text-secondary)] disabled:opacity-50"
-          >
-            {loadingMore ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-            {loadingMore ? '加载中…' : '加载更多'}
-          </button>
-        </div>
-      ) : null}
 
       {menu ? createPortal(
         <div
@@ -310,8 +377,13 @@ export default function AgentMemoryCards({ novelId }: Props) {
         card={editing}
         onClose={() => setEditing(null)}
         onSaved={(updated) => {
-          setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+          setSetCards((current) => {
+            const state = current[updated.memoryType]
+            if (!state) return current
+            return { ...current, [updated.memoryType]: { ...state, items: state.items.map((item) => (item.id === updated.id ? updated : item)) } }
+          })
           setEditing(null)
+          void loadSets()
           showToast(`「${updated.title}」已更新，后续创作按最新设定召回`)
         }}
       /> : null}
@@ -324,6 +396,43 @@ export default function AgentMemoryCards({ novelId }: Props) {
         document.body,
       ) : null}
     </section>
+  )
+}
+
+type TileProps = {
+  card: StoryMemoryCard
+  index: number
+  onOpen: (card: StoryMemoryCard) => void
+  onMenu: (event: React.MouseEvent, card: StoryMemoryCard) => void
+  onDragStart: (event: React.DragEvent, card: StoryMemoryCard) => void
+}
+
+/** 单张记忆牌：悬停翻出堆顶、点击详情、右键菜单、拖拽引用 */
+function MemoryCardTile({ card, index, onOpen, onMenu, onDragStart }: TileProps) {
+  const meta = typeMeta(card.memoryType)
+  return (
+    <div className="memory-stack" data-thick={1} style={{ animationDelay: `${Math.min(index, 11) * 40}ms` }}>
+      <article
+        draggable
+        onDragStart={(event) => onDragStart(event, card)}
+        onContextMenu={(event) => onMenu(event, card)}
+        onClick={() => onOpen(card)}
+        className="memory-card group flex h-[152px] cursor-pointer flex-col rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3.5 pb-2.5 pt-3"
+        title={card.title}
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-[9px] tracking-wide text-[var(--text-tertiary)]">{meta.label}</span>
+          {card.version > 1 ? <span className="shrink-0 text-[9px] tabular-nums text-[var(--text-tertiary)]">v{card.version}</span> : null}
+          <GripVertical className="ml-auto h-3 w-3 shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity duration-300 group-hover:opacity-60" />
+        </div>
+        <h4 className="mt-2 truncate text-xs font-medium text-[var(--text-primary)]">{card.title}</h4>
+        <p className="mt-1.5 line-clamp-3 text-[11px] leading-[1.7] text-[var(--text-secondary)]">{card.content}</p>
+        <div className="mt-auto flex items-center justify-between pt-2 text-[9px] text-[var(--text-tertiary)]">
+          <span>重要性 {card.importance}</span>
+          <span>{formatMemoryDate(card.updatedAt)}</span>
+        </div>
+      </article>
+    </div>
   )
 }
 
@@ -359,7 +468,7 @@ function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote }: DetailDialog
         <header className="flex shrink-0 items-start justify-between gap-3 px-5 pb-3 pt-4">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-[9px] tracking-wide text-[var(--text-tertiary)]">
-              {typeLabel(card.memoryType)}
+              {typeMeta(card.memoryType).label}
               {card.version > 1 ? <span className="tabular-nums">v{card.version}</span> : null}
               <span>重要性 {card.importance}</span>
             </p>
@@ -437,7 +546,7 @@ function MemoryCardEditDialog({ card, onClose, onSaved }: EditDialogProps) {
         <header className="flex shrink-0 items-center justify-between gap-3 px-5 pb-3 pt-4">
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">编辑记忆卡片</h3>
-            <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">{typeLabel(card.memoryType)}</span>
+            <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">{typeMeta(card.memoryType).label}</span>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="关闭编辑弹窗" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-40"><X className="h-4 w-4" /></button>
         </header>
