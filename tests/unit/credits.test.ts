@@ -24,6 +24,10 @@ describe('Credits token pricing', () => {
     expect(calculateTokenChargeMilli(10_000, 0, 48_000)).toBe(4_800)
     expect(calculateTokenChargeMilli(1, 0)).toBe(1)
   })
+
+  it('charges nothing for the free 0x tier', () => {
+    expect(calculateTokenChargeMilli(100_000, 10_000, 0)).toBe(0)
+  })
 })
 
 describe('Credits UTC+8 reset window', () => {

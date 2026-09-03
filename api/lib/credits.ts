@@ -341,7 +341,8 @@ export async function consumeCredits(input: ConsumeCreditInput): Promise<CreditC
     return {
       chargedMilli: 0,
       remainingMilli: Math.round(summary.totalRemaining * CREDIT_MILLI),
-      exhausted: summary.totalRemaining <= 0,
+      // 0 倍率免费档不消耗额度：额度为空也不报 exhausted，否则免费档在 quota 用尽后会被误拦
+      exhausted: false,
     }
   }
 

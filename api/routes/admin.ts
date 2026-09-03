@@ -180,7 +180,7 @@ const adminModelUpdateSchema = z.object({
   modelName: z.string().trim().min(1).max(160).optional(),
   baseUrl: z.string().trim().url().max(512).nullable().optional(),
   apiKey: z.string().trim().min(8).max(2_000).optional(),
-  multiplier: z.number().min(0.1).max(100).optional(),
+  multiplier: z.number().min(0).max(100).optional(),
   enabled: z.boolean().optional(),
   selectable: z.boolean().optional(),
   isDefault: z.boolean().optional(),
