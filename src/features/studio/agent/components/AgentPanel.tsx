@@ -236,7 +236,7 @@ export function AgentPanel({
   const [modelTier, setModelTier] = useState<CreditModelTier>(() => {
     if (typeof window === 'undefined') return 'speed'
     const saved = window.localStorage.getItem('chevoink:agent-model-tier')
-    return saved === 'standard' || saved === 'performance' || saved === 'ultimate' || saved === 'custom' ? saved : 'speed'
+    return saved === 'lite' || saved === 'standard' || saved === 'performance' || saved === 'ultimate' || saved === 'custom' ? saved : 'speed'
   })
   const [customModelId, setCustomModelId] = useState<string | null>(() => typeof window === 'undefined' ? null : window.localStorage.getItem('chevoink:agent-custom-model-id'))
   const [reasoningSelections, setReasoningSelections] = useState<Record<string, ModelReasoningEffort>>(() => {
@@ -1540,6 +1540,7 @@ export function AgentPanel({
           qualityMode={qualityMode}
           modelTier={modelTier}
           modelOptions={creditSummaryQuery.data?.models ?? [
+            { tier: 'lite', label: '轻量', multiplier: 0, available: false, selectedByDefault: false, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', visionEnabled: false },
             { tier: 'speed', label: '极速', multiplier: 1, available: true, selectedByDefault: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', visionEnabled: false },
             { tier: 'standard', label: '标准', multiplier: 1.1, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
             { tier: 'performance', label: '性能', multiplier: 1.8, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },

@@ -965,7 +965,7 @@ export async function getAdminTokenManagementData(period: AdminTokenPeriod = 'to
   const mainTurnsByRun = new Map(mainTurnGroups.flatMap((item) => item.targetId ? [[item.targetId, item._max.turn ?? 0] as const] : []))
   const webSearchCalls = [...toolCounts.values()].reduce((total, item) => total + item.webSearchCalls, 0)
   const imageCalls = [...toolCounts.values()].reduce((total, item) => total + item.imageCalls, 0)
-  const modelLabels: Record<string, string> = { speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', custom: '自定义' }
+  const modelLabels: Record<string, string> = { lite: '轻量', speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', custom: '自定义' }
   const trendMap = new Map<string, { requestTokens: number; responseTokens: number }>()
   for (const item of rawTrend) {
     const date = new Date(item.createdAt.getTime() + 8 * 3_600_000).toISOString().slice(0, 10)

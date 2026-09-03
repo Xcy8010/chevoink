@@ -8,7 +8,7 @@ export const SOURCE_LABELS: Record<string, string> = {
 
 /** 文本模型行按实际调用档位展示模型名，而非笼统的「文本模型」 */
 export const TIER_LABELS: Record<string, string> = {
-  speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', basic: '基础', custom: '自定义模型',
+  lite: '轻量', speed: '极速', standard: '标准', performance: '性能', ultimate: '极致', basic: '基础', custom: '自定义模型',
 }
 
 export function ledgerLabel(item: CreditLedgerItem): string {

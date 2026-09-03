@@ -126,7 +126,7 @@ export const startAgentLoopRunSchema = z.object({
   attachments: z.array(agentAttachmentMetaSchema).optional(),
   creativeFreedom: z.enum(['stable', 'balanced', 'bold']).optional(),
   qualityMode: z.enum(['balanced', 'premium']).optional(),
-  modelTier: z.enum(['speed', 'standard', 'performance', 'ultimate', 'custom']).optional(),
+  modelTier: z.enum(['lite', 'speed', 'standard', 'performance', 'ultimate', 'custom']).optional(),
   customModelId: z.string().trim().min(1).max(64).optional(),
   reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
   /** 作者手动指定的技能；上限 3 个，避免一次性把上下文填满。 */

@@ -27,6 +27,7 @@ const DEFAULT_RESET_HOUR_UTC8 = 15
 const GLOBAL_SETTING_ID = 'global'
 
 const MODEL_FALLBACKS: CreditModelOption[] = [
+  { tier: 'lite', label: '轻量', multiplier: 0, available: false, selectedByDefault: false, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', visionEnabled: false },
   { tier: 'speed', label: '极速', multiplier: 1, available: true, selectedByDefault: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', visionEnabled: false },
   { tier: 'standard', label: '标准', multiplier: 1.1, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
   { tier: 'performance', label: '性能', multiplier: 1.8, available: false, selectedByDefault: false, reasoningEfforts: ['high'], defaultReasoningEffort: 'high', visionEnabled: false },
@@ -144,7 +145,7 @@ async function listPublicModelOptions(): Promise<CreditModelOption[]> {
   })
   if (configs.length === 0) return MODEL_FALLBACKS
   return configs.flatMap((item) => {
-    if (!item.tier || !['speed', 'standard', 'performance', 'ultimate'].includes(item.tier)) return []
+    if (!item.tier || !['lite', 'speed', 'standard', 'performance', 'ultimate'].includes(item.tier)) return []
     const capabilities = parseModelCapabilities(item.metadata, item.provider)
     return [{
       tier: item.tier as CreditModelOption['tier'],

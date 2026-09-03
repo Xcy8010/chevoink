@@ -85,7 +85,7 @@ describe('Agent 工具协议与结构化输出兜底', () => {
 
 describe('模型身份、排序与聊天区尺寸契约', () => {
   it.each([
-    ['speed', '极速模型'], ['standard', '标准模型'], ['performance', '性能模型'], ['ultimate', '极致模型'],
+    ['lite', '轻量模型'], ['speed', '极速模型'], ['standard', '标准模型'], ['performance', '性能模型'], ['ultimate', '极致模型'],
   ] as const)('%s 档位先报 Chevoink Agent，追问才报档位名 %s', (tier, label) => {
     const prompt = buildAgentIdentityPrompt(tier)
     expect(prompt).toContain('我是 Chevoink Agent')
@@ -100,7 +100,7 @@ describe('模型身份、排序与聊天区尺寸契约', () => {
   })
 
   it('内置模型使用固定产品顺序而非倍率顺序', () => {
-    expect(BUILT_IN_MODEL_TIERS).toEqual(['speed', 'standard', 'performance', 'ultimate'])
+    expect(BUILT_IN_MODEL_TIERS).toEqual(['lite', 'speed', 'standard', 'performance', 'ultimate'])
   })
 
   it('IDE Agent 面板保留可完整操作的最小宽度', () => {

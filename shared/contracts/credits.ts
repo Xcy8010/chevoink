@@ -1,12 +1,12 @@
 /**
- * 模型档位：四档用户可选 + basic 基础模型（后台轻量文本任务专用，不进用户侧选择器） + custom 自定义模型。
+ * 模型档位：五档用户可选 + basic 基础模型（后台轻量文本任务专用，不进用户侧选择器） + custom 自定义模型。
  * basic 承载关系网生成、导出建议等非对话任务，与用户侧体验档位解耦，
  * 管理员可在模型管理页独立配置其模型与 Credits 倍率；未配置时服务端自动回退 speed。
  */
-export type CreditModelTier = 'speed' | 'standard' | 'performance' | 'ultimate' | 'basic' | 'custom'
+export type CreditModelTier = 'lite' | 'speed' | 'standard' | 'performance' | 'ultimate' | 'basic' | 'custom'
 
 /** 用户侧可选档位（产品语义顺序固定，不随管理员调整的 Credits 倍率漂移）。basic 不在列。 */
-export const BUILT_IN_MODEL_TIERS = ['speed', 'standard', 'performance', 'ultimate'] as const
+export const BUILT_IN_MODEL_TIERS = ['lite', 'speed', 'standard', 'performance', 'ultimate'] as const
 
 /** 全部服务端内置档位（含后台轻任务档）。 */
 export const SERVER_MODEL_TIERS = [...BUILT_IN_MODEL_TIERS, 'basic'] as const
