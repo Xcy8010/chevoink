@@ -22,6 +22,7 @@ const queryClient = new QueryClient({
 
 export default function AppProviders({ children }: PropsWithChildren) {
   const theme = useShellStore((state) => state.theme)
+  const studioAppearance = useShellStore((state) => state.studioAppearance)
   const setSessionChecking = useShellStore((state) => state.setSessionChecking)
   const setSessionUnavailable = useShellStore((state) => state.setSessionUnavailable)
   const setGuest = useShellStore((state) => state.setGuest)
@@ -36,6 +37,20 @@ export default function AppProviders({ children }: PropsWithChildren) {
     const appBg = getComputedStyle(document.documentElement).getPropertyValue('--app-bg').trim()
     syncNativeSystemBars(appBg, theme === 'dark')
   }, [theme])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.studioReducedMotion = studioAppearance.reducedMotion ? 'true' : 'false'
+    root.style.setProperty(
+      '--studio-body-font',
+      studioAppearance.bodyFont === 'serif'
+        ? '"Noto Serif SC", "Songti SC", SimSun, serif'
+        : '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    )
+    root.style.setProperty('--studio-editor-font-size', `${studioAppearance.fontSize}px`)
+    root.style.setProperty('--studio-editor-line-height', String(studioAppearance.lineHeight))
+    root.style.setProperty('--studio-editor-max-width', `${studioAppearance.contentWidth}px`)
+  }, [studioAppearance])
 
   useEffect(() => {
     let disposed = false

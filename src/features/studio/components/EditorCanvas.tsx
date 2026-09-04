@@ -430,7 +430,7 @@ export default function EditorCanvas({
                 onSelectionChange={onSelectionChange}
                 onBlur={() => onEditorBlur?.()}
                 wrapperClassName="mt-3"
-                className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                className="studio-editor-content w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                 placeholder="继续写这一章的正文。"
               />
             </>
@@ -509,7 +509,7 @@ export default function EditorCanvas({
               onSelectionChange={onSelectionChange}
               onBlur={() => onEditorBlur?.()}
               rows={20}
-              className="min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent px-1 text-[15px] leading-8 text-[var(--text-primary)] outline-none"
+              className="studio-editor-content min-h-[30rem] w-full flex-1 resize-none overflow-y-auto bg-transparent px-1 text-[var(--text-primary)] outline-none"
               placeholder="继续写这一章的正文。"
             />
           </div>

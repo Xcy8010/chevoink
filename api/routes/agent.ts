@@ -781,11 +781,11 @@ router.post('/attachments', async (req: Request, res: Response): Promise<void> =
   const requestId = createRequestId()
 
   try {
-    // 上传端点仅要求登录态：requireSessionUserId 的鉴权副作用即可
-    requireSessionUserId(req)
+    const userId = requireSessionUserId(req)
     const body = parseBody(uploadAgentAttachmentSchema, req.body, '附件参数不完整。')
 
     const payload = await storeAgentAttachment({
+      userId,
       kind: body.kind,
       name: body.name.trim(),
       dataUrl: body.dataUrl.trim(),

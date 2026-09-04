@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 import { setSessionToken } from '@/lib/auth-token'
+import {
+  DEFAULT_STUDIO_APPEARANCE,
+  normalizeStudioAppearance,
+  type StudioAppearancePreferences,
+} from '@/features/studio/studio-preferences'
 import type { ThemeMode } from '@/types/app'
 import type { AuthTokenPair, User } from '../../shared/contracts'
 
@@ -9,6 +14,7 @@ type AuthStatus = 'checking' | 'guest' | 'authenticated' | 'unavailable'
 
 type ShellState = {
   theme: ThemeMode
+  studioAppearance: StudioAppearancePreferences
   /** 全站沉浸全屏开关（设置页可关），持久化保存；默认关闭，由首次进入弹窗询问 */
   fullscreenEnabled: boolean
   /** 是否已回答过「首次进入是否开启全屏」弹窗，持久化保存 */
@@ -20,6 +26,7 @@ type ShellState = {
   unreadMessageCount: number
   unreadNotificationCount: number
   setTheme: (theme: ThemeMode) => void
+  setStudioAppearance: (appearance: Partial<StudioAppearancePreferences>) => void
   toggleTheme: () => void
   setFullscreenEnabled: (enabled: boolean) => void
   /** 首次进入弹窗中的选择：记录偏好并标记弹窗已回答 */
@@ -46,6 +53,7 @@ export const useShellStore = create<ShellState>()(
   persist(
     (set, get) => ({
       theme: 'light',
+      studioAppearance: DEFAULT_STUDIO_APPEARANCE,
       fullscreenEnabled: false,
       fullscreenPromptSeen: false,
       quickCreateOpen: false,
@@ -55,6 +63,9 @@ export const useShellStore = create<ShellState>()(
       unreadMessageCount: 0,
       unreadNotificationCount: 0,
       setTheme: (theme) => set({ theme }),
+      setStudioAppearance: (appearance) => set((state) => ({
+        studioAppearance: normalizeStudioAppearance({ ...state.studioAppearance, ...appearance }),
+      })),
       toggleTheme: () =>
         set({
           theme: get().theme === 'light' ? 'dark' : 'light',
@@ -111,6 +122,7 @@ export const useShellStore = create<ShellState>()(
       name: 'chevoink-shell',
       partialize: (state) => ({
         theme: state.theme,
+        studioAppearance: state.studioAppearance,
         fullscreenEnabled: state.fullscreenEnabled,
         fullscreenPromptSeen: state.fullscreenPromptSeen,
       }),
@@ -119,6 +131,7 @@ export const useShellStore = create<ShellState>()(
         return {
           ...currentState,
           theme: persisted?.theme ?? currentState.theme,
+          studioAppearance: normalizeStudioAppearance(persisted?.studioAppearance),
           fullscreenEnabled: persisted?.fullscreenEnabled ?? currentState.fullscreenEnabled,
           // 老版本没有该字段：只要本地已存过全屏偏好就视为回答过，避免老用户被再次弹窗
           fullscreenPromptSeen:

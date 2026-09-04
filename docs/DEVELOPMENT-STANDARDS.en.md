@@ -157,7 +157,7 @@ All in-process Maps (rate limiting, caches, registries) **must**:
 
 ### 4.5 Middleware Order (api/app.ts baseline)
 
-cors (origin whitelist + credentials) → trust proxy → body parsing (limit 40mb, measured need for 9-image base64 posts) → uploads static (30d immutable) → unified session gate (fail-open on anomaly: the gate's own failure must not take down the whole site) → business routes → health → 500/404 fallback. New middleware must not break the semantics of this order.
+cors (origin whitelist + credentials) → trust proxy → body parsing (limit 40mb, measured need for 9-image base64 posts) → authenticated, user-scoped Agent attachments (private 30d immutable) → public uploads static (30d immutable) → unified session gate (fail-open on anomaly: the gate's own failure must not take down the whole site) → business routes → health → 500/404 fallback. Nginx must proxy the longer `/api/uploads/agent-attachments/` prefix to Node instead of letting it fall through to the public uploads alias. New middleware must not break the semantics of this order.
 
 ---
 

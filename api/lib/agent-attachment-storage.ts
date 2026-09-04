@@ -35,20 +35,34 @@ export function getUploadsRootDirectory(): string {
     : path.resolve(process.cwd(), '.local-storage', 'uploads')
 }
 
-function getAttachmentDirectory(): string {
+export function getAgentAttachmentDirectory(): string {
   return path.join(getUploadsRootDirectory(), 'agent-attachments')
 }
 
-/** URL → 磁盘绝对路径：仅接受托管前缀且 basename 与 URL 尾部严格一致（防路径穿越），否则 null */
+/** URL → 磁盘绝对路径：兼容旧版单层文件，同时支持 userId/filename 隔离目录。 */
 export function resolveManagedAttachmentPath(url: string): string | null {
   if (!url.startsWith(MANAGED_AGENT_ATTACHMENT_PREFIX)) {
     return null
   }
-  const basename = path.basename(url)
-  if (!basename || basename !== url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length)) {
+  const relative = url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length)
+  const segments = relative.split('/').filter(Boolean)
+  if (
+    (segments.length !== 1 && segments.length !== 2) ||
+    segments.some((segment) => !segment || path.basename(segment) !== segment || !/^[A-Za-z0-9_.-]+$/.test(segment))
+  ) {
     return null
   }
-  return path.join(getAttachmentDirectory(), basename)
+  const root = getAgentAttachmentDirectory()
+  const resolved = path.resolve(root, ...segments)
+  return resolved.startsWith(`${path.resolve(root)}${path.sep}`) ? resolved : null
+}
+
+/** New attachments are user-scoped; legacy one-segment URLs stay usable after upgrade. */
+export function isManagedAttachmentOwnedBy(url: string, userId: string): boolean {
+  if (!resolveManagedAttachmentPath(url)) return false
+  const relative = url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length)
+  const segments = relative.split('/').filter(Boolean)
+  return segments.length === 1 || segments[0] === userId
 }
 
 /** 仅供已声明视觉能力的主模型直传；仍复用本站托管前缀白名单，绝不接受任意路径或 URL。 */
@@ -126,11 +140,15 @@ function parseFileDataUrl(dataUrl: string, name: string): { extension: string; b
 
 /** 单附件落盘：图片优先 sharp 转 WebP（失败降级原样），文件原样落盘；返回元数据供 run 请求携带 */
 export async function storeAgentAttachment(input: {
+  userId: string
   kind: AgentAttachmentKind
   name: string
   dataUrl: string
 }): Promise<AgentAttachmentMeta> {
-  const directory = getAttachmentDirectory()
+  if (!/^[A-Za-z0-9_-]+$/.test(input.userId)) {
+    throw new DataAccessError(400, 'VALIDATION_ERROR', '用户标识无效。')
+  }
+  const directory = path.join(getAgentAttachmentDirectory(), input.userId)
   await mkdir(directory, { recursive: true })
 
   const id = randomUUID()
@@ -148,7 +166,7 @@ export async function storeAgentAttachment(input: {
         id,
         kind: 'image',
         name: input.name,
-        url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${filename}`,
+        url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${input.userId}/${filename}`,
         size: transcoded.main.byteLength,
       }
     }
@@ -159,7 +177,7 @@ export async function storeAgentAttachment(input: {
       id,
       kind: 'image',
       name: input.name,
-      url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${filename}`,
+      url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${input.userId}/${filename}`,
       size: buffer.byteLength,
     }
   }
@@ -172,7 +190,7 @@ export async function storeAgentAttachment(input: {
     id,
     kind: 'file',
     name: input.name,
-    url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${filename}`,
+    url: `${MANAGED_AGENT_ATTACHMENT_PREFIX}${input.userId}/${filename}`,
     size: buffer.byteLength,
   }
 }

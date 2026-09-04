@@ -26,6 +26,7 @@ import type {
   UpdateAgentSessionRequest,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
+import { isManagedAttachmentOwnedBy } from '../agent-attachment-storage.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { assertCreditAccess, getModelTierRuntime } from '../credits.js'
 import { getRunEventBus, loadPersistedEvents } from './events.js'
@@ -70,6 +71,10 @@ export async function startLoopRun(
 
   if (session.novelId !== input.novelId) {
     throw new DataAccessError(400, 'VALIDATION_ERROR', '会话与作品不匹配。')
+  }
+
+  if (input.attachments?.some((attachment) => !isManagedAttachmentOwnedBy(attachment.url, userId))) {
+    throw new DataAccessError(403, 'FORBIDDEN', '附件不存在或不属于当前用户。')
   }
 
   const modelTier = input.modelTier ?? 'speed'
@@ -214,18 +219,33 @@ export async function streamLoopRun(
       ;(res as Response & { flush?: () => void }).flush?.()
     }, 20000)
 
-    const unsubscribe = bus.subscribe((event) => {
+    // subscribe 会同步补发内存历史。若历史已经包含终态，回调会在
+    // unsubscribe 赋值前执行；旧写法会触发 TDZ ReferenceError，导致刚结束时
+    // 连接直播偶发 500。用幂等 finish + replay 标记覆盖这条竞态。
+    let unsubscribe: () => void = () => undefined
+    let subscriptionReady = false
+    let terminalDuringReplay = false
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      unsubscribe()
+      clearInterval(heartbeat)
+      if (!res.writableEnded) res.end()
+    }
+
+    unsubscribe = bus.subscribe((event) => {
       writeEvent(event)
       if (event.type === 'run.finished' || event.type === 'run.paused' || (event.type === 'error' && !event.recoverable)) {
-        unsubscribe()
-        clearInterval(heartbeat)
-        res.end()
+        if (subscriptionReady) finish()
+        else terminalDuringReplay = true
       }
     }, sinceSeq)
+    subscriptionReady = true
+    if (terminalDuringReplay) finish()
 
     res.on('close', () => {
-      clearInterval(heartbeat)
-      unsubscribe()
+      finish()
     })
     return
   }
@@ -389,6 +409,12 @@ export async function continueLoopRun(
 
   if (getActiveRun(runId) || hasActiveRunInSession(run.sessionId)) {
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行。')
+  }
+
+  // 续跑与新建任务使用同一交互并发上限。否则作者可以同时继续多个已暂停
+  // run，绕过 startLoopRun 的账户级并发保护并瞬间放大模型成本。
+  if (countActiveRunsByUser(userId) >= env.agentUserMaxConcurrent) {
+    throw new DataAccessError(409, 'RUN_LIMIT', `同时进行的任务数已达上限（${env.agentUserMaxConcurrent}），请稍后再试。`)
   }
 
   await assertCreditAccess(userId, run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier)

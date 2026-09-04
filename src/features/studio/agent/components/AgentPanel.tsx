@@ -320,9 +320,33 @@ export function AgentPanel({
   const awaiting =
     active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
 
+  // AgentPanel stays mounted while authors switch works. Re-hydrate the per-work
+  // freedom setting instead of carrying the previous work's value into the new one.
+  useEffect(() => {
+    const saved = window.localStorage.getItem(`chevoink:creative-freedom:${novelId}`)
+    setCreativeFreedom(saved === 'stable' || saved === 'bold' ? saved : 'balanced')
+  }, [novelId])
+
+  // The full-screen Studio settings page can update the active panel without
+  // reaching into component state or forcing a remount.
+  useEffect(() => {
+    const handleChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ novelId?: string; value?: CreativeFreedom }>).detail
+      if (detail?.novelId !== novelId) return
+      if (detail.value === 'stable' || detail.value === 'balanced' || detail.value === 'bold') {
+        setCreativeFreedom(detail.value)
+      }
+    }
+    window.addEventListener('chevoink:creative-freedom-change', handleChange)
+    return () => window.removeEventListener('chevoink:creative-freedom-change', handleChange)
+  }, [novelId])
+
   useEffect(() => {
     window.localStorage.setItem(`chevoink:creative-freedom:${novelId}`, creativeFreedom)
-  }, [creativeFreedom, novelId])
+    // novelId changes are hydrated by the effect above; persisting on that same
+    // render would overwrite the next work with the previous work's preference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creativeFreedom])
 
   useEffect(() => {
     window.localStorage.setItem('chevoink:agent-model-tier', modelTier)

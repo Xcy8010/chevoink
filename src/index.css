@@ -131,6 +131,10 @@ html.dark {
   --text-contrast: #f7f8fa;
   --border-subtle: rgba(23, 26, 32, 0.1);
   --border-strong: rgba(23, 26, 32, 0.18);
+  --studio-body-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --studio-editor-font-size: 16px;
+  --studio-editor-line-height: 1.8;
+  --studio-editor-max-width: 880px;
 }
 
 html.dark .studio-workspace {
@@ -186,9 +190,9 @@ html.dark .feedback-dialog {
   min-height: 100%;
   color: var(--text-primary);
   background: transparent;
-  --crepe-base-font-size: 15px;
+  --crepe-base-font-size: var(--studio-editor-font-size, 16px);
   --crepe-font-title: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --crepe-font-default: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --crepe-font-default: var(--studio-body-font, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
   --crepe-font-code: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   --crepe-color-background: transparent;
   --crepe-color-on-background: var(--text-primary);
@@ -213,8 +217,13 @@ html.dark .feedback-dialog {
 
 .plan-rich-markdown .milkdown .ProseMirror {
   min-height: 100%;
+  width: min(100%, var(--studio-editor-max-width, 880px));
+  margin-inline: auto;
   padding: 8px 4px 72px;
   caret-color: var(--text-primary);
+  font-family: var(--studio-body-font, inherit);
+  font-size: var(--studio-editor-font-size, 16px);
+  line-height: var(--studio-editor-line-height, 1.8);
 }
 
 .plan-rich-markdown .milkdown .ProseMirror > :first-child {
@@ -244,7 +253,7 @@ html.dark .feedback-dialog {
 
 .plan-rich-markdown .milkdown .ProseMirror p,
 .plan-rich-markdown .milkdown .ProseMirror li {
-  line-height: 1.9;
+  line-height: var(--studio-editor-line-height, 1.8);
 }
 
 .plan-rich-markdown .milkdown .ProseMirror table {
@@ -624,15 +633,32 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 
 /* 手机端创作区正文：17px 舒适档，<375px 小屏机型自动降到 16px 压缩档 */
 .composer-body-text {
-  font-size: 17px;
-  line-height: 1.9;
+  font-family: var(--studio-body-font, inherit);
+  font-size: var(--studio-editor-font-size, 16px);
+  line-height: var(--studio-editor-line-height, 1.8);
 }
 
 @media (max-width: 374px) {
   .composer-body-text {
-    font-size: 16px;
-    line-height: 1.85;
+    font-size: min(16px, var(--studio-editor-font-size, 16px));
   }
+}
+
+.studio-editor-content {
+  width: min(100%, var(--studio-editor-max-width, 880px));
+  margin-inline: auto;
+  font-family: var(--studio-body-font, inherit);
+  font-size: var(--studio-editor-font-size, 16px) !important;
+  line-height: var(--studio-editor-line-height, 1.8) !important;
+}
+
+/* User-controlled accessibility preference; scoped to Studio so community and reader motion stay unchanged. */
+html[data-studio-reduced-motion='true'] .studio-workspace *,
+html[data-studio-reduced-motion='true'] .studio-settings-page * {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }
 
 /* 触屏设备确保点击区域不小于 44px 的工具类 */

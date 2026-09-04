@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  MAX_AGENT_FILE_BYTES_PDF,
+  MAX_AGENT_FILE_COUNT,
+  MAX_AGENT_IMAGE_COUNT,
+} from './agent-attachments.js'
 
 /**
  * P0 写操作路由请求体 schema（阶段 L 收编）
@@ -101,12 +106,23 @@ export const createCommentSchema = z.object({
 /* ---------------- agent ---------------- */
 
 const agentAttachmentMetaSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1).max(120),
   kind: z.enum(['image', 'file']),
-  name: z.string(),
-  url: z.string(),
-  size: z.number().optional(),
+  name: z.string().trim().min(1).max(255),
+  url: z.string().max(500).startsWith('/api/uploads/agent-attachments/'),
+  size: z.number().int().nonnegative().max(MAX_AGENT_FILE_BYTES_PDF).optional(),
 })
+
+const agentAttachmentsSchema = z.array(agentAttachmentMetaSchema)
+  .max(MAX_AGENT_IMAGE_COUNT + MAX_AGENT_FILE_COUNT)
+  .superRefine((items, context) => {
+    if (items.filter((item) => item.kind === 'image').length > MAX_AGENT_IMAGE_COUNT) {
+      context.addIssue({ code: 'custom', message: '参考图数量超过上限。' })
+    }
+    if (items.filter((item) => item.kind === 'file').length > MAX_AGENT_FILE_COUNT) {
+      context.addIssue({ code: 'custom', message: '文件数量超过上限。' })
+    }
+  })
 
 /** POST /api/agent/runs（原校验：四字段齐全；mode 管道保留但后端恒 build，见 agent.ts） */
 export const startAgentLoopRunSchema = z.object({
@@ -114,16 +130,16 @@ export const startAgentLoopRunSchema = z.object({
   novelId: z.string().min(1),
   chapterId: z.string().nullable().optional(),
   mode: z.enum(['plan', 'build', 'review']),
-  prompt: nonEmptyText,
+  prompt: nonEmptyText.and(z.string().max(20_000)),
   selection: z
     .object({
-      text: z.string(),
+      text: z.string().max(200_000),
       start: z.number().optional(),
       end: z.number().optional(),
     })
     .nullable()
     .optional(),
-  attachments: z.array(agentAttachmentMetaSchema).optional(),
+  attachments: agentAttachmentsSchema.optional(),
   creativeFreedom: z.enum(['stable', 'balanced', 'bold']).optional(),
   qualityMode: z.enum(['balanced', 'premium']).optional(),
   modelTier: z.enum(['lite', 'speed', 'standard', 'performance', 'ultimate', 'custom']).optional(),
@@ -149,6 +165,7 @@ export const resolveAgentQuestionSchema = z.object({
 /** POST /api/agent/attachments（原校验：kind 真值 + name/dataUrl trim 后非空；kind 枚举收紧为 image|file） */
 export const uploadAgentAttachmentSchema = z.object({
   kind: z.enum(['image', 'file']),
-  name: nonEmptyText,
-  dataUrl: nonEmptyText,
+  name: nonEmptyText.and(z.string().max(255)),
+  // 10MB PDF becomes ~13.4MB after base64; cap encoded input before decoding.
+  dataUrl: nonEmptyText.and(z.string().max(15_000_000)),
 })

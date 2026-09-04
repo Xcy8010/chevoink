@@ -44,6 +44,12 @@ describe('应用冒烟（无 DB 依赖）', () => {
     expect(res.status).toBe(400)
     expect(res.body.error.code).toBe('VALIDATION_ERROR')
   })
+
+  it('未登录用户不能读取 Agent 私有附件', async () => {
+    const res = await request(app).get('/api/uploads/agent-attachments/not-a-real-file.txt')
+    expect(res.status).toBe(401)
+    expect(res.body.error.code).toBe('UNAUTHORIZED')
+  })
 })
 
 describe.skipIf(!dbAvailable)('应用冒烟（需 DB）', () => {

@@ -698,7 +698,7 @@ export default function ImmersiveComposer({
                           onCommit={(content) => onChange({ ...chapterDraft, content })}
                           onSelectionChange={onSelectionChange}
                           rows={24}
-                          className="mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-sm leading-8 text-[var(--text-primary)] outline-none"
+                          className="studio-editor-content mt-5 min-h-0 w-full flex-1 resize-none overflow-y-auto bg-transparent text-[var(--text-primary)] outline-none"
                           placeholder="继续写这一章的正文。"
                         />
                         {onGoToNextReviewFile ? (
@@ -777,11 +777,11 @@ export default function ImmersiveComposer({
                           resetKey={workspaceDocument.id}
                           onCommit={(content) => onWorkspaceDocumentChange?.({ title: workspaceDocument.title, content })}
                           wrapperClassName="mt-3"
-                          className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                          className="studio-editor-content w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                           placeholder={workspaceDocument.kind === 'plan' ? '继续完善这份创作计划。' : '在这里维护目录内容。'}
                         />
                       ) : (
-                        <div className="mt-3 whitespace-pre-wrap break-words composer-body-text text-[var(--text-primary)]">
+                        <div className="studio-editor-content mt-3 whitespace-pre-wrap break-words composer-body-text text-[var(--text-primary)]">
                           {workspaceDocument.content}
                         </div>
                       )}
@@ -813,7 +813,7 @@ export default function ImmersiveComposer({
                         onCommit={(content) => onChange({ ...chapterDraft, content })}
                         onSelectionChange={onSelectionChange}
                         wrapperClassName="mt-3"
-                        className="w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
+                        className="studio-editor-content w-full bg-transparent composer-body-text text-[var(--text-primary)] outline-none"
                         placeholder="继续写这一章的正文。"
                       />
                     </>

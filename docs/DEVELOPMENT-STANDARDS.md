@@ -157,7 +157,7 @@
 
 ### 4.5 中间件顺序（api/app.ts 基线）
 
-cors（origin 白名单 + credentials）→ trust proxy → body 解析（limit 40mb，发帖 9 图 base64 实测需求）→ uploads 静态（30d immutable）→ 会话统一闸口（异常放行：闸口自身故障不打挂全站）→ 业务路由 → health → 500/404 兜底。新增中间件不得破坏该顺序语义。
+cors（origin 白名单 + credentials）→ trust proxy → body 解析（limit 40mb，发帖 9 图 base64 实测需求）→ Agent 私有附件鉴权与用户目录隔离（private 30d immutable）→ 公开 uploads 静态（30d immutable）→ 会话统一闸口（异常放行：闸口自身故障不打挂全站）→ 业务路由 → health → 500/404 兜底。Nginx 必须用更长前缀把 `/api/uploads/agent-attachments/` 回源 Node，禁止落入公开 uploads alias；新增中间件不得破坏该顺序语义。
 
 ---
 

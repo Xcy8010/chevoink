@@ -24,6 +24,7 @@ import creditsRoutes from './routes/credits.js'
 import { env } from './config/env.js'
 import { getSessionUserId, resolveSessionGate } from './lib/auth-session.js'
 import { getUploadsStaticDirectory } from './lib/avatar-storage.js'
+import { getAgentAttachmentDirectory } from './lib/agent-attachment-storage.js'
 import { prisma } from './lib/prisma.js'
 
 const app: express.Application = express()
@@ -40,6 +41,38 @@ app.set('trust proxy', 1)
 // 发帖最多 9 张 base64 配图，预留到 40mb
 app.use(express.json({ limit: '40mb' }))
 app.use(express.urlencoded({ extended: true, limit: '40mb' }))
+// Agent 附件可能包含未发布正文、合同或研究材料，不能像头像/封面一样匿名公开。
+// 独立静态挂载先校验登录态；随机文件名继续作为第二层不可枚举保护。
+app.use(
+  '/api/uploads/agent-attachments',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await resolveSessionGate(req, res)
+      const userId = getSessionUserId(req)
+      if (!userId) {
+        res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请登录后查看附件。' } })
+        return
+      }
+      // 新上传附件按 userId 分目录并校验归属；旧版单层随机文件名仅保留
+      // “登录可读”兼容，避免升级后历史会话里的附件全部失效。
+      const segments = req.path.split('/').filter(Boolean)
+      if (segments.length >= 2 && segments[0] !== userId) {
+        res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: '无权查看该附件。' } })
+        return
+      }
+      next()
+    } catch {
+      res.status(503).json({ success: false, error: { code: 'SESSION_UNAVAILABLE', message: '暂时无法验证登录状态。' } })
+    }
+  },
+  express.static(getAgentAttachmentDirectory(), {
+    fallthrough: false,
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'private, no-store')
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+    },
+  }),
+)
 // 上传图片文件名含随机 ID、内容不可变，30 天强缓存安全（nginx 直服未命中时的兜底）
 app.use(
   '/api/uploads',

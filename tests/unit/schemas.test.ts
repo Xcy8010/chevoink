@@ -112,8 +112,26 @@ describe('P0 schema 行为对齐原路由断言', () => {
       novelId: 'n',
       mode: 'build',
       prompt: 'p',
-      attachments: [{ id: 'a', kind: 'file', name: 'f', url: 'u' }],
+      attachments: [{ id: 'a', kind: 'file', name: 'f', url: '/api/uploads/agent-attachments/u/a.txt' }],
     })
     expect(run.attachments?.[0].size).toBeUndefined()
+    expect(startAgentLoopRunSchema.safeParse({
+      sessionId: 's',
+      novelId: 'n',
+      mode: 'build',
+      prompt: 'p',
+      attachments: Array.from({ length: 7 }, (_, index) => ({
+        id: `i${index}`,
+        kind: 'image',
+        name: `i${index}.png`,
+        url: `/api/uploads/agent-attachments/u/i${index}.png`,
+      })),
+    }).success).toBe(false)
+    expect(startAgentLoopRunSchema.safeParse({
+      sessionId: 's',
+      novelId: 'n',
+      mode: 'build',
+      prompt: 'x'.repeat(20_001),
+    }).success).toBe(false)
   })
 })

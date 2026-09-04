@@ -67,7 +67,12 @@ export class RunEventBus {
   subscribe(listener: EventListener, sinceSeq = 0): () => void {
     for (const event of this.history) {
       if (event.seq > sinceSeq) {
-        listener(event)
+        try {
+          listener(event)
+        } catch {
+          // 历史补发与 live 通知保持同一隔离语义：单个断开的 SSE
+          // 响应不能阻止其他订阅者，也不能打断 Agent 运行。
+        }
       }
     }
 
