@@ -773,9 +773,8 @@ html[data-studio-reduced-motion='true'] .studio-settings-page * {
 .reasoning-range input { position: absolute; inset: 0; width: 100%; height: 44px; margin: 0; opacity: 0; cursor: pointer; touch-action: pan-y; }
 .reasoning-range:has(input:focus-visible) .reasoning-track { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
 .reasoning-range:active .reasoning-thumb { box-shadow: 0 2px 8px #0003; }
-.work-split-column { transition: width 220ms cubic-bezier(.22,1,.36,1), flex-basis 220ms cubic-bezier(.22,1,.36,1); }
-.work-perspective[data-dragging='true'][data-folding='false'] .work-split-column { transition: none; }
-.work-activity-dock { transition: width 240ms cubic-bezier(.22,1,.36,1), opacity 180ms, clip-path 240ms; clip-path: inset(0 0 0 100%); opacity: 0; }
+.work-split-column { transition: none; }
+.work-activity-dock { transition: opacity 160ms, clip-path 160ms; clip-path: inset(0 0 0 100%); opacity: 0; }
 .work-activity-dock.is-visible { clip-path: inset(0); opacity: 1; }
 .work-inspector-column { container-type: inline-size; }
 @container (max-width: 300px) { .work-inspector-nav button > span { display: none; } }

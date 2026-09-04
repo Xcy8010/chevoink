@@ -15,12 +15,13 @@ it('uses one compact effort label without repeating the selected model, preservi
   fireEvent.change(slider, { target: { value: '2' } })
   expect(change).toHaveBeenCalledWith('max')
 })
-it('provides the explicit restore action and chevron, without a last-message excerpt', () => {
+it('provides the explicit restore action, latest message and an ellipsis container', () => {
   const expand = vi.fn()
-  render(<WorkConversationRestore onExpand={expand} />)
-  const button = screen.getByRole('button', { name: '点击展开会话' })
+  render(<WorkConversationRestore onExpand={expand} recentMessage="第十二章已保存" />)
+  const button = screen.getByRole('button', { name: '点击展开Agent会话区域：第十二章已保存' })
   expect(button.querySelector('svg')).toBeTruthy()
   expect(screen.queryByText(/最近一条/)).toBeNull()
+  expect(button.querySelector('.truncate')?.textContent).toContain('第十二章已保存')
   fireEvent.click(button)
   expect(expand).toHaveBeenCalledOnce()
 })

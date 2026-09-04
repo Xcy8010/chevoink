@@ -185,6 +185,13 @@ export function AgentPanel({
   const phase = useAgentStore((state) => state.phase)
   const resumeableRunId = useAgentStore((state) => state.resumeableRunId)
   const messages = useAgentStore((state) => state.messages)
+  const recentConversationText = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const text = getMessageText(messages[index].parts).replace(/\s+/g, ' ').trim()
+      if (text) return text.slice(0, 1000)
+    }
+    return ''
+  }, [messages])
   // 正文已定稿的消息 id：定稿后不再画流式光标（等答题/审批/工具执行期间光标不应常闪）
   const finalizedTextIds = useAgentStore((state) => state.finalizedTextIds)
   const pendingApproval = useAgentStore((state) => state.pendingApproval)
@@ -1568,7 +1575,7 @@ export function AgentPanel({
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
-      {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} /> : null}
+      {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} recentMessage={recentConversationText} /> : null}
       <div data-agent-composer className="px-4 pb-4">
         <AgentComposer
           novelId={novelId}

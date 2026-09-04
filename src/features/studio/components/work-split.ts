@@ -1,4 +1,4 @@
-export const WORK_SPLIT = { chat: 360, viewer: 240, inspector: 200, rail: 46, conversationRail: 44, hysteresis: 24, foldResistance: 72 }
+export const WORK_SPLIT = { chat: 360, viewer: 220, inspector: 200, rail: 46, conversationRail: 44, hysteresis: 24, foldResistance: 84 }
 export type WorkSplit = { viewer: number; inspector: number; chatCollapsed: boolean; viewerCollapsed: boolean; inspectorCollapsed: boolean }
 export type WorkSplitGeometry = WorkSplit & { chat: number; rail: number }
 
@@ -19,7 +19,7 @@ export function fitWorkSplit(state: WorkSplit, width: number, hasViewer: boolean
   return { ...state, inspector, viewer, rail, chatCollapsed, viewerCollapsed, inspectorCollapsed, chat: chatCollapsed ? 0 : Math.max(0, room - rail - viewer - inspector) }
 }
 
-/** Pure gesture mapping. The immutable start snapshot survives every fold/unfold. */
+/** Pure mapping within one open/closed phase of a gesture. */
 export function resizeWorkSplit(start: WorkSplitGeometry, previous: WorkSplit, width: number, delta: number, boundary: 'content' | 'inspector', hasViewer: boolean): WorkSplit {
   const { chat, viewer, inspector, hysteresis, foldResistance, rail, conversationRail } = WORK_SPLIT
   if (boundary === 'inspector') {
@@ -53,11 +53,27 @@ export function resizeWorkSplit(start: WorkSplitGeometry, previous: WorkSplit, w
   return { viewer: Math.max(viewer, rawGroup - nextInspector), inspector: nextInspector, chatCollapsed: foldedChat, viewerCollapsed: false, inspectorCollapsed: independentInspectorFolded }
 }
 
-export type WorkSplitGesture = { x: number; start: WorkSplitGeometry; width: number; boundary: 'content' | 'inspector'; hasViewer: boolean }
+export type WorkSplitGesture = { x: number; left?: number; start: WorkSplitGeometry; width: number; boundary: 'content' | 'inspector'; hasViewer: boolean }
+
+/** Ordinary resizing is 1:1; near an edge, fit the shrink + resistance distance
+ * into the available pointer travel so another fold never requires leaving the window. */
+function boundedDragDelta(gesture: WorkSplitGesture, x: number): number {
+  const { start, boundary, hasViewer, width } = gesture
+  const { viewer, inspector, rail, chat, conversationRail, foldResistance } = WORK_SPLIT
+  const delta = x - gesture.x
+  const rightMinimum = boundary === 'inspector' || !hasViewer ? inspector : viewer + (start.inspectorCollapsed ? rail : inspector)
+  const rightSize = boundary === 'inspector' || !hasViewer ? start.inspector : start.viewer + start.inspector
+  const rightFolded = boundary === 'inspector' ? start.inspectorCollapsed : start.viewerCollapsed && start.inspectorCollapsed || !hasViewer && start.inspectorCollapsed
+  const leftSize = start.chatCollapsed ? 0 : width - conversationRail - start.viewer - start.inspector
+  const free = delta >= 0 ? Math.max(0, rightSize - rightMinimum) : Math.max(0, leftSize - chat)
+  if (delta >= 0 ? rightFolded || start.chatCollapsed : start.chatCollapsed || boundary === 'inspector') return delta
+  const available = delta >= 0 ? (gesture.left ?? 0) + width - 4 - gesture.x : gesture.x - (gesture.left ?? 0) - 4
+  return delta * Math.max(1, (free + foldResistance + 2) / Math.max(1, available))
+}
 
 /** Re-anchor at a fold and follow overshoot, so reversal never has to retrace dead travel. */
 export function advanceWorkSplitGesture(gesture: WorkSplitGesture, previous: WorkSplit, x: number): WorkSplit {
-  const next = resizeWorkSplit(gesture.start, previous, gesture.width, x - gesture.x, gesture.boundary, gesture.hasViewer)
+  const next = resizeWorkSplit(gesture.start, previous, gesture.width, boundedDragDelta(gesture, x), gesture.boundary, gesture.hasViewer)
   const changed = next.chatCollapsed !== previous.chatCollapsed || next.viewerCollapsed !== previous.viewerCollapsed || next.inspectorCollapsed !== previous.inspectorCollapsed
   const foldedTowardLeft = gesture.boundary === 'content' && next.chatCollapsed
   const foldedTowardRight = gesture.boundary === 'inspector' ? next.inspectorCollapsed : next.inspectorCollapsed && (!gesture.hasViewer || next.viewerCollapsed)

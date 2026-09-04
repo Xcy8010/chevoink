@@ -14,7 +14,7 @@ export function Conversation() {
   return <div className={`relative flex h-full min-h-0 flex-col ${collapsed ? 'work-agent-compact' : ''}`}>
     <header className="p-4">历史架空小说构想 · 布衣山河</header>
     <div className="min-h-0 flex-1 overflow-auto p-4">{Array.from({ length: 12 }, (_, i) => <p key={i} className="mb-8">第 {i + 1} 章已完成。此处是交互测试内容，不会访问真实作品。</p>)}</div>
-    {collapsed ? <WorkConversationRestore onExpand={expand} /> : null}
+    {collapsed ? <WorkConversationRestore onExpand={expand} recentMessage="第12章《北归》已完成，章节内容与创作记忆已保存。接下来可以继续检查人物动机、章节衔接与场景细节，确认无误后开始下一章。" /> : null}
     <div data-agent-composer className="px-4 pb-4"><AgentComposer novelId="preview" voiceScopeKey="split-preview" running={false} onSend={noop} onStop={noop} creativeFreedom="balanced" onCreativeFreedomChange={noop} qualityMode="premium" modelTier="speed" modelOptions={[{ tier: 'speed', label: '极速', multiplier: 1, available: true, selectedByDefault: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' }]} onModelTierChange={noop} customModels={[]} customModelId={null} onCustomModelChange={noop} reasoningSelections={reasoning} onReasoningEffortChange={(key, effort) => setReasoning(prev => ({ ...prev, [key]: effort }))} onOpenModelSettings={noop} referenceOptions={[]} /></div>
   </div>
 }

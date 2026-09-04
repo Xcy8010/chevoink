@@ -5,6 +5,7 @@ import type { WorkInspectorTab } from './WorkInspector'
 import { FLOATING_DOCK_MIN_CLEARANCE, shouldShowWorkActivityDock } from './work-layout'
 import { advanceWorkSplitGesture, fitWorkSplit, resizeWorkSplit, WORK_SPLIT, type WorkSplit, type WorkSplitGesture } from './work-split'
 import { WorkConversationContext } from './work-conversation-context'
+import { useWorkSplitMotion } from './use-work-split-motion'
 
 type Props = {
   conversationRail: ReactNode; conversation: ReactNode; activityDock?: ReactNode
@@ -37,8 +38,6 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   const pendingX = useRef<number | null>(null)
   const frame = useRef(0)
   const [dragging, setDragging] = useState(false)
-  const [folding, setFolding] = useState(false)
-  const foldTimer = useRef<ReturnType<typeof setTimeout>>()
   const [retainedViewer, setRetainedViewer] = useState(viewer)
   const hasViewer = Boolean(viewer)
   const geometry = fitWorkSplit(split, width || 1600, hasViewer)
@@ -46,13 +45,8 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   const viewerOpen = hasViewer && !geometry.viewerCollapsed
   const dockVisible = !geometry.chatCollapsed && shouldShowWorkActivityDock({ containerWidth: width, leftWidth: 44, rightWidth: geometry.inspector, hasActivity: Boolean(activityDock), hasViewer: viewerOpen })
   const floatDock = !outerSidebarOpen && dockVisible && width - geometry.inspector >= FLOATING_DOCK_MIN_CLEARANCE
+  const motion = useWorkSplitMotion({ rail: geometry.rail, chat: Math.max(0, geometry.chat - (dockVisible && !floatDock ? 296 : 0)), viewer: viewerOpen ? geometry.viewer : 0, inspector: geometry.inspector, dock: dockVisible ? 296 : 0 }, `${geometry.chatCollapsed}:${viewerOpen}:${inspectorOpen}:${dockVisible}:${floatDock}`)
   const update = useCallback((value: WorkSplit) => {
-    const previous = splitRef.current
-    if (previous.chatCollapsed !== value.chatCollapsed || previous.viewerCollapsed !== value.viewerCollapsed || previous.inspectorCollapsed !== value.inspectorCollapsed) {
-      clearTimeout(foldTimer.current)
-      setFolding(true)
-      foldTimer.current = setTimeout(() => setFolding(false), 240)
-    }
     splitRef.current = value; setSplit(value)
   }, [])
   const expand = useCallback(() => update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: true, inspectorCollapsed: true }), [update])
@@ -103,7 +97,6 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     return () => {
       window.removeEventListener('blur', finish)
       cancelAnimationFrame(frame.current)
-      clearTimeout(foldTimer.current)
       if (drag.current) delete document.documentElement.dataset.studioResizing
       drag.current = null
     }
@@ -123,7 +116,8 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     onPointerDown={event => {
       if (event.button !== 0 || !root.current) return
       event.preventDefault()
-      const measured = root.current.getBoundingClientRect().width
+      const bounds = root.current.getBoundingClientRect()
+      const measured = bounds.width
       const start = fitWorkSplit(splitRef.current, measured, hasViewer)
       // Start from actual on-screen geometry, even in the middle of an animation.
       const viewerNode = root.current.querySelector<HTMLElement>('[data-studio-panel="workViewer"]')
@@ -131,7 +125,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
       if (viewerNode && !start.viewerCollapsed) start.viewer = viewerNode.getBoundingClientRect().width
       if (inspectorNode && !start.inspectorCollapsed) start.inspector = inspectorNode.getBoundingClientRect().width
       start.chat = start.chatCollapsed ? 0 : measured - start.rail - start.viewer - start.inspector
-      drag.current = { x: event.clientX, start, width: measured, boundary, pointer: event.pointerId, hasViewer }
+      drag.current = { x: event.clientX, left: bounds.left, start, width: measured, boundary, pointer: event.pointerId, hasViewer }
       root.current.setPointerCapture(event.pointerId)
       document.documentElement.dataset.studioResizing = 'true'
       setDragging(true)
@@ -147,21 +141,21 @@ export default function WorkPerspective({ conversationRail, conversation, activi
       else update(resizeWorkSplit(geometry, split, width, event.key === 'ArrowLeft' ? -32 : 32, boundary, hasViewer))
     }}
   />
-  return <WorkConversationContext.Provider value={context}><div ref={root} data-studio-layout="work" data-activity-dock={dockVisible ? 'visible' : 'hidden'} data-chat-collapsed={geometry.chatCollapsed} data-dragging={dragging} data-folding={folding} className="work-perspective relative flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]"
+  return <WorkConversationContext.Provider value={context}><div ref={root} data-studio-layout="work" data-activity-dock={dockVisible ? 'visible' : 'hidden'} data-chat-collapsed={geometry.chatCollapsed} data-dragging={dragging} className="work-perspective relative flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]"
     onPointerMove={event => {
       if (!drag.current || drag.current.pointer !== event.pointerId) return
       pendingX.current = event.clientX
       if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; flush() })
     }} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={() => { if (drag.current) finish() }}>
-    <aside className="work-split-column h-full shrink-0 overflow-hidden" style={{ width: geometry.rail }} aria-hidden={geometry.chatCollapsed} {...(geometry.chatCollapsed ? { inert: '' } : {})}>{conversationRail}</aside>
-    <main data-work-conversation className="work-split-column min-w-0 bg-[var(--surface-default)]" style={{ flex: `0 0 ${Math.max(0, geometry.chat - (dockVisible && !floatDock ? 296 : 0))}px` }}>{conversation}</main>
-    <aside aria-hidden={!dockVisible} {...(!dockVisible ? { inert: '' } : {})} className={cn('work-activity-dock h-full min-h-0 shrink-0 overflow-hidden', dockVisible ? 'is-visible' : '', floatDock && 'absolute top-0 z-40')} style={{ width: dockVisible ? 296 : 0, ...(floatDock ? { right: geometry.inspector } : {}) }}><div className="h-full w-[296px] px-3 py-4">{activityDock}</div></aside>
-    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} {...(!viewerOpen ? { inert: '' } : {})} className="work-split-column h-full min-h-0 shrink-0 overflow-hidden border-[var(--border-subtle)]" style={{ width: viewerOpen ? geometry.viewer : 0, borderLeftWidth: viewerOpen ? 1 : 0 }}><div className="h-full" style={{ minWidth: WORK_SPLIT.viewer }}>{retainedViewer}</div></section>
-    <aside data-studio-panel="workInspector" className="work-split-column work-inspector-column relative ml-auto h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: geometry.inspector }}>
+    <aside className="work-split-column h-full shrink-0 overflow-hidden" style={{ width: motion.rail }} aria-hidden={geometry.chatCollapsed} {...(geometry.chatCollapsed ? { inert: '' } : {})}>{conversationRail}</aside>
+    <main data-work-conversation className="work-split-column min-w-0 bg-[var(--surface-default)]" style={{ flex: `0 0 ${motion.chat}px` }}>{conversation}</main>
+    <aside aria-hidden={!dockVisible} {...(!dockVisible ? { inert: '' } : {})} className={cn('work-activity-dock h-full min-h-0 shrink-0 overflow-hidden', dockVisible ? 'is-visible' : '', floatDock && 'absolute top-0 z-40')} style={{ width: motion.dock, ...(floatDock ? { right: motion.inspector } : {}) }}><div className="h-full w-[296px] px-3 py-4">{activityDock}</div></aside>
+    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} {...(!viewerOpen ? { inert: '' } : {})} className="work-split-column h-full min-h-0 shrink-0 overflow-hidden border-[var(--border-subtle)]" style={{ width: motion.viewer, borderLeftWidth: motion.viewer > 0 ? 1 : 0 }}><div className="h-full" style={{ minWidth: WORK_SPLIT.viewer }}>{retainedViewer}</div></section>
+    <aside data-studio-panel="workInspector" className="work-split-column work-inspector-column relative ml-auto h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: motion.inspector }}>
       <div aria-hidden={!inspectorOpen} {...(!inspectorOpen ? { inert: '' } : {})} className={cn('absolute inset-0 overflow-hidden transition-opacity duration-200', inspectorOpen ? 'opacity-100' : 'pointer-events-none opacity-0')}>{inspector}</div>
       {!inspectorOpen ? <div className="absolute inset-0 flex flex-col items-center py-2"><button type="button" onClick={toggleInspector} className="flex h-9 w-9 items-center justify-center" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button>{items.map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-label={label} title={label} className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-[var(--surface-muted)]" onClick={() => { onSelectInspectorTab(key); toggleInspector() }}><Icon className="h-4 w-4" /></button>)}</div> : <button type="button" onClick={toggleInspector} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button>}
     </aside>
-    {separator('content', geometry.chatCollapsed ? 4 : width - geometry.viewer - geometry.inspector, hasViewer ? '调整查看器与对话宽度' : '调整对话宽度')}
-    {viewerOpen ? separator('inspector', width - geometry.inspector, '调整检查区宽度') : null}
+    {separator('content', width - motion.viewer - motion.inspector, hasViewer ? '调整查看器与对话宽度' : '调整对话宽度')}
+    {viewerOpen ? separator('inspector', width - motion.inspector, '调整检查区宽度') : null}
   </div></WorkConversationContext.Provider>
 }
