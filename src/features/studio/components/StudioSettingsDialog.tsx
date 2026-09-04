@@ -22,7 +22,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Sun,
   UserRound,
   X,
@@ -135,7 +134,7 @@ function Toggle({ checked, label, onChange }: { checked: boolean; label: string;
       className={cn(
         'relative h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         checked
-          ? 'border-[var(--text-primary)] bg-[var(--text-primary)]'
+          ? 'border-[#71857c] bg-[#71857c] dark:border-[#8fa198] dark:bg-[#8fa198]'
           : 'border-[var(--border-strong)] bg-[var(--surface-muted)]',
       )}
     >
@@ -169,7 +168,7 @@ function Choice<T extends string | number>({
       className={cn(
         'inline-flex h-9 items-center justify-center gap-2 rounded-[9px] border px-3 text-xs transition-colors',
         active
-          ? 'border-[var(--text-primary)] bg-[var(--text-primary)] text-[var(--text-contrast)]'
+          ? 'border-[#aab8b2] bg-[#e5ebe8] text-[#26332e] dark:border-[#596a63] dark:bg-[#2c3934] dark:text-[#e8eeeb]'
           : 'border-[var(--border-subtle)] bg-transparent text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
       )}
     >
@@ -494,7 +493,7 @@ function ProfilePanel() {
               ['缓存命中率', stats.cacheHitRate === null ? '—' : `${stats.cacheHitRate}%`],
               ['作品数量', sessionUser.novelCount.toLocaleString('zh-CN')],
             ].map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4 py-2.5 text-xs"><dt className="text-[var(--text-secondary)]">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>)}</dl></section>
-            <section><h3 className="text-sm font-semibold">常用模型</h3><div className="mt-3 divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">{stats.modelUsage.length > 0 ? stats.modelUsage.map((model) => <div key={model.modelName} className="py-2.5"><div className="flex items-center justify-between gap-4 text-xs"><span className="min-w-0 truncate font-medium">{model.modelName}</span><span className="shrink-0 text-[var(--text-secondary)]">{model.calls.toLocaleString('zh-CN')} 次</span></div><div className="mt-1.5 flex items-center justify-between gap-4 text-[10px] text-[var(--text-tertiary)]"><span>{formatCompactCount(model.tokens)} Token</span><span>{formatCreditAmount(model.creditsSpent)} Credits</span></div></div>) : <p className="py-8 text-center text-xs text-[var(--text-tertiary)]">尚无模型调用记录</p>}</div></section>
+            <section><h3 className="text-sm font-semibold">常用模型</h3><div className="mt-3 divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">{stats.modelUsage.length > 0 ? stats.modelUsage.map((model) => <div key={model.label} className="py-2.5"><div className="flex items-center justify-between gap-4 text-xs"><span className="min-w-0 truncate font-medium">{model.label}</span><span className="shrink-0 text-[var(--text-secondary)]">{model.calls.toLocaleString('zh-CN')} 次</span></div><div className="mt-1.5 flex items-center justify-between gap-4 text-[10px] text-[var(--text-tertiary)]"><span>{formatCompactCount(model.tokens)} Token</span><span>{formatCreditAmount(model.creditsSpent)} Credits</span></div></div>) : <p className="py-8 text-center text-xs text-[var(--text-tertiary)]">尚无模型调用记录</p>}</div></section>
           </div>
         </>
       )}
@@ -725,7 +724,7 @@ export default function StudioSettingsDialog(props: Props) {
           {filteredGroups.map((group) => <div key={group.label}><p className="mb-1.5 px-3 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{group.label}</p><div className="space-y-0.5">{group.items.map((item) => navButton(item))}</div></div>)}
           {filteredGroups.length === 0 ? <p className="px-3 py-8 text-center text-xs text-[var(--text-tertiary)]">没有匹配的设置</p> : null}
         </nav>
-        <div className="mt-4 flex items-center gap-2 border-t border-[var(--border-subtle)] px-2 pt-4 text-xs text-[var(--text-tertiary)]"><Sparkles className="h-3.5 w-3.5" />Chevoink Agent 3.0</div>
+        <div className="mt-4 flex items-center gap-2 border-t border-[var(--border-subtle)] px-2 pt-4 text-xs text-[var(--text-tertiary)]"><img src="/chevoink-agent.png" alt="" className="h-4 w-4 object-contain" />Chevoink Agent 3.0</div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col bg-white dark:bg-[#111318]">

@@ -70,7 +70,8 @@ export type CreditActivityDay = {
 }
 
 export type CreditModelActivity = {
-  modelName: string
+  /** 仅返回产品档位名称，禁止透出供应商或底层模型 ID。 */
+  label: string
   calls: number
   creditsSpent: number
   tokens: number

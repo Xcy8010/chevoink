@@ -38,6 +38,24 @@ const MODEL_FALLBACKS: CreditModelOption[] = [
 
 const MODEL_REASONING_EFFORTS = new Set<ModelReasoningEffort>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
+const CREDIT_ACTIVITY_MODEL_LABELS: Record<CreditModelTier, string> = {
+  lite: '轻量',
+  speed: '极速',
+  standard: '标准',
+  performance: '性能',
+  ultimate: '极致',
+  basic: '基础',
+  custom: '自定义模型',
+}
+
+/** 个人资料属于用户侧产品界面，只显示产品档位，绝不返回供应商模型 ID。 */
+export function getCreditActivityModelLabel(providerType: 'text' | 'image', modelTier: string | null): string {
+  if (providerType === 'image') return '生图'
+  return modelTier && modelTier in CREDIT_ACTIVITY_MODEL_LABELS
+    ? CREDIT_ACTIVITY_MODEL_LABELS[modelTier as CreditModelTier]
+    : '历史模型'
+}
+
 export type ModelCapabilities = {
   reasoningEfforts: ModelReasoningEffort[]
   defaultReasoningEffort: ModelReasoningEffort
@@ -288,7 +306,7 @@ type CreditActivityDbRow = {
  * 日聚合在数据库完成，最多只把“一天一行”传回应用层，不随调用日志数量线性增长。
  */
 export async function getCreditActivity(userId: string, now = new Date()): Promise<CreditActivityPayload> {
-  const [account, dailyRows, earned, aiTotals, modelGroups, agentRuns] = await Promise.all([
+  const [account, dailyRows, earned, aiTotals, modelGroups, imageSpend, agentRuns] = await Promise.all([
     getCreditSummary(userId),
     prisma.$queryRaw<CreditActivityDbRow[]>`
       SELECT
@@ -307,10 +325,14 @@ export async function getCreditActivity(userId: string, now = new Date()): Promi
       _sum: { requestTokens: true, responseTokens: true, promptCacheHitTokens: true, promptCacheMissTokens: true },
     }),
     prisma.aiUsageLog.groupBy({
-      by: ['modelName'],
+      by: ['providerType', 'modelTier'],
       where: { userId },
       _count: { _all: true },
       _sum: { requestTokens: true, responseTokens: true, creditChargeMilli: true },
+    }),
+    prisma.creditLedgerEntry.aggregate({
+      where: { userId, sourceType: 'image_generation', deltaMilli: { lt: 0 } },
+      _sum: { deltaMilli: true },
     }),
     prisma.agentRun.count({ where: { userId } }),
   ])
@@ -326,6 +348,18 @@ export async function getCreditActivity(userId: string, now = new Date()): Promi
   const hitTokens = aiTotals._sum.promptCacheHitTokens ?? 0
   const missTokens = aiTotals._sum.promptCacheMissTokens ?? 0
   const cacheTokens = hitTokens + missTokens
+  const imageSpentMilli = Math.max(0, -(imageSpend._sum.deltaMilli ?? 0))
+  const modelUsageByLabel = new Map<string, { label: string; calls: number; creditsSpentMilli: number; tokens: number }>()
+  for (const group of modelGroups) {
+    const label = getCreditActivityModelLabel(group.providerType, group.modelTier)
+    const current = modelUsageByLabel.get(label) ?? { label, calls: 0, creditsSpentMilli: 0, tokens: 0 }
+    current.calls += group._count._all
+    current.creditsSpentMilli += group.providerType === 'image' ? 0 : group._sum.creditChargeMilli ?? 0
+    current.tokens += (group._sum.requestTokens ?? 0) + (group._sum.responseTokens ?? 0)
+    modelUsageByLabel.set(label, current)
+  }
+  const imageUsage = modelUsageByLabel.get('生图')
+  if (imageUsage) imageUsage.creditsSpentMilli = imageSpentMilli
 
   return {
     account,
@@ -347,12 +381,12 @@ export async function getCreditActivity(userId: string, now = new Date()): Promi
       activity: daily
         .filter((row) => row.date >= activityStartedAt && row.date <= todayKey)
         .map((row) => ({ date: row.date, creditsSpent: milliToCredits(row.spentMilli), eventCount: row.eventCount })),
-      modelUsage: modelGroups
+      modelUsage: [...modelUsageByLabel.values()]
         .map((group) => ({
-          modelName: group.modelName,
-          calls: group._count._all,
-          creditsSpent: milliToCredits(group._sum.creditChargeMilli ?? 0),
-          tokens: (group._sum.requestTokens ?? 0) + (group._sum.responseTokens ?? 0),
+          label: group.label,
+          calls: group.calls,
+          creditsSpent: milliToCredits(group.creditsSpentMilli),
+          tokens: group.tokens,
         }))
         .sort((left, right) => right.calls - left.calls || right.tokens - left.tokens)
         .slice(0, 5),

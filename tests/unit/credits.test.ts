@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   calculateCreditActivityStreaks,
   calculateTokenChargeMilli,
+  getCreditActivityModelLabel,
   getCreditWindow,
 } from '../../api/lib/credits.js'
 
@@ -44,6 +45,17 @@ describe('Credits activity streaks', () => {
       ['2026-08-30', '2026-08-30', '2026-08-31'],
       '2026-09-04',
     )).toEqual({ current: 0, longest: 2 })
+  })
+})
+
+describe('Credits activity model privacy', () => {
+  it('maps provider model IDs to product-facing tier labels', () => {
+    expect(getCreditActivityModelLabel('text', 'speed')).toBe('极速')
+    expect(getCreditActivityModelLabel('text', 'standard')).toBe('标准')
+    expect(getCreditActivityModelLabel('text', 'performance')).toBe('性能')
+    expect(getCreditActivityModelLabel('text', 'basic')).toBe('基础')
+    expect(getCreditActivityModelLabel('image', null)).toBe('生图')
+    expect(getCreditActivityModelLabel('text', null)).toBe('历史模型')
   })
 })
 
