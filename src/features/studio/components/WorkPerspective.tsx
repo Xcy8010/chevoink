@@ -13,7 +13,7 @@ type Props = {
   activityDock?: ReactNode
   inspector: ReactNode
   viewer?: ReactNode
-  /** Agent 聊天区最小宽度：左侧栏折叠后变小（保底 160），展开后回420，变化带过渡动画 */
+  /** Agent 聊天区最小宽度：折叠外层侧栏后仍保留完整对话操作宽度。 */
   conversationMinWidth?: number
   /** 外层创作侧栏是否展开：折叠后对话区在整个视口居中（任务状态卡改悬浮，不再挤压对话列） */
   outerSidebarOpen?: boolean

@@ -51,7 +51,7 @@ import ContextDetailDialog from './agent/components/ContextDetailDialog'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
 import { getMessageText } from './agent/lib/panel-helpers'
 import { PanelResizeHandle } from './panel-resize'
-import { useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
+import { WORK_CONVERSATION_WIDTH_LIMITS, useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
 
 
@@ -215,9 +215,14 @@ export default function StudioWorkspace() {
   const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
-  // Agent 聊天区最小宽度：侧栏展开时保持 420；折叠后 = 420 - 侧栏宽度（保底 160），
-  // 重新展开时回弹到 420（main 的 min-width 带 300ms 过渡）
-  const conversationMinWidth = workspaceSidebarOpen ? 420 : Math.max(160, 420 - workspaceSidebarWidth)
+  // 折叠外层侧栏会给正文释放空间，但不能把 Agent 压成只剩输入框的窄条。
+  // 360px 是完整阅读消息、操作工具确认与输入的最低可用宽度；重新展开回到 420px。
+  const conversationMinWidth = workspaceSidebarOpen
+    ? WORK_CONVERSATION_WIDTH_LIMITS.expanded
+    : Math.max(
+        WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin,
+        WORK_CONVERSATION_WIDTH_LIMITS.expanded - workspaceSidebarWidth,
+      )
   const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
     const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
     // Work 必须同时为最左创作栏（最大 392）、聊天轨（44）和可完整操作的 Agent 对话
@@ -5170,6 +5175,7 @@ export default function StudioWorkspace() {
               setActiveAgentTaskWindowId(sessionId)
               setStudioSettingsOpen(false)
             }}
+            onTaskForked={handleAgentTaskForked}
           />
 
           {activeToolPanel && activeToolPanel !== 'assistant' ? (

@@ -6,7 +6,7 @@ import { coerceToolArgumentEnvelope } from '../../api/lib/agent/tools/argument-c
 import { getToolByName } from '../../api/lib/agent/tools/registry.js'
 import { parseIndependentContinuityResult } from '../../api/lib/agent/tools/story-compiler-tools.js'
 import { BUILT_IN_MODEL_TIERS, type ResearchDossierBuild } from '../../shared/contracts/index.js'
-import { AGENT_PANEL_WIDTH_LIMITS } from '../../src/features/studio/panel-widths.js'
+import { AGENT_PANEL_WIDTH_LIMITS, WORK_CONVERSATION_WIDTH_LIMITS } from '../../src/features/studio/panel-widths.js'
 
 const researchInput: ResearchDossierBuild = {
   triggerReason: 'new_book',
@@ -105,5 +105,10 @@ describe('模型身份、排序与聊天区尺寸契约', () => {
 
   it('IDE Agent 面板保留可完整操作的最小宽度', () => {
     expect(AGENT_PANEL_WIDTH_LIMITS.min).toBeGreaterThanOrEqual(400)
+  })
+
+  it('Work 侧栏折叠后仍保留可完整对话的宽度', () => {
+    expect(WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin).toBeGreaterThanOrEqual(360)
+    expect(WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin).toBeLessThanOrEqual(WORK_CONVERSATION_WIDTH_LIMITS.expanded)
   })
 })

@@ -24,7 +24,6 @@ import {
   ShieldCheck,
   Sun,
   UserRound,
-  X,
   type LucideIcon,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
@@ -40,7 +39,7 @@ import Avatar from '@/features/community/components/Avatar'
 import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
-import type { CreditActivityDay, Novel, UpdateMyProfileRequest, User } from '../../../../shared/contracts/index.js'
+import type { AgentSession, CreditActivityDay, Novel, UpdateMyProfileRequest, User } from '../../../../shared/contracts/index.js'
 import type {
   StudioBodyFont,
   StudioContentWidth,
@@ -75,6 +74,7 @@ type Props = {
   chapterId?: string | null
   runIds?: string[]
   onSelectSession?: (sessionId: string) => void
+  onTaskForked?: (session: AgentSession) => void
 }
 
 type NavItem = {
@@ -99,7 +99,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     label: '创作与协作',
     items: [
       { id: 'writing', label: '写作偏好', description: '创作自由度与编辑体验', keywords: '写作 严谨 平衡 大胆 正文 Agent', icon: FileText },
-      { id: 'operations', label: 'Agent 操作', description: '任务、版本、权限与评测', keywords: '任务 版本 子Agent 定时 权限 评测', icon: Bot },
+      { id: 'operations', label: 'Agent 操作', description: '任务、分支、权限与评测', keywords: '任务 分支 子Agent 定时 权限 评测', icon: Bot },
       { id: 'archives', label: '归档', description: '恢复作品与历史任务', keywords: '归档 恢复 作品 任务', icon: Archive },
     ],
   },
@@ -111,7 +111,7 @@ const SECTION_META: Record<StudioSettingsSection, { title: string; description: 
   appearance: { title: '外观', description: '调整创作区主题与正文排版，修改会立即生效。' },
   models: { title: '模型', description: '管理当前账户可用于 Agent 的自定义模型。' },
   writing: { title: '写作偏好', description: '设置当前作品的创作自由度与正文跟随方式。' },
-  operations: { title: 'Agent 操作', description: '管理任务、版本、专业 Agent、定时计划、权限和评测。' },
+  operations: { title: 'Agent 操作', description: '管理任务分支、专业子 Agent、定时计划、权限和评测。' },
   archives: { title: '归档', description: '查看并恢复已归档作品与 Agent 任务。' },
 }
 
@@ -784,18 +784,16 @@ export default function StudioSettingsDialog(props: Props) {
         <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-4 pb-3 pt-[max(12px,var(--safe-top))] lg:hidden">
           <button type="button" onClick={props.onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] hover:bg-[var(--surface-muted)]" aria-label="返回创作区"><ArrowLeft className="h-4 w-4" /></button>
           <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">创作区设置</p><p className="truncate text-[10px] text-[var(--text-tertiary)]">{meta.title}</p></div>
-          <button type="button" onClick={props.onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] hover:bg-[var(--surface-muted)]" aria-label="关闭设置"><X className="h-4 w-4" /></button>
         </header>
         <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--border-subtle)] px-3 py-2 lg:hidden" aria-label="设置导航">{NAV_GROUPS.flatMap((group) => group.items).map((item) => navButton(item, true))}</nav>
 
         <header className="hidden h-[88px] shrink-0 items-start border-b border-[var(--border-subtle)] px-10 py-5 lg:flex">
           <div className="min-w-0 flex-1"><h1 className="text-xl font-semibold tracking-tight">{meta.title}</h1><p className="mt-1 text-xs text-[var(--text-tertiary)]">{meta.description}</p></div>
-          <button type="button" onClick={props.onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label="关闭设置"><X className="h-4 w-4" /></button>
         </header>
 
         <main className={cn('min-h-0 flex-1 overflow-y-auto', props.section === 'operations' ? 'p-0' : 'px-5 py-7 sm:px-8 lg:px-10 lg:py-9')}>
           {props.section === 'operations' ? (
-            <AgentOperationsCenter embedded open onClose={props.onClose} novelId={props.novelId} sessionId={props.sessionId} chapterId={props.chapterId} runIds={props.runIds ?? []} onSelectSession={props.onSelectSession} />
+            <AgentOperationsCenter embedded open onClose={props.onClose} novelId={props.novelId} sessionId={props.sessionId} chapterId={props.chapterId} runIds={props.runIds ?? []} onSelectSession={props.onSelectSession} onTaskForked={props.onTaskForked} />
           ) : (
             <div className="mx-auto w-full max-w-[920px]">
               {props.section === 'general' ? <GeneralPanel {...props} /> : null}

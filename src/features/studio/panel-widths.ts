@@ -13,6 +13,8 @@ export const AGENT_PANEL_WIDTH_LIMITS = { min: 400, fallback: 440 }
 export const WORK_TASK_PANEL_WIDTH_LIMITS = { min: 200, fallback: 232 }
 export const WORK_INSPECTOR_PANEL_WIDTH_LIMITS = { min: 260, fallback: 520 }
 export const WORK_VIEWER_PANEL_WIDTH_LIMITS = { min: 320, fallback: 900 }
+/** Work 模式的 Agent 对话列必须始终可完成阅读、输入和工具确认。 */
+export const WORK_CONVERSATION_WIDTH_LIMITS = { expanded: 420, collapsedMin: 360 }
 
 export type StudioPanelWidths = { tree: number; agent: number; workTask: number; workInspector: number; workViewer: number }
 export type ResizablePanel = keyof StudioPanelWidths
