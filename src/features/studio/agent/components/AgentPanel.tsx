@@ -1509,7 +1509,7 @@ export function AgentPanel({
 
       {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开） */}
       {workspaceActivities.length > 0 || todos.length > 0 || pendingReviewCount > 0 ? (
-        <div className={cn('px-4 pb-2', activityPresentation === 'responsive' && 'agent-activity-responsive')}>
+        <div data-agent-activity className={cn('px-4 pb-2', activityPresentation === 'responsive' && 'agent-activity-responsive')}>
           <AgentActivityBar
             activities={workspaceActivities}
             activitiesVersion={activitiesVersion}

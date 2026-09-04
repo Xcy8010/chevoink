@@ -803,7 +803,7 @@ html[data-studio-resizing='true'] .studio-resizable-grid {
 }
 html[data-studio-resizing='true'] .studio-resizable-panel[data-sidebar-folding='true'] { transition: width 220ms cubic-bezier(.22,1,.36,1); }
 
-.work-perspective[data-activity-dock='visible'] .agent-activity-responsive {
+.work-perspective[data-activity-dock='visible'] [data-agent-activity] {
   display: none;
 }
 
