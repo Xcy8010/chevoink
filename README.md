@@ -23,33 +23,46 @@
 ## 本地构建
 
 ```bash
-# 1. 安装依赖
-npm install
+# 1. Windows/PowerShell：锁定依赖、校验官方 AAR 与许可证、重建壳资源和原生生成文件
+powershell -File scripts/prepare-android-source.ps1 -InstallDependencies
 
-# 2. 构建 Web 产物并同步进原生工程
-npm run build
-npx cap copy android
-
-# 3. 打开 Android Studio 或命令行打包
-npx cap open android
-# 或
-cd android && ./gradlew assembleRelease
+# 2. 需要本地 release keystore 和已发布旧 APK，测试、打包、比较签名；默认依赖离线模式
+powershell -File scripts/build-android-release.ps1
 ```
 
-产物路径：`android/app/build/outputs/apk/release/app-release.apk`
+当前产物：`android/app/build/outputs/apk/release/chevoink-v1.0.6.apk`；验证后复制为
+`artifacts/android/chevoink-v1.0.6-<sha256前12位>.apk`。这些脚本不会上传或发布。
+旧 `app-release.apk` 是签名基线，不能覆盖。完整前置条件见 `release/ANDROID-HANDOFF.md`。
 
 ## 签名配置（不入库）
 
 release 签名从被 gitignore 的 `android/keystore.properties` 读取，模板：
 
 ```properties
-storeFile=chevoink-release.keystore
+storeFile=../chevoink-release.keystore
 storePassword=***
 keyAlias=***
 keyPassword=***
 ```
 
-`*.keystore` / `keystore.properties` / `.env` / `plan/` / `cert/` 等敏感与内部文件均已被 `.gitignore` 排除，缺少 `keystore.properties` 时自动回退 debug 签名（仅用于本地验证）。
+`*.keystore` / `keystore.properties` / `.env` / `plan/` / `cert/` 等敏感与内部文件均已被 `.gitignore` 排除。
+release 缺少签名配置、必填字段或 keystore 时直接失败，禁止回退 debug；普通 debug 构建仍可使用 debug 签名。
+
+## 离线语音
+
+原生 `ChevoinkSpeech` 使用官方 sherpa-onnx1.13.7 AAR 和 SenseVoice/Silero，支持60秒
+单声道float32LE、16kHz输入，VAD分段并逐段限制为20秒。音频不上传、不走系统云识别。
+模型由用户主动从同源 `/voice/native-sensevoice-1.13.7/` 下载；不能将该目录放入会被覆盖的Web发布根目录。
+
+`third-party/speech/` 包含完整许可证及署名，自动进入APK的 `assets/speech/`。
+模型准备脚本同时复制完整 `licenses/`；发布rawmodel时必须一起复制。
+已下载WASM数据的可重复提取命令：
+
+```powershell
+node scripts/stage-native-from-wasm.mjs <已验证的sherpa-onnx-wasm-main-vad-asr.data绝对路径>
+```
+
+AAR、APK、模型二进制、生成资源和密钥均不应提交Git。
 
 ## 发版流程（版本号必须三处同步）
 

@@ -1,0 +1,30 @@
+{
+  "normalization": "Complete UTF-8 text, LF, one trailing newline.",
+  "files": [
+    {
+      "name": "MODEL_LICENSE",
+      "sha256": "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8",
+      "sourceUrl": "https://raw.githubusercontent.com/modelscope/FunASR/04a6970746e4f117413aa8972adc359dff8f4d31/MODEL_LICENSE"
+    },
+    {
+      "name": "NOTICE.md",
+      "sha256": "fb93f3724f470183a020d141659114e669bb8d12819c0dd50fc97a91c50439e2",
+      "sourceUrl": null
+    },
+    {
+      "name": "ONNXRUNTIME-LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.27.1/LICENSE"
+    },
+    {
+      "name": "SHERPA-ONNX-LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.7/LICENSE"
+    },
+    {
+      "name": "SILERO-LICENSE",
+      "sha256": "51c19c8be941a3fb00ccf58f0bf9053de9f7237a0b37327896eabad32dffe873",
+      "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/867c2aa692646a1f1de3e94a15c9dd9f614c0acb/LICENSE"
+    }
+  ]
+}

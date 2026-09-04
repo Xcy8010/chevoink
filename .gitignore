@@ -53,3 +53,8 @@ cert/
 *.aab
 google-services.json
 .deploy-*.tar.gz
+artifacts/android/
+release/voice/**/*.onnx
+release/voice/**/tokens.txt
+release/voice/**/*.part
+release/voice/**/licenses/

@@ -1,0 +1,2 @@
+# Keep pinned upstream license snapshots hash-stable on all checkouts.
+third-party/speech/* text eol=lf

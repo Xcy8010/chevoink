@@ -1,6 +1,6 @@
 apply plugin: 'com.android.application'
 
-// release signing config is read from gitignored keystore.properties (secrets never committed)
+// release 签名参数从 gitignore 的 keystore.properties 读取（密码/密钥绝不入库）
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
@@ -8,14 +8,16 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
+    // Versioned licenses are source files, independent of generated Capacitor assets.
+    sourceSets.main.assets.srcDir rootProject.file('../third-party')
     namespace = "com.chevoink.app"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId "com.chevoink.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 8
-        versionName "1.0.5.1"
+        versionCode 9
+        versionName "1.0.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -35,8 +37,8 @@ android {
     }
     buildTypes {
         release {
-            // fall back to debug signing when keystore.properties is absent so the build never blocks
-            signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+            // Release must never silently fall back to the debug certificate.
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -50,6 +52,9 @@ repositories {
 }
 
 dependencies {
+    implementation files('libs/sherpa-onnx-1.13.7.aar')
+    // The upstream AAR exposes Kotlin classes; calling them from Java needs only the runtime.
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.25'
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
@@ -62,6 +67,55 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// Keep the published v1.0.5.1 app-release.apk untouched for certificate comparison.
+android.applicationVariants.all { variant ->
+    if (variant.buildType.name == 'release') {
+        variant.outputs.all { outputFileName = 'chevoink-v1.0.6.apk' }
+    }
+}
+
+tasks.register('verifySpeechSdk') {
+    doLast {
+        def aar = file('libs/sherpa-onnx-1.13.7.aar')
+        if (!aar.isFile()) throw new GradleException('Missing pinned speech SDK. Run scripts/prepare-android-speech.ps1.')
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        aar.withInputStream { input ->
+            byte[] buffer = new byte[65536]
+            int count
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count)
+        }
+        if (digest.digest().encodeHex().toString() != 'c4ef49e309f24fcee5c106b8a279481aaecaabb078cd37b2cd6e9a62cc8a73c8') {
+            throw new GradleException('Speech SDK checksum mismatch; refusing to build.')
+        }
+    }
+}
+tasks.register('verifyReleaseSigning') {
+    doLast {
+        if (!keystorePropertiesFile.isFile() ||
+            ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].any { !keystoreProperties[it]?.trim() }) {
+            throw new GradleException('Release signing configuration missing or incomplete. Debug fallback is forbidden.')
+        }
+        if (!file(keystoreProperties['storeFile']).isFile()) {
+            throw new GradleException('Release keystore does not exist.')
+        }
+    }
+}
+tasks.register('verifyShellVersion') {
+    doLast {
+        def expectedUa = "ChevoinkApp/${android.defaultConfig.versionName}"
+        def source = rootProject.file('../capacitor.config.ts').getText('UTF-8')
+        def packaged = new groovy.json.JsonSlurper().parse(file('src/main/assets/capacitor.config.json'))
+        if (!source.contains("appendUserAgent: '${expectedUa}'") || packaged.appendUserAgent != expectedUa) {
+            throw new GradleException('Source, packaged UA and Android versionName must match. Sync the Capacitor config before building.')
+        }
+        if (android.defaultConfig.versionCode <= 8) throw new GradleException('versionCode must exceed published code 8.')
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'preBuild') task.dependsOn('verifySpeechSdk')
+    if (task.name == 'preReleaseBuild') task.dependsOn('verifyReleaseSigning', 'verifyShellVersion')
+}
 
 try {
     def servicesJSON = file('google-services.json')
