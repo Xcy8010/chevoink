@@ -51,6 +51,13 @@ import {
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
+import {
+  collapseEarlyToolRounds,
+  compactEarlyToolPayloads,
+  estimateChatMessagesTokens,
+  estimateToolDefinitionTokens,
+  resolveAgentContextBudget,
+} from './context-budget.js'
 
 /**
  * Agent Loop 执行内核（plan/13 §4.3）。
@@ -184,33 +191,8 @@ const WRITE_PROGRESS_TOOLS = new Set([
 /** plan/18 P0 重复签名熔断：前 2 次成功同签名后，第 3 次相同调用不执行 */
 const REPEAT_SIGNATURE_BLOCK_AFTER_SUCCESSES = 2
 
-/** 长上下文防稀释阈值（plan/14 §三 A4）：超过后每轮在队尾刷新一条轻量提醒 */
-const CONTEXT_REMINDER_THRESHOLD_CHARS = 60000
-
-/** 上下文瘦身阈值：messages 总字符超过后，把久远轮次的工具输出压缩成摘要，
- * 支撑百轮长任务不撞模型上下文窗口（deepseek 128K token ≈ 中文 15 万字符量级） */
-const CONTEXT_SLIM_THRESHOLD_CHARS = 150000
 /** 瘦身时保留最近 N 条工具输出不动：近期结果是当前决策的主要依据 */
 const CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS = 8
-
-/** 长任务上下文瘦身：久远工具输出原文已落库/已被后续轮次消化，压成短摘要释放窗口；
- * 模型需要旧内容时可重新调用读取类工具（chapter_read/plan_read 等）取回 */
-function slimEarlyToolOutputs(messages: ChatMessage[]) {
-  const toolIndexes: number[] = []
-  for (let index = 0; index < messages.length; index++) {
-    if (messages[index].role === 'tool') {
-      toolIndexes.push(index)
-    }
-  }
-
-  const cutoff = toolIndexes.length - CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS
-  for (let k = 0; k < cutoff; k++) {
-    const message = messages[toolIndexes[k]] as Extract<ChatMessage, { role: 'tool' }>
-    if (message.content.length > 600 && !message.content.startsWith('[工具输出已压缩]')) {
-      message.content = `[工具输出已压缩] ${message.content.slice(0, 300)}…（原 ${message.content.length} 字，内容已落库，需要时重新调用读取工具获取）`
-    }
-  }
-}
 
 type ToolCallOutcome = {
   observation: string
@@ -949,6 +931,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       taskSpec,
       modelTier: modelRuntime.tier,
       modelName: modelRuntime.modelName,
+      contextWindowTokens: modelRuntime.contextWindowTokens,
       pinnedSkillIds: params.pinnedSkillIds ?? [],
     })
     const messages: ChatMessage[] = assembledContext.messages
@@ -1044,6 +1027,48 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       sessionPolicy?.sandboxMode === 'read_only' || sessionPolicy?.sandboxMode === 'full_access' ? sessionPolicy.sandboxMode : 'workspace',
     )
     const openAITools = toOpenAITools(tools)
+    const contextBudget = resolveAgentContextBudget(modelRuntime.contextWindowTokens ?? env.agentContextWindowTokens, env.aiTextMaxOutputTokens)
+
+    /**
+     * Provider-independent in-run compaction for DeepSeek, GLM and custom
+     * OpenAI-compatible models. It counts tool schemas, tool arguments,
+     * reasoning and multimodal placeholders instead of only visible text.
+     */
+    const prepareContextForRequest = (requestTools = openAITools, reason = 'turn') => {
+      const toolDefinitionTokens = estimateToolDefinitionTokens(requestTools)
+      const beforeTokens = estimateChatMessagesTokens(messages) + toolDefinitionTokens
+      let afterTokens = beforeTokens
+      let compactedToolArguments = 0
+      let compactedToolOutputs = 0
+      let collapsedToolRounds = 0
+
+      if (beforeTokens >= contextBudget.compactAtTokens) {
+        const firstStage = compactEarlyToolPayloads(messages, CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS)
+        compactedToolArguments += firstStage.compactedToolArguments
+        compactedToolOutputs += firstStage.compactedToolOutputs
+        afterTokens = firstStage.afterTokens + toolDefinitionTokens
+      }
+      if (afterTokens > contextBudget.hardRequestTokens) {
+        const secondStage = collapseEarlyToolRounds(messages, CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS)
+        collapsedToolRounds += secondStage.collapsedToolRounds
+        afterTokens = secondStage.afterTokens + toolDefinitionTokens
+      }
+      if (compactedToolArguments > 0 || compactedToolOutputs > 0 || collapsedToolRounds > 0) {
+        console.info('[agent-loop] 运行中上下文压缩', JSON.stringify({
+          runId,
+          turn,
+          reason,
+          modelTier: modelRuntime.tier,
+          contextWindowTokens: contextBudget.contextWindowTokens,
+          beforeTokens,
+          afterTokens,
+          compactedToolArguments,
+          compactedToolOutputs,
+          collapsedToolRounds,
+        }))
+      }
+      return { beforeTokens, afterTokens, fits: afterTokens <= contextBudget.hardRequestTokens }
+    }
     // plan/18：轮次片/预算片可被检查点续跑刷新，改 let；预算从「只能下调」改为 clamp 到硬顶（默认 500 万）
     let maxTurns = env.agentMaxTurns
     let runTokenBudget = resolveRunTokenBudget(params.tokenBudget, env.agentRunTokenBudget, env.agentRunTokenBudgetCeiling)
@@ -1111,6 +1136,15 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         role: 'user',
         content: `[系统] ${reasonText}请立即停止调用工具，用一段话总结目前的进展与剩余工作。`,
       })
+      const wrapBudget = prepareContextForRequest([], 'wrap-up')
+      if (!wrapBudget.fits) {
+        const fallbackText = `${reasonText}上下文已达到当前模型的安全窗口上限，系统已停止继续请求。已完成的写入均已保存；请点击「继续执行」从持久化检查点恢复剩余工作。`
+        bus.emit({ type: 'text.delta', messageId: wrapMessageId, delta: fallbackText })
+        bus.emit({ type: 'text.final', messageId: wrapMessageId, text: fallbackText, asReasoning: false })
+        await persistMessage(wrapMessageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: fallbackText }])
+        await finalizeRun(runId, bus, 'failed', usage, turn, fallbackText.slice(0, 300), fallbackText)
+        return
+      }
       const wrapUp = await chatWithTools({
         messages,
         tools: [],
@@ -1185,8 +1219,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       checkpointWriteBaseline = writeProgressCount
       runTokenBudget = Math.min(env.agentRunTokenBudgetCeiling, runTokenBudget + CHECKPOINT_BUDGET_SLICE)
       maxTurns += CHECKPOINT_TURN_SLICE
-      // compaction：久远工具输出压成短摘要释放窗口（旧内容可用读取类工具重新取回）
-      slimEarlyToolOutputs(messages)
+      // compaction：先压缩久远工具参数与输出；下一轮发送前再按真实 token 预算判断是否需要折叠完整工具轮。
+      compactEarlyToolPayloads(messages, CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS)
       const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
       const notice = `已到检查点 ${resumeCount}/${CHECKPOINT_MAX_RESUMES}（${trigger === 'budget' ? '预算片用尽' : '轮次片用尽'}） · 累计消耗 ${(usage.totalTokens / 10_000).toFixed(0)} 万 tokens · 剩余待办 ${todoLeft} 项 · 自动续跑中`
       // 检查点可见性：落库+直播的系统行，刷新后仍在（产品化参照 codex 的自动 compaction 提示）
@@ -1225,18 +1259,15 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       if (reminderIndex >= 0) {
         messages.splice(reminderIndex, 1)
       }
-      const totalChars = messages.reduce(
-        (sum, message) => sum + (typeof message.content === 'string'
-          ? message.content.length
-          : Array.isArray(message.content) ? message.content.reduce((partSum, part) => partSum + (part.type === 'text' ? part.text.length : 0), 0) : 0),
-        0,
-      )
-      if (totalChars > CONTEXT_REMINDER_THRESHOLD_CHARS) {
+      const estimatedRequestTokens = estimateChatMessagesTokens(messages) + estimateToolDefinitionTokens(openAITools)
+      if (estimatedRequestTokens > contextBudget.warningTokens) {
         messages.push(contextReminder)
       }
-      // 上下文逼近模型窗口时压缩久远工具输出，长任务（连写多章）才能持续跑下去
-      if (totalChars > CONTEXT_SLIM_THRESHOLD_CHARS) {
-        slimEarlyToolOutputs(messages)
+      // 在发往供应商之前执行模型窗口感知的压缩；仍超限则安全收尾，不把必失败请求交给供应商。
+      const requestBudget = prepareContextForRequest(openAITools, 'turn')
+      if (!requestBudget.fits) {
+        await wrapUpAndFinish('当前任务上下文已达到所选模型的安全窗口上限。')
+        return
       }
 
       const messageId = randomUUID()

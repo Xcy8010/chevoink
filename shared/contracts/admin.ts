@@ -434,6 +434,7 @@ export type AdminModelManagementPayload = {
     reasoningEfforts: import('./credits.js').ModelReasoningEffort[]
     defaultReasoningEffort: import('./credits.js').ModelReasoningEffort
     visionEnabled: boolean
+    contextWindowTokens: number | null
     configurationReady: boolean
     updatedAt: string
   }>

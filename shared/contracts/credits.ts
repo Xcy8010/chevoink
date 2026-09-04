@@ -120,6 +120,8 @@ export type CustomModelView = {
   reasoningEfforts: ModelReasoningEffort[]
   defaultReasoningEffort: ModelReasoningEffort
   visionEnabled: boolean
+  /** Agent 可用上下文窗口；为空时沿用服务端安全默认值。 */
+  contextWindowTokens: number | null
   createdAt: string
   updatedAt: string
 }
@@ -136,4 +138,5 @@ export type SaveCustomModelRequest = {
   reasoningEfforts?: ModelReasoningEffort[]
   defaultReasoningEffort?: ModelReasoningEffort
   visionEnabled?: boolean
+  contextWindowTokens?: number
 }

@@ -9,6 +9,13 @@ import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
 import { handleToolCall } from './loop.js'
 import { toOpenAITools } from './tools/registry.js'
 import type { ToolContext } from './tools/types.js'
+import {
+  collapseEarlyToolRounds,
+  compactEarlyToolPayloads,
+  estimateChatMessagesTokens,
+  estimateToolDefinitionTokens,
+  resolveAgentContextBudget,
+} from './context-budget.js'
 
 /**
  * 子 Agent 内嵌执行引擎（codex/Zcode 模式）：
@@ -106,6 +113,20 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
   const openAITools = toOpenAITools(tools)
 
   const messages = buildSubagentMessages(params)
+  const contextBudget = resolveAgentContextBudget(params.modelRuntime.contextWindowTokens ?? env.agentContextWindowTokens, env.aiTextMaxOutputTokens)
+  const prepareContextForRequest = (requestTools = openAITools): boolean => {
+    const toolTokens = estimateToolDefinitionTokens(requestTools)
+    let requestTokens = estimateChatMessagesTokens(messages) + toolTokens
+    if (requestTokens >= contextBudget.compactAtTokens) {
+      compactEarlyToolPayloads(messages)
+      requestTokens = estimateChatMessagesTokens(messages) + toolTokens
+    }
+    if (requestTokens > contextBudget.hardRequestTokens) {
+      collapseEarlyToolRounds(messages)
+      requestTokens = estimateChatMessagesTokens(messages) + toolTokens
+    }
+    return requestTokens <= contextBudget.hardRequestTokens
+  }
   const usage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
   const extraParts: AgentMessagePart[] = []
   // 防死循环兑底：单个子 Agent 的 token 消耗固定钳在 ceiling 内（轮次上限 + 并发闸之外再加一道总量闸），
@@ -126,6 +147,10 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
     while (turns < SUBAGENT_MAX_TURNS) {
       turns += 1
       emitProgress(turns, `「${params.name}」第 ${turns} 轮：分析任务并选择工具`)
+      if (!prepareContextForRequest()) {
+        report = '子 Agent 上下文已达到当前模型的安全窗口上限。已完成的工具结果均已保存，主 Agent 可重新读取工作区状态后继续。'
+        break
+      }
 
       const result = await chatWithTools({
         messages,
@@ -198,6 +223,10 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
       if (usage.totalTokens >= budget) {
         // 预算用尽：带着已有上下文做一次无工具总结，避免静默截断
         emitProgress(turns, `「${params.name}」预算已用尽，正在总结`)
+        if (!prepareContextForRequest([])) {
+          report = '子 Agent 已达到 token 预算与上下文安全上限；已执行的工具结果均已保存，请主 Agent 核验后继续。'
+          break
+        }
         const wrapUp = await chatWithTools({
           messages,
           tools: [],

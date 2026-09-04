@@ -60,6 +60,7 @@ export type ModelCapabilities = {
   reasoningEfforts: ModelReasoningEffort[]
   defaultReasoningEffort: ModelReasoningEffort
   visionEnabled: boolean
+  contextWindowTokens: number | null
 }
 
 export function parseModelCapabilities(metadata: Prisma.JsonValue | null | undefined, provider = ''): ModelCapabilities {
@@ -79,6 +80,12 @@ export function parseModelCapabilities(metadata: Prisma.JsonValue | null | undef
     reasoningEfforts,
     defaultReasoningEffort: reasoningEfforts.includes(configuredDefault) ? configuredDefault : reasoningEfforts[0] ?? 'high',
     visionEnabled: record.visionEnabled === true,
+    contextWindowTokens: typeof record.contextWindowTokens === 'number'
+      && Number.isInteger(record.contextWindowTokens)
+      && record.contextWindowTokens >= 16_000
+      && record.contextWindowTokens <= 4_000_000
+      ? record.contextWindowTokens
+      : null,
   }
 }
 
@@ -426,6 +433,7 @@ export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userI
   reasoningEffort: ModelReasoningEffort
   reasoningEfforts: ModelReasoningEffort[]
   visionEnabled: boolean
+  contextWindowTokens: number | null
 }> {
   if (tier === 'custom') {
     if (!userId || !customModelId) throw new DataAccessError(400, 'CUSTOM_MODEL_REQUIRED', '请选择一个已配置的自定义模型。')
@@ -445,7 +453,7 @@ export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userI
   })
   if (!config) {
     const configuredModels = await prisma.aiModelConfig.count({ where: { ownerUserId: null } })
-    if (tier === 'speed' && configuredModels === 0) return { tier, multiplierBps: 10000, provider: 'deepseek', modelName: null, baseUrl: null, apiKey: null, reasoningEffort: requestedReasoningEffort ?? 'high', reasoningEfforts: ['low', 'high', 'max'], visionEnabled: false }
+    if (tier === 'speed' && configuredModels === 0) return { tier, multiplierBps: 10000, provider: 'deepseek', modelName: null, baseUrl: null, apiKey: null, reasoningEffort: requestedReasoningEffort ?? 'high', reasoningEfforts: ['low', 'high', 'max'], visionEnabled: false, contextWindowTokens: null }
     // 基础模型档未建行/未启用时回退极速档：后台轻任务（关系网/导出建议）不因可选配置缺失而整体失败
     if (tier === 'basic') return getModelTierRuntime('speed', userId, customModelId, requestedReasoningEffort ?? 'low')
     throw new DataAccessError(409, 'MODEL_TIER_UNAVAILABLE', '该模型档位尚未开放。')

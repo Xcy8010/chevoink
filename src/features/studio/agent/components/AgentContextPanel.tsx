@@ -128,6 +128,7 @@ export default function AgentContextPanel({ sessionId, active = false, scrollabl
 
       {checkpoint ? <section className="mt-5 space-y-4 border-t border-[var(--border-subtle)] pt-4">
         <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-600" /><div><p className="text-xs font-medium text-[var(--text-primary)]">已验证检查点 v{checkpoint.version}</p><p className="mt-0.5 text-[9px] text-[var(--text-tertiary)]">{checkpoint.sourceMessageCount} 条历史消息 · {formatContextTokenCount(checkpoint.sourceTokens)} → {formatContextTokenCount(checkpoint.summaryTokens)}</p></div></div>
+        {checkpoint.version >= 2 ? <p className="rounded-[9px] bg-[var(--surface-muted)] px-3 py-2 text-[10px] leading-5 text-[var(--text-secondary)]">该任务已多次压缩。目标、硬约束和工具凭据会保留，但很早的措辞细节可能逐步淡化；需要逐字延续时建议新建任务并附上原文。</p> : null}
         <SummaryList title="目标" items={checkpoint.summary.goals} />
         <SummaryList title="约束" items={checkpoint.summary.constraints} />
         <SummaryList title="关键决策" items={checkpoint.summary.decisions} />

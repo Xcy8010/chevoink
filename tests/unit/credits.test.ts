@@ -5,6 +5,7 @@ import {
   calculateTokenChargeMilli,
   getCreditActivityModelLabel,
   getCreditWindow,
+  parseModelCapabilities,
 } from '../../api/lib/credits.js'
 
 describe('Credits token pricing', () => {
@@ -56,6 +57,19 @@ describe('Credits activity model privacy', () => {
     expect(getCreditActivityModelLabel('text', 'basic')).toBe('基础')
     expect(getCreditActivityModelLabel('image', null)).toBe('生图')
     expect(getCreditActivityModelLabel('text', null)).toBe('历史模型')
+  })
+})
+
+describe('模型上下文窗口能力', () => {
+  it('从模型 metadata 读取合法窗口，DeepSeek 与 GLM 共用同一能力契约', () => {
+    expect(parseModelCapabilities({ contextWindowTokens: 128_000 }, 'deepseek').contextWindowTokens).toBe(128_000)
+    expect(parseModelCapabilities({ contextWindowTokens: 200_000 }, 'zhipu').contextWindowTokens).toBe(200_000)
+  })
+
+  it('拒绝不可信窗口值并回退服务端默认配置', () => {
+    expect(parseModelCapabilities({ contextWindowTokens: 8_000 }, 'zhipu').contextWindowTokens).toBeNull()
+    expect(parseModelCapabilities({ contextWindowTokens: 128_000.5 }, 'deepseek').contextWindowTokens).toBeNull()
+    expect(parseModelCapabilities({ contextWindowTokens: '128000' }, 'deepseek').contextWindowTokens).toBeNull()
   })
 })
 

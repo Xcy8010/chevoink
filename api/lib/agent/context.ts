@@ -1,6 +1,7 @@
 import type { AgentExecutionMode, CreditModelTier } from '../../../shared/contracts/index.js'
 import type { AgentAttachmentMeta, AgentMessagePart, TaskSpec } from '../../../shared/contracts/index.js'
 import { MAX_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
+import { env } from '../../config/env.js'
 import type { ChatMessage } from '../ai-service.js'
 import { prisma } from '../prisma.js'
 import type { AgentDefinition } from './agents.js'
@@ -19,6 +20,7 @@ import { renderTaskSpec } from './task-spec.js'
 import { searchStoryMemory } from './story-memory.js'
 import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
 import { buildStoryCompilerDigest } from './story-compiler.js'
+import { estimateTextTokens } from './context-budget.js'
 
 /**
  * Context Manager（plan/13 §4.4 / §4.5）。
@@ -28,7 +30,7 @@ import { buildStoryCompilerDigest } from './story-compiler.js'
  *   assembleContext 每个 Run 只执行一次，因此该布局主要改善跨 Run 复用；Run 内工具轮次仍靠 append-only messages 命中。
  * - 正文不默认全文注入：模型需要正文时自己调 chapter_read（带 range）
  * - L2 记忆（风格规则/角色卡/时间线/伏笔）摘要注入，按重要性截断
- * - 历史消息按字符预算裁剪：超预算的旧消息折叠为一条摘要占位
+ * - 历史消息按模型窗口比例分配 token 预算：超预算的旧消息折叠为一条摘要占位
  */
 
 const MODEL_IDENTITY_LABELS: Record<CreditModelTier, string> = {
@@ -269,12 +271,12 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
     .join('\n')
 }
 
-/** 历史消息按字符预算裁剪：从最新往回收，超预算的旧消息折叠成一条占位 */
+/** 历史消息按 token 预算裁剪：从最新往回收，超预算的旧消息折叠成一条占位。 */
 async function loadSessionHistory(
   sessionId: string,
   excludeRunId: string,
-  budgetChars: number,
-  after: Date | null,
+  budgetTokens: number,
+  after: { createdAt: Date; messageId: string | null } | null,
 ): Promise<ChatMessage[]> {
   // 与会话恢复窗口保持一致取最近 500 条，再由字符预算裁剪。旧版固定 60 条会让
   // 工具密集型任务在上下文仅占很少时也提前丢掉首轮用户需求。
@@ -283,7 +285,10 @@ async function loadSessionHistory(
       sessionId,
       runId: { not: excludeRunId },
       role: { in: ['user', 'assistant'] },
-      ...(after ? { createdAt: { gt: after } } : {}),
+      ...(after ? { OR: [
+        { createdAt: { gt: after.createdAt } },
+        ...(after.messageId ? [{ createdAt: after.createdAt, id: { gt: after.messageId } }] : []),
+      ] } : {}),
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 500,
@@ -303,11 +308,12 @@ async function loadSessionHistory(
 
   for (let index = plain.length - 1; index >= 0; index--) {
     const message = plain[index]
-    if (used + message.text.length > budgetChars) {
+    const messageTokens = estimateTextTokens(message.text) + 4
+    if (used + messageTokens > budgetTokens) {
       dropped = index + 1
       break
     }
-    used += message.text.length
+    used += messageTokens
     kept.unshift(
       message.role === 'assistant'
         ? { role: 'assistant', content: message.text }
@@ -389,6 +395,8 @@ export type AssembleContextInput = {
   modelTier: CreditModelTier
   /** 当前主模型的真实模型名：仅自定义档（作者自己接入的 API）会如实告知作者。 */
   modelName?: string | null
+  /** 当前模型真实上下文窗口；用于按比例限制跨 Run 历史。 */
+  contextWindowTokens?: number | null
   /** 作者在输入框里手动指定本轮要用的技能 id。 */
   pinnedSkillIds?: string[]
 }
@@ -400,6 +408,8 @@ export type AssembledAgentContext = {
 
 export async function assembleContext(input: AssembleContextInput): Promise<AssembledAgentContext> {
   const checkpointState = await loadContextCheckpoint(input.sessionId)
+  const contextWindowTokens = input.contextWindowTokens ?? env.agentContextWindowTokens
+  const historyBudgetTokens = Math.max(2_000, Math.min(20_000, Math.floor(contextWindowTokens * 0.18)))
   const storyCompilerFeatureEnabled = isAgent2FeatureEnabled('storyCompiler', input.userId)
   const [ruleBundleSplit, memoryDigest, planDigest, coverDigest, todoDigest, directives, history, chapter, novelTags, storyCompilerDigest] = await Promise.all([
     buildNovelRuleBundle(input.novelId),
@@ -408,7 +418,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     buildCoverCandidateDigest(input.userId, input.novelId),
     buildTodoDigest(input.sessionId),
     listActiveDirectives(input.userId, input.novelId),
-    loadSessionHistory(input.sessionId, input.runId, 40000, checkpointState.sourceEndedAt),
+    loadSessionHistory(input.sessionId, input.runId, historyBudgetTokens, checkpointState.sourceEndedAt
+      ? { createdAt: checkpointState.sourceEndedAt, messageId: checkpointState.sourceEndMessageId ?? null }
+      : null),
     input.chapterId
       ? prisma.chapter.findFirst({
           where: { id: input.chapterId, novelId: input.novelId },

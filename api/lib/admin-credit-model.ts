@@ -229,6 +229,7 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
         requestTokens: row?._sum.requestTokens ?? 0, responseTokens: row?._sum.responseTokens ?? 0,
         reasoningEfforts: capabilities.reasoningEfforts, defaultReasoningEffort: capabilities.defaultReasoningEffort,
         visionEnabled: capabilities.visionEnabled,
+        contextWindowTokens: capabilities.contextWindowTokens,
         configurationReady,
         updatedAt: model.updatedAt.toISOString(),
       }
@@ -250,6 +251,7 @@ export type UpdateAdminModelInput = {
   reasoningEfforts?: ModelReasoningEffort[]
   defaultReasoningEffort?: ModelReasoningEffort
   visionEnabled?: boolean
+  contextWindowTokens?: number
 }
 
 const DEEPSEEK_REASONING_EFFORTS = new Set<ModelReasoningEffort>(['low', 'high', 'max'])
@@ -295,6 +297,7 @@ export async function updateAdminModel(modelId: string, input: UpdateAdminModelI
           reasoningEfforts,
           defaultReasoningEffort,
           visionEnabled: input.visionEnabled ?? currentCapabilities.visionEnabled,
+          contextWindowTokens: input.contextWindowTokens ?? currentCapabilities.contextWindowTokens,
         },
       },
     })

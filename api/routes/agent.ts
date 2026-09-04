@@ -10,7 +10,7 @@ import {
 import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import { getStoredExport } from '../lib/export-store.js'
-import { stopActiveRunsInSession } from '../lib/agent/active-runs.js'
+import { hasActiveRunInSession, stopActiveRunsInSession } from '../lib/agent/active-runs.js'
 import {
   createNovelPlanArtifact,
   listNovelPlanArtifacts,
@@ -313,6 +313,11 @@ router.post('/sessions/:sessionId/compact', async (req: Request, res: Response):
   const requestId = createRequestId()
   try {
     const userId = requireSessionUserId(req)
+    const activeRun = hasActiveRunInSession(req.params.sessionId) || Boolean(await prisma.agentRun.findFirst({
+      where: { sessionId: req.params.sessionId, userId, status: { in: ['queued', 'running', 'awaiting_approval'] } },
+      select: { id: true },
+    }))
+    if (activeRun) throw new DataAccessError(409, 'CONTEXT_COMPACTION_RUN_ACTIVE', 'Agent 正在运行，结束或停止当前任务后才能手动压缩上下文。')
     const checkpoint = await compactSessionContext(userId, req.params.sessionId, true)
     const state = await getContextState(userId, req.params.sessionId)
     res.status(200).json(buildSuccess(requestId, { checkpoint, state }))

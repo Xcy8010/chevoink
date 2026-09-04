@@ -141,8 +141,8 @@ function Toggle({ checked, label, onChange }: { checked: boolean; label: string;
       <span
         aria-hidden
         className={cn(
-          'absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
-          checked ? 'translate-x-[22px]' : 'translate-x-[3px]',
+          'absolute left-[3px] top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
+          checked ? 'translate-x-[22px]' : 'translate-x-0',
         )}
       />
     </button>
@@ -281,6 +281,12 @@ function CreditsActivityHeatmap({
   endsAt: string
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const [tooltip, setTooltip] = useState<{
+    day: CreditActivityDay
+    left: number
+    top: number
+    placement: 'top' | 'bottom'
+  } | null>(null)
   const { cells, columnCount, labels, maxSpent } = useMemo(() => {
     const activityByDate = new Map(activity.map((day) => [day.date, day]))
     const days: CreditActivityDay[] = []
@@ -315,6 +321,28 @@ function CreditsActivityHeatmap({
     }
   }, [cells.length])
 
+  useEffect(() => {
+    if (!tooltip) return
+    const hideTooltip = () => setTooltip(null)
+    window.addEventListener('resize', hideTooltip)
+    window.addEventListener('scroll', hideTooltip, true)
+    return () => {
+      window.removeEventListener('resize', hideTooltip)
+      window.removeEventListener('scroll', hideTooltip, true)
+    }
+  }, [tooltip])
+
+  const showTooltip = (day: CreditActivityDay, target: HTMLElement) => {
+    const rect = target.getBoundingClientRect()
+    const halfWidth = Math.min(112, Math.max(0, (window.innerWidth - 24) / 2))
+    setTooltip({
+      day,
+      left: Math.min(window.innerWidth - halfWidth - 12, Math.max(halfWidth + 12, rect.left + rect.width / 2)),
+      top: rect.top >= 92 ? rect.top - 8 : rect.bottom + 8,
+      placement: rect.top >= 92 ? 'top' : 'bottom',
+    })
+  }
+
   const levelClass = (spent: number) => {
     if (spent <= 0 || maxSpent <= 0) return 'bg-[#eceeed] dark:bg-white/[.06]'
     const ratio = spent / maxSpent
@@ -326,23 +354,48 @@ function CreditsActivityHeatmap({
 
   const width = columnCount * 13 - 3
   return (
-    <div ref={scrollerRef} className="overflow-x-auto pb-1" role="img" aria-label={`过去一年共有 ${activity.length} 个 Credits 使用日`}>
-      <div className="min-w-[685px]" style={{ width }}>
-        <div className="grid w-max grid-flow-col grid-rows-7 gap-[3px]">
-          {cells.map((day, index) => day ? (
-            <span
-              key={day.date}
-              aria-hidden="true"
-              title={`${day.date} · 消耗 ${formatCreditAmount(day.creditsSpent)} Credits · ${day.eventCount} 次计费`}
-              className={cn('h-2.5 w-2.5 rounded-[2px]', levelClass(day.creditsSpent))}
-            />
-          ) : <span key={`empty-${index}`} aria-hidden className="h-2.5 w-2.5" />)}
-        </div>
-        <div className="relative mt-2 h-4 text-[10px] text-[var(--text-tertiary)]">
-          {labels.map((month) => <span key={`${month.label}-${month.column}`} className="absolute whitespace-nowrap" style={{ left: month.column * 13 }}>{month.label}</span>)}
+    <>
+      <div ref={scrollerRef} className="overflow-x-auto pb-1" role="group" aria-label={`过去一年共有 ${activity.length} 个 Credits 使用日`}>
+        <div className="min-w-[685px]" style={{ width }}>
+          <div className="grid w-max grid-flow-col grid-rows-7 gap-[3px]">
+            {cells.map((day, index) => day ? (
+              <button
+                type="button"
+                key={day.date}
+                tabIndex={day.creditsSpent > 0 ? 0 : -1}
+                aria-label={`${day.date}，消耗 ${formatCreditAmount(day.creditsSpent)} Credits，${day.eventCount} 次计费`}
+                data-activity-date={day.date}
+                onMouseEnter={(event) => showTooltip(day, event.currentTarget)}
+                onMouseLeave={() => setTooltip(null)}
+                onFocus={(event) => showTooltip(day, event.currentTarget)}
+                onBlur={() => setTooltip(null)}
+                className={cn(
+                  'h-2.5 w-2.5 rounded-[2px] outline-none ring-offset-1 ring-offset-white focus-visible:ring-2 focus-visible:ring-[#71857c] dark:ring-offset-[#111318]',
+                  levelClass(day.creditsSpent),
+                )}
+              />
+            ) : <span key={`empty-${index}`} aria-hidden className="h-2.5 w-2.5" />)}
+          </div>
+          <div className="relative mt-2 h-4 text-[10px] text-[var(--text-tertiary)]">
+            {labels.map((month) => <span key={`${month.label}-${month.column}`} className="absolute whitespace-nowrap" style={{ left: month.column * 13 }}>{month.label}</span>)}
+          </div>
         </div>
       </div>
-    </div>
+      {tooltip ? createPortal(
+        <div
+          role="tooltip"
+          data-credits-activity-tooltip
+          className={cn(
+            'pointer-events-none fixed z-[220] w-max max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-[10px] border border-white/10 bg-[#171a1f] px-3 py-2 text-left text-white shadow-[0_10px_30px_rgba(15,23,42,.22)]',
+            tooltip.placement === 'top' && '-translate-y-full',
+          )}
+          style={{ left: tooltip.left, top: tooltip.top }}
+        >
+          <p className="text-[11px] font-medium">{new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${tooltip.day.date}T00:00:00.000Z`))}</p>
+          <p className="mt-1 text-[10px] text-white/70">消耗 {formatCreditAmount(tooltip.day.creditsSpent)} Credits · {tooltip.day.eventCount} 次计费</p>
+        </div>
+        , document.body) : null}
+    </>
   )
 }
 

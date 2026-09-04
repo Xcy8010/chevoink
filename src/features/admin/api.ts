@@ -151,6 +151,7 @@ export function updateAdminModel(modelId: string, payload: {
   reasoningEfforts?: import('../../../shared/contracts').ModelReasoningEffort[]
   defaultReasoningEffort?: import('../../../shared/contracts').ModelReasoningEffort
   visionEnabled?: boolean
+  contextWindowTokens?: number
 }): Promise<{ ok: true }> {
   return requestJson(`/api/admin/models/${modelId}`, { method: 'PATCH', body: JSON.stringify(payload) })
 }

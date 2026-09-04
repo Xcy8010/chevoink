@@ -92,6 +92,9 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P3 上下文引擎（需 DB）', () => 
     expect(digest).toContain('第三人称限知视角')
     expect(digest).not.toContain('第一人称')
 
+    // 没有新的可压缩来源时不得把旧检查点冒充新版本返回。
+    expect(await compactSessionContext(userId, sessionId, true)).toBeNull()
+
     const active = await listActiveDirectives(userId, novelId)
     const directiveDigest = renderDirectiveDigest(active)!
     expect(directiveDigest).toContain('第三人称限知视角')
@@ -108,5 +111,22 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P3 上下文引擎（需 DB）', () => 
     expect(response.status).toBe(200)
     expect(response.body.data.checkpoint.version).toBe(2)
     expect(response.body.data.activeDirectiveCount).toBe(2)
+  })
+
+  it('服务端拒绝对运行中的会话手动压缩，不能只依赖前端按钮禁用', async () => {
+    const runId = randomUUID()
+    await prisma.agentRun.create({
+      data: {
+        id: runId, sessionId, userId, novelId, mode: 'act', action: 'continueChapter',
+        agentType: 'writingOrchestrator', status: 'queued', engine: 'loop', inputSummary: '运行中压缩门禁',
+      },
+    })
+    try {
+      const response = await request(app).post(`/api/agent/sessions/${sessionId}/compact`).set('Cookie', cookie)
+      expect(response.status).toBe(409)
+      expect(response.body.code).toBe('CONTEXT_COMPACTION_RUN_ACTIVE')
+    } finally {
+      await prisma.agentRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: new Date() } })
+    }
   })
 })

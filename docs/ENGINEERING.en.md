@@ -167,6 +167,9 @@ Every Agent 3.0 run follows a fixed pipeline: task specification → permission/
 
 Modeled on codex-style continuous long-task execution (referencing the in-run auto-compaction architecture of openai/codex, hardened against the compaction death-loop incident in its issue #31351):
 
+- **Model-window-aware compaction (P0)**: before every main-Agent and inline-subagent request, a conservative mixed Chinese/ASCII estimator accounts for system/user/assistant/tool messages, native reasoning, `tool_calls.arguments`, image placeholders, and the complete tool schema. Warning begins at 65%, compaction at 72%, with an explicit reserve for output and estimation error. Stage one preserves call IDs and protocol pairs while bounding old tool arguments and outputs; if the hard threshold is still exceeded, stage two replaces complete old tool rounds with deterministic receipts while retaining the latest eight tool results byte-for-byte. A request that still cannot fit is not sent to the provider; the run records a safe wrap-up and keeps the continue action. Implementation: `api/lib/agent/context-budget.ts`.
+- **Cross-model consistency**: DeepSeek, GLM, and user-supplied OpenAI-compatible models share the same deterministic local compaction path and do not depend on a provider-only endpoint. `AiModelConfig.metadata.contextWindowTokens` is configurable for built-in and custom models (16K–4M); runtime budgets, cross-run history allocation, and the context-usage card all use the active model's value, falling back to `AGENT_CONTEXT_WINDOW_TOKENS`. OpenAI Responses `/responses/compact` remains an optional provider capability and is not mixed into the current Chat Completions tool protocol.
+- **Persistent-checkpoint correctness**: cross-run auto/manual compaction keeps the latest 24 messages and persists goals, active hard constraints, decisions, completed work, and tool receipts in `ContextCheckpoint`. The trigger ratio now measures “previous checkpoint summary + current active window” instead of permanently counting already-compacted history; Chinese uses the conservative estimator; boundaries use `createdAt + messageId` ordering to avoid losing same-millisecond messages; per-session compaction is single-flight in process and a database `(sessionId, sourceHash)` unique key blocks duplicate writes across instances, while the manual endpoint rejects active runs on the server. A no-op returns “no compaction needed” instead of falsely reporting a new version. The UI warns that repeated compaction can gradually soften very early wording details.
 - **Checkpoint auto-resume (P4)**: exhausting the budget slice (default 2M tokens) or turn slice (default 100 turns) no longer ends the run directly; a deterministic four-condition evaluation runs first: unfinished todos, new write-class progress inside the slice (success-count delta of chapter_write/append/edit_range/create, plan_save, memory_save), resume ≤4 and compaction ≤6, and the long-task wall clock (180 minutes) not exceeded. When all hold, the same run compacts its context (reusing the aged-tool-output slimming path), refreshes the budget slice by +1M (clamped to the hard ceiling) and the turn slice by +50, and persists a checkpoint system line (still present after refresh); any failure falls back to the existing wrap-up (unfinished todos end as failed, keeping the manual “continue execution” entry). Condition b doubles as a compaction-loop guard: no re-compaction without new progress since the last one, killing the “compact → lose progress → re-plan → compact again” death loop. Implementation: `api/lib/agent/checkpoint.ts` (pure functions, unit-tested) + the `loop.ts` main loop.
 - **Repeat-signature circuit breaker (P0)**: call signature = tool name + normalized-argument hash (sorted keys, long strings truncated to the first 200 chars; `api/lib/agent/tool-signature.ts`). The sliding window records successful executions only: after 2 consecutive successes with the same signature, the 3rd identical call is not executed and only returns an observation hint; the 4th forces wrap-up. Same-signature retries after a failure never count (self-healing is not killed by mistake). Coexists with the pre-existing structural breaker (3 consecutive volume/chapter operation failures), which takes priority.
 - **Channel repetition detection (P1)**: sanitized body/reasoning deltas are fed into a detector (`api/lib/agent/repeat-detect.ts`): the same 50-char block appearing ≥3 times within a 2000-char sliding window counts as repetition; whitespace-dominated blocks never count. Two stages: `AGENT_REPEAT_GUARD_MODE=observe` (default) logs only with zero intervention to collect samples; `enforce` injects a reminder on the first hit and forces wrap-up on the second.
@@ -204,7 +207,7 @@ Modeled on codex-style continuous long-task execution (referencing the in-run au
 
 ### 3.1 Test Matrix (Vitest + Supertest)
 
-The repository currently has **70 test files and 402 cases**. CI provides PostgreSQL 16 and executes all database integration groups; DB groups auto-skip in local environments without PostgreSQL.
+The repository currently has **75 test files and 424 cases**. CI provides PostgreSQL 16 and executes all database integration groups; DB groups auto-skip in local environments without PostgreSQL.
 
 | Layer | Primary coverage |
 | --- | --- |
@@ -308,7 +311,7 @@ All configuration is injected via `.env`, grouped by domain (the template is the
 
 ### 5.3 Test Execution Performance
 
-All 70 test files use the local forks pool. CI additionally runs PostgreSQL integration groups, coverage, the Agent 3.0 evaluation snapshot, build, and dependency audit, with a 20-minute workflow timeout.
+All 75 test files use the local forks pool. CI additionally runs PostgreSQL integration groups, coverage, the Agent 3.0 evaluation snapshot, build, and dependency audit, with a 20-minute workflow timeout.
 
 ---
 
@@ -494,7 +497,7 @@ The external "readers" metric switched from raw PV (+1 per chapter open) to UV (
 
 | Gate | Status on 2026-09-02 | Requirement before broad release |
 | --- | --- | --- |
-| Engineering regression safety | ✅ Established | 70 test files / 402 cases, coverage non-regression, enforced CSP, production dependency audit, and critical UI regressions |
+| Engineering regression safety | ✅ Established | 75 test files / 424 cases, coverage non-regression, enforced CSP, production dependency audit, and critical UI regressions |
 | Frozen-scenario evaluation | 🟡 Framework and CI snapshot established | At least five runs per formal scenario; freeze model, temperature, Skill/retrieval versions, code SHA, and tokens; every failure traceable |
 | Expert blind review | 🟡 Admin capability exists; real sample pending | At least three target-genre readers/editors per sample; anonymous comparison of 2.0, 3.0, and human samples; target ≥65% overall preference for 3.0 over 2.0 |
 | Quality improvement | 🟡 Beta sampling | Target ≥40% relative reduction in “obviously AI/mechanical” marks and ≥35% reduction in average author revision rounds to publishable text |

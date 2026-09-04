@@ -25,7 +25,7 @@ vi.mock('../../api/lib/agent/context-engine.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/lib/agent/context-engine.js')>()
   return {
     ...actual,
-    loadContextCheckpoint: vi.fn(async () => ({ checkpoint: null, sourceEndedAt: null })),
+    loadContextCheckpoint: vi.fn(async () => ({ checkpoint: null, sourceEndedAt: null, sourceEndMessageId: null })),
     listActiveDirectives: vi.fn(async () => [
       { id: 'directive-1', kind: 'writing', scope: 'global', text: '每天至少更新一章', status: 'active', createdAt: new Date('2026-09-01T00:00:00.000Z') },
     ]),

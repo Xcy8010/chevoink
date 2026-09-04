@@ -26,6 +26,7 @@ const customModelCreateSchema = z.object({
   reasoningEfforts: z.array(modelReasoningEffortSchema).min(1).max(7).optional(),
   defaultReasoningEffort: modelReasoningEffortSchema.optional(),
   visionEnabled: z.boolean().optional(),
+  contextWindowTokens: z.number().int().min(16_000).max(4_000_000).optional(),
 })
 const customModelUpdateSchema = customModelCreateSchema.partial()
 const DEEPSEEK_REASONING_EFFORTS = new Set(['low', 'high', 'max'])
@@ -133,6 +134,7 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
           reasoningEfforts,
           defaultReasoningEffort,
           visionEnabled: body.visionEnabled ?? false,
+          ...(body.contextWindowTokens ? { contextWindowTokens: body.contextWindowTokens } : {}),
         },
       },
     })
@@ -170,6 +172,7 @@ router.patch('/models/:modelId', async (req: Request, res: Response): Promise<vo
           reasoningEfforts: nextReasoningEfforts,
           defaultReasoningEffort: nextDefaultReasoningEffort,
           visionEnabled: body.visionEnabled ?? currentCapabilities.visionEnabled,
+          contextWindowTokens: body.contextWindowTokens ?? currentCapabilities.contextWindowTokens,
         },
       },
     })
