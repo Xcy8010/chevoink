@@ -1,115 +1,166 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { BookCopy, Brain, ChevronLeft, GitCompareArrows, Network, PanelRightClose, Wrench } from 'lucide-react'
-
 import { cn } from '@/lib/utils'
-import type { ResizablePanel } from '../panel-widths'
-import { PanelResizeHandle } from '../panel-resize'
 import type { WorkInspectorTab } from './WorkInspector'
 import { FLOATING_DOCK_MIN_CLEARANCE, shouldShowWorkActivityDock } from './work-layout'
+import { fitWorkSplit, resizeWorkSplit, type WorkSplit, type WorkSplitGeometry } from './work-split'
+import { WorkConversationContext } from './work-conversation-context'
 
 type Props = {
-  conversationRail: ReactNode
-  conversation: ReactNode
-  activityDock?: ReactNode
-  inspector: ReactNode
-  viewer?: ReactNode
-  /** Agent 聊天区最小宽度：折叠外层侧栏后仍保留完整对话操作宽度。 */
-  conversationMinWidth?: number
-  /** 外层创作侧栏是否展开：折叠后对话区在整个视口居中（任务状态卡改悬浮，不再挤压对话列） */
-  outerSidebarOpen?: boolean
-  rightOpen: boolean
-  inspectorWidth: number
-  viewerWidth: number
-  onToggleRight: () => void
-  inspectorTab: WorkInspectorTab
-  onSelectInspectorTab: (tab: WorkInspectorTab) => void
-  onBeginResize: (panel: ResizablePanel, event: ReactPointerEvent<HTMLDivElement>, linkedPanel?: ResizablePanel) => void
+  conversationRail: ReactNode; conversation: ReactNode; activityDock?: ReactNode
+  inspector: ReactNode; viewer?: ReactNode; viewerIdentity?: string | null; scopeKey?: string
+  outerSidebarOpen?: boolean; rightOpen: boolean; inspectorWidth: number; viewerWidth: number
+  onToggleRight: () => void; inspectorTab: WorkInspectorTab; onSelectInspectorTab: (tab: WorkInspectorTab) => void
 }
-
-const inspectorRailItems = [
-  { key: 'work' as const, label: '作品', icon: BookCopy },
-  { key: 'context' as const, label: '记忆', icon: Brain },
-  { key: 'changes' as const, label: '变更', icon: GitCompareArrows },
-  { key: 'memory' as const, label: '关系网', icon: Network },
-  { key: 'skills' as const, label: '技能', icon: Wrench },
+const items = [
+  { key: 'work' as const, label: '作品', icon: BookCopy }, { key: 'context' as const, label: '记忆', icon: Brain },
+  { key: 'changes' as const, label: '变更', icon: GitCompareArrows }, { key: 'memory' as const, label: '关系网', icon: Network }, { key: 'skills' as const, label: '技能', icon: Wrench },
 ]
+const storageKey = 'chevoink:work-split-v1'
+type Gesture = { x: number; start: WorkSplitGeometry; width: number; boundary: 'content' | 'inspector'; pointer: number; hasViewer: boolean }
 
-const PANEL_MOTION_MS = 220
-
-/** Agent-first 工作台：左侧窄轨对应当前任务的逐轮聊天，右侧窄轨按需展开作品与证据。 */
-export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, conversationMinWidth = 420, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab, onBeginResize }: Props) {
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
-  const [renderedViewer, setRenderedViewer] = useState<ReactNode>(viewer)
-  const viewerOpen = Boolean(viewer)
-  const viewerPresent = Boolean(renderedViewer)
-  // 查看器打开时按参考稿优先保证正文阅读宽度：约 50% 查看器 / 18.5% 检查区，
-  // 其余空间留给对话与窄轨；用户一旦拖拽成自定义宽度就完全尊重持久化结果。
-  const resolvedInspectorWidth = viewerOpen
-    ? inspectorWidth === 520
-      ? Math.max(280, Math.round((containerWidth || 1600) * 0.185))
-      : inspectorWidth
-    : inspectorWidth
-  const resolvedViewerWidth = viewerOpen
-    ? viewerWidth === 900
-      ? Math.max(560, Math.min(1280, Math.round((containerWidth || 1600) * 0.5)))
-      : viewerWidth
-    : viewerWidth
-  const leftWidth = 0
-  const rightWidth = rightOpen ? resolvedInspectorWidth : 46
-  const showActivityDock = shouldShowWorkActivityDock({
-    containerWidth,
-    leftWidth,
-    rightWidth,
-    hasActivity: Boolean(activityDock),
-    hasViewer: viewerPresent,
+export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, viewerIdentity, scopeKey, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab }: Props) {
+  const root = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  const [split, setSplit] = useState<WorkSplit>(() => {
+    let sizes = { viewer: viewerWidth, inspector: inspectorWidth === 520 ? 320 : inspectorWidth }
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null')
+      if (saved && Number.isFinite(saved.viewer) && Number.isFinite(saved.inspector)) sizes = { viewer: Math.max(320, Math.min(2000, saved.viewer)), inspector: Math.max(260, Math.min(1000, saved.inspector)) }
+    } catch { /* Optional preferences. */ }
+    return { ...sizes, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen }
   })
-  // 外层侧栏折叠时对话列需在整个视口居中：任务状态卡改为悬浮定位（不再占据 main 右侧流空间），
-  // 对话列 mx-auto 即落在视口中心；外层侧栏展开或窗口不够宽时保持流内布局不变。
-  // 悬浮层级必须高于 main（z-40）：悬浮后 main 的 flex-1 占满全宽，其不透明背景会盖住低层级的卡片。
-  const floatDock = !outerSidebarOpen && showActivityDock && containerWidth - rightWidth >= FLOATING_DOCK_MIN_CLEARANCE
-
-  useEffect(() => {
-    if (viewer) {
-      setRenderedViewer(viewer)
-      return
+  const splitRef = useRef(split)
+  splitRef.current = split
+  const drag = useRef<Gesture | null>(null)
+  const previousScope = useRef(scopeKey)
+  const pendingX = useRef<number | null>(null)
+  const frame = useRef(0)
+  const [dragging, setDragging] = useState(false)
+  const [folding, setFolding] = useState(false)
+  const foldTimer = useRef<ReturnType<typeof setTimeout>>()
+  const [retainedViewer, setRetainedViewer] = useState(viewer)
+  const hasViewer = Boolean(viewer)
+  const geometry = fitWorkSplit(split, width || 1600, hasViewer)
+  const inspectorOpen = !geometry.inspectorCollapsed
+  const viewerOpen = hasViewer && !geometry.viewerCollapsed
+  const dockVisible = !geometry.chatCollapsed && shouldShowWorkActivityDock({ containerWidth: width, leftWidth: 44, rightWidth: geometry.inspector, hasActivity: Boolean(activityDock), hasViewer: viewerOpen })
+  const floatDock = !outerSidebarOpen && dockVisible && width - geometry.inspector >= FLOATING_DOCK_MIN_CLEARANCE
+  const update = useCallback((value: WorkSplit) => {
+    const previous = splitRef.current
+    if (previous.chatCollapsed !== value.chatCollapsed || previous.viewerCollapsed !== value.viewerCollapsed || previous.inspectorCollapsed !== value.inspectorCollapsed) {
+      clearTimeout(foldTimer.current)
+      setFolding(true)
+      foldTimer.current = setTimeout(() => setFolding(false), 240)
     }
-    if (!renderedViewer) return
-    const timeout = window.setTimeout(() => setRenderedViewer(undefined), PANEL_MOTION_MS)
-    return () => window.clearTimeout(timeout)
-  }, [renderedViewer, viewer])
-
-  useEffect(() => {
-    const element = rootRef.current
-    if (!element) return
-    const updateWidth = () => setContainerWidth(element.getBoundingClientRect().width)
-    updateWidth()
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', updateWidth)
-      return () => window.removeEventListener('resize', updateWidth)
-    }
-    const observer = new ResizeObserver(updateWidth)
-    observer.observe(element)
-    return () => observer.disconnect()
+    splitRef.current = value; setSplit(value)
   }, [])
-
-  return <div ref={rootRef} data-studio-layout="work" data-activity-dock={showActivityDock ? 'visible' : 'hidden'} className="work-perspective relative flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]">
-    <aside className="h-full w-11 shrink-0 bg-transparent motion-safe:animate-[conversation-rail-in_220ms_cubic-bezier(.22,1,.36,1)]">{conversationRail}</aside>
-    <main
-      className="relative z-40 flex-1 overflow-visible bg-[var(--surface-default)] transition-[min-width] duration-300 ease-out"
-      style={{
-        minWidth: conversationMinWidth,
-      }}
-    >{conversation}</main>
-    {showActivityDock ? <aside className={cn('h-full min-h-0 w-[296px] shrink-0 px-3 py-4', floatDock ? 'absolute top-0 z-50 bg-transparent' : 'bg-[var(--surface-default)]')} style={floatDock ? { right: rightWidth } : undefined}>{activityDock}</aside> : null}
-    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} className="studio-resizable-panel relative h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)]" style={{ width: viewerOpen ? resolvedViewerWidth : 0 }}>
-      {viewerOpen ? <PanelResizeHandle panel="workViewer" side="left" label="调整查看器宽度" onBegin={onBeginResize} /> : null}
-      <div className={cn('h-full min-w-[320px] transition-[opacity,transform] duration-200 ease-out', viewerOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0')}>{renderedViewer}</div>
-    </section>
-    <aside data-studio-panel="workInspector" className="studio-resizable-panel relative h-full min-h-0 shrink-0 border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: rightOpen ? resolvedInspectorWidth : 46 }}>
-      <div className={cn('absolute inset-0 min-h-0 overflow-hidden transition-[opacity,transform] duration-200 ease-out', rightOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0')}>{inspector}</div>
-      <div className={cn('absolute inset-0 flex h-full flex-col items-center py-2 transition-opacity duration-200 ease-out', rightOpen ? 'pointer-events-none opacity-0' : 'opacity-100')}><button type="button" onClick={onToggleRight} className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)]" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button><div className="my-3 h-px w-5 bg-[var(--border-subtle)]" />{inspectorRailItems.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => { onSelectInspectorTab(key); onToggleRight() }} className="mb-1 inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]" aria-label={label} title={label}><Icon className="h-4 w-4" /></button>)}</div>
-      {rightOpen ? <><button type="button" onClick={onToggleRight} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button><PanelResizeHandle panel="workInspector" linkedPanel={viewerOpen ? 'workViewer' : undefined} side="left" label="调整检查区宽度" onBegin={onBeginResize} /></> : null}
+  const expand = useCallback(() => update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: true, inspectorCollapsed: true }), [update])
+  const context = useMemo(() => ({ collapsed: geometry.chatCollapsed, expand }), [geometry.chatCollapsed, expand])
+  useEffect(() => { update({ ...splitRef.current, inspectorCollapsed: !rightOpen }) }, [rightOpen, update])
+  useEffect(() => { if (viewerIdentity) update({ ...splitRef.current, viewerCollapsed: false }) }, [viewerIdentity, update])
+  useEffect(() => {
+    if (viewer) { setRetainedViewer(viewer); return }
+    const timer = window.setTimeout(() => setRetainedViewer(undefined), 240)
+    return () => clearTimeout(timer)
+  }, [viewer])
+  useLayoutEffect(() => {
+    const node = root.current
+    if (!node) return
+    const measure = () => setWidth(node.getBoundingClientRect().width)
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(node)
+    window.addEventListener('resize', measure)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure) }
+  }, [])
+  const flush = useCallback(() => {
+    const gesture = drag.current
+    if (!gesture || pendingX.current === null) return
+    update(resizeWorkSplit(gesture.start, splitRef.current, gesture.width, pendingX.current - gesture.x, gesture.boundary, gesture.hasViewer))
+    pendingX.current = null
+  }, [update])
+  const finish = useCallback(() => {
+    if (!drag.current) return
+    cancelAnimationFrame(frame.current); frame.current = 0
+    flush()
+    const gesture = drag.current
+    drag.current = null
+    if (gesture && root.current?.hasPointerCapture(gesture.pointer)) root.current.releasePointerCapture(gesture.pointer)
+    if (gesture) delete document.documentElement.dataset.studioResizing
+    setDragging(false)
+    try { localStorage.setItem(storageKey, JSON.stringify({ viewer: Math.max(320, splitRef.current.viewer), inspector: Math.max(260, splitRef.current.inspector) })) } catch { /* Optional preferences. */ }
+  }, [flush])
+  useEffect(() => {
+    if (previousScope.current === scopeKey) return
+    finish()
+    previousScope.current = scopeKey
+    update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen })
+  }, [scopeKey, rightOpen, finish, update])
+  useEffect(() => {
+    window.addEventListener('blur', finish)
+    return () => {
+      window.removeEventListener('blur', finish)
+      cancelAnimationFrame(frame.current)
+      clearTimeout(foldTimer.current)
+      if (drag.current) delete document.documentElement.dataset.studioResizing
+      drag.current = null
+    }
+  }, [finish])
+  const toggleInspector = () => {
+    if (!inspectorOpen) {
+      update({ ...splitRef.current, inspectorCollapsed: false, viewerCollapsed: false })
+      if (!rightOpen) onToggleRight()
+    } else {
+      update({ ...splitRef.current, inspectorCollapsed: true })
+      if (rightOpen) onToggleRight()
+    }
+  }
+  const separator = (boundary: 'content' | 'inspector', left: number, label: string) => <div
+    role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={Math.round(left)} aria-valuemin={0} aria-valuemax={Math.round(width)} tabIndex={0}
+    className="work-split-handle absolute inset-y-0 z-50 w-2 -translate-x-1/2 cursor-col-resize touch-none hover:bg-[var(--border-strong)] focus-visible:bg-[var(--border-strong)] focus-visible:outline-none" style={{ left: Math.max(4, Math.min((width || 1600) - 4, left)) }}
+    onPointerDown={event => {
+      if (event.button !== 0 || !root.current) return
+      event.preventDefault()
+      const measured = root.current.getBoundingClientRect().width
+      const start = fitWorkSplit(splitRef.current, measured, hasViewer)
+      // Start from actual on-screen geometry, even in the middle of an animation.
+      const viewerNode = root.current.querySelector<HTMLElement>('[data-studio-panel="workViewer"]')
+      const inspectorNode = root.current.querySelector<HTMLElement>('[data-studio-panel="workInspector"]')
+      if (viewerNode && !start.viewerCollapsed) start.viewer = viewerNode.getBoundingClientRect().width
+      if (inspectorNode && !start.inspectorCollapsed) start.inspector = inspectorNode.getBoundingClientRect().width
+      start.chat = start.chatCollapsed ? 0 : measured - start.rail - start.viewer - start.inspector
+      drag.current = { x: event.clientX, start, width: measured, boundary, pointer: event.pointerId, hasViewer }
+      root.current.setPointerCapture(event.pointerId)
+      document.documentElement.dataset.studioResizing = 'true'
+      setDragging(true)
+    }}
+    onKeyDown={event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+      event.preventDefault()
+      if (event.key === 'Home') update({ ...split, ...(boundary === 'content' ? { chatCollapsed: true } : { inspectorCollapsed: true }) })
+      else if (event.key === 'End') {
+        if (boundary === 'content') expand()
+        else update({ ...split, inspectorCollapsed: false })
+      }
+      else update(resizeWorkSplit(geometry, split, width, event.key === 'ArrowLeft' ? -32 : 32, boundary, hasViewer))
+    }}
+  />
+  return <WorkConversationContext.Provider value={context}><div ref={root} data-studio-layout="work" data-activity-dock={dockVisible ? 'visible' : 'hidden'} data-chat-collapsed={geometry.chatCollapsed} data-dragging={dragging} data-folding={folding} className="work-perspective relative flex h-full min-h-0 overflow-hidden bg-[var(--surface-default)]"
+    onPointerMove={event => {
+      if (!drag.current || drag.current.pointer !== event.pointerId) return
+      pendingX.current = event.clientX
+      if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; flush() })
+    }} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={() => { if (drag.current) finish() }}>
+    <aside className="work-split-column h-full shrink-0 overflow-hidden" style={{ width: geometry.rail }} aria-hidden={geometry.chatCollapsed} {...(geometry.chatCollapsed ? { inert: '' } : {})}>{conversationRail}</aside>
+    <main data-work-conversation className="work-split-column min-w-0 bg-[var(--surface-default)]" style={{ flex: `0 0 ${Math.max(0, geometry.chat - (dockVisible && !floatDock ? 296 : 0))}px` }}>{conversation}</main>
+    <aside aria-hidden={!dockVisible} {...(!dockVisible ? { inert: '' } : {})} className={cn('work-activity-dock h-full min-h-0 shrink-0 overflow-hidden', dockVisible ? 'is-visible' : '', floatDock && 'absolute top-0 z-40')} style={{ width: dockVisible ? 296 : 0, ...(floatDock ? { right: geometry.inspector } : {}) }}><div className="h-full w-[296px] px-3 py-4">{activityDock}</div></aside>
+    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} {...(!viewerOpen ? { inert: '' } : {})} className="work-split-column h-full min-h-0 shrink-0 overflow-hidden border-[var(--border-subtle)]" style={{ width: viewerOpen ? geometry.viewer : 0, borderLeftWidth: viewerOpen ? 1 : 0 }}><div className="h-full min-w-[320px]">{retainedViewer}</div></section>
+    <aside data-studio-panel="workInspector" className="work-split-column work-inspector-column relative ml-auto h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: geometry.inspector }}>
+      <div aria-hidden={!inspectorOpen} {...(!inspectorOpen ? { inert: '' } : {})} className={cn('absolute inset-0 overflow-hidden transition-opacity duration-200', inspectorOpen ? 'opacity-100' : 'pointer-events-none opacity-0')}>{inspector}</div>
+      {!inspectorOpen ? <div className="absolute inset-0 flex flex-col items-center py-2"><button type="button" onClick={toggleInspector} className="flex h-9 w-9 items-center justify-center" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button>{items.map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-label={label} title={label} className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-[var(--surface-muted)]" onClick={() => { onSelectInspectorTab(key); toggleInspector() }}><Icon className="h-4 w-4" /></button>)}</div> : <button type="button" onClick={toggleInspector} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button>}
     </aside>
-  </div>
+    {separator('content', geometry.chatCollapsed ? 4 : width - geometry.viewer - geometry.inspector, hasViewer ? '调整查看器与对话宽度' : '调整对话宽度')}
+    {viewerOpen ? separator('inspector', width - geometry.inspector, '调整检查区宽度') : null}
+  </div></WorkConversationContext.Provider>
 }

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, X } from 'lucide-react'
 import type { CreditModelOption, CreditModelTier, CustomModelView, ModelReasoningEffort } from '../../../../../shared/contracts/index.js'
 import { cn } from '@/lib/utils'
+import { ReasoningSlider } from './ReasoningSlider'
 
 type Props = {
   modelOptions: CreditModelOption[]
@@ -19,7 +20,6 @@ type Props = {
   onClose: () => void
 }
 
-const labels: Record<ModelReasoningEffort, string> = { none: '关闭', minimal: '最少', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' }
 
 /** A single viewport-bound surface, never positioned relative to a narrow toolbar. */
 export function AgentMobileModelSheet(props: Props) {
@@ -73,8 +73,7 @@ export function AgentMobileModelSheet(props: Props) {
           {props.customModels.some(model => model.enabled) && <p className="px-3 pb-2 pt-4 text-xs text-[var(--text-tertiary)]">自定义模型</p>}
           {props.customModels.filter(model => model.enabled).map(model => row(model.id, model.displayName, props.modelTier === 'custom' && props.customModelId === model.id, '自有密钥', () => props.onCustom(model.id)))}
           <section className="mt-3 border-t border-[var(--border-subtle)] px-3 pt-4">
-            <p className="mb-3 text-sm">{props.activeModelLabel} · 思考强度</p>
-            <div className="flex flex-wrap gap-2">{props.activeReasoningEfforts.map(effort => <button key={effort} type="button" aria-pressed={props.activeReasoningEffort === effort} onClick={() => props.onReasoning(effort)} className={cn('min-h-11 min-w-11 rounded-lg border px-3 text-sm', props.activeReasoningEffort === effort ? 'border-[var(--border-strong)] bg-[var(--surface-muted)]' : 'border-[var(--border-subtle)]')}>{labels[effort] ?? effort}</button>)}</div>
+            <ReasoningSlider efforts={props.activeReasoningEfforts} value={props.activeReasoningEffort} modelLabel={props.activeModelLabel} onChange={props.onReasoning} />
           </section>
           <button type="button" onClick={props.onSettings} className="mt-3 min-h-11 w-full px-3 text-left text-sm text-[var(--text-secondary)]">配置自定义模型</button>
         </div>

@@ -134,7 +134,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   onWidthChangeRef.current = props.onWidthChange
   // 宽度稳定后上报（拖拽中不逐帧上报，避免父级大组件高频重渲染）
   useEffect(() => {
-    onWidthChangeRef.current?.(width)
+    if (!dragRef.current) onWidthChangeRef.current?.(width)
   }, [width])
   const [peek, setPeek] = useState(false)
   const [productMenu, setProductMenu] = useState(false)
@@ -158,7 +158,24 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const accountRef = useRef<HTMLDivElement | null>(null)
   const peekCloseTimerRef = useRef<number | null>(null)
   const autoCopyRef = useRef(false)
-  const dragRef = useRef<{ x: number; width: number; raw: number } | null>(null)
+  const resizeRootRef = useRef<HTMLElement>(null)
+  const [foldingSidebar, setFoldingSidebar] = useState(false)
+  useEffect(() => {
+    setFoldingSidebar(true)
+    const timer = setTimeout(() => setFoldingSidebar(false), 220)
+    return () => clearTimeout(timer)
+  }, [props.open])
+  const dragRef = useRef<{ x: number; width: number; raw: number; pointer: number; open: boolean } | null>(null)
+  useEffect(() => {
+    const cancel = () => {
+      const gesture = dragRef.current
+      dragRef.current = null
+      if (gesture && resizeRootRef.current?.hasPointerCapture(gesture.pointer)) resizeRootRef.current.releasePointerCapture(gesture.pointer)
+      if (gesture) delete document.documentElement.dataset.studioResizing
+    }
+    window.addEventListener('blur', cancel)
+    return () => { window.removeEventListener('blur', cancel); cancel() }
+  }, [])
   // 作品列表滚动位置记忆：折叠/展开或切换作品重挂载后恢复，不再回到顶部
   const listScrollTopRef = useRef(0)
   const restoreListScroll = (element: HTMLDivElement | null) => {
@@ -386,32 +403,37 @@ export default function StudioWorkspaceSidebar(props: Props) {
     } finally { setBusy(false) }
   }
   function beginResize(event: React.PointerEvent) {
-    event.currentTarget.setPointerCapture(event.pointerId)
-    dragRef.current = { x: event.clientX, width, raw: width }
+    if (event.button !== 0) return
+    event.preventDefault()
+    resizeRootRef.current?.setPointerCapture(event.pointerId)
+    const initial = props.open ? width : MIN_WIDTH
+    dragRef.current = { x: event.clientX, width: initial, raw: initial, pointer: event.pointerId, open: props.open }
+    document.documentElement.dataset.studioResizing = 'true'
+    setPeek(false)
   }
   function resize(event: React.PointerEvent) {
-    if (!dragRef.current) return
+    if (!dragRef.current || dragRef.current.pointer !== event.pointerId) return
     const raw = dragRef.current.width + event.clientX - dragRef.current.x
     dragRef.current.raw = raw
-    if (raw <= COLLAPSE_AT) {
-      dragRef.current = null
-      // 折叠时保留用户当前宽度（不重置默认）：重新展开与 peek 都沿用这个宽度
-      window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(width)))
-      onWidthChangeRef.current?.(width)
-      props.onOpenChange(false)
-      return
+    const open = raw >= COLLAPSE_AT + (dragRef.current.open ? -24 : 24)
+    if (open !== dragRef.current.open) {
+      dragRef.current.open = open
+      props.onOpenChange(open)
     }
-    setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, raw)))
+    if (open) setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, raw)))
   }
   function finishResize() {
     const state = dragRef.current; dragRef.current = null
     if (state) {
-      window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(Math.max(MIN_WIDTH + 17, width))))
+      if (resizeRootRef.current?.hasPointerCapture(state.pointer)) resizeRootRef.current.releasePointerCapture(state.pointer)
+      delete document.documentElement.dataset.studioResizing
+      try { window.localStorage.setItem('chevoink:studio-sidebar-width', String(Math.round(Math.max(MIN_WIDTH + 17, width)))) } catch { /* Optional preference. */ }
       onWidthChangeRef.current?.(width)
     }
   }
 
   function showPeek() {
+    if (dragRef.current) return
     if (peekCloseTimerRef.current !== null) window.clearTimeout(peekCloseTimerRef.current)
     peekCloseTimerRef.current = null
     setPeek(true)
@@ -466,7 +488,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
     return <div key={`${task.novelId}:${task.id}`} className="group/task relative" onMouseEnter={(event) => scheduleTaskCard(event, task)} onMouseLeave={hideTaskCard}><button type="button" onClick={() => props.onSelectTask(task.id, task.novelId)} onContextMenu={(event) => openContext(event, { kind: 'task', id: task.id, novelId: task.novelId, title: task.title, pinned: Boolean(task.pinnedAt), temporary: task.temporary })} disabled={props.taskSwitchLocked} className={cn('group flex w-full items-center gap-2 rounded-[8px] pl-2.5 pr-2 text-left text-[12px] transition-colors disabled:opacity-50', compact ? 'h-8' : 'h-9', active ? 'bg-[var(--surface-muted)] font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]')} aria-current={active ? 'page' : undefined}><span className="flex h-3 w-3 shrink-0 items-center justify-center">{indicator}</span><span className="min-w-0 flex-1 truncate">{task.title || '新任务'}</span>{task.isBranch ? <GitBranch className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="分支任务" /> : null}{task.pinnedAt ? <Pin className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" /> : null}{/* 悬停时右侧让位给置顶/归档按钮，避免按钮盖住标题末尾 */}{task.temporary ? null : <span className="w-0 shrink-0 transition-[width] duration-150 group-hover/task:w-[46px]" aria-hidden="true" />}</button>{task.temporary ? null : <div className="absolute right-1 top-0 flex h-full items-center gap-0.5 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100"><button type="button" disabled={busy} onClick={() => void togglePin({ kind: 'task', id: task.id, novelId: task.novelId, title: task.title, pinned: Boolean(task.pinnedAt), temporary: task.temporary })} className="inline-flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--text-tertiary)] hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)] disabled:opacity-40" aria-label={task.pinnedAt ? '取消置顶' : '置顶任务'} title={task.pinnedAt ? '取消置顶' : '置顶'}>{task.pinnedAt ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button><button type="button" disabled={busy} onClick={() => void archive({ kind: 'task', id: task.id, novelId: task.novelId, title: task.title, pinned: Boolean(task.pinnedAt), temporary: task.temporary })} className="inline-flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--text-tertiary)] hover:bg-[var(--surface-default)] hover:text-[var(--text-primary)] disabled:opacity-40" aria-label="归档任务" title="归档"><Archive className="h-3.5 w-3.5" /></button></div>}</div>
   }
 
-  function body(preview = false) {
+  function body() {
     return <div className="relative flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
       <div className="flex h-12 shrink-0 items-center gap-1.5 px-3">
         <div className="relative min-w-0 flex-1">
@@ -500,7 +522,6 @@ export default function StudioWorkspaceSidebar(props: Props) {
         <button type="button" onClick={() => setAccountOpen((value) => !value)} className="flex h-11 w-full items-center gap-2.5 px-3 text-left hover:bg-[var(--surface-muted)]" aria-expanded={accountOpen}><Avatar name={sessionUser?.nickname ?? '创作者'} src={sessionUser?.avatarUrl} size="sm" className="h-7 w-7" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{sessionUser?.nickname ?? '创作者'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', accountOpen && 'rotate-180')} /></button>
         {accountOpen ? <div className="absolute bottom-[calc(100%-2px)] left-2 right-2 z-[70] overflow-hidden rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-1.5 shadow-[0_20px_55px_rgba(15,23,42,.22)] motion-safe:origin-bottom motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(.2,.8,.2,1)]"><div className="mb-1 flex items-center gap-2 rounded-[10px] bg-emerald-600 px-3 py-2.5 text-[11px] text-white shadow-[0_5px_16px_rgba(5,150,105,.18)]"><Gift className="h-3.5 w-3.5" /><span className="font-medium">公测期间，每日送 450 Credits！</span></div><button type="button" onClick={() => setUsageExpanded((value) => !value)} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs font-medium hover:bg-[var(--surface-muted)]"><Gauge className="h-3.5 w-3.5" /><span className="flex-1">剩余用量</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', usageExpanded && 'rotate-180')} /></button>{usageExpanded ? <div className="mx-1 mb-1 rounded-[10px] bg-[var(--surface-muted)] px-3 py-2.5 text-[11px]"><div className="flex items-end justify-between"><div><p className="text-[var(--text-tertiary)]">当前可用</p><p className="mt-0.5 text-base font-semibold tabular-nums">{summary ? formatCreditAmount(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p></div><span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"><div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${remainingPercent}%` }} /></div><div className="mt-2 flex justify-between text-[10px] text-[var(--text-tertiary)]"><span>每日 {formatCreditAmount(summary?.dailyAllowance ?? 450)} Credits</span><span>{formatCreditResetLabel(summary?.resetsAt)}</span></div><button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="mt-2 text-[10px] font-medium hover:underline">查看详细记录 →</button></div> : null}<button type="button" onClick={openInvite} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Gift className="h-3.5 w-3.5" />邀请好友</button><button type="button" onClick={() => { setAccountOpen(false); props.onOpenStudioSettings('general') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Settings2 className="h-3.5 w-3.5" />创作区设置</button><button type="button" onClick={() => { setAccountOpen(false); setFeedbackKind('suggestion') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Lightbulb className="h-3.5 w-3.5" />提交建议</button><button type="button" onClick={() => { setAccountOpen(false); setFeedbackKind('bug') }} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Bug className="h-3.5 w-3.5" />问题反馈</button><button type="button" onClick={() => navigate('/')} className="flex h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-xs hover:bg-[var(--surface-muted)]"><Home className="h-3.5 w-3.5" />返回首页</button></div> : null}
       </div>
-      {!preview ? <div role="separator" aria-label="调整左侧栏宽度" onPointerDown={beginResize} onPointerMove={resize} onPointerUp={finishResize} onPointerCancel={finishResize} className="absolute inset-y-0 -right-1 z-40 w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-transparent hover:before:bg-emerald-500/55" /> : null}
     </div>
   }
 
@@ -524,8 +545,8 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const foundNovels = novels.filter((item) => !needle || novelTitle(item).toLocaleLowerCase().includes(needle))
 
   return <>
-    <aside className={cn('relative z-30 h-full min-h-0 shrink-0 overflow-visible border-r bg-[var(--app-bg)] transition-[width,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', props.open ? 'border-[var(--border-subtle)]' : 'border-transparent')} style={{ width: props.open ? width : 0 }} data-workspace-sidebar={props.open ? 'open' : 'collapsed'}>{props.open ? body() : null}</aside>
-    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-50 overflow-visible transition-[width] duration-200 ease-[cubic-bezier(.22,1,.36,1)]" style={{ width: peek ? peekWidth : 12 }} onMouseEnter={showPeek} onMouseLeave={schedulePeekClose}><aside className={cn('h-full border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] transition-[opacity,transform] duration-180 ease-out', peek ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-3 opacity-0')} style={{ width: peekWidth }}>{body(true)}</aside></div> : null}
+    <aside data-sidebar-folding={foldingSidebar} ref={resizeRootRef} onPointerMove={resize} onPointerUp={finishResize} onPointerCancel={finishResize} onLostPointerCapture={finishResize} className={cn('studio-resizable-panel relative z-30 h-full min-h-0 shrink-0 overflow-visible border-r bg-[var(--app-bg)] transition-[width,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]', props.open ? 'border-[var(--border-subtle)]' : 'border-transparent')} style={{ width: props.open ? width : 0 }} data-workspace-sidebar={props.open ? 'open' : 'collapsed'}>{props.open ? body() : null}<div role="separator" aria-label="调整左侧栏宽度" aria-orientation="vertical" aria-valuenow={props.open ? width : 0} aria-valuemin={0} aria-valuemax={MAX_WIDTH} tabIndex={0} onPointerDown={beginResize} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); if (!props.open) { if (event.key === 'ArrowRight') props.onOpenChange(true) } else if (width <= MIN_WIDTH && event.key === 'ArrowLeft') props.onOpenChange(false); else setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, width + (event.key === 'ArrowRight' ? 24 : -24)))) } }} className="absolute inset-y-0 -right-1 z-[60] w-2 cursor-col-resize touch-none hover:bg-[var(--border-strong)] focus-visible:bg-[var(--border-strong)]" /></aside>
+    {!props.open ? <div className="fixed bottom-0 left-0 top-12 z-50 overflow-visible transition-[width] duration-200 ease-[cubic-bezier(.22,1,.36,1)]" style={{ width: peek ? peekWidth : 12 }} onMouseEnter={showPeek} onMouseLeave={schedulePeekClose}><div aria-hidden="true" onPointerDown={beginResize} className="absolute inset-y-0 left-0 z-[60] w-2 cursor-col-resize touch-none" /><aside className={cn('h-full border-r border-[var(--border-subtle)] bg-[var(--app-bg)] shadow-[12px_0_34px_rgba(15,23,42,.14)] transition-[opacity,transform] duration-180 ease-out', peek ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-3 opacity-0')} style={{ width: peekWidth }}>{body()}</aside></div> : null}
 
     {searchOpen ? <div className="fixed inset-0 z-[180] flex items-start justify-center bg-black/25 px-4 pt-[10vh] backdrop-blur-[2px]" onMouseDown={() => setSearchOpen(false)}><section role="dialog" aria-modal="true" aria-label="搜索作品、任务与聊天记录" onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-2xl overflow-hidden rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_28px_90px_rgba(15,23,42,.24)]"><div className="flex h-14 items-center gap-3 border-b border-[var(--border-subtle)] px-4"><Search className="h-4 w-4 text-[var(--text-tertiary)]" /><input autoFocus value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索作品、任务或聊天记录" className="min-w-0 flex-1 bg-transparent text-sm outline-none" /><kbd className="rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)]">Esc</kbd></div><div className="max-h-[62vh] overflow-y-auto p-2"><p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">作品</p>{foundNovels.map((item) => <button key={item.id} type="button" onClick={() => { props.onSelectNovel(item.id); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><BookOpenText className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="flex-1 truncate">{novelTitle(item)}</span><span className="text-[10px] text-[var(--text-tertiary)]">作品</span></button>)}<p className="mt-2 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-[var(--text-tertiary)]">任务与聊天记录</p>{foundSessions.map((session) => <button key={session.id} type="button" onClick={() => { props.onSelectTask(session.id, session.novelId); setSearchOpen(false) }} className="flex h-10 w-full items-center gap-3 rounded-[9px] px-3 text-left text-xs hover:bg-[var(--surface-muted)]"><Clock3 className="h-4 w-4 text-[var(--text-tertiary)]" /><span className="min-w-0 flex-1 truncate">{session.title}</span><span className="max-w-36 truncate text-[10px] text-[var(--text-tertiary)]">{session.novelTitle ?? '任务'}</span></button>)}{needle && !foundNovels.length && !foundSessions.length ? <p className="px-3 py-10 text-center text-xs text-[var(--text-tertiary)]">没有找到相关作品、任务或聊天记录</p> : null}</div></section></div> : null}
 

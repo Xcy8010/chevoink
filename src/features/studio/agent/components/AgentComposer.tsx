@@ -5,12 +5,12 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
-  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
+import { ReasoningSlider } from './ReasoningSlider'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast-context'
 import { AgentMobileModelSheet } from './AgentMobileModelSheet'
@@ -359,7 +359,6 @@ export function AgentComposer({
   const activeReasoningEffort = storedActiveEffort && activeReasoningEfforts.includes(storedActiveEffort)
     ? storedActiveEffort
     : activeCustomModel?.defaultReasoningEffort ?? activeBuiltInModel?.defaultReasoningEffort ?? 'high'
-  const activeReasoningIndex = Math.max(0, activeReasoningEfforts.indexOf(activeReasoningEffort))
 
   useLayoutEffect(() => {
     const editor = editorRef.current
@@ -943,9 +942,7 @@ export function AgentComposer({
               <details className="group/advanced rounded-[10px] open:bg-[var(--surface-muted)]/65">
                 <summary className="flex h-9 cursor-pointer list-none items-center justify-between rounded-[9px] px-2.5 text-xs hover:bg-[var(--surface-muted)] [&::-webkit-details-marker]:hidden"><span className="font-medium text-[var(--text-primary)]">高级</span><ChevronDown className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform group-open/advanced:rotate-180" /></summary>
                 <div className="px-3 pb-3 pt-1">
-                  <div className="mb-1.5 flex items-center justify-between text-[11px]"><span className="inline-flex items-center gap-1.5 font-medium"><BrainCircuit className="h-3.5 w-3.5" />推理强度</span><span className="text-[var(--text-secondary)]">{activeReasoningEffort}</span></div>
-                  <input type="range" min={0} max={Math.max(0, activeReasoningEfforts.length - 1)} step={1} value={activeReasoningIndex} disabled={activeReasoningEfforts.length <= 1} onChange={(event) => onReasoningEffortChange(activeModelKey, activeReasoningEfforts[Number(event.target.value)] ?? activeReasoningEffort)} aria-label="调整当前模型推理强度" className="agent-reasoning-slider h-7 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-45" style={{ '--agent-slider-progress': `${activeReasoningEfforts.length <= 1 ? 100 : (activeReasoningIndex / (activeReasoningEfforts.length - 1)) * 100}%` } as CSSProperties} />
-                  <div className="mt-0.5 flex justify-between text-[9px] text-[var(--text-tertiary)]">{activeReasoningEfforts.map((effort) => <span key={effort}>{effort}</span>)}</div>
+                  <ReasoningSlider efforts={activeReasoningEfforts} value={activeReasoningEffort} modelLabel={activeModelLabel} onChange={effort => onReasoningEffortChange(activeModelKey, effort)} />
                 </div>
               </details>
               <div className="mx-2 my-1 border-t border-[var(--border-subtle)]" />

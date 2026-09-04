@@ -215,14 +215,8 @@ export default function StudioWorkspace() {
   const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
-  // 折叠外层侧栏会给正文释放空间，但不能把 Agent 压成只剩输入框的窄条。
-  // 360px 是完整阅读消息、操作工具确认与输入的最低可用宽度；重新展开回到 420px。
-  const conversationMinWidth = workspaceSidebarOpen
-    ? WORK_CONVERSATION_WIDTH_LIMITS.expanded
-    : Math.max(
-        WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin,
-        WORK_CONVERSATION_WIDTH_LIMITS.expanded - workspaceSidebarWidth,
-      )
+  // Work 对话展开时统一保留 360px；越过阈值后由 WorkPerspective 切为浮动输入。
+  const conversationMinWidth = WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin
   const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
     const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
     // Work 必须同时为最左创作栏（最大 392）、聊天轨（44）和可完整操作的 Agent 对话
@@ -230,7 +224,7 @@ export default function StudioWorkspace() {
     // 侧栏折叠后保留收窄为「聊天轨 44 + 压缩后的聊天区最小宽度」，
     // 查看器拖拽上限同步放大；侧栏展开后由 normalizeForViewport 自动回弹。
     const centerReserve = workspacePerspective === 'work'
-      ? (workspaceSidebarOpen ? 856 : 44 + conversationMinWidth)
+      ? (workspaceSidebarOpen ? workspaceSidebarWidth : 0) + 44 + conversationMinWidth
       : 520
     if (panel === 'tree') {
       return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
@@ -243,7 +237,7 @@ export default function StudioWorkspace() {
     if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
     if (panel === 'workInspector') return viewportWidth - centerReserve - viewerWidth
     return viewportWidth - centerReserve - inspectorWidth
-  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective, workspaceSidebarOpen, conversationMinWidth])
+  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective, workspaceSidebarOpen, workspaceSidebarWidth, conversationMinWidth])
   const { panelWidths, beginPanelResize } = useStudioPanelWidths({
     onCollapse: (panel) => {
       if (panel === 'tree') setIdeTreeOpen(false)
@@ -4944,7 +4938,6 @@ export default function StudioWorkspace() {
                   memoryGraph={featureFlags.memory2 ? <MemoryGraph novelId={currentNovel.id} active={agentRunState.active} /> : null}
                   skillsPanel={<SkillsPanel novelId={currentNovel.id} chapters={chapters} />}
                   contextPanel={<AgentMemoryCenter sessionId={agentSessionId} novelId={currentNovel.id} active={agentRunState.active} onOpenDetail={() => setContextDetailOpen(true)} />}
-                  compactNavigation={panelWidths.workInspector < 300}
                 />}
                 viewer={workViewer ? <StudioChapterViewer
                   draft={workViewer === 'chapter' ? chapterDraft : null}
@@ -4961,7 +4954,8 @@ export default function StudioWorkspace() {
                 /> : undefined}
                 rightOpen={workRightOpen}
                 outerSidebarOpen={workspaceSidebarOpen}
-                conversationMinWidth={conversationMinWidth}
+                scopeKey={`${currentNovel.id}:${activeAgentTaskWindowId ?? ''}`}
+                viewerIdentity={workViewer ? `${workViewer}:${selectedTreeItemId ?? ''}` : null}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}
                 onToggleRight={() => {
@@ -4979,7 +4973,6 @@ export default function StudioWorkspace() {
                     else if (selectedTreeItemId === 'catalog' || selectedTreeItemId?.startsWith('plan:')) setWorkViewer('document')
                   }
                 }}
-                onBeginResize={beginPanelResize}
               />
             ) : (
             <IdePerspective

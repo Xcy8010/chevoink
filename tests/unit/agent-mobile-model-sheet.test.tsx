@@ -35,7 +35,7 @@ it('exposes selected model/effort and real callbacks with a single modal surface
   expect(screen.queryByText('不可用')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: /标准\s*2.0x/ }))
   expect(view.onTier).toHaveBeenCalledWith('standard')
-  fireEvent.click(screen.getByRole('button', { name: '低' }))
+  fireEvent.change(screen.getByRole('slider', { name: '调整当前模型推理强度' }), { target: { value: '0' } })
   expect(view.onReasoning).toHaveBeenCalledWith('low')
   fireEvent.click(screen.getByRole('button', { name: '完成' }))
   expect(view.onClose).toHaveBeenCalledOnce()

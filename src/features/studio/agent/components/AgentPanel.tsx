@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
+import { useWorkConversation } from '../../components/work-conversation-context'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import { cn } from '@/lib/utils'
@@ -178,6 +179,7 @@ export function AgentPanel({
   onOpenSkills,
   referenceOptions = [],
 }: AgentPanelProps) {
+  const workConversation = useWorkConversation()
   const runId = useAgentStore((state) => state.runId)
   const phase = useAgentStore((state) => state.phase)
   const resumeableRunId = useAgentStore((state) => state.resumeableRunId)
@@ -618,7 +620,7 @@ export function AgentPanel({
   // 单次滚底只能跳到「估算底部」，随后底部消息真实布局、高度膨胀，位置会停在半山腰；
   // 改为逐帧追底直到连续多帧稳定贴底才收敛
   useEffect(() => {
-    if (conversationLoading) {
+    if (conversationLoading || workConversation.collapsed) {
       return
     }
     const node = scrollRef.current
@@ -649,14 +651,14 @@ export function AgentPanel({
       }
     })
     return () => cancelAnimationFrame(frame)
-  }, [messages, pendingApproval, pendingQuestion, conversationLoading])
+  }, [messages, pendingApproval, pendingQuestion, conversationLoading, workConversation.collapsed])
 
   // 跟踪用户是否贴底。只要出现一次「向上滚动」就立刻脱离贴底：
   // 流式输出时每个增量都会触发自动滚底，若只用「距底 80px」判定，用户手指刚上滑十几像素
   // 就会被下一个增量拽回底部、并把贴底标记重新置回 true，表现为整个对话根本滑不动。
   const handleMessagesScroll = useCallback(() => {
     const node = scrollRef.current
-    if (!node) {
+    if (!node || node.clientHeight === 0) {
       return
     }
     const previousTop = lastScrollTopRef.current
@@ -1066,8 +1068,17 @@ export function AgentPanel({
           }
     : null
 
+  const recentConversationText = messages.length ? getMessageText(messages[messages.length - 1].parts).replace(/\s+/g, ' ').slice(0, 100) : ''
+  useLayoutEffect(() => {
+    const node = scrollRef.current
+    if (!workConversation.collapsed && node && !pinnedToBottomRef.current) node.scrollTop = lastScrollTopRef.current
+  }, [workConversation.collapsed])
+  useEffect(() => {
+    if (workConversation.collapsed && (pendingApproval || pendingQuestion || combinedError || quotaDialogOpen)) workConversation.expand()
+  }, [workConversation, pendingApproval, pendingQuestion, combinedError, quotaDialogOpen])
+
   return (
-    <div className={cn('relative flex h-full min-h-0 flex-col', className)}>
+    <div className={cn('relative flex h-full min-h-0 flex-col', workConversation.collapsed && 'work-agent-compact', className)}>
       {/* 状态栏 */}
       {!hideHeader ? <div className={cn(
         'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
@@ -1557,7 +1568,8 @@ export function AgentPanel({
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
-      <div className="px-4 pb-4">
+      {workConversation.collapsed ? <button type="button" data-agent-compact-restore aria-label="展开对话区" onClick={workConversation.expand} className="mx-4 flex min-h-10 items-center justify-between gap-3 rounded-t-2xl border border-b-0 border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-2 text-left text-xs text-[var(--text-secondary)]"><span className="flex min-w-0 items-center gap-3"><span className="shrink-0">{active ? 'Agent 正在执行' : '最近一条'}</span><span className="truncate">{recentConversationText || '展开对话区'}</span></span><span aria-hidden="true">↗</span></button> : null}
+      <div data-agent-composer className="px-4 pb-4">
         <AgentComposer
           novelId={novelId}
           voiceScopeKey={voiceScopeKey}
