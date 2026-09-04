@@ -124,7 +124,7 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P3 上下文引擎（需 DB）', () => 
     try {
       const response = await request(app).post(`/api/agent/sessions/${sessionId}/compact`).set('Cookie', cookie)
       expect(response.status).toBe(409)
-      expect(response.body.code).toBe('CONTEXT_COMPACTION_RUN_ACTIVE')
+      expect(response.body.error.code).toBe('CONTEXT_COMPACTION_RUN_ACTIVE')
     } finally {
       await prisma.agentRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: new Date() } })
     }
