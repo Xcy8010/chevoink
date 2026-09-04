@@ -1,6 +1,7 @@
 import { requestJson } from '@/app/api-client'
 import type {
   CreditAccountSummary,
+  CreditActivityPayload,
   CreditUsagePayload,
   CustomModelsPayload,
   ReferralPayload,
@@ -13,6 +14,10 @@ export function fetchCreditSummary(): Promise<CreditAccountSummary> {
 
 export function fetchCreditUsage(): Promise<CreditUsagePayload> {
   return requestJson<CreditUsagePayload>('/api/credits/usage?take=150')
+}
+
+export function fetchCreditActivity(): Promise<CreditActivityPayload> {
+  return requestJson<CreditActivityPayload>('/api/credits/activity')
 }
 
 export function fetchReferral(): Promise<ReferralPayload> {

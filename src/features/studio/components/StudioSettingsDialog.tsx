@@ -1,18 +1,23 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
   Archive,
   ArrowLeft,
   BookOpenText,
   Bot,
   BrainCircuit,
+  CalendarDays,
   Check,
   ChevronRight,
   Eye,
   FileText,
   Gauge,
+  Gift,
   LoaderCircle,
   Moon,
+  Pencil,
+  RefreshCcw,
   RotateCcw,
   Search,
   Settings2,
@@ -29,11 +34,14 @@ import { ApiClientError, requestJson } from '@/app/api-client'
 import Button from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'
 import { CustomModelSettingsContent } from '@/features/account/CustomModelSettingsDialog'
+import { fetchCreditActivity, fetchReferral } from '@/features/account/credits-api'
+import { formatCreditAmount } from '@/features/account/credit-format'
+import InviteCreditsDialog from '@/features/account/InviteCreditsDialog'
 import Avatar from '@/features/community/components/Avatar'
 import { isNativeApp } from '@/lib/native-app'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
-import type { Novel, UpdateMyProfileRequest, User } from '../../../../shared/contracts/index.js'
+import type { CreditActivityDay, Novel, UpdateMyProfileRequest, User } from '../../../../shared/contracts/index.js'
 import type {
   StudioBodyFont,
   StudioContentWidth,
@@ -254,6 +262,91 @@ function GeneralPanel(props: Props) {
   )
 }
 
+const ACTIVITY_DAY_MS = 24 * 60 * 60 * 1000
+
+function shiftActivityDate(dateKey: string, days: number): string {
+  return new Date(new Date(`${dateKey}T00:00:00.000Z`).getTime() + days * ACTIVITY_DAY_MS).toISOString().slice(0, 10)
+}
+
+function formatCompactCount(value: number): string {
+  return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+}
+
+function CreditsActivityHeatmap({
+  activity,
+  startedAt,
+  endsAt,
+}: {
+  activity: CreditActivityDay[]
+  startedAt: string
+  endsAt: string
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const { cells, columnCount, labels, maxSpent } = useMemo(() => {
+    const activityByDate = new Map(activity.map((day) => [day.date, day]))
+    const days: CreditActivityDay[] = []
+    for (let date = startedAt, guard = 0; date <= endsAt && guard < 370; date = shiftActivityDate(date, 1), guard += 1) {
+      days.push(activityByDate.get(date) ?? { date, creditsSpent: 0, eventCount: 0 })
+    }
+    const leading = new Date(`${startedAt}T00:00:00.000Z`).getUTCDay()
+    const allCells: Array<CreditActivityDay | null> = [...Array.from({ length: leading }, () => null), ...days]
+    const months: Array<{ label: string; column: number }> = []
+    let previousMonth = ''
+    days.forEach((day, index) => {
+      const month = day.date.slice(0, 7)
+      if (month === previousMonth) return
+      previousMonth = month
+      months.push({
+        label: new Intl.DateTimeFormat('zh-CN', { month: 'short', timeZone: 'UTC' }).format(new Date(`${day.date}T00:00:00.000Z`)),
+        column: Math.floor((leading + index) / 7),
+      })
+    })
+    return {
+      cells: allCells,
+      columnCount: Math.ceil(allCells.length / 7),
+      labels: months,
+      maxSpent: Math.max(0, ...activity.map((day) => day.creditsSpent)),
+    }
+  }, [activity, endsAt, startedAt])
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current
+    if (scroller && window.matchMedia('(max-width: 639px)').matches) {
+      scroller.scrollLeft = scroller.scrollWidth
+    }
+  }, [cells.length])
+
+  const levelClass = (spent: number) => {
+    if (spent <= 0 || maxSpent <= 0) return 'bg-[#eceeed] dark:bg-white/[.06]'
+    const ratio = spent / maxSpent
+    if (ratio <= 0.15) return 'bg-[#d5e3de] dark:bg-[#24463a]'
+    if (ratio <= 0.4) return 'bg-[#a9c8bd] dark:bg-[#356451]'
+    if (ratio <= 0.7) return 'bg-[#719f8e] dark:bg-[#4c806c]'
+    return 'bg-[#386c59] dark:bg-[#72a590]'
+  }
+
+  const width = columnCount * 13 - 3
+  return (
+    <div ref={scrollerRef} className="overflow-x-auto pb-1" role="img" aria-label={`过去一年共有 ${activity.length} 个 Credits 使用日`}>
+      <div className="min-w-[685px]" style={{ width }}>
+        <div className="grid w-max grid-flow-col grid-rows-7 gap-[3px]">
+          {cells.map((day, index) => day ? (
+            <span
+              key={day.date}
+              aria-hidden="true"
+              title={`${day.date} · 消耗 ${formatCreditAmount(day.creditsSpent)} Credits · ${day.eventCount} 次计费`}
+              className={cn('h-2.5 w-2.5 rounded-[2px]', levelClass(day.creditsSpent))}
+            />
+          ) : <span key={`empty-${index}`} aria-hidden className="h-2.5 w-2.5" />)}
+        </div>
+        <div className="relative mt-2 h-4 text-[10px] text-[var(--text-tertiary)]">
+          {labels.map((month) => <span key={`${month.label}-${month.column}`} className="absolute whitespace-nowrap" style={{ left: month.column * 13 }}>{month.label}</span>)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ProfilePanel() {
   const toast = useToast()
   const sessionUser = useShellStore((state) => state.sessionUser)
@@ -263,6 +356,21 @@ function ProfilePanel() {
   const [nickname, setNickname] = useState(sessionUser?.nickname ?? '')
   const [bio, setBio] = useState(sessionUser?.bio ?? '')
   const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const activityQuery = useQuery({
+    queryKey: ['credits', 'activity'],
+    queryFn: fetchCreditActivity,
+    staleTime: 20_000,
+    enabled: Boolean(sessionUser),
+  })
+  const referralQuery = useQuery({
+    queryKey: ['credits', 'referral'],
+    queryFn: fetchReferral,
+    staleTime: 60_000,
+    enabled: inviteOpen,
+  })
 
   useEffect(() => {
     setNickname(sessionUser?.nickname ?? '')
@@ -282,6 +390,7 @@ function ProfilePanel() {
         body: JSON.stringify({ nickname: nickname.trim(), bio: bio.trim() } satisfies UpdateMyProfileRequest),
       })
       syncSessionUser({ user: payload.user, unreadMessageCount, unreadNotificationCount })
+      setEditing(false)
       toast.success('个人资料已保存')
     } catch (error) {
       toast.error(error instanceof ApiClientError ? error.message : '暂时无法保存个人资料。')
@@ -294,48 +403,102 @@ function ProfilePanel() {
     return <p className="border-y border-[var(--border-subtle)] py-10 text-center text-sm text-[var(--text-tertiary)]">登录后可以维护作者资料。</p>
   }
 
+  const activity = activityQuery.data
+  const stats = activity?.stats
+  const account = activity?.account
+  const copyInviteLink = async () => {
+    if (!referralQuery.data?.inviteUrl || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(referralQuery.data.inviteUrl)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1800)
+    } catch {
+      toast.error('复制失败，请在邀请窗口中手动复制。')
+    }
+  }
+
   return (
-    <div className="space-y-7">
-      <SettingsGroup title="作者身份" description="昵称与简介会用于个人主页及作品作者信息。">
-        <div className="flex items-center gap-4 border-y border-[var(--border-subtle)] py-5">
-          <Avatar name={sessionUser.nickname} src={sessionUser.avatarUrl} size="lg" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-base font-semibold">{sessionUser.nickname}</p>
-            <p className="mt-1 truncate text-xs text-[var(--text-tertiary)]">{sessionUser.email || sessionUser.phone || 'Chevoink 创作者'}</p>
+    <div className="pb-8">
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <button type="button" onClick={() => setInviteOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-[9px] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Gift className="h-3.5 w-3.5" />邀请好友</button>
+        <button type="button" onClick={() => window.open('/account/usage', '_blank', 'noopener,noreferrer')} className="inline-flex h-9 items-center gap-2 rounded-[9px] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Activity className="h-3.5 w-3.5" />用量明细</button>
+        <button type="button" onClick={() => setEditing((value) => !value)} className="inline-flex h-9 items-center gap-2 rounded-[9px] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Pencil className="h-3.5 w-3.5" />{editing ? '收起编辑' : '编辑资料'}</button>
+      </div>
+
+      <div className="pb-8 pt-5 text-center sm:pt-7">
+        <Avatar name={sessionUser.nickname} src={sessionUser.avatarUrl} size="lg" className="mx-auto h-20 w-20" />
+        <h2 className="mt-4 text-xl font-semibold tracking-[-.02em]">{sessionUser.nickname}</h2>
+        <p className="mt-1 text-xs text-[var(--text-tertiary)]">{sessionUser.email || sessionUser.phone || 'Chevoink 创作者'}</p>
+        <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-1 text-[11px] text-[var(--text-secondary)]">
+          {account?.planLabel ?? '公测版'}
+          <span aria-hidden className="h-3 w-px bg-[var(--border-strong)]" />
+          剩余 {account ? formatCreditAmount(account.totalRemaining) : '—'} Credits
+        </p>
+      </div>
+
+      {editing ? (
+        <section className="mb-8 rounded-[14px] border border-[var(--border-subtle)] p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div><h3 className="text-sm font-semibold">公开资料</h3><p className="mt-1 text-xs text-[var(--text-tertiary)]">昵称与简介会用于个人主页及作品作者信息。</p></div>
+            <button type="button" onClick={() => window.open('/settings', '_blank', 'noopener,noreferrer')} className="h-8 shrink-0 rounded-[8px] border border-[var(--border-subtle)] px-2.5 text-xs hover:bg-[var(--surface-muted)]">更换头像</button>
           </div>
-          <button type="button" onClick={() => window.open('/settings', '_blank', 'noopener,noreferrer')} className="h-9 rounded-[9px] border border-[var(--border-subtle)] px-3 text-xs hover:bg-[var(--surface-muted)]">更换头像</button>
+          <form onSubmit={saveProfile} className="mt-5 space-y-4">
+            <label className="block text-xs font-medium text-[var(--text-secondary)]">昵称<input value={nickname} maxLength={30} onChange={(event) => setNickname(event.target.value)} className="mt-2 h-10 w-full rounded-[9px] border border-[var(--border-strong)] bg-transparent px-3 text-sm text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring)]" /></label>
+            <label className="block text-xs font-medium text-[var(--text-secondary)]">个人简介<textarea value={bio} maxLength={200} rows={3} onChange={(event) => setBio(event.target.value)} placeholder="介绍你的创作方向与擅长题材" className="mt-2 w-full resize-y rounded-[9px] border border-[var(--border-strong)] bg-transparent px-3 py-2.5 text-sm leading-6 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring)]" /></label>
+            <div className="flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>取消</Button><Button type="submit" size="sm" disabled={saving}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}保存资料</Button></div>
+          </form>
+        </section>
+      ) : null}
+
+      {activityQuery.isLoading ? (
+        <div className="space-y-8" aria-label="正在加载 Credits 活动">
+          <div className="grid grid-cols-5 overflow-hidden rounded-[14px] border border-[var(--border-subtle)]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="border-l border-[var(--border-subtle)] px-3 py-5 first:border-l-0"><span className="skeleton-shimmer mx-auto block h-5 w-16 rounded" /><span className="skeleton-shimmer mx-auto mt-2 block h-3 w-20 rounded" /></div>)}</div>
+          <div className="skeleton-shimmer h-44 rounded-[14px]" />
         </div>
-      </SettingsGroup>
+      ) : activityQuery.isError || !stats ? (
+        <div className="flex min-h-56 flex-col items-center justify-center rounded-[14px] border border-[var(--border-subtle)] px-6 text-center">
+          <p className="text-sm text-[var(--text-secondary)]">暂时无法读取 Credits 活动。</p>
+          <Button size="sm" className="mt-4" onClick={() => void activityQuery.refetch()}><RefreshCcw className="h-3.5 w-3.5" />重新加载</Button>
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto rounded-[14px] border border-[var(--border-subtle)]">
+            <dl className="grid min-w-[680px] grid-cols-5 divide-x divide-[var(--border-subtle)]">
+              {[
+                ['累计消耗', formatCreditAmount(stats.cumulativeSpent), 'Credits'],
+                ['峰值日消耗', formatCreditAmount(stats.peakDailySpent), 'Credits'],
+                ['累计 Token', formatCompactCount(stats.totalTokens), '输入与输出'],
+                ['当前连续', `${stats.currentStreakDays} 天`, '今日或昨日仍活跃'],
+                ['最长连续', `${stats.longestStreakDays} 天`, 'Credits 使用记录'],
+              ].map(([label, value, note]) => (
+                <div key={label} className="px-3 py-4 text-center sm:py-5"><dt className="text-base font-semibold tabular-nums sm:text-lg">{value}</dt><dd className="mt-1 text-[11px] font-medium text-[var(--text-secondary)]">{label}</dd><p className="mt-0.5 text-[9px] text-[var(--text-tertiary)]">{note}</p></div>
+              ))}
+            </dl>
+          </div>
 
-      <SettingsGroup title="公开资料">
-        <form onSubmit={saveProfile} className="space-y-4">
-          <label className="block text-xs font-medium text-[var(--text-secondary)]">
-            昵称
-            <input value={nickname} maxLength={30} onChange={(event) => setNickname(event.target.value)} className="mt-2 h-10 w-full rounded-[9px] border border-[var(--border-strong)] bg-transparent px-3 text-sm text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring)]" />
-          </label>
-          <label className="block text-xs font-medium text-[var(--text-secondary)]">
-            个人简介
-            <textarea value={bio} maxLength={200} rows={4} onChange={(event) => setBio(event.target.value)} placeholder="介绍你的创作方向与擅长题材" className="mt-2 w-full resize-y rounded-[9px] border border-[var(--border-strong)] bg-transparent px-3 py-2.5 text-sm leading-6 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring)]" />
-          </label>
-          <div className="flex justify-end"><Button type="submit" disabled={saving}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}保存资料</Button></div>
-        </form>
-      </SettingsGroup>
-
-      <SettingsGroup title="创作概览" description="以下数据来自当前账户，不生成虚构活跃度。">
-        <dl className="grid grid-cols-2 border-y border-[var(--border-subtle)] sm:grid-cols-4">
-          {[
-            ['作品', sessionUser.novelCount],
-            ['动态', sessionUser.postCount],
-            ['关注者', sessionUser.followerCount],
-            ['关注中', sessionUser.followingCount],
-          ].map(([label, value], index) => (
-            <div key={label} className={cn('px-4 py-4', index > 0 && 'border-l border-[var(--border-subtle)]')}>
-              <dt className="text-xs text-[var(--text-tertiary)]">{label}</dt>
-              <dd className="mt-1 text-lg font-semibold tabular-nums">{Number(value).toLocaleString()}</dd>
+          <section className="mt-8 rounded-[14px] border border-[var(--border-subtle)] p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><h3 className="flex items-center gap-2 text-sm font-semibold"><CalendarDays className="h-4 w-4 text-[var(--text-secondary)]" />Credits 活动</h3><p className="mt-1 text-[11px] text-[var(--text-tertiary)]">按 UTC+8 汇总过去一年真实计费记录；颜色越深，消耗越高。</p></div>
+              <p className="text-[10px] text-[var(--text-tertiary)]">{stats.ledgerStartedAt ? `统计自 ${stats.ledgerStartedAt}` : '尚无 Credits 消耗'}</p>
             </div>
-          ))}
-        </dl>
-      </SettingsGroup>
+            <div className="mt-5"><CreditsActivityHeatmap activity={stats.activity} startedAt={stats.activityStartedAt} endsAt={stats.activityEndsAt} /></div>
+            <div className="mt-2 flex items-center justify-end gap-1.5 text-[10px] text-[var(--text-tertiary)]"><span>少</span>{['bg-[#eceeed] dark:bg-white/[.06]', 'bg-[#d5e3de] dark:bg-[#24463a]', 'bg-[#a9c8bd] dark:bg-[#356451]', 'bg-[#719f8e] dark:bg-[#4c806c]', 'bg-[#386c59] dark:bg-[#72a590]'].map((color) => <span key={color} className={cn('h-2.5 w-2.5 rounded-[2px]', color)} />)}<span>多</span></div>
+          </section>
+
+          <div className="mt-8 grid gap-8 md:grid-cols-2">
+            <section><h3 className="text-sm font-semibold">活动洞察</h3><dl className="mt-3 divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">{[
+              ['模型调用', stats.totalModelCalls.toLocaleString('zh-CN')],
+              ['Agent 任务', stats.agentRuns.toLocaleString('zh-CN')],
+              ['Credits 活跃天', `${stats.activeDays.toLocaleString('zh-CN')} 天`],
+              ['累计获得', `+${formatCreditAmount(stats.cumulativeEarned)} Credits`],
+              ['缓存命中率', stats.cacheHitRate === null ? '—' : `${stats.cacheHitRate}%`],
+              ['作品数量', sessionUser.novelCount.toLocaleString('zh-CN')],
+            ].map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4 py-2.5 text-xs"><dt className="text-[var(--text-secondary)]">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>)}</dl></section>
+            <section><h3 className="text-sm font-semibold">常用模型</h3><div className="mt-3 divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">{stats.modelUsage.length > 0 ? stats.modelUsage.map((model) => <div key={model.modelName} className="py-2.5"><div className="flex items-center justify-between gap-4 text-xs"><span className="min-w-0 truncate font-medium">{model.modelName}</span><span className="shrink-0 text-[var(--text-secondary)]">{model.calls.toLocaleString('zh-CN')} 次</span></div><div className="mt-1.5 flex items-center justify-between gap-4 text-[10px] text-[var(--text-tertiary)]"><span>{formatCompactCount(model.tokens)} Token</span><span>{formatCreditAmount(model.creditsSpent)} Credits</span></div></div>) : <p className="py-8 text-center text-xs text-[var(--text-tertiary)]">尚无模型调用记录</p>}</div></section>
+          </div>
+        </>
+      )}
+      <InviteCreditsDialog open={inviteOpen} referral={referralQuery.data ?? null} copied={copied} onCopy={() => void copyInviteLink()} onClose={() => { setInviteOpen(false); setCopied(false) }} />
     </div>
   )
 }

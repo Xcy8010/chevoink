@@ -23,7 +23,7 @@ export default function InviteCreditsDialog({
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/30 px-0 backdrop-blur-[2px] sm:items-center sm:px-5">
+    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/30 px-0 backdrop-blur-[2px] sm:items-center sm:px-5">
       <section
         role="dialog"
         aria-modal="true"

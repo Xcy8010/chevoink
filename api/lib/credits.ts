@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
 import type {
   CreditAccountSummary,
+  CreditActivityPayload,
   CreditLedgerItem,
   CreditModelOption,
   CreditModelTier,
@@ -23,6 +24,7 @@ export const IMAGE_CALL_MILLI = 6 * CREDIT_MILLI
 export const WEB_SEARCH_CALL_MILLI = 2 * CREDIT_MILLI
 
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_RESET_HOUR_UTC8 = 15
 const GLOBAL_SETTING_ID = 'global'
 
@@ -168,6 +170,41 @@ function milliToCredits(value: number): number {
   return Math.round(value) / CREDIT_MILLI
 }
 
+function utc8DateKey(now = new Date()): string {
+  return new Date(now.getTime() + UTC8_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+function shiftDateKey(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00.000Z`)
+  return new Date(date.getTime() + days * DAY_MS).toISOString().slice(0, 10)
+}
+
+/** 当前连续天数允许最后一次活动停在昨天，避免当天尚未使用时在 00:00 立即归零。 */
+export function calculateCreditActivityStreaks(activityDates: string[], todayKey = utc8DateKey()): {
+  current: number
+  longest: number
+} {
+  const dates = [...new Set(activityDates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)))].sort()
+  const active = new Set(dates)
+  let longest = 0
+  let running = 0
+  let previous: string | null = null
+  for (const date of dates) {
+    running = previous && shiftDateKey(previous, 1) === date ? running + 1 : 1
+    longest = Math.max(longest, running)
+    previous = date
+  }
+
+  const yesterdayKey = shiftDateKey(todayKey, -1)
+  let cursor = active.has(todayKey) ? todayKey : active.has(yesterdayKey) ? yesterdayKey : null
+  let current = 0
+  while (cursor && active.has(cursor)) {
+    current += 1
+    cursor = shiftDateKey(cursor, -1)
+  }
+  return { current, longest }
+}
+
 async function toCreditSummary(
   account: Awaited<ReturnType<typeof ensureAccountWithDb>>['account'],
   setting: Awaited<ReturnType<typeof getGlobalSetting>>,
@@ -238,6 +275,89 @@ export async function getCreditUsage(userId: string, take = 100): Promise<Credit
     createdAt: entry.createdAt.toISOString(),
   }))
   return { account, ledger }
+}
+
+type CreditActivityDbRow = {
+  date: string
+  spentMilli: bigint | number
+  eventCount: bigint | number
+}
+
+/**
+ * 个人资料页的真实 Credits/Agent 使用画像。
+ * 日聚合在数据库完成，最多只把“一天一行”传回应用层，不随调用日志数量线性增长。
+ */
+export async function getCreditActivity(userId: string, now = new Date()): Promise<CreditActivityPayload> {
+  const [account, dailyRows, earned, aiTotals, modelGroups, agentRuns] = await Promise.all([
+    getCreditSummary(userId),
+    prisma.$queryRaw<CreditActivityDbRow[]>`
+      SELECT
+        TO_CHAR(("created_at" + INTERVAL '8 hours')::date, 'YYYY-MM-DD') AS "date",
+        SUM(-"delta_milli")::bigint AS "spentMilli",
+        COUNT(*)::bigint AS "eventCount"
+      FROM "credit_ledger_entries"
+      WHERE "user_id" = ${userId} AND "delta_milli" < 0
+      GROUP BY ("created_at" + INTERVAL '8 hours')::date
+      ORDER BY ("created_at" + INTERVAL '8 hours')::date ASC
+    `,
+    prisma.creditLedgerEntry.aggregate({ where: { userId, deltaMilli: { gt: 0 } }, _sum: { deltaMilli: true } }),
+    prisma.aiUsageLog.aggregate({
+      where: { userId },
+      _count: { _all: true },
+      _sum: { requestTokens: true, responseTokens: true, promptCacheHitTokens: true, promptCacheMissTokens: true },
+    }),
+    prisma.aiUsageLog.groupBy({
+      by: ['modelName'],
+      where: { userId },
+      _count: { _all: true },
+      _sum: { requestTokens: true, responseTokens: true, creditChargeMilli: true },
+    }),
+    prisma.agentRun.count({ where: { userId } }),
+  ])
+
+  const daily = dailyRows.map((row) => ({
+    date: row.date,
+    spentMilli: Number(row.spentMilli),
+    eventCount: Number(row.eventCount),
+  }))
+  const todayKey = utc8DateKey(now)
+  const activityStartedAt = shiftDateKey(todayKey, -364)
+  const streaks = calculateCreditActivityStreaks(daily.map((row) => row.date), todayKey)
+  const hitTokens = aiTotals._sum.promptCacheHitTokens ?? 0
+  const missTokens = aiTotals._sum.promptCacheMissTokens ?? 0
+  const cacheTokens = hitTokens + missTokens
+
+  return {
+    account,
+    stats: {
+      generatedAt: now.toISOString(),
+      ledgerStartedAt: daily[0]?.date ?? null,
+      activityStartedAt,
+      activityEndsAt: todayKey,
+      cumulativeSpent: milliToCredits(daily.reduce((sum, row) => sum + row.spentMilli, 0)),
+      cumulativeEarned: milliToCredits(earned._sum.deltaMilli ?? 0),
+      peakDailySpent: milliToCredits(daily.reduce((peak, row) => Math.max(peak, row.spentMilli), 0)),
+      totalTokens: (aiTotals._sum.requestTokens ?? 0) + (aiTotals._sum.responseTokens ?? 0),
+      totalModelCalls: aiTotals._count._all,
+      agentRuns,
+      activeDays: daily.length,
+      currentStreakDays: streaks.current,
+      longestStreakDays: streaks.longest,
+      cacheHitRate: cacheTokens > 0 ? Math.round((hitTokens / cacheTokens) * 1000) / 10 : null,
+      activity: daily
+        .filter((row) => row.date >= activityStartedAt && row.date <= todayKey)
+        .map((row) => ({ date: row.date, creditsSpent: milliToCredits(row.spentMilli), eventCount: row.eventCount })),
+      modelUsage: modelGroups
+        .map((group) => ({
+          modelName: group.modelName,
+          calls: group._count._all,
+          creditsSpent: milliToCredits(group._sum.creditChargeMilli ?? 0),
+          tokens: (group._sum.requestTokens ?? 0) + (group._sum.responseTokens ?? 0),
+        }))
+        .sort((left, right) => right.calls - left.calls || right.tokens - left.tokens)
+        .slice(0, 5),
+    },
+  }
 }
 
 export async function assertCreditAccess(userId: string, tier: CreditModelTier = 'speed', requireSelectable = true): Promise<void> {

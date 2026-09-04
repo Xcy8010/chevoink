@@ -4,7 +4,7 @@ import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 
 import { env } from '../config/env.js'
-import { getCreditSummary, getCreditUsage, getReferralPayload, parseModelCapabilities } from '../lib/credits.js'
+import { getCreditActivity, getCreditSummary, getCreditUsage, getReferralPayload, parseModelCapabilities } from '../lib/credits.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import { buildSuccess, createRequestId } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
@@ -53,6 +53,16 @@ router.get('/usage', async (req: Request, res: Response): Promise<void> => {
     const userId = requireSessionUserId(req)
     const take = typeof req.query.take === 'string' ? Number.parseInt(req.query.take, 10) : 100
     res.status(200).json(buildSuccess(requestId, await getCreditUsage(userId, Number.isFinite(take) ? take : 100)))
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+  }
+})
+
+router.get('/activity', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    res.status(200).json(buildSuccess(requestId, await getCreditActivity(userId)))
   } catch (error) {
     sendRouteError(res, requestId, error)
   }

@@ -69,6 +69,16 @@ describe.skipIf(!dbAvailable)('应用冒烟（需 DB）', () => {
     expect(cookies.some((c) => c.startsWith('chevoink_session='))).toBe(true)
     expect(cookies.some((c) => c.startsWith('chevoink_refresh='))).toBe(true)
 
+    const activityRes = await request(app)
+      .get('/api/credits/activity')
+      .set('Cookie', `chevoink_session=${registerRes.body.data.tokens.accessToken}`)
+    expect(activityRes.status).toBe(200)
+    expect(activityRes.body.data.stats).toMatchObject({
+      cumulativeSpent: 0,
+      totalModelCalls: 0,
+      currentStreakDays: 0,
+    })
+
     const loginRes = await request(app).post('/api/auth/login').send({ phone, password })
     expect(loginRes.status).toBe(200)
 

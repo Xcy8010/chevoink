@@ -63,6 +63,42 @@ export type CreditUsagePayload = {
   ledger: CreditLedgerItem[]
 }
 
+export type CreditActivityDay = {
+  date: string
+  creditsSpent: number
+  eventCount: number
+}
+
+export type CreditModelActivity = {
+  modelName: string
+  calls: number
+  creditsSpent: number
+  tokens: number
+}
+
+/** 个人资料页的全量真实使用画像；统计起点受 Credits 账本上线时间约束。 */
+export type CreditActivityPayload = {
+  account: CreditAccountSummary
+  stats: {
+    generatedAt: string
+    ledgerStartedAt: string | null
+    activityStartedAt: string
+    activityEndsAt: string
+    cumulativeSpent: number
+    cumulativeEarned: number
+    peakDailySpent: number
+    totalTokens: number
+    totalModelCalls: number
+    agentRuns: number
+    activeDays: number
+    currentStreakDays: number
+    longestStreakDays: number
+    cacheHitRate: number | null
+    activity: CreditActivityDay[]
+    modelUsage: CreditModelActivity[]
+  }
+}
+
 export type ReferralPayload = {
   code: string
   inviteUrl: string

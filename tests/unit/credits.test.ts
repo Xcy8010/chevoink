@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  calculateCreditActivityStreaks,
   calculateTokenChargeMilli,
   getCreditWindow,
 } from '../../api/lib/credits.js'
@@ -27,6 +28,22 @@ describe('Credits token pricing', () => {
 
   it('charges nothing for the free 0x tier', () => {
     expect(calculateTokenChargeMilli(100_000, 10_000, 0)).toBe(0)
+  })
+})
+
+describe('Credits activity streaks', () => {
+  it('calculates current and longest streak from real active dates', () => {
+    expect(calculateCreditActivityStreaks(
+      ['2026-08-20', '2026-08-21', '2026-09-01', '2026-09-02', '2026-09-03'],
+      '2026-09-04',
+    )).toEqual({ current: 3, longest: 3 })
+  })
+
+  it('resets the current streak after a full inactive day and ignores duplicates', () => {
+    expect(calculateCreditActivityStreaks(
+      ['2026-08-30', '2026-08-30', '2026-08-31'],
+      '2026-09-04',
+    )).toEqual({ current: 0, longest: 2 })
   })
 })
 
