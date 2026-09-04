@@ -100,14 +100,18 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
     expect(after.findings[0]).toMatchObject({ disposition: 'repaired', authorFeedback: 'accepted' })
   })
 
-  it('局部修订绑定最新 revision，并阻止第二轮自动循环', async () => {
+  it('局部修订绑定最新 revision，新检查重置修订预算且同报告内阻止第二轮自动循环', async () => {
     const secondChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
     const second = await persistHumanityQualityReport({
       userId, novelId, runId, chapterId, chapterRevision: secondChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
       criticFindings: [{ signal: 'reader_pull', severity: 'warning', quote: '林舟把钥匙塞回袖口，没再问父亲的事。', explanation: '动作没有改变当下关系。', suggestion: '让动作落到当前场景选择。', confidence: 0.8 }],
     })
-    expect(second.repairRound).toBe(1)
+    // 新检查 = 新报告：修订预算重置为 0，不再继承旧报告已用轮次（否则新 revision 上的新检查会被直接熔断成工具失败）
+    expect(second.repairRound).toBe(0)
     await selectQualityFindings(userId, novelId, second.id, [second.findings[0].id])
+    const repaired = await applyQualityRepair({ userId, novelId, reportId: second.id, replacements: [{ findingId: second.findings[0].id, replacement: '林舟把钥匙塞回袖口，转身去关窗。' }] })
+    expect(repaired.updated.revision).toBe(secondChapter.revision + 1)
+    // 同一报告内第二轮自动修订仍硬熔断（单次检查单次修订，防空转循环）
     await expect(applyQualityRepair({ userId, novelId, reportId: second.id, replacements: [{ findingId: second.findings[0].id, replacement: '林舟把钥匙塞回袖口，转身去关窗。' }] })).rejects.toMatchObject({ code: 'QUALITY_REPAIR_LIMIT' })
   })
 })
