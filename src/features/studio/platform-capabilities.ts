@@ -40,7 +40,12 @@ export function subscribePlatformLifecycle(handlers: { onBack: () => void; onRes
     if (disposed) void listener.remove?.()
     else listeners.push(listener)
   }
-  void add('backButton', () => handlers.onBack())
+  void add('backButton', () => {
+    // Dismiss a foreground model sheet before navigating away from the draft.
+    const dialog = Array.from(document.querySelectorAll('dialog[open][data-native-back-dismiss]')).at(-1)
+    if (dialog) dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+    else handlers.onBack()
+  })
   void add('appStateChange', (state) => { if (state.isActive) handlers.onResume() })
   const visibility = () => { if (document.visibilityState === 'visible') handlers.onResume() }
   document.addEventListener('visibilitychange', visibility)

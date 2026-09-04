@@ -100,6 +100,32 @@ async function record() {
 }
 
 describe('useVoiceInput local PCM lifecycle', () => {
+  it('opens first-use download immediately while metadata is still pending', async () => {
+    const pending = deferred<boolean>()
+    vi.mocked(engine.getVoiceModelStatus).mockReturnValue(pending.promise)
+    const hook = renderHook(() => useVoiceInput({ scopeKey: 'task', disabled: false, onTranscript: vi.fn() }))
+    expect(hook.result.current.state).toBe('checking')
+    await act(async () => hook.result.current.start())
+    expect(hook.result.current.state).toBe('needs-download')
+    await act(async () => pending.resolve(false))
+    expect(hook.result.current.state).toBe('needs-download')
+    expect(permission).not.toHaveBeenCalled()
+  })
+
+  it('reports silence via toast without leaving an error bar or changing draft', async () => {
+    vi.mocked(engine.transcribeAudio).mockResolvedValue('')
+    const onNotice = vi.fn()
+    const onTranscript = vi.fn()
+    const hook = renderHook(() => useVoiceInput({ scopeKey: 'task', disabled: false, onTranscript, onNotice }))
+    await waitFor(() => expect(hook.result.current.state).toBe('idle'))
+    await act(async () => hook.result.current.start())
+    act(() => worklets[0].emit('pcm', new Float32Array([0.1, 0.2])))
+    await act(async () => hook.result.current.stop())
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('没有识别到语音'))
+    expect(hook.result.current.state).toBe('idle')
+    expect(hook.result.current.error).toBeNull()
+    expect(onTranscript).not.toHaveBeenCalled()
+  })
   it('inspects cache without downloading or requesting microphone; aliases stay compatible', async () => {
     const { result } = await setup()
     expect(result.current.active).toBe(false)

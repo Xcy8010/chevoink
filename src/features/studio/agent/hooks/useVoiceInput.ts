@@ -8,7 +8,7 @@ import {
 } from '../voice/speech-engine'
 
 export type VoiceInputStatus = 'checking' | 'idle' | 'needs-download' | 'downloading' | 'requesting-permission' | 'recording' | 'transcribing' | 'deleting' | 'error'
-export type VoiceInputOptions = { scopeKey: string; disabled: boolean; onTranscript: (text: string) => void }
+export type VoiceInputOptions = { scopeKey: string; disabled: boolean; onTranscript: (text: string) => void; onNotice?: (message: string) => void }
 export type VoiceInputController = {
   state: VoiceInputStatus
   /** Composer compatibility alias of state. */
@@ -146,10 +146,12 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInputController 
   const fail = useCallback((cause: unknown) => {
     invalidate()
     if (mounted.current) {
-      setError(errorMessage(cause))
+      const message = errorMessage(cause)
+      if (latest.current.onNotice) { latest.current.onNotice(message); setError(null) }
+      else setError(message)
       setLevels(EMPTY_LEVELS)
     }
-    transition('error')
+    transition(latest.current.onNotice ? 'idle' : 'error')
   }, [invalidate, transition])
 
   useLayoutEffect(() => { latest.current = options })
@@ -171,7 +173,7 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInputController 
       if (!mounted.current || id !== generation.current) return
       ready.current = available
       setModelReady(available)
-      transition('idle')
+      if (phase.current === 'checking') transition('idle')
     }).catch((cause: unknown) => {
       if (mounted.current && id === generation.current) fail(cause)
     })
@@ -272,6 +274,7 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInputController 
       transition('idle')
       setElapsed(0)
       if (text.trim()) latest.current.onTranscript(text.trim())
+      else if (latest.current.onNotice) latest.current.onNotice('没有识别到语音，请靠近麦克风后重试。')
       else { setError('没有识别到语音，请靠近麦克风后重试。'); transition('error') }
     } catch (cause) {
       if (valid(id, scope)) fail(cause)
@@ -281,7 +284,7 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInputController 
   useLayoutEffect(() => { stopRef.current = stop }, [stop])
 
   const start = useCallback(async () => {
-    if (latest.current.disabled || document.hidden || !['idle', 'error', 'needs-download'].includes(phase.current)) return
+    if (latest.current.disabled || document.hidden || !['checking', 'idle', 'error', 'needs-download'].includes(phase.current)) return
     if (!ready.current) { setError(null); transition('needs-download'); return }
     invalidate()
     const id = generation.current
@@ -302,13 +305,12 @@ export function useVoiceInput(options: VoiceInputOptions): VoiceInputController 
       // resume must be initiated during the original click, before awaiting permission (iOS).
       await Promise.all([
         context.resume(),
+        context.audioWorklet.addModule(CAPTURE_WORKLET_URL, { credentials: 'same-origin' }),
         navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false }).then((stream) => {
           if (!valid(id, scope)) { stream.getTracks().forEach((track) => track.stop()); return }
           recording.stream = stream
         }),
       ])
-      if (!valid(id, scope)) return
-      await context.audioWorklet.addModule(CAPTURE_WORKLET_URL, { credentials: 'same-origin' })
       if (!valid(id, scope)) return
       const worklet = new AudioWorkletNode(context, 'voice-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
       recording.worklet = worklet

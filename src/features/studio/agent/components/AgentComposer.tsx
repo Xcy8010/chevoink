@@ -12,6 +12,8 @@ import {
 } from 'react'
 import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useToast } from '@/components/ui/toast-context'
+import { AgentMobileModelSheet } from './AgentMobileModelSheet'
 
 import {
   MAX_AGENT_FILE_COUNT,
@@ -274,6 +276,8 @@ export function AgentComposer({
   // 手机端模型二级列表改为受控视图：触屏没有 hover，靠 focus-within 显示会残留/溢出，
   // 点击「模型」行进入模型列表、返回或选中后回到根视图；桌面端仍走 hover/focus 行为完全不变
   const [mobileModelsOpen, setMobileModelsOpen] = useState(false)
+  const [mobileModelSheetOpen, setMobileModelSheetOpen] = useState(false)
+  const { info: voiceNotice } = useToast()
   const editorRef = useRef<HTMLDivElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -283,12 +287,12 @@ export function AgentComposer({
   const voiceBookmark = useRef<{ scope: string; signature: string; offset: number; preceding: string[] } | null>(null)
   const [pendingVoice, setPendingVoice] = useState<{ scope: string; text: string } | null>(null)
   const voiceUndo = useRef<{ scope: string; after: string; draft: string; references: ComposerReference[] } | null>(null)
-  const [voiceInserted, setVoiceInserted] = useState(false)
   const caretAfterVoice = useRef<number | null>(null)
   const scope = voiceScopeKey ?? ''
   const voice = useVoiceInput({
     scopeKey: scope,
     disabled: !scope || voiceDisabled || disabled || running || sending || uploading > 0,
+    onNotice: voiceNotice,
     onTranscript: (text) => {
       const bookmark = voiceBookmark.current
       if (!bookmark || bookmark.scope !== scope || !text.trim()) return
@@ -307,7 +311,7 @@ export function AgentComposer({
     voiceUndo.current = null
     caretAfterVoice.current = null
     setPendingVoice(null)
-    setVoiceInserted(false)
+    setMobileModelSheetOpen(false)
   }, [scope])
 
   function applyVoiceText(text: string, offset?: number, preceding?: string[]) {
@@ -317,7 +321,6 @@ export function AgentComposer({
     caretAfterVoice.current = result.caret
     setComposerContent(result.draft, result.references)
     setPendingVoice(null)
-    setVoiceInserted(true)
   }
 
   function captureVoiceBookmark() {
@@ -558,6 +561,15 @@ export function AgentComposer({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (voiceActive) { event.preventDefault(); return }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      const undo = voiceUndo.current
+      if (undo?.scope === scope && undo.after === composerSignature(useAgentStore.getState().composerDraft, useAgentStore.getState().composerReferences)) {
+        event.preventDefault()
+        setComposerContent(undo.draft, undo.references)
+        voiceUndo.current = null
+        return
+      }
+    }
     if (event.key === 'Backspace' && !prompt && references.length > 0) {
       event.preventDefault()
       setComposerContent('', references.slice(0, -1))
@@ -693,8 +705,14 @@ export function AgentComposer({
         />
       </div>
       {pendingVoice?.scope === scope ? <div className="px-1.5 py-2 text-xs text-[var(--text-secondary)]" role="status">草稿已变化，转写文字尚未插入。<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{pendingVoice.text}</div><button type="button" disabled={disabled || running || sending || voiceActive} className="mr-3 min-h-11 underline disabled:opacity-50" onClick={() => { if (!disabled && !running && !sending && !voiceActive) applyVoiceText(pendingVoice.text) }}>插入到末尾</button><button type="button" className="min-h-11" onClick={() => setPendingVoice(null)}>放弃</button></div> : null}
-      {voiceInserted && voiceUndo.current?.scope === scope && voiceUndo.current.after === composerSignature(prompt, references) ? <div className="flex items-center gap-3 px-1.5 text-xs text-[var(--text-secondary)]" role="status"><span>已转写，请检查后发送</span><button type="button" disabled={voiceActive} className="min-h-9 underline" onClick={() => { const undo = voiceUndo.current; if (undo?.scope === scope && undo.after === composerSignature(useAgentStore.getState().composerDraft, useAgentStore.getState().composerReferences)) setComposerContent(undo.draft, undo.references); setVoiceInserted(false); voiceUndo.current = null }}>撤销插入</button></div> : null}
       {voiceActive ? <AgentVoiceInputBar voice={voice} /> : null}
+      {mobileModelSheetOpen && !running && !disabled && !voiceActive ? <AgentMobileModelSheet
+        modelOptions={modelOptions} customModels={customModels} modelTier={modelTier} customModelId={customModelId}
+        activeModelLabel={activeModelLabel} activeReasoningEffort={activeReasoningEffort} activeReasoningEfforts={activeReasoningEfforts}
+        onTier={onModelTierChange} onCustom={id => { onCustomModelChange(id); onModelTierChange('custom') }}
+        onReasoning={effort => onReasoningEffortChange(activeModelKey, effort)}
+        onSettings={() => { setMobileModelSheetOpen(false); onOpenModelSettings() }} onClose={() => setMobileModelSheetOpen(false)}
+      /> : null}
       <div className={cn('mt-1.5 flex items-center justify-between gap-1', voiceActive && 'hidden')}>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <input
@@ -881,7 +899,15 @@ export function AgentComposer({
           </details>
           <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto min-w-0" data-disabled={running || disabled || undefined} onToggle={(event) => { if (!(event.currentTarget as HTMLDetailsElement).open) { setMobileModelsOpen(false); setEditingReasoningTier(null) } }}>
             <summary
-              onClick={(event) => { if (running || disabled) event.preventDefault() }}
+              onClick={(event) => {
+                if (running || disabled) { event.preventDefault(); return }
+                if (window.innerWidth < 768) {
+                  event.preventDefault()
+                  editorRef.current?.blur()
+                  modelMenuRef.current?.removeAttribute('open')
+                  setMobileModelSheetOpen(true)
+                }
+              }}
               aria-label="模型档位"
               title="选择模型性能与 Credits 倍率"
               className="flex h-7 cursor-pointer list-none items-center gap-1 rounded-full px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] group-data-[disabled=true]/model:pointer-events-none group-data-[disabled=true]/model:opacity-45 [&::-webkit-details-marker]:hidden"
@@ -933,7 +959,7 @@ export function AgentComposer({
             </div>
           </details>
         </div>
-        <button type="button" disabled={voice.disabled || voice.state === 'checking'} onPointerDown={captureVoiceBookmark} onClick={(event) => { if (event.detail === 0 || !voiceBookmark.current || voiceBookmark.current.scope !== scope) captureVoiceBookmark(); void voice.start() }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] focus-visible:outline focus-visible:outline-2 disabled:opacity-35 mobile:h-11 mobile:w-11" aria-label="语音输入" title="语音输入 · 本机离线转写"><Mic className="h-[18px] w-[18px]" /></button>
+        <button type="button" disabled={voice.disabled} onPointerDown={captureVoiceBookmark} onClick={(event) => { if (event.detail === 0 || !voiceBookmark.current || voiceBookmark.current.scope !== scope) captureVoiceBookmark(); void voice.start() }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] focus-visible:outline focus-visible:outline-2 disabled:opacity-35 mobile:h-11 mobile:w-11" aria-label="语音输入" title="语音输入 · 本机离线转写"><Mic className="h-[18px] w-[18px]" /></button>
         {running ? (
           <button
             type="button"

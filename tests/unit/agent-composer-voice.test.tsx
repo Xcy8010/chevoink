@@ -5,6 +5,7 @@ import { AgentComposer } from '../../src/features/studio/agent/components/AgentC
 import { useAgentStore } from '../../src/features/studio/agent/agentStore'
 
 const voice = vi.hoisted(() => ({ options: undefined as undefined | { onTranscript: (text: string) => void }, state: 'idle', start: vi.fn(), cancel: vi.fn(), removeModel: vi.fn() }))
+vi.mock('../../src/components/ui/toast-context', () => ({ useToast: () => ({ info: vi.fn() }) }))
 vi.mock('../../src/features/studio/agent/hooks/useVoiceInput', () => ({ useVoiceInput: (options: { onTranscript: (text: string) => void }) => {
   voice.options = options
   return { state: voice.state, disabled: false, modelReady: true, start: voice.start, cancel: voice.cancel, removeModel: voice.removeModel }
@@ -30,7 +31,8 @@ describe('Agent voice draft integration', () => {
     act(() => voice.options?.onTranscript('，续写下一章'))
     expect(useAgentStore.getState().composerDraft).toBe('已有草稿，续写下一章')
     expect(input.onSend).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '撤销插入' }))
+    expect(screen.queryByText('已转写，请检查后发送')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Agent 提示词' }), { key: 'z', ctrlKey: true })
     expect(useAgentStore.getState().composerDraft).toBe('已有草稿')
   })
   it('does not overwrite concurrent edits and asks to append', () => {

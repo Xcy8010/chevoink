@@ -17,6 +17,14 @@ function voice(overrides: Partial<VoiceInputController> = {}): VoiceInputControl
 }
 
 describe('AgentVoiceInputBar', () => {
+  it('keeps permission preparation in the compact recording surface without a waiting message', () => {
+    render(<AgentVoiceInputBar voice={voice({ state: 'requesting-permission' })} />)
+    expect(screen.queryByText(/正在等待麦克风权限/)).toBeNull()
+    expect(screen.getByLabelText('麦克风准备中，尚未录音')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '取消语音输入' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '停止录音并转写' })).toBeNull()
+  })
+
   it('shows real waveform and time between neutral 44px cancel/stop buttons, never a send button', () => {
     const controller = voice({ state: 'recording', elapsed: 12.7 })
     render(<AgentVoiceInputBar voice={controller} />)
@@ -57,7 +65,7 @@ describe('AgentVoiceInputBar', () => {
     const controller = voice({ state: 'downloading', progress: 0.42, error: '连接已中断' })
     render(<AgentVoiceInputBar voice={controller} />)
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0.42')
-    expect(screen.getByText('42%')).toBeTruthy()
+    expect(screen.getByText('42.0%')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toBe('连接已中断')
     fireEvent.click(screen.getByRole('button', { name: '取消语音输入' }))
     expect(controller.cancel).toHaveBeenCalledOnce()

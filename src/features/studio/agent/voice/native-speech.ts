@@ -14,7 +14,18 @@ let detection: Promise<NativeSpeech | undefined> | undefined;
 export function getNativeSpeech(): Promise<NativeSpeech | undefined> {
   detection ??= import('@capacitor/core').then(({ Capacitor, registerPlugin }) => {
     if (Capacitor.getPlatform() !== 'android' || !Capacitor.isPluginAvailable('ChevoinkSpeech')) return undefined;
-    plugin = registerPlugin<NativeSpeech>('ChevoinkSpeech');
+    const proxy = registerPlugin<NativeSpeech>('ChevoinkSpeech');
+    // Capacitor's Proxy synthesizes a function for EVERY unknown property, including
+    // `then`. Resolving that proxy through a Promise invokes a nonexistent native
+    // then() method and never settles. Return an explicit non-thenable facade.
+    plugin = {
+      status: () => proxy.status(),
+      download: () => proxy.download(),
+      transcribe: options => proxy.transcribe(options),
+      cancel: () => proxy.cancel(),
+      deleteModel: () => proxy.deleteModel(),
+      addListener: (event, listener) => proxy.addListener(event, listener),
+    };
     return plugin;
   });
   return detection;
@@ -22,14 +33,14 @@ export function getNativeSpeech(): Promise<NativeSpeech | undefined> {
 
 export function cancelNativeSpeech(): void { void plugin?.cancel().catch(() => {}); }
 
-export async function nativeOperation<T>(native: NativeSpeech, action: () => Promise<T>, signal?: AbortSignal, timeoutMs = 180_000): Promise<T> {
+export async function nativeOperation<T>(native: NativeSpeech, action: () => Promise<T>, signal?: AbortSignal, timeoutMs = 180_000, cancelOnTimeout = true): Promise<T> {
   if (signal?.aborted) throw new DOMException('语音操作已取消', 'AbortError');
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: () => void = () => {};
   const cancelled = new Promise<never>((_, reject) => {
     abort = () => { void native.cancel().catch(() => {}); reject(new DOMException('语音操作已取消', 'AbortError')); };
     signal?.addEventListener('abort', abort, { once: true });
-    timer = setTimeout(() => { void native.cancel().catch(() => {}); reject(new DOMException('原生语音操作超时', 'TimeoutError')); }, timeoutMs);
+    timer = setTimeout(() => { if (cancelOnTimeout) void native.cancel().catch(() => {}); reject(new DOMException('原生语音操作超时', 'TimeoutError')); }, timeoutMs);
   });
   try { return await Promise.race([action(), cancelled]); }
   finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }

@@ -16,7 +16,7 @@ export function AgentVoiceInputBar({ voice, modelSizeLabel = `${Math.ceil(VOICE_
   const showDownload = status === 'needs-download' || (status === 'error' && !voice.modelReady)
   const seconds = Math.min(60, Math.max(0, Math.floor(voice.elapsed)))
   const time = `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
-  const busyLabel = status === 'transcribing' ? '正在转写' : status === 'requesting-permission' ? '正在等待麦克风权限' : status === 'deleting' ? '正在删除语音包' : '正在检查语音包'
+  const busyLabel = status === 'transcribing' ? '正在转写' : status === 'requesting-permission' ? '' : status === 'deleting' ? '正在删除语音包' : '正在检查语音包'
 
   return (
     <div className="w-full min-w-0 text-[var(--text-primary)]" aria-label="语音输入">
@@ -31,18 +31,18 @@ export function AgentVoiceInputBar({ voice, modelSizeLabel = `${Math.ceil(VOICE_
           <X size={20} aria-hidden="true" />
         </button>
         <div className="flex min-w-0 flex-1 items-center justify-center gap-3">
-          {status === 'recording' ? (
+          {status === 'recording' || status === 'requesting-permission' ? (
             <>
               <div className="flex h-8 min-w-0 flex-1 items-center justify-center gap-0.5 overflow-hidden" role="img" aria-label="实时麦克风音量">
                 {voice.levels.map((level, index) => (
                   <span key={index} data-level={level} className="w-0.5 shrink-0 rounded-full bg-current opacity-70" style={{ height: `${2 + Math.min(1, Math.max(0, level)) * 28}px` }} />
                 ))}
               </div>
-              <span className="shrink-0 text-sm tabular-nums" aria-label={`录音时间 ${time}，最多一分钟`}>{time}</span>
+              <span className="shrink-0 text-sm tabular-nums" aria-label={status === 'requesting-permission' ? '麦克风准备中，尚未录音' : `录音时间 ${time}，最多一分钟`}>{time}</span>
             </>
           ) : status === 'downloading' ? (
             <div className="min-w-0 flex-1 px-1">
-              <div className="mb-1 flex justify-between gap-2 text-xs text-[var(--text-secondary)]"><span>正在下载语音包</span><span>{Math.round(voice.progress * 100)}%</span></div>
+              <div className="mb-1 flex justify-between gap-2 text-xs text-[var(--text-secondary)]"><span>{voice.progress <= 0 ? '正在连接下载' : voice.progress >= 0.999 ? '正在完成下载与校验' : '正在下载语音包'}</span><span>{voice.progress > 0 ? `${(Math.min(voice.progress < 1 ? 99.9 : 100, voice.progress * 100)).toFixed(1)}%` : '…'}</span></div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-muted)]" role="progressbar" aria-label="语音包下载进度" aria-valuenow={voice.progress} aria-valuemin={0} aria-valuemax={1}>
                 <div className="h-full rounded-full bg-[var(--text-secondary)]" style={{ width: `${voice.progress * 100}%` }} />
               </div>

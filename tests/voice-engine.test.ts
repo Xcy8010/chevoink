@@ -45,7 +45,20 @@ describe('voice main-thread contract', () => {
     vi.stubGlobal('caches', { keys: vi.fn(async () => ['chevoink-voice-old', 'unrelated-cache']), delete: vi.fn(async () => true) });
     WorkerMock.instances = [];
   });
-  afterEach(() => { disposeVoiceEngine(); vi.unstubAllGlobals(); });
+  afterEach(() => { disposeVoiceEngine(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it('a metadata timeout does not cancel an in-flight transcription', async () => {
+    vi.useFakeTimers();
+    const transcription = transcribeAudio(new Float32Array([0.25]), 16000);
+    await Promise.resolve();
+    const worker = WorkerMock.instances[0];
+    const transcriptionId = worker.postMessage.mock.calls[0][0].id;
+    const status = getVoiceModelStatus();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await status).toBe(false);
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.onmessage?.({ data: { id: transcriptionId, value: '你好' } });
+    expect(await transcription).toBe('你好');
+  });
   it('pins all sizes/hashes and total download', () => {
     expect(VOICE_MODEL_DOWNLOAD_BYTES).toBe(252062335);
     expect(VOICE_MODEL_DOWNLOAD_BYTES).toBe(VOICE_MANIFEST.files.reduce((sum, file) => sum + file.bytes, 0));

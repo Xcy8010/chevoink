@@ -9,6 +9,7 @@ import { useAgentStore } from '../../src/features/studio/agent/agentStore'
 import { AgentConversationRail, type AgentConversationRailItem } from '../../src/features/studio/components/AgentTaskSidebar'
 import LocalFirstTextarea from '../../src/features/studio/components/LocalFirstTextarea'
 import type { CreditModelOption } from '../../shared/contracts/index.js'
+import { ToastProvider } from '../../src/components/ui/Toast'
 
 class ResizeObserverStub {
   observe() {}
@@ -116,7 +117,7 @@ describe('Agent 模型与推理菜单', () => {
 
   it('模型卡片保持最高交互层级，推理滑杆按当前模型支持档位切换', () => {
     const onReasoningEffortChange = vi.fn()
-    render(<AgentComposer
+    render(<ToastProvider><AgentComposer
       novelId="novel-1"
       running={false}
       onSend={() => undefined}
@@ -134,7 +135,7 @@ describe('Agent 模型与推理菜单', () => {
       onReasoningEffortChange={onReasoningEffortChange}
       onOpenModelSettings={() => undefined}
       referenceOptions={[]}
-    />)
+    /></ToastProvider>)
 
     const modelSummary = screen.getByLabelText('模型档位')
     expect(modelSummary.closest('details')?.className).toContain('z-[120]')

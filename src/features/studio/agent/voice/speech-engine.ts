@@ -59,8 +59,10 @@ async function call<T>(operation: string, payload: Record<string, unknown> = {},
       pending.delete(id);
       cleanup();
       reject(new DOMException('离线语音操作超时，请缩短录音或重试', 'TimeoutError'));
-      disposeVoiceEngine();
-    }, operation === 'prepare' ? 15 * 60_000 : operation === 'transcribe' ? 180_000 : 30_000);
+      // A status probe can queue behind synchronous inference. Its timeout must
+      // not terminate another composer's download/transcription.
+      if (operation !== 'status') disposeVoiceEngine();
+    }, operation === 'prepare' ? 15 * 60_000 : operation === 'transcribe' ? 180_000 : operation === 'status' ? 3000 : 30_000);
     const cleanup = () => { clearTimeout(timeout); signal?.removeEventListener('abort', abort); };
     pending.set(id, { resolve: value => resolve(value as T), reject, progress, cleanup });
     signal?.addEventListener('abort', abort, { once: true });
@@ -75,7 +77,7 @@ async function call<T>(operation: string, payload: Record<string, unknown> = {},
 export async function getVoiceModelStatus(): Promise<boolean> {
   try {
     const native = await getNativeSpeech();
-    if (native) { const state = await nativeOperation(native, () => native.status()); return state.ready && state.sdkReady && !state.checking; }
+    if (native) { const state = await nativeOperation(native, () => native.status(), undefined, 3000, false); return state.ready && state.sdkReady && !state.checking; }
     return await call<boolean>('status');
   } catch { return false; }
 }
