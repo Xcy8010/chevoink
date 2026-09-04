@@ -3,7 +3,7 @@ import { BookCopy, Brain, ChevronLeft, GitCompareArrows, Network, PanelRightClos
 import { cn } from '@/lib/utils'
 import type { WorkInspectorTab } from './WorkInspector'
 import { FLOATING_DOCK_MIN_CLEARANCE, shouldShowWorkActivityDock } from './work-layout'
-import { fitWorkSplit, resizeWorkSplit, type WorkSplit, type WorkSplitGeometry } from './work-split'
+import { advanceWorkSplitGesture, fitWorkSplit, resizeWorkSplit, WORK_SPLIT, type WorkSplit, type WorkSplitGesture } from './work-split'
 import { WorkConversationContext } from './work-conversation-context'
 
 type Props = {
@@ -17,7 +17,7 @@ const items = [
   { key: 'changes' as const, label: '变更', icon: GitCompareArrows }, { key: 'memory' as const, label: '关系网', icon: Network }, { key: 'skills' as const, label: '技能', icon: Wrench },
 ]
 const storageKey = 'chevoink:work-split-v1'
-type Gesture = { x: number; start: WorkSplitGeometry; width: number; boundary: 'content' | 'inspector'; pointer: number; hasViewer: boolean }
+type Gesture = WorkSplitGesture & { pointer: number }
 
 export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, viewerIdentity, scopeKey, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab }: Props) {
   const root = useRef<HTMLDivElement>(null)
@@ -26,7 +26,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     let sizes = { viewer: viewerWidth, inspector: inspectorWidth === 520 ? 320 : inspectorWidth }
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null')
-      if (saved && Number.isFinite(saved.viewer) && Number.isFinite(saved.inspector)) sizes = { viewer: Math.max(320, Math.min(2000, saved.viewer)), inspector: Math.max(260, Math.min(1000, saved.inspector)) }
+      if (saved && Number.isFinite(saved.viewer) && Number.isFinite(saved.inspector)) sizes = { viewer: Math.max(WORK_SPLIT.viewer, Math.min(2000, saved.viewer)), inspector: Math.max(WORK_SPLIT.inspector, Math.min(1000, saved.inspector)) }
     } catch { /* Optional preferences. */ }
     return { ...sizes, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen }
   })
@@ -57,8 +57,9 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   }, [])
   const expand = useCallback(() => update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: true, inspectorCollapsed: true }), [update])
   const context = useMemo(() => ({ collapsed: geometry.chatCollapsed, expand }), [geometry.chatCollapsed, expand])
-  useEffect(() => { update({ ...splitRef.current, inspectorCollapsed: !rightOpen }) }, [rightOpen, update])
+  useEffect(() => { update({ ...splitRef.current, inspectorCollapsed: !rightOpen, ...(!rightOpen ? { chatCollapsed: false } : {}) }) }, [rightOpen, update])
   useEffect(() => { if (viewerIdentity) update({ ...splitRef.current, viewerCollapsed: false }) }, [viewerIdentity, update])
+  useEffect(() => { if (!hasViewer) update({ ...splitRef.current, chatCollapsed: false }) }, [hasViewer, update])
   useEffect(() => {
     if (viewer) { setRetainedViewer(viewer); return }
     const timer = window.setTimeout(() => setRetainedViewer(undefined), 240)
@@ -77,7 +78,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   const flush = useCallback(() => {
     const gesture = drag.current
     if (!gesture || pendingX.current === null) return
-    update(resizeWorkSplit(gesture.start, splitRef.current, gesture.width, pendingX.current - gesture.x, gesture.boundary, gesture.hasViewer))
+    update(advanceWorkSplitGesture(gesture, splitRef.current, pendingX.current))
     pendingX.current = null
   }, [update])
   const finish = useCallback(() => {
@@ -89,7 +90,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     if (gesture && root.current?.hasPointerCapture(gesture.pointer)) root.current.releasePointerCapture(gesture.pointer)
     if (gesture) delete document.documentElement.dataset.studioResizing
     setDragging(false)
-    try { localStorage.setItem(storageKey, JSON.stringify({ viewer: Math.max(320, splitRef.current.viewer), inspector: Math.max(260, splitRef.current.inspector) })) } catch { /* Optional preferences. */ }
+    try { localStorage.setItem(storageKey, JSON.stringify({ viewer: Math.max(WORK_SPLIT.viewer, splitRef.current.viewer), inspector: Math.max(WORK_SPLIT.inspector, splitRef.current.inspector) })) } catch { /* Optional preferences. */ }
   }, [flush])
   useEffect(() => {
     if (previousScope.current === scopeKey) return
@@ -112,7 +113,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
       update({ ...splitRef.current, inspectorCollapsed: false, viewerCollapsed: false })
       if (!rightOpen) onToggleRight()
     } else {
-      update({ ...splitRef.current, inspectorCollapsed: true })
+      update({ ...splitRef.current, inspectorCollapsed: true, chatCollapsed: false })
       if (rightOpen) onToggleRight()
     }
   }
@@ -138,7 +139,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
       event.preventDefault()
-      if (event.key === 'Home') update({ ...split, ...(boundary === 'content' ? { chatCollapsed: true } : { inspectorCollapsed: true }) })
+      if (event.key === 'Home') update({ ...split, ...(boundary === 'content' ? { chatCollapsed: true } : { inspectorCollapsed: true, chatCollapsed: false }) })
       else if (event.key === 'End') {
         if (boundary === 'content') expand()
         else update({ ...split, inspectorCollapsed: false })
@@ -155,7 +156,7 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     <aside className="work-split-column h-full shrink-0 overflow-hidden" style={{ width: geometry.rail }} aria-hidden={geometry.chatCollapsed} {...(geometry.chatCollapsed ? { inert: '' } : {})}>{conversationRail}</aside>
     <main data-work-conversation className="work-split-column min-w-0 bg-[var(--surface-default)]" style={{ flex: `0 0 ${Math.max(0, geometry.chat - (dockVisible && !floatDock ? 296 : 0))}px` }}>{conversation}</main>
     <aside aria-hidden={!dockVisible} {...(!dockVisible ? { inert: '' } : {})} className={cn('work-activity-dock h-full min-h-0 shrink-0 overflow-hidden', dockVisible ? 'is-visible' : '', floatDock && 'absolute top-0 z-40')} style={{ width: dockVisible ? 296 : 0, ...(floatDock ? { right: geometry.inspector } : {}) }}><div className="h-full w-[296px] px-3 py-4">{activityDock}</div></aside>
-    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} {...(!viewerOpen ? { inert: '' } : {})} className="work-split-column h-full min-h-0 shrink-0 overflow-hidden border-[var(--border-subtle)]" style={{ width: viewerOpen ? geometry.viewer : 0, borderLeftWidth: viewerOpen ? 1 : 0 }}><div className="h-full min-w-[320px]">{retainedViewer}</div></section>
+    <section data-studio-panel="workViewer" aria-hidden={!viewerOpen} {...(!viewerOpen ? { inert: '' } : {})} className="work-split-column h-full min-h-0 shrink-0 overflow-hidden border-[var(--border-subtle)]" style={{ width: viewerOpen ? geometry.viewer : 0, borderLeftWidth: viewerOpen ? 1 : 0 }}><div className="h-full" style={{ minWidth: WORK_SPLIT.viewer }}>{retainedViewer}</div></section>
     <aside data-studio-panel="workInspector" className="work-split-column work-inspector-column relative ml-auto h-full min-h-0 shrink-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--app-bg)]" style={{ width: geometry.inspector }}>
       <div aria-hidden={!inspectorOpen} {...(!inspectorOpen ? { inert: '' } : {})} className={cn('absolute inset-0 overflow-hidden transition-opacity duration-200', inspectorOpen ? 'opacity-100' : 'pointer-events-none opacity-0')}>{inspector}</div>
       {!inspectorOpen ? <div className="absolute inset-0 flex flex-col items-center py-2"><button type="button" onClick={toggleInspector} className="flex h-9 w-9 items-center justify-center" aria-label="展开检查区"><ChevronLeft className="h-4 w-4" /></button>{items.map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-label={label} title={label} className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-[var(--surface-muted)]" onClick={() => { onSelectInspectorTab(key); toggleInspector() }}><Icon className="h-4 w-4" /></button>)}</div> : <button type="button" onClick={toggleInspector} className="absolute left-1 top-2 z-20 rounded p-1.5 text-[var(--text-secondary)]" aria-label="收起检查区"><PanelRightClose className="h-4 w-4" /></button>}

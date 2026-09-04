@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { useState } from 'react'
 import WorkPerspective from '../../src/features/studio/components/WorkPerspective'
 import { useWorkConversation } from '../../src/features/studio/components/work-conversation-context'
+import { WorkConversationRestore } from '../../src/features/studio/components/WorkConversationRestore'
 import { AgentComposer } from '../../src/features/studio/agent/components/AgentComposer'
 import { ToastProvider } from '../../src/components/ui/Toast'
 import type { ModelReasoningEffort } from '../../shared/contracts/index'
@@ -13,7 +14,7 @@ export function Conversation() {
   return <div className={`relative flex h-full min-h-0 flex-col ${collapsed ? 'work-agent-compact' : ''}`}>
     <header className="p-4">历史架空小说构想 · 布衣山河</header>
     <div className="min-h-0 flex-1 overflow-auto p-4">{Array.from({ length: 12 }, (_, i) => <p key={i} className="mb-8">第 {i + 1} 章已完成。此处是交互测试内容，不会访问真实作品。</p>)}</div>
-    {collapsed ? <button data-agent-compact-restore className="mx-4 rounded-t-2xl bg-[var(--surface-muted)] p-3 text-left" onClick={expand}>最近一条 · 展开对话区</button> : null}
+    {collapsed ? <WorkConversationRestore onExpand={expand} /> : null}
     <div data-agent-composer className="px-4 pb-4"><AgentComposer novelId="preview" voiceScopeKey="split-preview" running={false} onSend={noop} onStop={noop} creativeFreedom="balanced" onCreativeFreedomChange={noop} qualityMode="premium" modelTier="speed" modelOptions={[{ tier: 'speed', label: '极速', multiplier: 1, available: true, selectedByDefault: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' }]} onModelTierChange={noop} customModels={[]} customModelId={null} onCustomModelChange={noop} reasoningSelections={reasoning} onReasoningEffortChange={(key, effort) => setReasoning(prev => ({ ...prev, [key]: effort }))} onOpenModelSettings={noop} referenceOptions={[]} /></div>
   </div>
 }

@@ -23,6 +23,7 @@ import {
 
 import Button from '@/components/ui/Button'
 import { useWorkConversation } from '../../components/work-conversation-context'
+import { WorkConversationRestore } from '../../components/WorkConversationRestore'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import { cn } from '@/lib/utils'
@@ -1068,7 +1069,6 @@ export function AgentPanel({
           }
     : null
 
-  const recentConversationText = messages.length ? getMessageText(messages[messages.length - 1].parts).replace(/\s+/g, ' ').slice(0, 100) : ''
   useLayoutEffect(() => {
     const node = scrollRef.current
     if (!workConversation.collapsed && node && !pinnedToBottomRef.current) node.scrollTop = lastScrollTopRef.current
@@ -1568,7 +1568,7 @@ export function AgentPanel({
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
-      {workConversation.collapsed ? <button type="button" data-agent-compact-restore aria-label="展开对话区" onClick={workConversation.expand} className="mx-4 flex min-h-10 items-center justify-between gap-3 rounded-t-2xl border border-b-0 border-[var(--border-subtle)] bg-[var(--surface-muted)] px-4 py-2 text-left text-xs text-[var(--text-secondary)]"><span className="flex min-w-0 items-center gap-3"><span className="shrink-0">{active ? 'Agent 正在执行' : '最近一条'}</span><span className="truncate">{recentConversationText || '展开对话区'}</span></span><span aria-hidden="true">↗</span></button> : null}
+      {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} /> : null}
       <div data-agent-composer className="px-4 pb-4">
         <AgentComposer
           novelId={novelId}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitWorkSplit, resizeWorkSplit, type WorkSplit } from '../../src/features/studio/components/work-split'
+import { advanceWorkSplitGesture, fitWorkSplit, resizeWorkSplit, WORK_SPLIT, type WorkSplit, type WorkSplitGesture } from '../../src/features/studio/components/work-split'
 
 const state: WorkSplit = { viewer: 600, inspector: 400, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: false }
 const width = 1600
@@ -8,18 +8,18 @@ describe('continuous Work gestures', () => {
     const start = fitWorkSplit(state, width, true)
     const a = resizeWorkSplit(start, state, width, 200, 'content', true)
     expect([a.viewer, a.inspector]).toEqual([400, 400])
-    const b = resizeWorkSplit(start, a, width, 350, 'content', true)
-    expect([b.viewer, b.inspector]).toEqual([320, 330])
-    const c = resizeWorkSplit(start, b, width, 470, 'content', true)
+    const b = resizeWorkSplit(start, a, width, 500, 'content', true)
+    expect([b.viewer, b.inspector]).toEqual([240, 260])
+    const c = resizeWorkSplit(start, b, width, 640, 'content', true)
     expect(c.viewerCollapsed && c.inspectorCollapsed).toBe(true)
-    const d = resizeWorkSplit(start, c, width, 380, 'content', true)
+    const d = resizeWorkSplit(start, c, width, 500, 'content', true)
     expect(d.viewerCollapsed || d.inspectorCollapsed).toBe(false)
-    expect([d.viewer, d.inspector]).toEqual([320, 300])
+    expect([d.viewer, d.inspector]).toEqual([240, 260])
     expect(resizeWorkSplit(start, d, width, 0, 'content', true)).toMatchObject(state)
   })
   it('collapses chat at the same 360px minimum and reverses in the held gesture', () => {
     const start = fitWorkSplit(state, width, true)
-    const folded = resizeWorkSplit(start, state, width, -250, 'content', true)
+    const folded = resizeWorkSplit(start, state, width, -280, 'content', true)
     expect(folded.chatCollapsed).toBe(true)
     const back = resizeWorkSplit(start, folded, width, -100, 'content', true)
     expect(back.chatCollapsed).toBe(false)
@@ -38,7 +38,7 @@ describe('continuous Work gestures', () => {
   })
   it('folds and unfolds the inspector independently without dropping the viewer', () => {
     const start = fitWorkSplit(state, width, true)
-    const folded = resizeWorkSplit(start, state, width, 180, 'inspector', true)
+    const folded = resizeWorkSplit(start, state, width, 280, 'inspector', true)
     expect(folded.inspectorCollapsed).toBe(true)
     const back = resizeWorkSplit(start, folded, width, 0, 'inspector', true)
     expect(back.inspectorCollapsed).toBe(false)
@@ -54,13 +54,47 @@ describe('continuous Work gestures', () => {
   })
   it('uses hysteresis instead of oscillating at the fold boundary', () => {
     const start = fitWorkSplit(state, width, true)
-    const folded = resizeWorkSplit(start, state, width, 470, 'content', true)
-    expect(resizeWorkSplit(start, folded, width, 420, 'content', true).viewerCollapsed).toBe(true)
-    expect(resizeWorkSplit(start, folded, width, 390, 'content', true).viewerCollapsed).toBe(false)
+    const folded = resizeWorkSplit(start, state, width, 640, 'content', true)
+    expect(resizeWorkSplit(start, folded, width, 560, 'content', true).viewerCollapsed).toBe(true)
+    expect(resizeWorkSplit(start, folded, width, 530, 'content', true).viewerCollapsed).toBe(false)
   })
   it('opens a collapsed inspector after a short drag even without a viewer', () => {
     const closed = { ...state, inspectorCollapsed: true }
     const start = fitWorkSplit(closed, width, false)
     expect(resizeWorkSplit(start, closed, width, -30, 'content', false).inspectorCollapsed).toBe(false)
+  })
+  it('holds both panes at smaller minima until deliberate overdrag', () => {
+    const start = fitWorkSplit(state, width, true)
+    const atMinimum = resizeWorkSplit(start, state, width, 560, 'content', true)
+    expect([atMinimum.viewer, atMinimum.inspector]).toEqual([240, 200])
+    expect(resizeWorkSplit(start, atMinimum, width, 630, 'content', true).viewerCollapsed).toBe(false)
+    expect(resizeWorkSplit(start, atMinimum, width, 633, 'content', true).viewerCollapsed).toBe(true)
+  })
+  it.each(['content', 'inspector'] as const)('reopens %s after 30px reversal even after overshooting to the window edge', boundary => {
+    const gesture: WorkSplitGesture = { x: 600, start: fitWorkSplit(state, width, true), width, boundary, hasViewer: true }
+    const folded = advanceWorkSplitGesture(gesture, state, 1400)
+    expect(folded.inspectorCollapsed).toBe(true)
+    const edge = advanceWorkSplitGesture(gesture, folded, 1599)
+    expect(edge.inspectorCollapsed).toBe(true)
+    const back = advanceWorkSplitGesture(gesture, edge, 1569)
+    expect(back.inspectorCollapsed).toBe(false)
+    expect(back.viewerCollapsed).toBe(false)
+  })
+  it('reopens chat after a short rightward reversal from the left edge', () => {
+    const gesture: WorkSplitGesture = { x: 600, start: fitWorkSplit(state, width, true), width, boundary: 'content', hasViewer: true }
+    const folded = advanceWorkSplitGesture(gesture, state, 250)
+    const edge = advanceWorkSplitGesture(gesture, folded, 0)
+    expect(edge.chatCollapsed).toBe(true)
+    expect(advanceWorkSplitGesture(gesture, edge, WORK_SPLIT.hysteresis + 1).chatCollapsed).toBe(false)
+  })
+  it('restores chat if no other content remains visible', () => {
+    for (const hasViewer of [true, false]) {
+      expect(fitWorkSplit({ ...state, chatCollapsed: true, viewerCollapsed: true, inspectorCollapsed: true }, width, hasViewer).chatCollapsed).toBe(false)
+    }
+  })
+  it('uses the remaining canvas for the inspector when chat folds without a viewer', () => {
+    const result = fitWorkSplit({ ...state, chatCollapsed: true }, width, false)
+    expect(result.inspector).toBe(width)
+    expect(result.chat + result.rail + result.viewer + result.inspector).toBe(width)
   })
 })
