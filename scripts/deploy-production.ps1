@@ -187,6 +187,7 @@ try {
     "-czf", $ArchivePath,
     "--exclude=node_modules",
     "--exclude=dist",
+    "--exclude=public/voice",
     "--exclude=.local-storage",
     "--exclude=.dbg",
     "--exclude=.git",

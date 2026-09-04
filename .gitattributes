@@ -1,0 +1,3 @@
+# This public module is SHA-256 pinned by the offline recorder; retain identical
+# bytes on Windows checkouts, Linux CI, and production static-file publication.
+public/voice-capture-worklet.js text eol=lf

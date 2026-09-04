@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "preview": "vite preview",
     "check": "tsc --noEmit",
+    "voice:prepare": "node scripts/prepare-voice-assets.mjs",
     "deploy:prod": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-production.ps1",
     "server:dev": "nodemon",
     "start:server": "tsx api/server.ts",
@@ -25,6 +26,7 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\""
   },
   "dependencies": {
+    "@capacitor/core": "8.4.2",
     "@milkdown/crepe": "^7.22.1",
     "@mozilla/readability": "^0.6.0",
     "@prisma/client": "6.12.0",

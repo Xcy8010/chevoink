@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -9,7 +10,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, BrainCircuit, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 import {
@@ -30,6 +31,9 @@ import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agen
 import { uploadAgentAttachment } from '../agentApi'
 import { getChapterContent } from '../../api'
 import { useAgentStore, type ComposerReference } from '../agentStore'
+import { useVoiceInput } from '../hooks/useVoiceInput'
+import { AgentVoiceInputBar } from './AgentVoiceInputBar'
+import { insertVoiceTranscript } from '../voice-insertion'
 import {
   buildComposerPrompt,
   COMPOSER_REFERENCE_MIME,
@@ -56,6 +60,8 @@ function formatAttachmentSize(size?: number): string {
 
 type AgentComposerProps = {
   novelId: string
+  voiceScopeKey?: string
+  voiceDisabled?: boolean
   running: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
@@ -220,6 +226,8 @@ function insertPlainText(root: HTMLDivElement, value: string): void {
 
 export function AgentComposer({
   novelId,
+  voiceScopeKey,
+  voiceDisabled = false,
   running,
   disabled = false,
   onSend,
@@ -272,6 +280,65 @@ export function AgentComposer({
   const creativeModeRef = useRef<HTMLDetailsElement | null>(null)
   const attachmentMenuRef = useRef<HTMLDetailsElement | null>(null)
   const modelMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const voiceBookmark = useRef<{ scope: string; signature: string; offset: number; preceding: string[] } | null>(null)
+  const [pendingVoice, setPendingVoice] = useState<{ scope: string; text: string } | null>(null)
+  const voiceUndo = useRef<{ scope: string; after: string; draft: string; references: ComposerReference[] } | null>(null)
+  const [voiceInserted, setVoiceInserted] = useState(false)
+  const caretAfterVoice = useRef<number | null>(null)
+  const scope = voiceScopeKey ?? ''
+  const voice = useVoiceInput({
+    scopeKey: scope,
+    disabled: !scope || voiceDisabled || disabled || running || sending || uploading > 0,
+    onTranscript: (text) => {
+      const bookmark = voiceBookmark.current
+      if (!bookmark || bookmark.scope !== scope || !text.trim()) return
+      const current = useAgentStore.getState()
+      if (composerSignature(current.composerDraft, current.composerReferences) !== bookmark.signature) {
+        setPendingVoice({ scope, text })
+        return
+      }
+      applyVoiceText(text, bookmark.offset, bookmark.preceding)
+    },
+  })
+  const voiceActive = voice.state !== 'idle' && voice.state !== 'checking'
+
+  useEffect(() => {
+    voiceBookmark.current = null
+    voiceUndo.current = null
+    caretAfterVoice.current = null
+    setPendingVoice(null)
+    setVoiceInserted(false)
+  }, [scope])
+
+  function applyVoiceText(text: string, offset?: number, preceding?: string[]) {
+    const current = useAgentStore.getState()
+    const result = insertVoiceTranscript(current.composerDraft, current.composerReferences, text, offset, preceding)
+    voiceUndo.current = { scope, after: composerSignature(result.draft, result.references), draft: current.composerDraft, references: current.composerReferences }
+    caretAfterVoice.current = result.caret
+    setComposerContent(result.draft, result.references)
+    setPendingVoice(null)
+    setVoiceInserted(true)
+  }
+
+  function captureVoiceBookmark() {
+    const editor = editorRef.current
+    const content = editor ? readComposerContent(editor, references) : { draft: prompt, references }
+    let offset = content.draft.length
+    let preceding = content.references.map((reference) => reference.id)
+    const selection = window.getSelection()
+    if (editor && selection?.rangeCount && editor.contains(selection.getRangeAt(0).endContainer)) {
+      const range = selection.getRangeAt(0).cloneRange()
+      range.setStart(editor, 0)
+      const prefix = document.createElement('div')
+      prefix.append(range.cloneContents())
+      const parsed = readComposerContent(prefix, references)
+      offset = parsed.draft.length
+      preceding = parsed.references.map((reference) => reference.id)
+    }
+    voiceBookmark.current = { scope, signature: composerSignature(content.draft, content.references), offset, preceding }
+    setComposerContent(content.draft, content.references)
+    for (const menu of [attachmentMenuRef, modelMenuRef, creativeModeRef]) menu.current?.removeAttribute('open')
+  }
 
   const imageCount = attachments.filter((attachment) => attachment.kind === 'image').length
   const fileCount = attachments.filter((attachment) => attachment.kind === 'file').length
@@ -279,7 +346,7 @@ export function AgentComposer({
   const fileFull = fileCount >= MAX_AGENT_FILE_COUNT
 
   const canSend =
-    !running && !disabled && !sending && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
+    !running && !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
   const activeBuiltInModel = modelOptions.find((item) => item.tier === modelTier)
   const activeCustomModel = modelTier === 'custom' ? customModels.find((item) => item.id === customModelId) : undefined
   const activeModelKey = modelTier === 'custom' && activeCustomModel ? `custom:${activeCustomModel.id}` : `tier:${modelTier}`
@@ -306,6 +373,26 @@ export function AgentComposer({
       writeComposerContent(editor, prompt, references)
     }
   }, [prompt, references])
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current
+    if (voiceActive || caretAfterVoice.current === null || !editor) return
+    let remaining = caretAfterVoice.current
+    caretAfterVoice.current = null
+    editor.focus()
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    range.collapse(false)
+    for (const node of Array.from(editor.childNodes)) {
+      if (node.nodeType !== Node.TEXT_NODE) continue
+      const length = node.textContent?.length ?? 0
+      if (remaining <= length) { range.setStart(node, remaining); range.collapse(true); break }
+      remaining -= length
+    }
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }, [prompt, references, voiceActive])
 
   const syncComposerFromDom = (): ParsedComposerContent => {
     const editor = editorRef.current
@@ -385,6 +472,7 @@ export function AgentComposer({
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    if (voiceActive) { event.preventDefault(); return }
     const files = Array.from(event.clipboardData.items)
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
@@ -425,6 +513,7 @@ export function AgentComposer({
   const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setDragActive(false)
+    if (voiceActive) return
     const transferredReference = parseComposerReferenceTransfer(event.dataTransfer.getData(COMPOSER_REFERENCE_MIME))
     if (transferredReference) {
       await attachReference(transferredReference)
@@ -446,7 +535,7 @@ export function AgentComposer({
 
   const handleSend = async () => {
     const current = syncComposerFromDom()
-    if ((!current.draft.trim() && current.references.length === 0) || running || disabled || sending || uploading > 0) {
+    if ((!current.draft.trim() && current.references.length === 0) || running || disabled || sending || voiceActive || pendingVoice || uploading > 0) {
       return
     }
     const effectivePrompt = buildComposerPrompt(current.draft, current.references)
@@ -468,6 +557,7 @@ export function AgentComposer({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (voiceActive) { event.preventDefault(); return }
     if (event.key === 'Backspace' && !prompt && references.length > 0) {
       event.preventDefault()
       setComposerContent('', references.slice(0, -1))
@@ -486,6 +576,7 @@ export function AgentComposer({
   }
 
   const handleEditorClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (voiceActive) return
     const removeButton = (event.target as HTMLElement).closest<HTMLElement>('[data-remove-composer-reference]')
     if (!removeButton) return
     event.preventDefault()
@@ -515,6 +606,7 @@ export function AgentComposer({
               <span className="truncate">{skill.name}</span>
               <button
                 type="button"
+                disabled={voiceActive}
                 onClick={() => toggleComposerSkill(skill.id)}
                 aria-label={`取消指定技能 ${skill.name}`}
                 className="shrink-0 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
@@ -537,6 +629,7 @@ export function AgentComposer({
                 />
                 <button
                   type="button"
+                  disabled={voiceActive}
                   onClick={() => removeAttachment(attachment.id)}
                   aria-label={`移除图片 ${attachment.name}`}
                   className="absolute -right-1.5 -top-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] opacity-85 transition-opacity hover:opacity-100"
@@ -558,6 +651,7 @@ export function AgentComposer({
                 </span>
                 <button
                   type="button"
+                  disabled={voiceActive}
                   onClick={() => removeAttachment(attachment.id)}
                   aria-label={`移除文件 ${attachment.name}`}
                   className="shrink-0 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
@@ -588,7 +682,7 @@ export function AgentComposer({
           role="textbox"
           aria-label="Agent 提示词"
           aria-multiline="true"
-          contentEditable={!disabled}
+          contentEditable={!disabled && !voiceActive && !sending}
           suppressContentEditableWarning
           onInput={syncComposerFromDom}
           onClick={handleEditorClick}
@@ -598,7 +692,10 @@ export function AgentComposer({
           data-disabled={disabled}
         />
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
+      {pendingVoice?.scope === scope ? <div className="px-1.5 py-2 text-xs text-[var(--text-secondary)]" role="status">草稿已变化，转写文字尚未插入。<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{pendingVoice.text}</div><button type="button" disabled={disabled || running || sending || voiceActive} className="mr-3 min-h-11 underline disabled:opacity-50" onClick={() => { if (!disabled && !running && !sending && !voiceActive) applyVoiceText(pendingVoice.text) }}>插入到末尾</button><button type="button" className="min-h-11" onClick={() => setPendingVoice(null)}>放弃</button></div> : null}
+      {voiceInserted && voiceUndo.current?.scope === scope && voiceUndo.current.after === composerSignature(prompt, references) ? <div className="flex items-center gap-3 px-1.5 text-xs text-[var(--text-secondary)]" role="status"><span>已转写，请检查后发送</span><button type="button" disabled={voiceActive} className="min-h-9 underline" onClick={() => { const undo = voiceUndo.current; if (undo?.scope === scope && undo.after === composerSignature(useAgentStore.getState().composerDraft, useAgentStore.getState().composerReferences)) setComposerContent(undo.draft, undo.references); setVoiceInserted(false); voiceUndo.current = null }}>撤销插入</button></div> : null}
+      {voiceActive ? <AgentVoiceInputBar voice={voice} /> : null}
+      <div className={cn('mt-1.5 flex items-center justify-between gap-1', voiceActive && 'hidden')}>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <input
             ref={imageInputRef}
@@ -645,6 +742,7 @@ export function AgentComposer({
                 <span><span className="block font-medium">上传文件</span><span className="mt-0.5 block text-[10px] text-[var(--text-tertiary)]">PDF、DOCX、TXT、Markdown</span></span>
               </button>
               <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />
+              {voice.modelReady ? <button type="button" onClick={() => { attachmentMenuRef.current?.removeAttribute('open'); void voice.removeModel() }} className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]"><Mic className="h-4 w-4 shrink-0" /><span><span className="block">删除本机语音包</span><span className="mt-0.5 block text-[10px] text-[var(--text-tertiary)]">释放存储空间，下次使用可重新下载</span></span></button> : null}
               <button
                 type="button"
                 onClick={() => setReferencePickerOpen((value) => !value)}
@@ -759,7 +857,7 @@ export function AgentComposer({
               className={cn('flex h-7 cursor-pointer list-none items-center gap-1.5 px-1 text-[11px] transition-colors hover:text-[var(--text-primary)] group-data-[disabled=true]/mode:pointer-events-none group-data-[disabled=true]/mode:opacity-45 [&::-webkit-details-marker]:hidden', creativeFreedom === 'bold' ? 'text-orange-600 dark:text-orange-400' : 'text-[var(--text-secondary)]')}
             >
               {(() => { const ActiveIcon = CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.icon ?? Feather; return <ActiveIcon className="h-3.5 w-3.5" /> })()}
-              <span>{CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.label}</span>
+              <span className="max-w-16 truncate mobile:hidden">{CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.label}</span>
               <ChevronDown className="h-3 w-3 transition-transform group-open/mode:rotate-180" />
             </summary>
             <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_14px_34px_rgba(15,23,42,0.16)] motion-safe:origin-bottom-left motion-safe:animate-[agent-menu-in_150ms_cubic-bezier(0.2,0.8,0.2,1)]">
@@ -781,14 +879,14 @@ export function AgentComposer({
               ))}
             </div>
           </details>
-          <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto" data-disabled={running || disabled || undefined} onToggle={(event) => { if (!(event.currentTarget as HTMLDetailsElement).open) { setMobileModelsOpen(false); setEditingReasoningTier(null) } }}>
+          <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto min-w-0" data-disabled={running || disabled || undefined} onToggle={(event) => { if (!(event.currentTarget as HTMLDetailsElement).open) { setMobileModelsOpen(false); setEditingReasoningTier(null) } }}>
             <summary
               onClick={(event) => { if (running || disabled) event.preventDefault() }}
               aria-label="模型档位"
               title="选择模型性能与 Credits 倍率"
               className="flex h-7 cursor-pointer list-none items-center gap-1 rounded-full px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] group-data-[disabled=true]/model:pointer-events-none group-data-[disabled=true]/model:opacity-45 [&::-webkit-details-marker]:hidden"
             >
-              <span className="max-w-24 truncate">{activeModelLabel}</span>
+              <span className="min-w-0 max-w-24 truncate">{activeModelLabel}</span>
               <span className="text-[9px] text-[var(--text-tertiary)]">{activeReasoningEffort}</span>
               <ChevronDown className="h-3 w-3 transition-transform group-open/model:rotate-180" />
             </summary>
@@ -835,11 +933,12 @@ export function AgentComposer({
             </div>
           </details>
         </div>
+        <button type="button" disabled={voice.disabled || voice.state === 'checking'} onPointerDown={captureVoiceBookmark} onClick={(event) => { if (event.detail === 0 || !voiceBookmark.current || voiceBookmark.current.scope !== scope) captureVoiceBookmark(); void voice.start() }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] focus-visible:outline focus-visible:outline-2 disabled:opacity-35 mobile:h-11 mobile:w-11" aria-label="语音输入" title="语音输入 · 本机离线转写"><Mic className="h-[18px] w-[18px]" /></button>
         {running ? (
           <button
             type="button"
             onClick={onStop}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 mobile:h-11 mobile:w-11"
             aria-label="停止运行"
             title="停止运行"
           >
@@ -850,7 +949,7 @@ export function AgentComposer({
             type="button"
             onClick={() => void handleSend()}
             disabled={!canSend}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35 mobile:h-11 mobile:w-11"
             aria-label="发送"
             title="发送"
           >

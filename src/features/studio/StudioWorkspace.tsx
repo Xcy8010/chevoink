@@ -4358,6 +4358,8 @@ export default function StudioWorkspace() {
   ) {
     return (
       <AgentPanel
+          voiceScopeKey={activeAgentTaskWindowId ? `${queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined}
+          voiceDisabled={studioSettingsOpen || studioQuery.isPlaceholderData}
           sessionId={agentSessionId}
           sessionResolving={agentSessionsResolving}
           novelId={activeNovelId}

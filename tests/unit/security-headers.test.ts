@@ -7,7 +7,16 @@ describe('生产 nginx 安全响应头', () => {
 
   it('强制执行 CSP，不再停留在无服务端收集端点的 Report-Only 状态', () => {
     expect(config).not.toContain('Content-Security-Policy-Report-Only')
-    expect(config.match(/add_header Content-Security-Policy /g)).toHaveLength(2)
+    expect(config.match(/add_header Content-Security-Policy /g)).toHaveLength(3)
+  })
+
+  it('仅离线语音 worker 获得 WASM 权限，页面不放宽脚本策略', () => {
+    const policies = [...config.matchAll(/add_header Content-Security-Policy "([^"]+)"/g)].map((match) => match[1])
+    expect(policies.filter((policy) => policy.includes("script-src 'self';"))).toHaveLength(2)
+    expect(policies.filter((policy) => policy.includes("'wasm-unsafe-eval'"))).toEqual([
+      "default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'none'",
+    ])
+    expect(config).toContain('location ~ ^/assets/voice-worker-')
   })
 
   it('脚本与连接仅允许同源，并阻止框架嵌入和 base/form 劫持', () => {

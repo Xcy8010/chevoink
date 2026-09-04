@@ -47,3 +47,9 @@ coverage/
 *.sw?
 .vite
 .local-storage
+
+# Offline voice assets: generated locally, never commit model/runtime binaries
+/output/voice-assets/
+/public/voice/sensevoice-*/
+/.playwright-cli/
+/output/playwright/

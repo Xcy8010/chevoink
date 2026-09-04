@@ -1,0 +1,64 @@
+# 设备端语音输入
+
+2026-09-05。本文记录 plan/24 经用户确认后的设备端优先实施，取代原服务端 ASR 发布路径。功能是输入辅助，不是语音通话。
+
+## 使用
+
+1. 创作区模型选择右侧点击麦克风。首次明确确认下载设备端语音包，显示实际下载进度，建议 Wi-Fi。
+2. 下载后再次点击麦克风，授予录音权限。底部显示真实音量与计时；单段最多 60 秒。
+3. 左侧 X 取消，右侧方块停止并转写。切任务、关闭工作区或页面切后台时取消，不在后台继续录音。
+4. 转写结果填入草稿，不自动发送。用户可校对、撤销本次插入，再按原发送按钮交给 Agent。
+5. 输入框「+」菜单可删除本机语音包；此操作不删除会话或作品，下次使用需要重新下载。
+
+## 数据与费用边界
+
+- 音频仅在用户设备内采集、处理，不上传 ASR API，不传入聊天模型，不保存到后端上传目录。
+- 语音识别不扣 Credits，不计作写作 token。用户主动发送文字后，现有 Agent 计费规则不变。
+- 首次模型/运行资源需要联网下载，网页版本总量以代码内 `VOICE_MODEL_DOWNLOAD_BYTES` 为准，约 252MB；Android 原生语音包与网页包分别缓存。
+- 设备性能、存储空间、浏览器缓存回收会影响可用性。离线转写不表示整站已具备离线启动能力；当前网页需已加载，发送 Agent 请求仍须联网。
+- 不支持的设备明确提示；没有云端或系统在线识别的静默回退。旧 APK 若缺录音权限需要更新，不能因模型已下载就假定麦克风可用。
+
+## 实现结构
+
+| 组件 | 职责 |
+| --- | --- |
+| `AgentComposer` | 麦克风入口、原草稿/引用不破坏、安全书签插入、冲突确认、撤销 |
+| `useVoiceInput` | 手势触发录音、AudioWorklet 单声道 PCM、资源释放、操作代数隔离、取消 |
+| `AgentVoiceInputBar` | 同一工具栏里的下载/授权/录音/转写/错误状态；手机最小 44px 操作热区 |
+| `speech-engine` | 本机缓存下载/删除、请求生命周期、设备识别适配 |
+| `voice-worker` | 浏览器后台 WASM 推理；取消时可终止 worker，不阻塞 React 主线程 |
+| `voice-manifest` | 固定版本、文件大小、SHA256、官方来源；准备脚本与运行时共享 |
+| Android `ChevoinkSpeech` | 原生设备端识别及模型存储，具体接口以原生代码为准 |
+
+当前任务以宿主窗口 ID 隔离，不使用可为 null 的 sessionId 作为唯一标识。捕获选区时引用芯片是独立对象；结果用纯文本插入，不能执行录音中的 HTML 或“发送/删除”等口令。转写期间若草稿被外部修改，先提示插入到末尾，不能按旧快照覆盖。
+
+## 模型与许可
+
+- 浏览器运行时使用官方 [sherpa-onnx v1.12.26](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.12.26) 的单线程 WASM SIMD 预编译包，不要求全站 SharedArrayBuffer/COOP/COEP。
+- 模型是 SenseVoice Small 的 INT8 路线，支持中文、英文等语言；模型名称/来源和许可须保留，不能把运行时 Apache-2.0 当作所有权重的许可。
+- [SenseVoice 官方许可说明](https://github.com/QwenAudio/SenseVoice#license)、[模型许可](https://github.com/modelscope/FunASR/blob/58830eca4012644aac0c3218c3ccc7d98f003fda/MODEL_LICENSE)。运行时及模型第三方声明见仓库随附语音许可文件。
+- 没有自报为“中文零误识别”；人名、生僻字、英文专名及嘈杂环境须用户复核。固定设备准确率/延迟与广泛真机评测没有被单元测试替代。
+
+## 构建与资源发布
+
+```powershell
+npm run voice:prepare
+# 本地预览可加 --public，大资源由 gitignore 排除
+node scripts/prepare-voice-assets.mjs --public
+```
+
+脚本验证固定官方包及每个文件的 SHA256。大模型不进入 Git；构建产物目录为 `output/voice-assets/<version>/`。发布时放入 `/var/www/chevoink/voice/<version>/`，对应同源 `/voice/<version>/`；它与日常网页发布目录隔离，不能被网页更新清空。Android 模型同样使用该持久资源根下的独立版本子目录。
+
+网页的严格 CSP 保持不变，仅独立 voice-worker 响应允许缓存 JS blob 和 WASM 编译。禁止为此给整站添加 `unsafe-eval` 或任意跨域网络权限。下载只获取公开模型/脚本，没有音频上传路由或新增数据库迁移。
+
+## 验证与发布要求
+
+- 顺序四闸：`npx tsc --noEmit`、`npm test`、`npm run build`、`npm run lint`，之后推送并等待对应提交 CI；不能把 skipped 集成测试算作通过。
+- 真模型识别 smoke：固定公开中英测试 WAV，下载完成后阻断网络仍能识别，验证取消/静音。Web UI 另验 320/360px、深浅色与键盘。
+- APK：核对线上版本、提高 versionCode/versionName、UA一致、release 签名严格使用既有密钥；用 apksigner 比较旧包和新包证书，禁止无 key 回退 debug 签名发布。
+- APK 先发布带版本号不可变文件并验证 SHA256，最后原子更新 version.json；保留旧 APK 可回退。跨仓库状态必须分别报告。
+- 硬件麦克风、蓝牙、锁屏、来电、低内存设备及 Android 覆盖安装必须有实机记录；没有连接真机时明确列为待验，不宣称已通过。
+
+## 回滚
+
+回滚前端提交可移除入口，不需要回滚数据库或 Agent 服务。版本化模型资源暂时保留，避免旧页面正在下载时 404。用户缓存仅以 `chevoink-voice-` 命名管理，不清空本站其他缓存/草稿。原生包不能用更低 versionCode覆盖安装，应用逻辑回滚需重新构建更高 versionCode且保持原签名。

@@ -78,6 +78,8 @@ import ChevoinkAgentMark from './ChevoinkAgentMark'
  */
 
 type AgentPanelProps = {
+  voiceScopeKey?: string
+  voiceDisabled?: boolean
   /** 未建会话时为 null，首次发送前通过 ensureSession 懒创建 */
   sessionId: EntityId | null
   novelId: EntityId
@@ -139,6 +141,8 @@ type AgentPanelProps = {
 const MIN_SHIMMER_HOLD_MS = 1500
 
 export function AgentPanel({
+  voiceScopeKey,
+  voiceDisabled = false,
   sessionId,
   novelId,
   novelName,
@@ -1556,9 +1560,11 @@ export function AgentPanel({
       <div className="px-4 pb-4">
         <AgentComposer
           novelId={novelId}
+          voiceScopeKey={voiceScopeKey}
+          voiceDisabled={voiceDisabled || sessionResolving}
           running={active}
           disabled={conversationLoading}
-          onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds) => void handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds)}
+          onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds) => handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
           qualityMode={qualityMode}
