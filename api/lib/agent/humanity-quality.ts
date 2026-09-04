@@ -289,15 +289,6 @@ export async function persistHumanityQualityReport(input: {
   const chapter = await getOwnedQualityChapter(input.userId, input.novelId, input.chapterId)
   if (chapter.revision !== input.chapterRevision) throw new DataAccessError(409, 'QUALITY_SOURCE_STALE', '章节在质量检查期间已被修改，请基于最新版本重新检查。')
 
-  const prior = await prisma.chapterQualityReport.findFirst({
-    where: {
-      userId: input.userId,
-      novelId: input.novelId,
-      chapterId: input.chapterId,
-      ...(input.runId ? { runId: input.runId } : input.compilationId ? { compilationId: input.compilationId } : {}),
-    },
-    orderBy: { createdAt: 'desc' }, select: { repairRound: true },
-  })
   const findings = [...input.deterministicFindings, ...locateCriticFindings(chapter.content, input.criticFindings)]
     .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.start === finding.start && item.end === finding.end) === index)
     .slice(0, 36)
@@ -311,7 +302,7 @@ export async function persistHumanityQualityReport(input: {
       data: {
         userId: input.userId, novelId: input.novelId, runId: input.runId, compilationId: input.compilationId,
         chapterId: input.chapterId, chapterRevision: chapter.revision, mode: input.mode,
-        status: actionableCount > 0 ? 'needs_repair' : 'passed', repairRound: prior?.repairRound ?? 0,
+        status: actionableCount > 0 ? 'needs_repair' : 'passed', repairRound: 0,
         deterministicMetrics: input.deterministicMetrics as Prisma.InputJsonValue,
         criticVersion: HUMANITY_CRITIC_VERSION, checkedAt: new Date(),
         findings: {

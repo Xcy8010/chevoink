@@ -920,6 +920,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           const existingActivity = state.workspaceActivities.some((activity) => activity.callId === event.callId)
           return {
             ...base,
+            // 进入工具执行即证明该消息正文流已结束：登记定稿，text.final 因断线重连等丢失时光标也不残留
+            ...(state.finalizedTextIds.includes(event.messageId) ? {} : { finalizedTextIds: [...state.finalizedTextIds, event.messageId] }),
             ...(question ? { phase: 'awaiting_input' as const, pendingQuestion: question } : {}),
             ...(question ? noteSessionSignal(state, 'attention') : {}),
             ...(isWrite && !isSubagentInternal && !existingActivity
@@ -1006,6 +1008,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
               : {}
           return {
             ...base,
+            // 工具结果到达同样证明正文流早已结束：兜底登记定稿，确保光标不残留
+            ...(state.finalizedTextIds.includes(event.messageId) ? {} : { finalizedTextIds: [...state.finalizedTextIds, event.messageId] }),
             ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null, ...withoutActiveSessionSignal(state) } : {}),
             ...todoUpdate,
             liveToolDrafts: Object.fromEntries(Object.entries(state.liveToolDrafts).filter(([callId]) => callId !== event.callId)),

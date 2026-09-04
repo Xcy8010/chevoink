@@ -1142,9 +1142,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       })
       addUsage(usage, wrapUp.usage)
       const cleanWrapUp = humanizeAgentVisibleText(stripAgentProtocolArtifacts(wrapUp.content))
-      if (wrapUp.content) {
-        bus.emit({ type: 'text.final', messageId: wrapMessageId, text: cleanWrapUp, asReasoning: false })
-      }
+      // 无论是否有干净文本都发 text.final：前端据此停掉收尾正文尾部的流式光标
+      bus.emit({ type: 'text.final', messageId: wrapMessageId, text: cleanWrapUp, asReasoning: false })
       if (cleanWrapUp) {
         await persistMessage(wrapMessageId, runId, params.sessionId, 'assistant', [
           { type: 'text', text: cleanWrapUp },
@@ -1194,6 +1193,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const noticeId = randomUUID()
       bus.emit({ type: 'message.start', messageId: noticeId, role: 'assistant' })
       bus.emit({ type: 'text.delta', messageId: noticeId, delta: notice })
+      // 检查点行一次性写完：立即定稿，避免续跑期间光标在系统行尾部常闪
+      bus.emit({ type: 'text.final', messageId: noticeId, text: notice, asReasoning: false })
       void persistMessage(noticeId, runId, params.sessionId, 'assistant', [{ type: 'text', text: notice }]).catch(() => {})
       messages.push({
         role: 'user',
@@ -1384,6 +1385,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
         const failureText = '模型连续返回无效工具调用协议，本轮已安全停止，未将这些文本视为已执行操作。请重新发起任务。'
         bus.emit({ type: 'text.delta', messageId, delta: failureText })
+        bus.emit({ type: 'text.final', messageId, text: failureText, asReasoning: false })
         await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: failureText }])
         bus.emit({ type: 'step.finish', turn, usage: result.usage })
         await finalizeRun(runId, bus, 'failed', usage, turn, failureText, failureText)
@@ -1437,11 +1439,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           if (blockedRepeat >= 2) {
             forceWrapUpReason = '同一工具与参数被连续重复调用已熔断终止（防空转循环）。'
           }
-          const blockTitle = getToolByName(call.name)?.title ?? call.name
           const blockSummary = '与前两次调用完全相同（工具与参数一致），未执行'
-          bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: blockTitle, args: null })
-          bus.emit({ type: 'tool.result', messageId, callId: call.id, toolName: call.name, ok: false, summary: blockSummary, durationMs: 0 })
-          parts.push({ type: 'tool-call', callId: call.id, toolName: call.name, title: blockTitle, args: null, status: 'failed', summary: blockSummary })
+          // 产品口径：熔断拦截属服务端防空转保护，不是作者需要看到的「失败工具」——
+          // 不发 tool.call/tool.result 事件、不落 part，会话与刷新后历史都不显示这张卡；
+          // 模型侧仍通过 tool 消息收到换路提示，服务器日志保留可观测性。
+          console.warn('[agent-loop] P0 重复签名熔断拦截：%s（tool=%s run=%s turn=%d）', blockSummary, call.name, runId, turn)
           messages.push({
             role: 'tool',
             toolCallId: call.id,
@@ -1497,6 +1499,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         const failureMessageId = randomUUID()
         bus.emit({ type: 'message.start', messageId: failureMessageId, role: 'assistant' })
         bus.emit({ type: 'text.delta', messageId: failureMessageId, delta: failureText })
+        bus.emit({ type: 'text.final', messageId: failureMessageId, text: failureText, asReasoning: false })
         await persistMessage(failureMessageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: failureText }])
         await finalizeRun(runId, bus, 'failed', usage, turn, failureText, failureText)
         return
@@ -1543,6 +1546,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         : error.message
       bus.emit({ type: 'message.start', messageId, role: 'assistant' })
       bus.emit({ type: 'text.delta', messageId, delta: message })
+      bus.emit({ type: 'text.final', messageId, text: message, asReasoning: false })
       await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: message }])
       bus.emit({ type: 'error', code: error.code.toLowerCase(), message, recoverable: false })
       await flushLiveTurn()

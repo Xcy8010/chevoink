@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { generateTextCompletion } from '../../ai-service.js'
-import { prisma } from '../../prisma.js'
+import { DataAccessError, prisma } from '../../prisma.js'
 import {
   characterVoiceProfileInputSchema,
   criticQualityFindingSchema,
@@ -37,6 +37,15 @@ import { coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js
 const READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const WRITE = { plan: 'deny', build: 'allow', review: 'allow' } as const
 const CONTENT_WRITE = { plan: 'deny', build: 'allow', review: 'deny' } as const
+
+/** 自动修订阶段的可预期拦截码：命中时检查仍视为完成（报告交付、剩余交作者审阅），不把工具标成执行失败 */
+const REPAIR_BLOCK_CODES = new Set([
+  'QUALITY_REPAIR_LIMIT',
+  'QUALITY_REPORT_STALE',
+  'QUALITY_EVIDENCE_STALE',
+  'QUALITY_PATCH_OVERLAP',
+  'QUALITY_FINDING_SCOPE_INVALID',
+])
 
 const criticEnvelopeSchema = z.object({ findings: z.array(criticQualityFindingSchema).max(24).default([]) })
 const repairEnvelopeSchema = z.object({
@@ -241,20 +250,31 @@ ${bundle.chapter.content}
       ? automaticRepairFindings(report, true)
       : []
     if (selected.length > 0) {
-      await selectQualityFindings(ctx.userId, ctx.novelId, report.id, selected.map((finding) => finding.id))
-      const repaired = await applySelectedQualityRepairs(ctx, report, selected)
-      if (repaired) {
-        return {
-          output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
-          summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
-          display: reportDisplay(repaired.report),
-          snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+      try {
+        await selectQualityFindings(ctx.userId, ctx.novelId, report.id, selected.map((finding) => finding.id))
+        const repaired = await applySelectedQualityRepairs(ctx, report, selected)
+        if (repaired) {
+          return {
+            output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
+            summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
+            display: reportDisplay(repaired.report),
+            snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
+          }
         }
-      }
-      return {
-        output: `质量检查已完成并保留报告：发现 ${warningCount} 个需关注问题、${advisoryCount} 个审美建议；局部修订器本次未返回可安全验证的补丁，正文保持不变。后续再次检查会直接复用本报告，不会循环重试。`,
-        summary: `人类感质量检查${criticFallback ? '（确定性兜底）' : ''} · 修订未应用`,
-        display: reportDisplay(report),
+        return {
+          output: `质量检查已完成并保留报告：发现 ${warningCount} 个需关注问题、${advisoryCount} 个审美建议；局部修订器本次未返回可安全验证的补丁，正文保持不变。后续再次检查会直接复用本报告，不会循环重试。`,
+          summary: `人类感质量检查${criticFallback ? '（确定性兜底）' : ''} · 修订未应用`,
+          display: reportDisplay(report),
+        }
+      } catch (error) {
+        // 修订轮次保护/证据过期等可预期拦截：检查本身已完成，报告照常交付，剩余问题交作者审阅；
+        // 绝不能把 CHECK 步骤标成「执行失败」挡住后续提交链路。
+        if (!(error instanceof DataAccessError) || !REPAIR_BLOCK_CODES.has(error.code)) throw error
+        return {
+          output: `质量检查完成：一次融合审查定位 ${report.findings.length} 项证据（${warningCount} 个需关注、${advisoryCount} 个审美建议）。自动局部修订被轮次保护拦截（${error.message}）正文保持 r${report.chapterRevision} 不变，剩余问题保留在报告中交作者审阅。检查视为已完成：禁止再次调用 quality_analyze，可直接继续后续流程。`,
+          summary: `人类感质量检查 · 剩余问题交作者审阅`,
+          display: reportDisplay(report),
+        }
       }
     }
     return {

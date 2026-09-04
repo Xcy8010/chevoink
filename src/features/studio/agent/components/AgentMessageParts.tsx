@@ -1271,7 +1271,9 @@ export const AgentMessageParts = memo(function AgentMessageParts({
         if (part.type === 'text') {
           // 折叠态且可收起：过程进展正文折进「已处理 n 个操作」，只留结尾总结的正文可见
           if (collapsed && textCollapsible) return null
-          return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast} />
+          // 消息内已存在工具卡 = 该段正文流早已结束：即便定稿标记丢失（断线/回放）也不画光标
+          const hasToolCall = parts.some((item) => item.type === 'tool-call')
+          return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast && !hasToolCall} />
         }
 
         // 折叠态：隐藏思考/动作，仅保留 text 结论

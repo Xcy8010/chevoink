@@ -9,7 +9,7 @@ import {
   storyStateSchema,
 } from '../../../../shared/contracts/index.js'
 import { generateTextCompletion } from '../../ai-service.js'
-import { prisma } from '../../prisma.js'
+import { DataAccessError, prisma } from '../../prisma.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { getLatestQualityReport } from '../humanity-quality.js'
 import { recordChapterBaseline } from '../baseline.js'
@@ -638,17 +638,19 @@ export const chapterBridgeCommitTool = defineTool({
           return { output: '质量报告仍有明确错误未修复，禁止提交章节桥。请先处理 error finding 并重新检查。', summary: '质量错误阻止提交' }
         }
         const validation = compilation.validation as { checkedRevision?: number; errorCount?: number; [key: string]: unknown } | null
+        // 有界质量修订自身会把 revision 推前一格：连续性校验记录落后时在此对账推进，
+        // 避免「检查都通过了却因 checkedRevision 落后一格」把 COMMIT 挡成执行失败
         if (
-          report.compilationId === compilation.id
-          && report.status === 'repaired'
-          && validation?.checkedRevision === compilation.chapter.revision - 1
-          && (validation.errorCount ?? 0) === 0
+          report.status === 'repaired'
+          && report.chapterRevision === compilation.chapter.revision
+          && (validation?.errorCount ?? 0) === 0
+          && (validation?.checkedRevision ?? -1) < compilation.chapter.revision
         ) {
           await prisma.storyCompilation.update({
             where: { id: compilation.id },
             data: {
               validation: {
-                ...validation,
+                ...(validation ?? {}),
                 checkedRevision: compilation.chapter.revision,
                 checkedAt: new Date().toISOString(),
                 advancedBy: 'bounded_quality_repair_commit_reconcile',
@@ -660,11 +662,15 @@ export const chapterBridgeCommitTool = defineTool({
     }
     const firstTask = compilation.sceneTasks[0]
     const lastTask = compilation.sceneTasks.at(-1)
-    const lastExit = storyStateSchema.parse(args.exitState ?? lastTask?.exitState ?? {
+    // 终态状态逐层容错补全：模型传参/历史落库形状异常时降级到编译态推导，再降级到空状态，绝不让 COMMIT 因参数形状执行失败
+    const derivedState = {
       action: lastTask?.turn || '', location: compilation.bridge.location, storyTime: compilation.bridge.storyTime,
       knowledge: asStrings(compilation.bridge.knowledgeState), emotion: asStrings(compilation.bridge.emotionAftermath), body: asStrings(compilation.bridge.bodyState),
       objects: asStrings(compilation.bridge.objectState), relationships: asStrings(compilation.bridge.relationshipState), openLoops: asStrings(compilation.bridge.openLoops),
-    })
+    }
+    const exitParse = storyStateSchema.safeParse(args.exitState ?? lastTask?.exitState ?? derivedState)
+    const derivedParse = exitParse.success ? null : storyStateSchema.safeParse(derivedState)
+    const lastExit = exitParse.success ? exitParse.data : (derivedParse?.success ? derivedParse.data : storyStateSchema.parse({}))
     const terminal = {
       compilationId: compilation.id,
       chapterSummary: args.chapterSummary?.trim() || compilation.sceneTasks.map((task) => `${task.purpose}；${task.turn}`).join('；').slice(0, 2000) || `${compilation.chapter.title}正文已完成。`,
@@ -672,17 +678,31 @@ export const chapterBridgeCommitTool = defineTool({
       lastUnfinishedAction: args.lastUnfinishedAction ?? lastExit.openLoops[0] ?? '',
       hookDecision: args.hookDecision ?? lastExit.openLoops[0] ?? '',
       delayedHookReason: args.delayedHookReason ?? '',
-      openingStructure: args.openingStructure?.trim() || `从${firstTask ? storyStateSchema.parse(firstTask.entryState).action || firstTask.purpose : '前章终态'}进入`,
+      openingStructure: args.openingStructure?.trim() || `从${(firstTask ? storyStateSchema.safeParse(firstTask.entryState) : null)?.data?.action || firstTask?.purpose || '前章终态'}进入`,
       endingStructure: args.endingStructure?.trim() || `以${lastTask?.turn || lastExit.action || '当前状态变化'}收束`,
     }
-    const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...terminal })
-    return {
-      output: `COMMIT 完成，章节 ${result.chapterId}@r${result.chapterRevision} 的 Chapter Bridge、Scene Task 终态与故事记忆已原子对齐。下一章将直接召回本次终态。`,
-      summary: '提交章节桥与故事终态',
-      display: {
-        kind: 'storyCompiler', compilationId: result.compilationId, phase: 'commit', title: '章节终态已提交',
-        detail: `r${result.chapterRevision}`, items: [terminal.chapterSummary, terminal.lastUnfinishedAction ? `未完成动作：${terminal.lastUnfinishedAction}` : '未留未完成动作', `结尾结构：${terminal.endingStructure}`],
-      },
+    try {
+      const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...terminal })
+      return {
+        output: `COMMIT 完成，章节 ${result.chapterId}@r${result.chapterRevision} 的 Chapter Bridge、Scene Task 终态与故事记忆已原子对齐。下一章将直接召回本次终态。`,
+        summary: '提交章节桥与故事终态',
+        display: {
+          kind: 'storyCompiler', compilationId: result.compilationId, phase: 'commit', title: '章节终态已提交',
+          detail: `r${result.chapterRevision}`, items: [terminal.chapterSummary, terminal.lastUnfinishedAction ? `未完成动作：${terminal.lastUnfinishedAction}` : '未留未完成动作', `结尾结构：${terminal.endingStructure}`],
+        },
+      }
+    } catch (error) {
+      // 流程顺序类门槛（连续性未重检/仍有错）转成可执行引导：作者侧看到下一步该做什么，而不是「执行失败」
+      if (
+        error instanceof DataAccessError
+        && (error.code === 'CONTINUITY_CHECK_REQUIRED' || error.code === 'CONTINUITY_ERRORS_REMAIN' || error.code === 'COMPILATION_NOT_FOUND')
+      ) {
+        return {
+          output: `${error.message}这是流程顺序提示而非执行失败：请先对当前 revision 调用 continuity_validate（有错误先修错再重检），通过后立即调用 chapter_bridge_commit 完成提交。`,
+          summary: '提交前置未满足 · 按引导继续',
+        }
+      }
+      throw error
     }
   },
 })
