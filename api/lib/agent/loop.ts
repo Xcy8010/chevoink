@@ -39,7 +39,8 @@ import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
-import { toolSignature } from './tool-signature.js'
+import { toolSignature, ToolAdmissionGuard } from './tool-signature.js'
+import { hasDurableProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
 import { createRepeatDetector } from './repeat-detect.js'
 import {
   CHECKPOINT_BUDGET_SLICE,
@@ -178,18 +179,9 @@ const STRUCTURE_MUTATION_TOOLS = new Set([
 ])
 const STRUCTURE_FAILURE_LIMIT = 3
 
-/** plan/18 P4 检查点条件 b：算「真实进展」的写类工具（成功调用计入区间进展） */
-const WRITE_PROGRESS_TOOLS = new Set([
-  'chapter_write',
-  'chapter_append',
-  'chapter_edit_range',
-  'chapter_create',
-  'plan_save',
-  'memory_save',
-])
-
-/** plan/18 P0 重复签名熔断：前 2 次成功同签名后，第 3 次相同调用不执行 */
-const REPEAT_SIGNATURE_BLOCK_AFTER_SUCCESSES = 2
+const STATE_SENSITIVE_VALIDATORS = new Set(['continuity_validate', 'quality_analyze'])
+// Polling/question tools observe external activity; they are intentionally repeatable.
+const REPEATABLE_TOOLS = new Set(['task_wait', 'task_get', 'task_list', 'ask_user'])
 
 /** 瘦身时保留最近 N 条工具输出不动：近期结果是当前决策的主要依据 */
 const CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS = 8
@@ -784,8 +776,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const runStartedAt = Date.now()
   let lastActivityAt = Date.now()
   // P0 重复签名滑窗：只记成功执行；失败后同签名正当重试不计次
-  let lastSuccessSig: string | null = null
-  let successRepeat = 0
+  const admission = new ToolAdmissionGuard()
+  const progressSignatures = new Set<string>()
   let blockedRepeat = 0
   // 非空时本轮工具执行完立即走 wrap-up（P0 第 4 次同签名 / P1 干预模式二次命中）
   let forceWrapUpReason: string | null = null
@@ -853,9 +845,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       ...attachmentParts,
     ])
 
-    const parsedTaskSpec = taskSpecSchema.safeParse(storedRun.taskSpec)
+    const continuingTask = Boolean(params.resume) || isContinuationRequest(params.prompt)
+    // Typed “continue” starts a new run but must retain the original task scope/constraints.
+    const previousTask = continuingTask && !storedRun.taskSpec
+      ? await prisma.agentRun.findFirst({ where: { sessionId: params.sessionId, userId: params.userId, novelId: params.novelId, id: { not: runId }, engine: 'loop' }, orderBy: { createdAt: 'desc' }, select: { taskSpec: true } })
+      : null
+    const parsedTaskSpec = taskSpecSchema.safeParse(storedRun.taskSpec ?? previousTask?.taskSpec)
     let taskSpec: TaskSpec = parsedTaskSpec.success
-      ? parsedTaskSpec.data
+      ? { ...parsedTaskSpec.data, runId }
       : buildTaskSpec({
           runId,
           novelId: params.novelId,
@@ -865,9 +862,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           creativeFreedom: params.creativeFreedom,
           qualityMode: params.qualityMode,
         })
-    let taskSpecChanged = !parsedTaskSpec.success
+    let taskSpecChanged = !parsedTaskSpec.success || Boolean(previousTask)
     const protectsEarlierContent = taskSpec.postconditions.some((item) => item.code === 'EARLIER_CONTENT_UNCHANGED')
-    if (protectsEarlierContent && (!params.resume || !taskSpec.scope.chapterIds?.length)) {
+    if (protectsEarlierContent && (!continuingTask || !taskSpec.scope.chapterIds?.length)) {
       const existingChapters = await prisma.chapter.findMany({
         where: { novelId: params.novelId, authorId: params.userId },
         select: { id: true },
@@ -943,7 +940,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
     // 中断续跑协作提醒：上一轮异常终止且存在派生子窗口时，强制主控用 task_send/task_wait 续协作，
     // 避免作者一句「继续」被理解成「在本窗口把子窗口没干完的活重干一遍」
-    const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId, Boolean(params.resume))
+    const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId, continuingTask)
     if (orchestrationResumeNote) {
       messages.push({ role: 'user', content: orchestrationResumeNote })
     }
@@ -1100,8 +1097,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     let planSaveReminders = 0
     // 长任务防早停：待办清单（todo_write 维护）未全部完成就想收尾时，回填强指令让它接着执行
     // 续跑时从会话恢复既有清单，新任务从空开始（避免上一个任务的残留待办干扰）
-    let todoItems: AgentTodoItem[] = params.resume ? await loadSessionTodoItems(params.sessionId) : []
+    let todoItems: AgentTodoItem[] = continuingTask ? await loadSessionTodoItems(params.sessionId) : []
+    let continuationPlanLoaded = todoItems.length > 0
     let todoReminders = 0
+    if (continuingTask) messages.push({ role: 'user', content: `[系统] 本轮继续既有任务，授权范围与约束不变。原目标：${taskSpec.goals.join('；')}。\n${renderTodoItems(todoItems)}\n先核对已保存进度，执行剩余工作；缺少清单时用 todo_write 建立剩余待办。不得仅回复下一步打算就结束，也不得将未完成项标为已完成。` })
     let consecutiveStructureFailures = 0
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
@@ -1137,8 +1136,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         content: `[系统] ${reasonText}请立即停止调用工具，用一段话总结目前的进展与剩余工作。`,
       })
       const wrapBudget = prepareContextForRequest([], 'wrap-up')
-      if (!wrapBudget.fits) {
-        const fallbackText = `${reasonText}上下文已达到当前模型的安全窗口上限，系统已停止继续请求。已完成的写入均已保存；请点击「继续执行」从持久化检查点恢复剩余工作。`
+      if (!wrapBudget.fits || usage.totalTokens >= runTokenBudget) {
+        const fallbackText = `${reasonText}系统已停止继续请求，未把剩余工作标为完成。已完成的写入均已保存；可点击「继续执行」恢复剩余工作。`
         bus.emit({ type: 'text.delta', messageId: wrapMessageId, delta: fallbackText })
         bus.emit({ type: 'text.final', messageId: wrapMessageId, text: fallbackText, asReasoning: false })
         await persistMessage(wrapMessageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: fallbackText }])
@@ -1197,13 +1196,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         )
         return
       }
-      await finalizeRun(runId, bus, 'succeeded', usage, turn, `${reasonText}：${cleanWrapUp.slice(0, 300)}`)
+      await finalizeRun(runId, bus, 'failed', usage, turn, cleanWrapUp.slice(0, 300), reasonText)
     }
 
     /** P4 检查点式自动续跑：预算片/轮次片耗尽不是终止条件，四条件全满足则同 run 内压缩上下文+刷新片继续跑；
      * 条件 b（区间内必须有新写类进展）兼作 compaction 防 loop：无进展则禁止再压缩，直接走 wrap-up，
      * 杜绝 codex #31351 式「压缩→丢进展→重复计划→再压缩」死循环 */
-    const tryCheckpointResume = (trigger: 'budget' | 'turns'): boolean => {
+    const tryCheckpointResume = async (trigger: 'budget' | 'turns'): Promise<boolean> => {
       const checkpoint = evaluateCheckpoint({
         todoLeft: todoItems.filter((item) => item.status !== 'completed').length,
         writeProgress: writeProgressCount,
@@ -1212,6 +1211,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         compactionCount,
         elapsedMs: Date.now() - runStartedAt,
         longWallClockLimitMs: env.agentRunWallClockLongMinutes * 60_000,
+        usedTokens: usage.totalTokens,
+        tokenCeiling: env.agentRunTokenBudgetCeiling,
       })
       if (!checkpoint.ok) return false
       resumeCount += 1
@@ -1229,7 +1230,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       bus.emit({ type: 'text.delta', messageId: noticeId, delta: notice })
       // 检查点行一次性写完：立即定稿，避免续跑期间光标在系统行尾部常闪
       bus.emit({ type: 'text.final', messageId: noticeId, text: notice, asReasoning: false })
-      void persistMessage(noticeId, runId, params.sessionId, 'assistant', [{ type: 'text', text: notice }]).catch(() => {})
+      await persistMessage(noticeId, runId, params.sessionId, 'assistant', [{ type: 'text', text: notice }])
       messages.push({
         role: 'user',
         content: `[系统] ${notice}。上下文已压缩，待办清单是唯一进展依据。立即继续执行下一条未完成待办：不要复述已完成工作、不要重新规划、不要询问作者是否继续。`,
@@ -1238,7 +1239,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
 
     // 轮次片耗尽时在 while 条件里做检查点续跑（成功则 maxTurns 已刷新、继续循环），不可续跑才落入下方收尾
-    while (turn < maxTurns || tryCheckpointResume('turns')) {
+    while (turn < maxTurns || await tryCheckpointResume('turns')) {
+      if (controller.signal.aborted) throw new DOMException('run aborted', 'AbortError')
+      // Every request path, including no-tool/protocol retries, passes this budget gate.
+      if (usage.totalTokens >= runTokenBudget && !(await tryCheckpointResume('budget'))) {
+        await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
+        return
+      }
       turn += 1
 
       // P2 墙钟双条件：总帽（发生过自动续跑后切长任务帽，默认 60→180 分钟）+ 空转帽（默认 10 分钟）。
@@ -1275,8 +1282,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       // 登记本轮缓冲：流式正文/思考与轮末组装的 parts 都记在这里，供中止时补落库
       liveTurn = { messageId, parts: [], streamedText: '', streamedReasoning: '' }
 
-      // 工具执行条提前显示：模型还在流式生成工具参数（写章节正文可能持续分钟级）时
-      // 就先播报 tool.call（args 为 null），前端按 callId upsert，执行完毕的正式事件就地更新同一张卡片
+      // Parameter generation is not execution. Keep transient document previews, but only
+      // handleToolCall may announce an admitted call; blocked calls never create a spinner.
       const announcedToolNames = new Map<string, string>()
       const toolArgsProgress = new Map<string, { chars: number; lastEmitted: number }>()
       const streamingToolArgs = new Map<string, string>()
@@ -1314,19 +1321,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
               handleRepeatHit(repeatDetector.push(reasoningIncrement))
             }
           } else if (chunk.type === 'tool-call-start') {
-            // name 可能分片累加到达：每次变化都重发，前端 upsert 后标题自动修正
-            if (chunk.id && announcedToolNames.get(chunk.id) !== chunk.name) {
-              announcedToolNames.set(chunk.id, chunk.name)
-              bus.emit({
-                type: 'tool.call',
-                messageId,
-                callId: chunk.id,
-                toolName: chunk.name,
-                title: getToolByName(chunk.name)?.title ?? chunk.name,
-                args: null,
-              })
-            }
+            lastActivityAt = Date.now()
+            if (chunk.id) announcedToolNames.set(chunk.id, chunk.name)
           } else if (chunk.type === 'tool-call-arguments-delta') {
+            lastActivityAt = Date.now()
             if (chunk.id) {
               const progress = toolArgsProgress.get(chunk.id) ?? { chars: 0, lastEmitted: 0 }
               progress.chars += chunk.delta.length
@@ -1440,20 +1438,22 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 防早停：待办清单还有未完成项就想结束（典型症状：连写六章只写两章就问“要不要继续”），
         // 回填强指令让它接着执行下一条待办，最多拦截 4 次避免死循环
         const unfinishedTodos = todoItems.filter((item) => item.status !== 'completed')
-        if (unfinishedTodos.length > 0 && todoReminders < 4) {
+        const missingContinuationPlan = continuingTask && !continuationPlanLoaded
+        const prematureFinish = unfinishedTodos.length > 0 || missingContinuationPlan || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
+        if (prematureFinish && todoReminders < 4) {
           todoReminders += 1
           await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
-            content: `[系统] 待办清单还有 ${unfinishedTodos.length} 项未完成：\n${renderTodoItems(unfinishedTodos)}\n任务尚未结束，严禁现在收尾，也严禁停下来问作者“要不要继续”。请立即继续执行下一条未完成的待办，每完成一条就用 todo_write 更新状态；确实无法完成的项，用 todo_write 标记为 completed 并在最后收尾时向作者说明原因。`,
+            content: `[系统] 当前回复尚不足以交付：${missingContinuationPlan ? '续跑缺少剩余工作清单，请先核对历史并用 todo_write 记录真实进度（确已完成可提交空清单）。' : '仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。'}\n${renderTodoItems(unfinishedTodos)}\n只在原授权范围内继续下一步，不重新规划已完成工作。每项真实完成后更新 todo_write；无法完成的项必须保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
           })
           continue
         }
 
         await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
         bus.emit({ type: 'step.finish', turn, usage: result.usage })
-        await finalizeRun(runId, bus, 'succeeded', usage, turn, lastAssistantText.slice(0, 300))
+        await finalizeRun(runId, bus, prematureFinish ? 'failed' : 'succeeded', usage, turn, lastAssistantText.slice(0, 300), prematureFinish ? '连续多轮没有推进剩余工作，已保存进度并安全停止；任务未完成。' : undefined)
         return
       }
 
@@ -1462,15 +1462,18 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         if (controller.signal.aborted) {
           throw new DOMException('run aborted', 'AbortError')
         }
-        // P0 重复签名熔断：同工具+同参数已连续成功 2 次后，第 3 次相同调用不执行只回提示；
-        // 模型仍坚持（第 4 次相同调用）则本轮工具执行完强制收尾。滑窗只记成功：失败后同签名正当重试不计次
+        // Admit only fresh work. Cached calls never emit tool.call; repeated requests reuse
+        // the previous observation. Four consecutive blocked calls trigger a bounded stop.
         const signature = toolSignature(call.name, call.arguments)
-        if (signature === lastSuccessSig && successRepeat >= REPEAT_SIGNATURE_BLOCK_AFTER_SUCCESSES) {
+        const tool = tools.find(candidate => candidate.name === call.name)
+        // todo_write may atomically accept only one completion from a batch. Its current
+        // snapshot is an execution input too, so the next legal advancement is not blocked.
+        const admissionSignature = call.name === 'todo_write' ? toolSignature(signature, JSON.stringify(todoItems)) : signature
+        const admissionKey = admission.key(admissionSignature, Boolean(tool?.readOnly) || STATE_SENSITIVE_VALIDATORS.has(call.name))
+        const previousObservation = REPEATABLE_TOOLS.has(call.name) ? undefined : admission.previous(admissionKey)
+        if (previousObservation !== undefined) {
           blockedRepeat += 1
-          if (blockedRepeat >= 2) {
-            forceWrapUpReason = '同一工具与参数被连续重复调用已熔断终止（防空转循环）。'
-          }
-          const blockSummary = '与前两次调用完全相同（工具与参数一致），未执行'
+          const blockSummary = '相同状态下该工具与完整参数已成功执行，复用结果，未重复执行'
           // 产品口径：熔断拦截属服务端防空转保护，不是作者需要看到的「失败工具」——
           // 不发 tool.call/tool.result 事件、不落 part，会话与刷新后历史都不显示这张卡；
           // 模型侧仍通过 tool 消息收到换路提示，服务器日志保留可观测性。
@@ -1478,23 +1481,27 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           messages.push({
             role: 'tool',
             toolCallId: call.id,
-            content: '[系统] 重复调用熔断：本次调用与前两次工具与参数完全相同，未执行。请换参数、换工具或改用其他方式推进；立即停止重复同一调用。',
+            content: `[系统] 重复调用已拦截，本次没有执行。相同工具与参数在当前状态已成功执行，请使用以下既有结果推进下一项；不要重试未变化的目标。\n${previousObservation}`,
           })
-          if (forceWrapUpReason) break
           continue
         }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
         lastActivityAt = Date.now()
         // 滑窗更新：只记成功执行；失败不碰窗口（同签名重试不会被误杀）
         if (outcome.part.status === 'success') {
-          if (signature === lastSuccessSig) {
-            successRepeat += 1
-          } else {
-            lastSuccessSig = signature
-            successRepeat = 1
+          const durableProgress = hasDurableProgress(outcome.part, todoItems)
+          const display = outcome.part.display
+          const stateChanged = display?.kind === 'chapterDiff' || display?.kind === 'planDiff'
+            ? durableProgress
+            : Boolean(tool && !tool.readOnly && !STATE_SENSITIVE_VALIDATORS.has(call.name) && !REPEATABLE_TOOLS.has(call.name) && call.name !== 'todo_write')
+          admission.record(admissionKey, outcome.observation, stateChanged)
+          const progressKey = toolSignature(signature, outcome.observation)
+          if (!progressSignatures.has(progressKey)) {
+            progressSignatures.add(progressKey)
+            todoReminders = 0
+            if (durableProgress) writeProgressCount += 1
           }
           blockedRepeat = 0
-          if (WRITE_PROGRESS_TOOLS.has(call.name)) writeProgressCount += 1
         }
         if (call.name === 'plan_save' && outcome.part.status === 'success') {
           planSavePerformed = true
@@ -1502,6 +1509,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 同步待办清单快照：防早停拦截与预算收尾都依赖它判断任务是否真的做完
         if (call.name === 'todo_write' && outcome.part.status === 'success' && outcome.part.display?.kind === 'todoList') {
           todoItems = outcome.part.display.items
+          continuationPlanLoaded = true
         }
         if (STRUCTURE_MUTATION_TOOLS.has(call.name)) {
           if (outcome.part.status === 'success') {
@@ -1522,9 +1530,17 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         }
       }
 
+      // A circuit may skip the rest of a multi-call batch. Close the model protocol for
+      // every unexecuted call before any wrap-up request; do not invent execution cards.
+      for (const call of effectiveToolCalls) {
+        if (!messages.some(message => message.role === 'tool' && message.toolCallId === call.id)) {
+          messages.push({ role: 'tool', toolCallId: call.id, content: '[系统] 本轮安全保护已停止该调用，未执行。' })
+        }
+      }
       await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
       bus.emit({ type: 'step.finish', turn, usage: result.usage })
 
+      if (blockedRepeat >= 4) forceWrapUpReason = '连续重复调用已拦截，且未产生新的工具进展（防空转循环）。'
       if (structureCircuitTripped) {
         const failureText = '卷章结构操作已连续失败 3 次，安全熔断已停止后续写入，避免重复建章、错卷和序号进一步漂移。请检查任务状态中的变更后重新发起。'
         const failureMessageId = randomUUID()
@@ -1546,7 +1562,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
       if (usage.totalTokens >= runTokenBudget) {
         // P4：预算片耗尽不是终止条件——先做检查点评估，有真实进展且待办未完则同 run 自动续跑
-        if (tryCheckpointResume('budget')) continue
+        if (await tryCheckpointResume('budget')) continue
         await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
         return
       }

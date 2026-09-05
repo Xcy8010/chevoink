@@ -1064,6 +1064,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         case 'step.finish':
           return {
             ...base,
+            // All admitted tools have settled at a step boundary. Reconcile old/speculative
+            // events and discard parameter-only drafts even when admission was blocked.
+            messages: settleRunningToolParts(state.messages, '本轮已结束，未收到工具完成结果'),
+            liveToolDrafts: {},
             currentTurn: event.turn,
             usage: {
               promptTokens: state.usage.promptTokens + event.usage.promptTokens,

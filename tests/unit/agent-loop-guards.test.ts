@@ -9,7 +9,8 @@ import {
   resolveRunTokenBudget,
 } from '../../api/lib/agent/checkpoint.js'
 import { createRepeatDetector } from '../../api/lib/agent/repeat-detect.js'
-import { toolSignature } from '../../api/lib/agent/tool-signature.js'
+import { toolSignature, ToolAdmissionGuard } from '../../api/lib/agent/tool-signature.js'
+import { isContinuationRequest, promisesFurtherAction } from '../../api/lib/agent/completion-guard.js'
 
 describe('plan/18 P0：工具调用签名', () => {
   it('同工具同参数：键顺序不同仍同签名', () => {
@@ -24,10 +25,10 @@ describe('plan/18 P0：工具调用签名', () => {
       .not.toBe(toolSignature('chapter_write', '{"chapterId":"c2"}'))
   })
 
-  it('长正文只取前 200 字符：重复再生成（开头相同、长度微变）仍同签名，熔断不被绕过', () => {
+  it('长正文结尾不同就是不同参数，不能误杀真实修订', () => {
     const base = '他抬起头，看见远处的灯塔在雾里明灭。'.repeat(20)
     expect(toolSignature('chapter_write', JSON.stringify({ chapterId: 'c1', content: base })))
-      .toBe(toolSignature('chapter_write', JSON.stringify({ chapterId: 'c1', content: `${base}结尾多了一句。` })))
+      .not.toBe(toolSignature('chapter_write', JSON.stringify({ chapterId: 'c1', content: `${base}结尾多了一句。` })))
   })
 
   it('前 200 字符不同：签名不同（正常连续写作不误判）', () => {
@@ -121,9 +122,37 @@ describe('plan/18 P4：检查点评估', () => {
     expect(evaluateCheckpoint({ ...baseInput, elapsedMs: 181 * 60_000 }).ok).toBe(false)
   })
 
-  it('切片常量：预算片 100 万、轮次片 50', () => {
-    expect(CHECKPOINT_BUDGET_SLICE).toBe(1_000_000)
+  it('切片常量：预算片 200 万、轮次片 50', () => {
+    expect(CHECKPOINT_BUDGET_SLICE).toBe(2_000_000)
     expect(CHECKPOINT_TURN_SLICE).toBe(50)
+  })
+
+  it('达到累计硬顶时即使有进展也不能重复获得检查点', () => {
+    expect(evaluateCheckpoint({ ...baseInput, usedTokens: 5_000_000, tokenCeiling: 5_000_000 }).ok).toBe(false)
+  })
+})
+
+describe('same-state admission and continuation', () => {
+  it('hashes array tails and deep fields without truncation', () => {
+    const array = Array.from({ length: 20 }, () => '相同')
+    expect(toolSignature('write', JSON.stringify([...array, '甲']))).not.toBe(toolSignature('write', JSON.stringify([...array, '乙'])))
+    expect(toolSignature('write', '{"a":{"b":{"c":{"d":{"e":"甲"}}}}}')).not.toBe(toolSignature('write', '{"a":{"b":{"c":{"d":{"e":"乙"}}}}}'))
+  })
+  it('blocks nonconsecutive duplicates but invalidates reads after a real write', () => {
+    const guard = new ToolAdmissionGuard()
+    const read = guard.key('read', true)
+    guard.record(read, 'r1', false)
+    guard.record('other', 'other result', false)
+    expect(guard.previous(guard.key('read', true))).toBe('r1')
+    guard.record('write', 'r2', true)
+    expect(guard.previous(guard.key('read', true))).toBeUndefined()
+    expect(guard.previous(guard.key('write', false))).toBe('r2')
+  })
+  it('recognizes a pure continue instruction, not a fresh request or a question about continuing', () => {
+    for (const text of ['继续', '请继续完成之前的任务。', '继续执行', '接着完成剩余工作']) expect(isContinuationRequest(text)).toBe(true)
+    for (const text of ['继续写一个新故事', '为什么不能继续？', '不要继续', '解释继续按钮']) expect(isContinuationRequest(text)).toBe(false)
+    expect(promisesFurtherAction('第七章仍为空，先写入正文。')).toBe(true)
+    expect(promisesFurtherAction('第七章已完成落库与校验。')).toBe(false)
   })
 })
 

@@ -100,6 +100,19 @@ describe('Work 聊天轨道', () => {
     expect(screen.getByText('用户第 48 轮提出的完整问题').className).toContain('line-clamp-2')
     expect(screen.getByText('Agent 第 48 轮给出的完整回复').className).toContain('line-clamp-2')
     expect(screen.getByText('用户第 48 轮提出的完整问题').closest('[aria-hidden]')?.getAttribute('aria-hidden')).toBe('false')
+    const tooltip = screen.getByRole('tooltip', { name: '聊天记录预览' })
+    expect(tooltip.parentElement).toBe(document.body)
+    expect(tooltip.className).toContain('fixed')
+    await userEvent.keyboard('{Escape}')
+    expect(tooltip.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('键盘聚焦可预览，窗口变化后关闭定位失效的卡片', () => {
+    render(<div style={{ width: 44, overflow: 'hidden' }}><AgentConversationRail conversations={conversations.slice(-2)} onSelectConversation={() => undefined} /></div>)
+    fireEvent.focus(screen.getByRole('button', { name: '第 1 轮聊天' }))
+    expect(screen.getByRole('tooltip').parentElement).toBe(document.body)
+    fireEvent.resize(window)
+    expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })
 

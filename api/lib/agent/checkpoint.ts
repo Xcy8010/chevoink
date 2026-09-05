@@ -27,16 +27,19 @@ export interface CheckpointEvaluation {
   longWallClockLimitMs: number
   maxResumes?: number
   maxCompactions?: number
+  usedTokens?: number
+  tokenCeiling?: number
 }
 
 export const CHECKPOINT_MAX_RESUMES = 4
 export const CHECKPOINT_MAX_COMPACTIONS = 6
-/** 每次续跑刷新的预算片：100 万 token；刷新时受硬顶 clamp，链总消耗封顶于硬顶（默认 500 万） */
-export const CHECKPOINT_BUDGET_SLICE = 1_000_000
+/** 每次续跑增加 200 万 token；总预算仍受服务端硬顶约束（默认 500 万）。 */
+export const CHECKPOINT_BUDGET_SLICE = 2_000_000
 /** 每次续跑刷新的轮次片 */
 export const CHECKPOINT_TURN_SLICE = 50
 
 export function evaluateCheckpoint(input: CheckpointEvaluation): { ok: boolean; reason: string } {
+  if (input.usedTokens !== undefined && input.tokenCeiling !== undefined && input.usedTokens >= input.tokenCeiling) return { ok: false, reason: '已达总 token 硬顶' }
   const maxResumes = input.maxResumes ?? CHECKPOINT_MAX_RESUMES
   const maxCompactions = input.maxCompactions ?? CHECKPOINT_MAX_COMPACTIONS
   // 条件 a：待办全部完成 = 任务做完，续跑没有意义

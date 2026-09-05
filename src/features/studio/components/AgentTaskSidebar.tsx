@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { PencilLine, SquarePlus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -23,6 +24,7 @@ export type AgentConversationRailItem = {
 const MAX_VISIBLE_CONVERSATION_MARKERS = 40
 const RAIL_VERTICAL_PADDING = 40
 const RAIL_MARKER_FOOTPRINT = 14
+type RailPreview = { conversation: AgentConversationRailItem; top: number; left: number; width: number }
 
 export function AgentConversationRail({
   conversations,
@@ -32,10 +34,10 @@ export function AgentConversationRail({
   onSelectConversation: (messageId: string) => void
 }) {
   const rootRef = useRef<HTMLElement | null>(null)
-  const [preview, setPreview] = useState<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  const [preview, setPreview] = useState<RailPreview | null>(null)
   // 淡出期间保留最后一次的定位与内容：若让 top 随 preview 置空回落到顶部，
   // 卡片会先瞬移到顶部再淡出，看起来像“往上飞出去”。
-  const lastPreviewRef = useRef<{ conversation: AgentConversationRailItem; top: number } | null>(null)
+  const lastPreviewRef = useRef<RailPreview | null>(null)
   // 跟随滚动：高亮当前视口所在的轮次（贴底=最新轮），而不是固定高亮最后一条
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   const scrollFrameRef = useRef(0)
@@ -54,6 +56,21 @@ export function AgentConversationRail({
     ? Math.max(8, Math.min(MAX_VISIBLE_CONVERSATION_MARKERS, Math.floor((railHeight - RAIL_VERTICAL_PADDING) / RAIL_MARKER_FOOTPRINT)))
     : MAX_VISIBLE_CONVERSATION_MARKERS
   const visibleConversations = conversations.slice(-maxVisibleMarkers)
+
+  useEffect(() => {
+    const dismiss = () => setPreview(null)
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') dismiss() }
+    document.addEventListener('scroll', dismiss, true)
+    document.addEventListener('fullscreenchange', dismiss)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      document.removeEventListener('scroll', dismiss, true)
+      document.removeEventListener('fullscreenchange', dismiss)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [])
 
   useEffect(() => {
     const root = rootRef.current
@@ -138,10 +155,11 @@ export function AgentConversationRail({
   const showPreview = (conversation: AgentConversationRailItem, element: HTMLButtonElement) => {
     const root = rootRef.current
     if (!root) return
-    const rootRect = root.getBoundingClientRect()
     const itemRect = element.getBoundingClientRect()
-    const top = Math.max(10, Math.min(rootRect.height - 150, itemRect.top - rootRect.top - 54))
-    setPreview({ conversation, top })
+    const width = Math.min(320, window.innerWidth - 20)
+    const top = Math.max(10, Math.min(window.innerHeight - 152, itemRect.top - 54))
+    const left = Math.max(10, Math.min(window.innerWidth - width - 10, itemRect.right + 10))
+    setPreview({ conversation, top, left, width })
   }
 
   return (
@@ -158,21 +176,23 @@ export function AgentConversationRail({
           </button>
         })}
       </div>
-      <div
+      {displayPreview && createPortal(<div
         className={cn(
           // 预览卡内部文字是硬编码的白色系（text-white/xx），卡片必须始终深色实底：
           // 之前用 --surface-contrast 在深色模式下反转为白底，白字白底完全看不清
-          'pointer-events-none absolute left-[calc(100%+10px)] z-[120] h-[142px] w-80 overflow-hidden rounded-[14px] bg-[#17212d] px-3.5 py-3 text-left text-white shadow-[0_18px_50px_rgba(8,12,20,0.45)] ring-1 ring-white/10 transition-opacity duration-200 ease-out',
+          'pointer-events-none fixed z-[120] h-[142px] overflow-hidden rounded-[14px] bg-[#17212d] px-3.5 py-3 text-left text-white shadow-[0_18px_50px_rgba(8,12,20,0.45)] ring-1 ring-white/10 transition-opacity duration-200 ease-out motion-reduce:transition-none',
           preview ? 'opacity-100' : 'opacity-0',
         )}
-        style={{ top: displayPreview?.top ?? 8 }}
+        style={{ top: displayPreview.top, left: displayPreview.left, width: displayPreview.width }}
         aria-hidden={!preview}
+        role="tooltip"
+        aria-label="聊天记录预览"
       >
         <div className="grid h-full grid-rows-2 gap-2">
           <div className="min-h-0 overflow-hidden"><p className="text-[10px] font-medium leading-4 text-white/55">你</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/90">{displayPreview?.conversation.userText || '（附件或引用）'}</p></div>
           <div className="min-h-0 overflow-hidden border-t border-white/10 pt-1.5"><p className="text-[10px] font-medium leading-4 text-white/55">Agent</p><p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/80">{displayPreview?.conversation.assistantText || '正在处理这一轮对话…'}</p></div>
         </div>
-      </div>
+      </div>, document.fullscreenElement ?? document.body)}
     </nav>
   )
 }
