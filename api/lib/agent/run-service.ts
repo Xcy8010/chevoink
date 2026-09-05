@@ -420,6 +420,23 @@ export async function continueLoopRun(
   await assertCreditAccess(userId, run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier)
   await getModelTierRuntime(run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier, userId, run.customModelId, run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort)
 
+  // A stale tab must not revive an old task after the author has started a new one.
+  const latest = await prisma.agentRun.findFirst({ where: { sessionId: run.sessionId }, orderBy: { createdAt: 'desc' }, select: { id: true } })
+  if (latest?.id !== run.id) {
+    throw new DataAccessError(409, 'STALE_RESUME_TARGET', '当前会话已开始新任务，不能从旧入口续跑。请刷新后继续最新任务。')
+  }
+  const originalMessage = await prisma.agentMessage.findFirst({ where: { runId: run.id, role: 'user' }, orderBy: { createdAt: 'asc' }, select: { parts: true } })
+  const originalPrompt = Array.isArray(originalMessage?.parts)
+    ? originalMessage.parts.flatMap(part => part && typeof part === 'object' && !Array.isArray(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
+    : ''
+  // No awaits between this second concurrency check and executeAgentRun's synchronous registration.
+  if (getActiveRun(runId) || hasActiveRunInSession(run.sessionId)) {
+    throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行。')
+  }
+  if (countActiveRunsByUser(userId) >= env.agentUserMaxConcurrent) {
+    throw new DataAccessError(409, 'RUN_LIMIT', '同时进行的任务数已达上限，请稍后再试。')
+  }
+
   void executeAgentRun({
     runId: run.id,
     sessionId: run.sessionId,
@@ -427,7 +444,7 @@ export async function continueLoopRun(
     novelId: run.novelId,
     chapterId: run.chapterId,
     mode: run.mode === 'act' ? 'build' : run.mode,
-    prompt: run.inputSummary ?? '请继续完成之前的任务。',
+    prompt: originalPrompt || run.inputSummary || '请继续完成之前的任务。',
     resume: true,
     modelTier: run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier,
     customModelId: run.customModelId,

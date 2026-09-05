@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../api/lib/prisma.js', () => ({
   prisma: {
+    agentRun: { findFirst: vi.fn(async () => null) },
     novel: { findUnique: vi.fn(), findFirst: vi.fn() },
     projectMemoryEntry: { findMany: vi.fn() },
     agentMessage: { findMany: vi.fn() },
@@ -194,7 +195,7 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     expect(content).toContain('作者当前正在编辑：第3章《静默轨道》（chapterId=chapter-1，1200 字）。')
 
     // 快照之后依次是待办与任务契约
-    expect(String(messages[4].content)).toContain('[系统] 当前会话的任务待办清单')
+    expect(String(messages[4].content)).toContain('[系统] 当前任务的待办清单')
     expect(String(messages[5].content)).toContain('本轮任务契约（taskSpecId=spec-1）')
     expect(String(messages[6].content)).toContain('把第三章开头改得更抓人')
   })

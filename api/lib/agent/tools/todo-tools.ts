@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { AgentMessagePart, AgentTodoItem } from '../../../../shared/contracts/index.js'
 import { prisma } from '../../prisma.js'
 import { defineTool } from './types.js'
+import { getTaskRunIds } from '../task-lineage.js'
 
 /**
  * 待办清单工具（plan/15 长任务连续性）：
@@ -49,11 +50,12 @@ export function validateTodoProgression(previous: AgentTodoItem[], next: AgentTo
 }
 
 /** 会话级待办清单在 agent_artifacts 里的定位条件（metadata.todoList=true，不进计划文件夹） */
-function todoArtifactWhere(sessionId: string) {
+function todoArtifactWhere(sessionId: string, runIds?: string[]) {
   return {
     artifactType: 'chapterPlan' as const,
     metadata: { path: ['todoList'], equals: true },
     run: { sessionId },
+    ...(runIds ? { runId: { in: runIds } } : {}),
   }
 }
 
@@ -62,9 +64,9 @@ function todoArtifactWhere(sessionId: string) {
  * 真相源优先取持久化消息里最新一次成功的 todo_write 清单（与前端展示同源）；
  * artifact 副本仅作后备：曾出现副本停留在旧任务清单，导致“继续”后模型拿到过期待办。
  */
-export async function loadSessionTodoItems(sessionId: string): Promise<AgentTodoItem[]> {
+export async function loadSessionTodoItems(sessionId: string, runIds?: string[]): Promise<AgentTodoItem[]> {
   const recent = await prisma.agentMessage.findMany({
-    where: { sessionId, role: 'assistant' },
+    where: { sessionId, role: 'assistant', ...(runIds ? { runId: { in: runIds } } : {}) },
     orderBy: { createdAt: 'desc' },
     take: 40,
     select: { parts: true },
@@ -90,7 +92,7 @@ export async function loadSessionTodoItems(sessionId: string): Promise<AgentTodo
   }
 
   const artifact = await prisma.agentArtifact.findFirst({
-    where: todoArtifactWhere(sessionId),
+    where: todoArtifactWhere(sessionId, runIds),
     orderBy: { updatedAt: 'desc' },
     select: { content: true },
   })
@@ -169,9 +171,10 @@ export const todoWriteTool = defineTool({
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
   async execute(ctx, args) {
+    const runIds = await getTaskRunIds(ctx.sessionId, ctx.runId)
     // 会话内 upsert：一份清单贯穿整个任务窗口，续跑/刷新都能恢复
     const existing = await prisma.agentArtifact.findFirst({
-      where: todoArtifactWhere(ctx.sessionId),
+      where: todoArtifactWhere(ctx.sessionId, runIds),
       orderBy: { updatedAt: 'desc' },
       select: { id: true, content: true, metadata: true },
     })
@@ -181,7 +184,7 @@ export const todoWriteTool = defineTool({
     // 待办前态以「注入模型的同一真相源」为准（loadSessionTodoItems 优先取消息里最后一次成功
     // 的 todo_write 清单），跨 run / 续跑也能拿到真实前态；避免 artifact 副本停在旧任务导致
     // previous 退化为空，从而把本应已完成的旧项误判为本轮“一次完成多项”而被拒。
-    const previous = await loadSessionTodoItems(ctx.sessionId)
+    const previous = await loadSessionTodoItems(ctx.sessionId, runIds)
     let items = args.items as AgentTodoItem[]
     const progressionError = validateTodoProgression(previous, items)
     // 模型偶发把多项一次打勾或 pending 直接打勾：不再把整次调用打成失败。

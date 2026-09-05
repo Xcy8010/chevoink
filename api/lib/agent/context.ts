@@ -10,6 +10,7 @@ import { buildGeneralWritingDigest, buildGenreWritingDigest } from './knowledge/
 import { buildSkillExecutionDigest, routeSkills, type SkillRouteDecision } from './skills/index.js'
 import { resolveEnabledRuntimeSkills } from './skills/service.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
+import { getTaskRunIds } from './task-lineage.js'
 import {
   listActiveDirectives,
   loadContextCheckpoint,
@@ -233,15 +234,16 @@ ${lines.join('\n')}`
 /** 会话待办清单摘要：续跑/新一轮任务时让模型接上上次的待办进度。
  * 注入在历史对话之后（而非 system 中部）：历史里残留着旧任务的待办痕迹，
  * 曾导致模型被带偏、把旧清单当作当前状态（“继续”后回去重写早已完成的章节） */
-async function buildTodoDigest(sessionId: string): Promise<string | null> {
-  const items = await loadSessionTodoItems(sessionId)
+async function buildTodoDigest(sessionId: string, runId: string): Promise<string | null> {
+  if (!runId) return null
+  const items = await loadSessionTodoItems(sessionId, await getTaskRunIds(sessionId, runId))
 
   if (items.length === 0) {
     return null
   }
 
   const unfinished = items.filter((item) => item.status !== 'completed').length
-  return `[系统] 当前会话的任务待办清单最新状态（${items.length - unfinished}/${items.length} 已完成）：
+  return `[系统] 当前任务的待办清单最新状态（${items.length - unfinished}/${items.length} 已完成）：
 ${renderTodoItems(items)}
 注意：这是待办清单的唯一真实状态，历史对话中出现的任何旧待办清单、旧进度数字均已过时作废，一律以本清单为准。标记为 [x] 的项已真实完成，严禁重做；用 todo_write 全量更新状态。另外：若作者的最新一条消息是在答复你上一条回复结尾的提问或建议（如「好的」「可以」「继续」），优先执行那个提问对应的操作，再回到本清单。${unfinished > 0 ? '\n清单里还有未完成项：除非作者提出了新任务或正在答复你的提问，否则请从第一条未完成项接着执行（先用 chapter_read 等工具核实它的实际进度再动笔）。' : ''}`
 }
@@ -416,7 +418,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     buildStoryMemoryDigest(input.userId, input.novelId, input.prompt),
     buildPlanFolderDigest(input.userId, input.novelId),
     buildCoverCandidateDigest(input.userId, input.novelId),
-    buildTodoDigest(input.sessionId),
+    buildTodoDigest(input.sessionId, input.taskSpec?.runId ?? input.runId),
     listActiveDirectives(input.userId, input.novelId),
     loadSessionHistory(input.sessionId, input.runId, historyBudgetTokens, checkpointState.sourceEndedAt
       ? { createdAt: checkpointState.sourceEndedAt, messageId: checkpointState.sourceEndMessageId ?? null }

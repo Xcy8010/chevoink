@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { SseDataDecoder } from './ai-sse.js'
 
 import { fetch as undiciFetch, Agent as UndiciAgent } from 'undici'
 
@@ -179,6 +180,8 @@ export type ChatMessage =
   | { role: 'tool'; toolCallId: string; content: string }
 
 export type ToolCallRequest = {
+  /** Provider exhausted output budget; never execute a syntactically repaired partial call. */
+  incomplete?: boolean
   id: string
   name: string
   arguments: string
@@ -431,9 +434,10 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
 
   const decoder = new TextDecoder()
   const reader = response.body.getReader()
-  let buffer = ''
+  let streamFinished = false
 
   const handleDelta = (parsed: {
+    error?: unknown
     usage?: {
       prompt_tokens?: number
       completion_tokens?: number
@@ -451,6 +455,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       }
     }>
   }) => {
+    if (parsed.error) throw new Error('模型在流式生成中返回错误，未执行工具；请重试当前任务。')
     if (parsed.usage) {
       usage.promptTokens = parsed.usage.prompt_tokens ?? usage.promptTokens
       usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
@@ -469,6 +474,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
 
     if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'length' || choice.finish_reason === 'stop') {
       finishReason = choice.finish_reason
+      streamFinished = true
     }
 
     const delta = choice.delta ?? ({} as NonNullable<NonNullable<Parameters<typeof handleDelta>[0]['choices']>[number]['delta']>)
@@ -485,7 +491,15 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
 
     if (Array.isArray(delta.tool_calls)) {
       for (const item of delta.tool_calls) {
-        const index = typeof item.index === 'number' ? item.index : 0
+        const knownIndex = typeof item.id === 'string' ? [...toolCallsByIndex].find(([, value]) => value.id === item.id)?.[0] : undefined
+        let index = typeof item.index === 'number' ? item.index : knownIndex
+        if (index === undefined) {
+          if (toolCallsByIndex.size === 0) index = 0
+          else if (typeof item.id === 'string' && item.id) index = Math.max(...toolCallsByIndex.keys()) + 1
+          else if (toolCallsByIndex.size === 1) index = [...toolCallsByIndex.keys()][0]
+          else index = -1
+        }
+        if (index < 0) throw new Error('模型工具参数缺少调用编号，无法安全关联，未执行工具。')
         let entry = toolCallsByIndex.get(index)
 
         if (!entry) {
@@ -498,18 +512,29 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
         }
 
         if (typeof item.function?.name === 'string' && item.function.name) {
-          entry.name += item.function.name
+          if (entry.name !== item.function.name) entry.name += item.function.name
           params.onChunk?.({ type: 'tool-call-start', id: entry.id, name: entry.name })
         }
 
         if (typeof item.function?.arguments === 'string' && item.function.arguments) {
           entry.arguments += item.function.arguments
           params.onChunk?.({ type: 'tool-call-arguments-delta', id: entry.id, delta: item.function.arguments })
+        } else if (item.function?.arguments != null && typeof item.function.arguments !== 'string') {
+          throw new Error('模型返回非字符串工具参数，协议不兼容，未执行工具。')
         }
       }
     }
   }
 
+  const frames = new SseDataDecoder(data => {
+    if (data.trim() === '[DONE]') { streamFinished = true; return }
+    if (!data.trim()) return
+    let parsed: Parameters<typeof handleDelta>[0]
+    try { parsed = JSON.parse(data) } catch {
+      throw new Error('模型流式事件损坏，未执行工具；请重试当前任务。')
+    }
+    handleDelta(parsed)
+  })
   try {
     for (;;) {
       const { done, value } = await reader.read()
@@ -517,33 +542,10 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
         break
       }
 
-      buffer += decoder.decode(value, { stream: true })
-
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary !== -1) {
-        const rawEvent = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        boundary = buffer.indexOf('\n\n')
-
-        for (const line of rawEvent.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith('data:')) {
-            continue
-          }
-
-          const data = trimmed.slice(5).trim()
-          if (!data || data === '[DONE]') {
-            continue
-          }
-
-          try {
-            handleDelta(JSON.parse(data))
-          } catch {
-            // 单帧解析失败不中断流
-          }
-        }
-      }
+      frames.push(decoder.decode(value, { stream: true }))
     }
+    frames.push(decoder.decode(), true)
+    if (!streamFinished) throw new Error('模型连接提前结束，未执行未确认完整的工具；请继续当前任务。')
   } finally {
     reader.releaseLock()
   }
@@ -554,10 +556,11 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       id: entry.id || `call_${index}`,
       name: entry.name,
       arguments: entry.arguments || '{}',
+      ...(finishReason === 'length' ? { incomplete: true } : {}),
     }))
     .filter((call) => call.name)
 
-  if (toolCalls.length > 0) {
+  if (toolCalls.length > 0 && (finishReason as ChatCompletionResult['finishReason']) !== 'length') {
     finishReason = 'tool_calls'
   }
 

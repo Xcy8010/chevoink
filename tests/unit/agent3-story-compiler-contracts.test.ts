@@ -44,6 +44,7 @@ describe('Agent 3.0 Story Compiler 契约', () => {
       turn: '内鬼提前出现在新路线', exitState: {}, styleBudget: { description: 'low', dialogue: 'medium', rhetoric: 'low' },
     })
     const tool = allTools.find((item) => item.name === 'scene_task_build')
+    expect(tool?.parameters.safeParse({ tasks: [{ purpose: task.purpose, goal: task.goal, obstacle: task.obstacle, choice: task.choice, cost: task.cost, turn: task.turn }] }).success).toBe(true)
     expect(tool?.parameters.safeParse({ tasks: [task] }).success).toBe(true)
     const coerced = tool?.coerceArgs?.({
       scene_tasks: [{

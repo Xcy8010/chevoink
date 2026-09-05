@@ -7,6 +7,14 @@ import { parseToolArgsTolerant } from '../../api/lib/agent/loop.js'
  * 悬垂逗号/冒号、悬垂键、尾部孤反斜杠，朴素补括号救不了，需 repairTruncatedDeep 兜底。
  */
 describe('parseToolArgsTolerant 深度截断修复', () => {
+  it('execution mode rejects incomplete nested payloads instead of inventing missing content', () => {
+    expect(() => parseToolArgsTolerant('{"tasks":[{"goal":"完整的一项"}', false)).toThrow('结构不完整')
+    expect(() => parseToolArgsTolerant('{"body":"只写了一半', false)).toThrow('结构不完整')
+  })
+  it('repairs nested scene JSON with missing and trailing commas without losing Chinese content', () => {
+    const raw = '{"tasks":[{"goal":"审俘破线" "entryState":{"body":["负伤",],},"exitState":{"knowledge":["发现真相"]}}]}'
+    expect(parseToolArgsTolerant(raw)).toEqual({ tasks: [{ goal: '审俘破线', entryState: { body: ['负伤'] }, exitState: { knowledge: ['发现真相'] } }] })
+  })
   it('悬垂逗号：截断留下的尾部逗号被清理后补齐括号仍可解析', () => {
     const raw = '{"mode":"build","tasks":[{"title":"第 1 章","brief":"写正文",'
     const parsed = parseToolArgsTolerant(raw) as { mode: string; tasks: Array<{ title: string; brief: string }> }

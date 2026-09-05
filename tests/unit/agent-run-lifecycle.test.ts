@@ -35,6 +35,7 @@ vi.mock('../../api/lib/agent2-feature-flags.js', () => ({ resolveAgent2FeatureFl
 vi.mock('../../api/lib/agent/events.js', () => ({ createRunEventBus: () => ({ emit: mocks.emit, emitTransient: mocks.emit }), disposeRunEventBus: vi.fn() }))
 vi.mock('../../api/lib/agent/permissions.js', () => ({ cancelAllQuestions: vi.fn(), grantAlwaysAllow: vi.fn(), hasAlwaysAllow: () => false, rejectAllApprovals: vi.fn(), waitForApproval: vi.fn() }))
 vi.mock('../../api/lib/agent/tools/todo-tools.js', () => ({ loadSessionTodoItems: mocks.todos, renderTodoItems: (items: AgentTodoItem[]) => JSON.stringify(items) }))
+vi.mock('../../api/lib/agent/task-lineage.js', () => ({ getTaskRunIds: async () => ['run'] }))
 vi.mock('../../api/lib/agent/tools/task-orchestration-tools.js', () => ({ ORCHESTRATION_TOOL_NAMES: new Set(), assertOrchestrationResumeGuard: vi.fn(), buildOrchestrationResumeNote: vi.fn() }))
 vi.mock('../../api/lib/agent/session-title.js', () => ({ autoNameSession: vi.fn() }))
 
@@ -68,6 +69,21 @@ beforeEach(() => {
 })
 
 describe('Agent run admission and completion lifecycle (real loop, mocked provider/persistence)', () => {
+  it('bounds repeated invalid arguments instead of spending the entire long-task budget', async () => {
+    queue(...['bad1', 'bad2', 'bad3'].map(id => response('', [call(id, 'chapter_read', '{')])), response('参数仍无效，已保存进度。'))
+    await run()
+    expect(mocks.tools[0].execute).not.toHaveBeenCalled()
+    expect(mocks.chat).toHaveBeenCalledTimes(4)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
+  })
+  it('never executes a provider-truncated tool even when its JSON can be repaired', async () => {
+    queue(response('', [{ ...call('partial', 'chapter_read', '{"chapterId":"c'), incomplete: true }]), response('', [call('valid')]), response())
+    await run()
+    expect(mocks.tools[0].execute).toHaveBeenCalledTimes(1)
+    expect(events().filter(event => event.type === 'tool.result')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId: 'partial', ok: false }), expect.objectContaining({ callId: 'valid', ok: true }),
+    ]))
+  })
   it('rejects duplicate calls before any running event/card, retaining one complete call/result pair', async () => {
     queue(response('', [call('a')]), response('', [call('b')]), response())
     await run()
@@ -95,7 +111,7 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
     mocks.todos.mockResolvedValue([{ content: '完成第七章整改', status: 'pending' }])
     queue(...Array.from({ length: 5 }, () => response('现在写入正文。')))
     await run('请继续完成之前的任务。')
-    expect(mocks.todos).toHaveBeenCalledWith('session')
+    expect(mocks.todos).toHaveBeenCalledWith('session', ['run'])
     expect(mocks.chat).toHaveBeenCalledTimes(5)
     expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
   })

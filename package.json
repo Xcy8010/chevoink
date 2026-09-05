@@ -37,6 +37,7 @@
     "dotenv": "^17.2.1",
     "express": "^4.21.2",
     "iconv-lite": "^0.7.3",
+    "jsonrepair": "3.15.0",
     "linkedom": "^0.18.13",
     "lucide-react": "^0.511.0",
     "mammoth": "^1.12.1",

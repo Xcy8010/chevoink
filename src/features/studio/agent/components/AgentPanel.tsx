@@ -12,7 +12,6 @@ import {
   Pencil,
   PencilLine,
   Pin,
-  RotateCcw,
   SlidersHorizontal,
   SquarePen,
   Trash2,
@@ -21,7 +20,6 @@ import {
   X,
 } from 'lucide-react'
 
-import Button from '@/components/ui/Button'
 import { useWorkConversation } from '../../components/work-conversation-context'
 import { WorkConversationRestore } from '../../components/WorkConversationRestore'
 import { copyToClipboard } from '@/lib/clipboard'
@@ -797,7 +795,13 @@ export function AgentPanel({
     }
   }, [runId])
 
+  const continuationViewEpoch = useRef(0)
+  useEffect(() => {
+    continuationViewEpoch.current += 1
+    return () => { continuationViewEpoch.current += 1 }
+  }, [sessionId])
   const handleContinue = useCallback(async () => {
+    const epoch = continuationViewEpoch.current
     const targetRunId = runId ?? resumeableRunId
     if (!targetRunId) {
       return
@@ -805,9 +809,12 @@ export function AgentPanel({
     setActionError(null)
     try {
       const result = await continueAgentLoopRun(targetRunId)
+      // Switching windows while the request is pending must not hydrate the old run into the new view.
+      if (epoch !== continuationViewEpoch.current) return
       useAgentStore.getState().beginRun(result.runId, '请继续完成之前的任务。', sessionId)
       connect(result.runId)
     } catch (error) {
+      if (epoch !== continuationViewEpoch.current) return
       setActionError(error instanceof Error ? error.message : '续跑失败，请稍后再试。')
     }
   }, [runId, resumeableRunId, sessionId, connect])
@@ -1495,14 +1502,6 @@ export function AgentPanel({
             {pendingQuestion ? (
               <AgentQuestionCard question={pendingQuestion} onAnswer={handleResolveQuestion} />
             ) : null}
-            {canContinue ? (
-              <div className="flex justify-start">
-                <Button size="sm" variant="secondary" onClick={() => void handleContinue()}>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  继续执行
-                </Button>
-              </div>
-            ) : null}
           </div>
         ) : (
           <AgentEmptyWelcome
@@ -1582,6 +1581,7 @@ export function AgentPanel({
           voiceScopeKey={voiceScopeKey}
           voiceDisabled={voiceDisabled || sessionResolving}
           running={active}
+          onContinue={canContinue ? handleContinue : undefined}
           disabled={conversationLoading}
           onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds) => handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds)}
           creativeFreedom={creativeFreedom}

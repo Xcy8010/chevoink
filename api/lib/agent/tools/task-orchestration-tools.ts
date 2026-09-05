@@ -12,6 +12,7 @@ import { prisma } from '../../prisma.js'
 import { countActiveRunsByUser, hasActiveRunInSession } from '../active-runs.js'
 import { coerceToolArgumentEnvelope } from './argument-coercion.js'
 import { defineTool, type ToolContext } from './types.js'
+import { getTaskRunIds } from '../task-lineage.js'
 
 /**
  * 跨任务并行协作工具（作者需求：a 窗口派生 b/c/d 分头写第 1/2/3 章 → a 等待 → a 审查 → a 补发提示词 → 再等 → 收尾）。
@@ -117,12 +118,12 @@ const STATUS_LABEL: Record<SpawnedWindowStatus, string> = {
   timeout: '等待超时',
 }
 
-/** 本会话派生出的子窗口及其最新状态（主控调度与续跑协作共用的唯一事实源） */
-async function listSpawnedWindows(sessionId: string): Promise<Array<{ id: string; title: string; status: SpawnedWindowStatus }>> {
+/** 只读取当前任务谱系派生的窗口；会话相同不代表属于同一任务。 */
+async function listSpawnedWindows(sessionId: string, runId: string): Promise<Array<{ id: string; title: string; status: SpawnedWindowStatus }>> {
+  const runIds = await getTaskRunIds(sessionId, runId)
   const children = await prisma.agentSession.findMany({
-    where: { spawnedFromSessionId: sessionId },
+    where: { spawnedFromSessionId: sessionId, spawnedFromRunId: { in: runIds } },
     orderBy: { createdAt: 'desc' },
-    take: 8,
     select: { id: true, title: true },
   })
   const windows: Array<{ id: string; title: string; status: SpawnedWindowStatus }> = []
@@ -138,27 +139,12 @@ async function listSpawnedWindows(sessionId: string): Promise<Array<{ id: string
   return windows
 }
 
-/** 中断续跑协作强制规则：上一轮异常终止（或本次就是续跑 run）且存在未完成派生窗口时，
- * 逐窗口给出可执行动作清单，并声明正文写入硬拦截，防止作者一句「继续」被模型理解成
- * 「在本窗口把子窗口没干完的活重干一遍」 */
+/** 恢复本任务的协作快照；窗口生命周期不等于章节交付状态。 */
 export async function buildOrchestrationResumeNote(sessionId: string, currentRunId: string, isResume: boolean): Promise<string> {
-  const windows = await listSpawnedWindows(sessionId)
+  if (!isResume) return ''
+  const windows = await listSpawnedWindows(sessionId, currentRunId)
   const unfinished = windows.filter((item) => UNFINISHED_STATUS.has(item.status))
   if (unfinished.length === 0) return ''
-
-  let triggered = isResume
-  if (!triggered) {
-    const lastRun = await prisma.agentRun.findFirst({
-      where: { sessionId, id: { not: currentRunId } },
-      orderBy: { createdAt: 'desc' },
-      select: { status: true },
-    })
-    triggered = Boolean(lastRun && (lastRun.status === 'failed' || lastRun.status === 'paused' || lastRun.status === 'cancelled'))
-  }
-  if (!triggered) return ''
-
-  // 命中续跑协作：登记硬拦截，本轮主窗口在子窗口收尾前写正文会被 guard 拦下并导回 task_send/task_wait
-  markOrchestrationGuardedRun(currentRunId)
 
   const lines = windows.map((item) => {
     const action =
@@ -166,50 +152,35 @@ export async function buildOrchestrationResumeNote(sessionId: string, currentRun
         ? '直接取其交付摘要审查'
         : item.status === 'running' || item.status === 'not_started'
           ? '直接用 task_wait 传入该窗口 ID 收交付'
-          : '先用 task_send 向该窗口投递续跑指令（写明从何处继续、交付要求），再 task_wait 等交付'
+          : '先用 task_wait 核对已保存交付，确实尚未完成且仍属原分工时才用 task_send 继续'
     return `- ${item.title}（${item.id}）：${STATUS_LABEL[item.status]} → ${action}`
   })
   return [
-    '[系统强制规则·中断续跑协作] 上一轮任务异常中断，本会话派生的任务窗口工作尚未完成：',
+    '[当前任务协作快照] 仅以下窗口属于本次恢复的任务；其他历史窗口不在本次授权范围：',
     ...lines,
-    '本轮第一个动作必须是上面的 task_wait / task_send，完成之前禁止调用任何正文写入工具、禁止在本窗口亲自重写这些窗口未完成的章节（服务端对正文写入硬拦截，调用会被直接驳回）。',
-    'task_send 会立即在目标窗口开启新一轮执行，失败过的窗口同样能被重新驱动，不要以为窗口失败就只能自己重做。',
-    '全部窗口交付后逐个审查：合格则汇总向作者汇报；不合格用 task_send 发返工要求再 task_wait。本窗口只负责调度、审查与汇报。',
-    '唯一例外：作者在本轮明确要求「你自己写/亲自接手/不用等那些窗口」时，才允许本窗口直接写正文。',
+    '窗口失败或暂停不等于正文未完成，先核对已保存成果与交付。不要重写已交付章节，也不要因历史窗口状态阻止本次目标推进。',
+    '尚在运行的窗口由 task_wait 收交付；只有原分工确有剩余工作时才续派。作者已要求接手时在本窗口完成，避免并行覆盖。',
   ].join('\n')
 }
 
-/** 续跑协作硬拦截覆盖的正文写入工具：子窗口未收尾前主窗口不得代写 */
-const ORCHESTRATION_GUARD_TOOL_NAMES: ReadonlySet<string> = new Set(['chapter_write', 'chapter_append', 'chapter_edit_range'])
-
-/** 命中续跑协作的 run：硬拦截登记（进程内即可，run 与进程同生命周期） */
-const guardedRunIds = new Set<string>()
-/** 每个 run 的拦截计数：拦两次后放行，避免模型与护栏空转烧轮次 */
-const guardBlockCount = new Map<string, number>()
-
-export function markOrchestrationGuardedRun(runId: string): void {
-  guardedRunIds.add(runId)
-  guardBlockCount.delete(runId)
-}
-
-/** 续跑协作硬约束：命中续跑协作的 run 里，子窗口未收尾前拦截主窗口正文写入并导回 task_send/task_wait */
-export async function assertOrchestrationResumeGuard(runId: string, sessionId: string, toolName: string): Promise<string | null> {
-  if (!guardedRunIds.has(runId) || !ORCHESTRATION_GUARD_TOOL_NAMES.has(toolName)) return null
-  const windows = await listSpawnedWindows(sessionId)
-  const unfinished = windows.filter((item) => UNFINISHED_STATUS.has(item.status))
-  if (unfinished.length === 0) {
-    guardedRunIds.delete(runId)
+/** Guard the actual cross-task side effect, not unrelated chapter writes. No retry-count bypass. */
+export async function assertOrchestrationResumeGuard(runId: string, sessionId: string, toolName: string, args?: unknown): Promise<string | null> {
+  if (toolName === 'task_spawn') {
+    const runIds = await getTaskRunIds(sessionId, runId)
+    const original = await prisma.agentMessage.findFirst({
+      where: { sessionId, runId: { in: runIds }, role: 'user' }, orderBy: { createdAt: 'asc' }, select: { parts: true },
+    })
+    const prompt = Array.isArray(original?.parts) ? assistantText(original.parts as unknown as AgentMessagePart[]) : ''
+    const requested = /(?:并行|同时|分别|多个|不同|独立|新建|打开|另开|分开).{0,16}(?:任务窗口|窗口)|(?:开|建|用).{0,6}[二两三四五六七八九十2-9].{0,4}窗口|(?:任务窗口|窗口).{0,16}(?:并行|同时|分别|各自)|parallel.{0,20}(?:tasks|windows)/i.test(prompt)
+    const denied = /(?:不要|不用|禁止|不得|无需).{0,12}(?:窗口|并行)/.test(prompt)
+    if (!requested || denied) return '当前任务没有作者明确的多窗口分工授权，未创建任何窗口。旧任务的并行指令不适用于本任务，请在当前窗口继续完成。'
     return null
   }
-  const blocked = (guardBlockCount.get(runId) ?? 0) + 1
-  guardBlockCount.set(runId, blocked)
-  if (blocked > 2) {
-    // 已尽到提醒义务：再拦只会烧轮次，放行但保留观察让模型自行负责
-    guardedRunIds.delete(runId)
-    return null
-  }
-  const names = unfinished.map((item) => `「${item.title}」`).join('、')
-  return `续跑协作硬约束：本会话仍有未完成的派生任务窗口${names}，它们负责的章节不允许由本窗口代写，本次调用未执行。请立即改为：执行中/未开始的窗口用 task_wait 收交付；失败/取消/暂停的窗口用 task_send 投递续跑指令（写明从何处继续与交付要求，它会立即在该窗口开启新一轮执行），再 task_wait 等交付并逐个审查。只有作者本轮明确说「你自己写/亲自接手」时才允许本窗口写正文。`
+  if (toolName !== 'task_send') return null
+  const targetId = args && typeof args === 'object' && 'sessionId' in args ? args.sessionId : null
+  const windows = await listSpawnedWindows(sessionId, runId)
+  return windows.some(item => item.id === targetId) ? null
+    : '目标窗口不属于当前任务的分工，本次未发送、未启动任何任务。历史对话中的窗口不构成续跑授权。请继续当前任务，不要恢复其他章节的历史窗口。'
 }
 
 /** 派生 run 跟随主控窗口的模型档位，避免并行窗口偷偷降档或用错自定义模型 */
@@ -294,7 +265,7 @@ export const taskSpawnTool = defineTool({
   name: 'task_spawn',
   title: '派生并行任务窗口',
   description:
-    '派生 1~5 个独立的任务窗口并让它们立刻并行开工（每个窗口有自己的对话流，作者可点进去看）。用于可切分且互不重叠的批量创作，例如同时写第 1/2/3 章。派生后必须用 task_wait 等待它们的交付摘要并逐个审查；发现问题用 task_send 把返工要求投递回对应窗口。禁止用它拆分同一章的同一段内容（并行写同一处会互相覆盖），也禁止在派生出的窗口里再次调用本工具。',
+    '仅当作者在当前任务明确要求多窗口分工时，派生 1~5 个独立任务窗口并行开工。旧任务的多窗口指令不算授权。用于互不重叠的批量创作，禁止拆分同章同段。派生后必须用 task_wait 收交付并逐个审查；返工用 task_send。派生窗口禁止再次调用。',
   parameters: z.object({
     tasks: z
       .array(
@@ -344,6 +315,8 @@ export const taskSpawnTool = defineTool({
   async execute(ctx, args) {
     const blocked = await assertNotSpawnedWindow(ctx.sessionId)
     if (blocked) return { output: blocked, summary: '派生窗口不能再派生' }
+    const scopeError = await assertOrchestrationResumeGuard(ctx.runId, ctx.sessionId, 'task_spawn')
+    if (scopeError) throw new Error(scopeError)
 
     const limit = env.agentSpawnMaxParallel
     const remaining = Math.max(0, env.agentOrchestrationMaxConcurrent - countActiveRunsByUser(ctx.userId))
@@ -560,6 +533,9 @@ export const taskSendTool = defineTool({
     if (args.sessionId === ctx.sessionId) {
       return { output: '不能向当前窗口自己发送提示词，那会导致自我递归。', summary: '目标窗口无效' }
     }
+
+    const scopeError = await assertOrchestrationResumeGuard(ctx.runId, ctx.sessionId, 'task_send', args)
+    if (scopeError) throw new Error(scopeError)
 
     const target = await prisma.agentSession.findFirst({
       where: { id: args.sessionId, userId: ctx.userId },

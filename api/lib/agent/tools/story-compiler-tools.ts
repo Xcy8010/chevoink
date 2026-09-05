@@ -291,10 +291,14 @@ export const sceneTaskBuildTool = defineTool({
   name: 'scene_task_build',
   title: '构建场景任务',
   description:
-    'Story Compiler 的 BEAT 步骤。把本章拆成 1–4 个可执行 Scene Task；每个任务必须有目标、阻力、选择、代价、转折和可观测终态。compilationId 和精品候选取舍可省略，由服务端从当前任务解析并补齐；禁止为了补流程元数据重复调用。',
+    'Story Compiler 的 BEAT 步骤。一次提交本章完整的 1–4 个场景，不是正文。每个 purpose/goal/obstacle/choice/cost/turn 用一句短句（建议 60 字内）；entryState/exitState 只填本场景变化的字段，每个状态列表建议最多 3 项，勿复制人物档案。省略未变化状态、styleBudget、alternatives 和 compilationId 可显著缩短参数，服务端解析当前编译并补齐流程元数据。顶层直接传 tasks 数组，禁止套 arguments 信封或为了补元数据重复调用。',
   parameters: z.object({
     compilationId: z.string().min(1).optional(),
-    tasks: z.array(sceneTaskInputSchema).min(1).max(4),
+    tasks: z.array(sceneTaskInputSchema.extend({
+      entryState: sceneTaskInputSchema.shape.entryState.prefault({}),
+      exitState: sceneTaskInputSchema.shape.exitState.prefault({}),
+      styleBudget: sceneTaskInputSchema.shape.styleBudget.default({ description: 'low', dialogue: 'medium', rhetoric: 'low' }),
+    })).min(1).max(4),
     alternatives: z.array(z.object({
       label: z.string().min(1).max(120).default('备选推进'),
       tradeoff: z.string().min(1).max(500).default('与当前 Scene Task 链相比的节奏和冲突取舍。'),

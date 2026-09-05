@@ -1186,22 +1186,17 @@ function sanitizePlainText(text: string): string {
 /** 文本段：清洗结果按 part.text 缓存，避免流式期间历史段落反复正则清洗 */
 const TextPart = memo(function TextPart({
   text,
-  streamingCursor,
 }: {
   text: string
-  streamingCursor: boolean
 }) {
   const cleanText = useMemo(() => sanitizePlainText(text), [text])
-  // 整段都是脏标记时清洗后为空，避免渲染空段落（流式尾部保留光标）
-  if (!cleanText.trim() && !streamingCursor) {
+  // Empty protocol-only text never renders a paragraph or a standalone activity cursor.
+  if (!cleanText.trim()) {
     return null
   }
   return (
     <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]">
       {cleanText}
-      {streamingCursor ? (
-        <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-[var(--text-primary)] align-middle" />
-      ) : null}
     </p>
   )
 })
@@ -1271,9 +1266,8 @@ export const AgentMessageParts = memo(function AgentMessageParts({
         if (part.type === 'text') {
           // 折叠态且可收起：过程进展正文折进「已处理 n 个操作」，只留结尾总结的正文可见
           if (collapsed && textCollapsible) return null
-          // 消息内已存在工具卡 = 该段正文流早已结束：即便定稿标记丢失（断线/回放）也不画光标
-          const hasToolCall = parts.some((item) => item.type === 'tool-call')
-          return <TextPart key={index} text={part.text} streamingCursor={streaming && isLast && !hasToolCall} />
+          // Activity belongs to run status, never an indefinitely blinking prose suffix.
+          return <TextPart key={index} text={part.text} />
         }
 
         // 折叠态：隐藏思考/动作，仅保留 text 结论

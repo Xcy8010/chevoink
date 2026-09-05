@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ArrowUp, BookOpenText, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
+import { ArrowUp, BookOpenText, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Play, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
 import { ReasoningSlider } from './ReasoningSlider'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast-context'
@@ -69,6 +69,7 @@ type AgentComposerProps = {
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
   onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => Promise<void> | void
   onStop: () => void
+  onContinue?: () => Promise<void>
   creativeFreedom: CreativeFreedom
   onCreativeFreedomChange: (value: CreativeFreedom) => void
   qualityMode: StoryCompilerMode
@@ -234,6 +235,7 @@ export function AgentComposer({
   disabled = false,
   onSend,
   onStop,
+  onContinue,
   creativeFreedom,
   onCreativeFreedomChange,
   qualityMode,
@@ -350,6 +352,15 @@ export function AgentComposer({
 
   const canSend =
     !running && !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
+  const showContinue = Boolean(onContinue) && !prompt.trim() && references.length === 0 && attachments.length === 0
+  const canContinue = showContinue && !running && !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0
+  const continueLock = useRef(false)
+  async function handleContinue() {
+    if (!canContinue || !onContinue || continueLock.current) return
+    continueLock.current = true
+    setSending(true)
+    try { await onContinue() } finally { continueLock.current = false; setSending(false) }
+  }
   const activeBuiltInModel = modelOptions.find((item) => item.tier === modelTier)
   const activeCustomModel = modelTier === 'custom' ? customModels.find((item) => item.id === customModelId) : undefined
   const activeModelKey = modelTier === 'custom' && activeCustomModel ? `custom:${activeCustomModel.id}` : `tier:${modelTier}`
@@ -970,13 +981,13 @@ export function AgentComposer({
         ) : (
           <button
             type="button"
-            onClick={() => void handleSend()}
-            disabled={!canSend}
+            onClick={() => void (showContinue ? handleContinue() : handleSend())}
+            disabled={showContinue ? !canContinue : !canSend}
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35 mobile:h-11 mobile:w-11"
-            aria-label="发送"
-            title="发送"
+            aria-label={showContinue ? '继续运行' : '发送'}
+            title={showContinue ? '继续当前任务' : '发送'}
           >
-            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : showContinue ? <Play className="h-4 w-4 fill-current" /> : <ArrowUp className="h-4 w-4" />}
           </button>
         )}
       </div>

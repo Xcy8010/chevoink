@@ -36,6 +36,8 @@ import {
 import { getToolByName, toOpenAITools } from './tools/registry.js'
 import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
+import { jsonrepair } from 'jsonrepair'
+import { getTaskRunIds } from './task-lineage.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
@@ -198,7 +200,29 @@ type ToolCallOutcome = {
  * 1. 字符串内部出现未转义的控制字符（真换行/制表符）
  * 2. 参数被 ```json 围栏或前后多余文本包裹
  * 3. 输出被 length 截断导致字符串/花括号未闭合 */
-export function parseToolArgsTolerant(raw: string): unknown {
+export function parseToolArgsTolerant(raw: string, allowTruncation = true): unknown {
+  // Normal calls stay linear and byte-for-byte intact. Repair full syntax before any legacy truncation fallback.
+  try { return JSON.parse(raw) } catch { /* syntax repair below */ }
+  if (!allowTruncation) {
+    // Syntax repair may add commas/escapes, but cannot invent the end of an execution payload.
+    const stack: string[] = []
+    let quote = ''
+    for (let index = 0; index < raw.length; index++) {
+      const char = raw[index]
+      if (quote) {
+        if (char === '\\') index++
+        else if (char === quote) quote = ''
+      } else if (char === '"' || char === "'") quote = char
+      else if (char === '{' || char === '[') stack.push(char === '{' ? '}' : ']')
+      else if (char === '}' || char === ']') {
+        if (stack.pop() !== char) throw new Error('工具参数结构不完整')
+      }
+    }
+    if (quote || stack.length) throw new Error('工具参数结构不完整')
+  }
+  if (/[}\]]\s*$/.test(raw)) {
+    try { return JSON.parse(jsonrepair(raw)) } catch { /* legacy compatibility below */ }
+  }
   const attempts: string[] = [raw]
 
   // 剥离 Markdown 围栏与前后多余文本：取第一个 { 到最后一个 } 之间
@@ -547,9 +571,14 @@ export async function handleToolCall(
   // 参数解析与校验：先容错修复常见格式毛病，实在修不好再作为观察回填让模型自行修正
   let parsedArgs: unknown = {}
   try {
-    parsedArgs = call.arguments ? parseToolArgsTolerant(call.arguments) : {}
+    if (call.incomplete) throw new Error('provider_output_limit')
+    parsedArgs = call.arguments ? parseToolArgsTolerant(call.arguments, false) : {}
   } catch {
-    const observation = `工具 ${call.name} 的参数不是合法 JSON，本次调用完全没有执行。请立即重新发起同一个工具调用：字符串内的换行必须写成 \\n，不要用 Markdown 围栏包裹参数；如果正文很长，改用 chapter_write 写开头部分，再用 chapter_append 分 2-3 次追加剩余段落，避免单次参数过长被截断。绝对禁止放弃重试或改在回复正文里完成该操作。原始参数：${call.arguments.slice(0, 400)}`
+    const correction = call.name === 'scene_task_build'
+      ? '使用原生 scene_task_build：顶层 tasks 数组包含本章完整的 1–4 个场景；每项 purpose/goal/obstacle/choice/cost/turn 各一句短句，entryState/exitState 只填变化字段，可省略 compilationId/styleBudget/alternatives。不要写正文或重复整章设定。'
+      : '使用该工具公布的 JSON Schema；字符串换行写成 \\n，键名与字符串使用双引号，不要输出 Markdown 或另一层工具调用信封。'
+    const observation = `工具 ${call.name} 未执行。${call.incomplete ? '供应商明确返回 length，参数生成未完成，不能补齐括号后冒充完整操作。' : 'JSON 语法无法安全解析；不能仅凭格式错误推断网络截断。'}接收参数共 ${call.arguments.length} 字符。${correction}请修正后重试，不重复发送相同损坏参数。`
+    console.warn('[agent-tool-arguments]', { runId, tool: call.name, chars: call.arguments.length, incomplete: Boolean(call.incomplete) })
     bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null, ...subagentMark })
     bus.emit({
       type: 'tool.result',
@@ -619,8 +648,8 @@ export async function handleToolCall(
     return fail('参数校验失败', `工具 ${call.name} 参数校验失败：${issues}。${chapterHint}本次调用完全没有执行，请补齐/修正参数后立即重新发起同一个工具调用，绝对禁止放弃重试或改在回复正文里完成该操作。`, 'failed')
   }
 
-  // 续跑协作硬约束：命中中断续跑协作且子窗口未收尾时，主窗口正文写入被拦回 task_send/task_wait
-  const orchestrationBlock = await assertOrchestrationResumeGuard(runId, ctx.sessionId, tool.name)
+  // 协作作用域约束：检查派生授权和目标归属，不拦截无关章节写入。
+  const orchestrationBlock = await assertOrchestrationResumeGuard(runId, ctx.sessionId, tool.name, validated.data)
   if (orchestrationBlock) {
     return fail('续跑协作约束', orchestrationBlock, 'failed')
   }
@@ -779,6 +808,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const admission = new ToolAdmissionGuard()
   const progressSignatures = new Set<string>()
   let blockedRepeat = 0
+  const argumentFailures = new Map<string, number>()
   // 非空时本轮工具执行完立即走 wrap-up（P0 第 4 次同签名 / P1 干预模式二次命中）
   let forceWrapUpReason: string | null = null
   // P1 信道重复检测：正文+思考共用一个检测器，观察/干预由 env.agentRepeatGuardMode 决定
@@ -938,8 +968,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const catalog = await renderSubagentCatalog(params.userId, params.novelId)
       insertSubagentCatalog(messages, catalog)
     }
-    // 中断续跑协作提醒：上一轮异常终止且存在派生子窗口时，强制主控用 task_send/task_wait 续协作，
-    // 避免作者一句「继续」被理解成「在本窗口把子窗口没干完的活重干一遍」
+    // 仅恢复指定任务的协作关系，禁止把同会话中旧任务的窗口重新激活。
     const orchestrationResumeNote = await buildOrchestrationResumeNote(params.sessionId, runId, continuingTask)
     if (orchestrationResumeNote) {
       messages.push({ role: 'user', content: orchestrationResumeNote })
@@ -1097,10 +1126,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     let planSaveReminders = 0
     // 长任务防早停：待办清单（todo_write 维护）未全部完成就想收尾时，回填强指令让它接着执行
     // 续跑时从会话恢复既有清单，新任务从空开始（避免上一个任务的残留待办干扰）
-    let todoItems: AgentTodoItem[] = continuingTask ? await loadSessionTodoItems(params.sessionId) : []
+    let todoItems: AgentTodoItem[] = continuingTask ? await loadSessionTodoItems(params.sessionId, await getTaskRunIds(params.sessionId, runId)) : []
     let continuationPlanLoaded = todoItems.length > 0
     let todoReminders = 0
-    if (continuingTask) messages.push({ role: 'user', content: `[系统] 本轮继续既有任务，授权范围与约束不变。原目标：${taskSpec.goals.join('；')}。\n${renderTodoItems(todoItems)}\n先核对已保存进度，执行剩余工作；缺少清单时用 todo_write 建立剩余待办。不得仅回复下一步打算就结束，也不得将未完成项标为已完成。` })
+    if (continuingTask) messages.push({ role: 'user', content: `[系统] 恢复指定任务 ${taskSpec.id}，不是恢复整个会话的历史工作。原目标：${taskSpec.goals.join('；')}。\n${renderTodoItems(todoItems)}\n历史中其他任务的并行窗口、待办与一次性指令不构成本任务的授权；禁止重新启动它们。被停止时生成但未成功执行的工具不是已保存成果。先核对本任务已保存进度，执行剩余工作；缺少清单时用 todo_write 建立剩余待办。不得仅回复下一步打算就结束，也不得将未完成项标为已完成。` })
     let consecutiveStructureFailures = 0
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
@@ -1486,6 +1515,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           continue
         }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
+        if (outcome.part.status === 'success') argumentFailures.delete(call.name)
+        else if (outcome.part.summary === '参数解析失败' || outcome.part.summary === '参数校验失败') {
+          const failures = (argumentFailures.get(call.name) ?? 0) + 1
+          argumentFailures.set(call.name, failures)
+          if (failures >= 3) forceWrapUpReason = `工具 ${call.name} 连续三次参数无效，已停止重复消耗；已成功保存的内容保留，该工具未完成。`
+        }
         lastActivityAt = Date.now()
         // 滑窗更新：只记成功执行；失败不碰窗口（同签名重试不会被误杀）
         if (outcome.part.status === 'success') {
