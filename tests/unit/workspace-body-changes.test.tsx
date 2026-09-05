@@ -8,6 +8,21 @@ const chapter = (id: string, before: string, after: string): WorkspaceActivity =
 const plan: WorkspaceActivity = { callId: 'p', toolName: 'plan_save', label: '计划', chapterId: null, deltaChars: null, status: 'done', display: { kind: 'planFile', artifactId: 'plan-id', title: '计划一', content: '计划正文' } }
 const props = { activities: [chapter('c', '旧', '新正文'), plan], activitiesVersion: 1, todos: [{ content: '已完成', status: 'completed' as const }, { content: '写十九章', status: 'in_progress' as const }, { content: '校验', status: 'pending' as const }], todosVersion: 1, runActive: true, pendingReviewCount: 0, reviewBusy: false }
 afterEach(cleanup)
+it('dock sections stay independent and retain manual collapse on updates, while changes still navigate', () => {
+  const view = render(<AgentActivityBar {...props} appearance="dock" />)
+  const todoHeader = screen.getByRole('button', { name: '待办 1/3 已完成' })
+  const changesHeader = screen.getByRole('button', { name: '工作区变更 2 个变更' })
+  expect(todoHeader.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.click(todoHeader)
+  view.rerender(<AgentActivityBar {...props} appearance="dock" todosVersion={99} activitiesVersion={99} />)
+  expect(todoHeader.getAttribute('aria-expanded')).toBe('false')
+  expect(changesHeader.getAttribute('aria-expanded')).toBe('true')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.click(screen.getByText('第十九章'))
+  expect(useAgentStore.getState().toolNavigationRequest?.display).toMatchObject({ kind: 'chapterDiff', chapterId: 'c' })
+  fireEvent.click(screen.getByText('计划一'))
+  expect(useAgentStore.getState().toolNavigationRequest?.display).toMatchObject({ kind: 'planFile', artifactId: 'plan-id' })
+})
 it('centers the two matching capsules and only allows one expanded list at a time', () => {
   const { container } = render(<AgentActivityBar {...props} />)
   const row = container.querySelector('[data-agent-activity-capsules]')!

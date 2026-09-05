@@ -70,7 +70,43 @@ function ActivityPopover({ anchor, open, label, onClose, onEnter, onLeave, child
     className="studio-workspace z-[180] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-default)] text-[var(--text-primary)] shadow-xl animate-[studio-change-reveal_160ms_ease-out] motion-reduce:animate-none"
     style={{ opacity: open ? 1 : 0, pointerEvents: open ? undefined : 'none', transition: 'opacity 160ms ease-out', position: 'fixed', left: position.left, top: position.top, transform: position.above ? 'translateY(-100%)' : undefined, width: position.width, maxHeight: position.height }}>{children}</div>, document.fullscreenElement ?? document.body)
 }
-export function AgentActivityBar({ activities, todos, runActive, pendingReviewCount, reviewBusy, onApproveAllReviews, onRejectAllReviews }: Props) {
+/** The right task-status card keeps its expanded, vertical lists; capsules belong only above the composer. */
+function DockSection({ title, summary, icon, children }: { title: string; summary: string; icon: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return <section>
+    <button type="button" aria-label={`${title} ${summary}`} aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex min-h-9 w-full min-w-0 items-center gap-2 px-2 py-2 text-left">
+      <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] transition-transform duration-200 motion-reduce:transition-none', !open && '-rotate-90')} />
+      {icon}<span className="shrink-0 text-xs font-medium text-[var(--text-primary)]">{title}</span><span className="min-w-0 truncate text-[11px] tabular-nums text-[var(--text-secondary)]">{summary}</span>
+    </button>
+    <div aria-hidden={!open} {...(!open ? { inert: '' } : {})} className={cn('grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none', open ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0')}>
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  </section>
+}
+function AgentActivityDock({ activities, todos, runActive, pendingReviewCount, reviewBusy, onApproveAllReviews, onRejectAllReviews }: Props) {
+  const changes = useMemo(() => workspaceBodyChanges(activities), [activities])
+  if (!changes.length && !todos.length && !pendingReviewCount) return null
+  return <div data-agent-activity-dock className="flex min-w-0 flex-col gap-1">
+    {todos.length > 0 ? <DockSection title="待办" summary={`${todos.filter(item => item.status === 'completed').length}/${todos.length} 已完成`} icon={<ListTodo className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}>
+      <ul className="max-h-60 overflow-y-auto overscroll-contain pb-1">{todos.map((item, index) => <li key={index} className="flex items-start gap-2 px-2 py-1.5 text-xs">
+        {item.status === 'completed' ? <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> : item.status === 'in_progress' && runActive ? <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" /> : <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}
+        <span className={cn('min-w-0 flex-1 break-words leading-5', item.status === 'completed' ? 'text-[var(--text-secondary)] line-through' : item.status === 'in_progress' ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>{item.content}</span>
+      </li>)}</ul>
+    </DockSection> : null}
+    {changes.length > 0 || pendingReviewCount > 0 ? <DockSection title="工作区变更" summary={`${changes.length} 个变更`} icon={<FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}>
+      <ul className="max-h-60 overflow-y-auto overscroll-contain pb-1">{[...changes].reverse().map(change => <li key={change.key}>
+        <button type="button" onClick={() => useAgentStore.getState().requestToolNavigation(change.activity.toolName, { chapterId: change.activity.chapterId }, change.activity.display)} className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-[var(--surface-default)] focus-visible:bg-[var(--surface-default)]">
+          <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 truncate text-[var(--text-primary)]" title={change.title}>{change.title}</span><Counts added={change.added} removed={change.removed} />
+        </button>
+      </li>)}</ul>
+    </DockSection> : null}
+    {pendingReviewCount > 0 ? <div className="flex flex-wrap items-center gap-2 px-2 text-xs text-[var(--text-secondary)]"><span>{pendingReviewCount} 项待审</span><button type="button" disabled={reviewBusy} onClick={onApproveAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-default)] disabled:opacity-40">接受全部</button><button type="button" disabled={reviewBusy} onClick={onRejectAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-default)] disabled:opacity-40">拒绝全部</button></div> : null}
+  </div>
+}
+export function AgentActivityBar(props: Props) {
+  return props.appearance === 'dock' ? <AgentActivityDock {...props} /> : <AgentActivityCapsules {...props} />
+}
+function AgentActivityCapsules({ activities, todos, runActive, pendingReviewCount, reviewBusy, onApproveAllReviews, onRejectAllReviews }: Props) {
   const [expanded, setExpanded] = useState<'todos' | 'changes' | null>(null)
   const todoAnchor = useRef<HTMLDivElement>(null), changeAnchor = useRef<HTMLDivElement>(null)
   const touchSummary = useRef(false)
