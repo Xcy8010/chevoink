@@ -1140,12 +1140,33 @@ model AgentSession {
   parentSubtasks     AgentSubtask[]       @relation("ParentAgentSubtask")
   childSubtasks      AgentSubtask[]       @relation("ChildAgentSubtask")
   schedules          AgentSchedule[]
+  queuedRequests     AgentQueuedRequest[]
 
   @@index([userId, novelId])
   @@index([novelId, updatedAt])
   @@index([forkedFromSessionId])
   @@index([spawnedFromSessionId])
   @@map("agent_sessions")
+}
+
+model AgentQueuedRequest {
+  id          String @id @db.VarChar(64)
+  sequence    Int @unique @default(autoincrement())
+  sessionId   String @map("session_id") @db.VarChar(64)
+  userId      String @map("user_id") @db.VarChar(64)
+  payload     Json
+  status      String @default("pending") @db.VarChar(24)
+  priority    Int @default(0)
+  revision    Int @default(0)
+  runId       String? @unique @map("run_id") @db.VarChar(64)
+  error       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  session     AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([sessionId, status, priority, sequence])
+  @@map("agent_queued_requests")
 }
 
 model StoryBranch {

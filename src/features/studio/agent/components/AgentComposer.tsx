@@ -138,6 +138,10 @@ function composerSignature(draft: string, references: ComposerReference[]): stri
   })
 }
 
+function isComposerBlank(text: string): boolean {
+  return !text.replace(/[\u200B\uFEFF]/g, '').trim()
+}
+
 function createReferenceNode(reference: ComposerReference): HTMLSpanElement {
   const chip = document.createElement('span')
   chip.dataset.composerReference = reference.id
@@ -351,10 +355,13 @@ export function AgentComposer({
   const fileFull = fileCount >= MAX_AGENT_FILE_COUNT
 
   const canSend =
-    !running && !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0 && (prompt.trim().length > 0 || references.length > 0)
-  const showContinue = Boolean(onContinue) && !prompt.trim() && references.length === 0 && attachments.length === 0
+    !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0 && (!isComposerBlank(prompt) || references.length > 0)
+  const showContinue = Boolean(onContinue) && isComposerBlank(prompt) && references.length === 0 && attachments.length === 0
   const canContinue = showContinue && !running && !disabled && !sending && !voiceActive && !pendingVoice && uploading === 0
   const continueLock = useRef(false)
+  const sendLock = useRef(false)
+  const currentScope = useRef(scope)
+  currentScope.current = scope
   async function handleContinue() {
     if (!canContinue || !onContinue || continueLock.current) return
     continueLock.current = true
@@ -548,15 +555,18 @@ export function AgentComposer({
 
   const handleSend = async () => {
     const current = syncComposerFromDom()
-    if ((!current.draft.trim() && current.references.length === 0) || running || disabled || sending || voiceActive || pendingVoice || uploading > 0) {
+    if ((isComposerBlank(current.draft) && current.references.length === 0) || disabled || sending || sendLock.current || voiceActive || pendingVoice || uploading > 0) {
       return
     }
     const effectivePrompt = buildComposerPrompt(current.draft, current.references)
     const pending = attachments
     const pinned = pinnedSkills.map((skill) => skill.id)
+    const sendingScope = scope
+    sendLock.current = true
     setSending(true)
     try {
       await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned)
+      if (currentScope.current !== sendingScope) return
       setComposerContent('', [])
       setAttachments([])
       setComposerSkillIds([])
@@ -564,6 +574,7 @@ export function AgentComposer({
     } catch {
       // 面板已展示错误提示；保留草稿与附件供用户重试
     } finally {
+      sendLock.current = false
       setSending(false)
       editorRef.current?.focus()
     }
@@ -694,7 +705,7 @@ export function AgentComposer({
         <p className="mb-1.5 px-1 text-[11px] text-red-500">{attachError}</p>
       )}
       <div className="relative min-h-12">
-        {!prompt && references.length === 0 ? (
+        {isComposerBlank(prompt) && references.length === 0 ? (
           <span className="pointer-events-none absolute left-1.5 top-1 text-sm leading-6 text-[var(--text-secondary)]">
             告诉我要做什么，我会自主完成…
           </span>
@@ -716,7 +727,7 @@ export function AgentComposer({
       </div>
       {pendingVoice?.scope === scope ? <div className="px-1.5 py-2 text-xs text-[var(--text-secondary)]" role="status">草稿已变化，转写文字尚未插入。<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{pendingVoice.text}</div><button type="button" disabled={disabled || running || sending || voiceActive} className="mr-3 min-h-11 underline disabled:opacity-50" onClick={() => { if (!disabled && !running && !sending && !voiceActive) applyVoiceText(pendingVoice.text) }}>插入到末尾</button><button type="button" className="min-h-11" onClick={() => setPendingVoice(null)}>放弃</button></div> : null}
       {voiceActive ? <AgentVoiceInputBar voice={voice} /> : null}
-      {mobileModelSheetOpen && !running && !disabled && !voiceActive ? <AgentMobileModelSheet
+      {mobileModelSheetOpen && !disabled && !voiceActive ? <AgentMobileModelSheet
         modelOptions={modelOptions} customModels={customModels} modelTier={modelTier} customModelId={customModelId}
         activeModelLabel={activeModelLabel} activeReasoningEffort={activeReasoningEffort} activeReasoningEfforts={activeReasoningEfforts}
         onTier={onModelTierChange} onCustom={id => { onCustomModelChange(id); onModelTierChange('custom') }}
@@ -741,9 +752,9 @@ export function AgentComposer({
             className="hidden"
             onChange={(event) => void handlePickFiles(event)}
           />
-          <details ref={attachmentMenuRef} className="group/attach relative" data-disabled={running || disabled || undefined}>
+          <details ref={attachmentMenuRef} className="group/attach relative" data-disabled={disabled || undefined}>
             <summary
-              onClick={(event) => { if (running || disabled) event.preventDefault() }}
+              onClick={(event) => { if (disabled) event.preventDefault() }}
               className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] group-data-[disabled=true]/attach:pointer-events-none group-data-[disabled=true]/attach:opacity-40 [&::-webkit-details-marker]:hidden"
               aria-label="添加内容"
               title="添加图片、文件、作品引用，或指定本轮技能"
@@ -877,9 +888,9 @@ export function AgentComposer({
               ) : null}
             </div>
           </details>
-          <details ref={creativeModeRef} className="group/mode relative" data-disabled={running || disabled || undefined}>
+          <details ref={creativeModeRef} className="group/mode relative" data-disabled={disabled || undefined}>
             <summary
-              onClick={(event) => { if (running || disabled) event.preventDefault() }}
+              onClick={(event) => { if (disabled) event.preventDefault() }}
               aria-label="创作模式"
               title={CREATIVE_MODES.find((item) => item.value === creativeFreedom)?.description}
               className={cn('flex h-7 cursor-pointer list-none items-center gap-1.5 px-1 text-[11px] transition-colors hover:text-[var(--text-primary)] group-data-[disabled=true]/mode:pointer-events-none group-data-[disabled=true]/mode:opacity-45 [&::-webkit-details-marker]:hidden', creativeFreedom === 'bold' ? 'text-orange-600 dark:text-orange-400' : 'text-[var(--text-secondary)]')}
@@ -907,10 +918,10 @@ export function AgentComposer({
               ))}
             </div>
           </details>
-          <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto min-w-0" data-disabled={running || disabled || undefined} onToggle={(event) => { if (!(event.currentTarget as HTMLDetailsElement).open) { setMobileModelsOpen(false); setEditingReasoningTier(null) } }}>
+          <details ref={modelMenuRef} className="group/model relative z-[120] ml-auto min-w-0" data-disabled={disabled || undefined} onToggle={(event) => { if (!(event.currentTarget as HTMLDetailsElement).open) { setMobileModelsOpen(false); setEditingReasoningTier(null) } }}>
             <summary
               onClick={(event) => {
-                if (running || disabled) { event.preventDefault(); return }
+                if (disabled) { event.preventDefault(); return }
                 if (window.innerWidth < 768) {
                   event.preventDefault()
                   editorRef.current?.blur()
@@ -968,7 +979,7 @@ export function AgentComposer({
           </details>
         </div>
         <button type="button" disabled={voice.disabled} onPointerDown={captureVoiceBookmark} onClick={(event) => { if (event.detail === 0 || !voiceBookmark.current || voiceBookmark.current.scope !== scope) captureVoiceBookmark(); void voice.start() }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] focus-visible:outline focus-visible:outline-2 disabled:opacity-35 mobile:h-11 mobile:w-11" aria-label="语音输入" title="语音输入 · 本机离线转写"><Mic className="h-[18px] w-[18px]" /></button>
-        {running ? (
+        {running && !canSend && !sending ? (
           <button
             type="button"
             onClick={onStop}
@@ -981,13 +992,13 @@ export function AgentComposer({
         ) : (
           <button
             type="button"
-            onClick={() => void (showContinue ? handleContinue() : handleSend())}
-            disabled={showContinue ? !canContinue : !canSend}
+            onClick={() => void (showContinue && !running ? handleContinue() : handleSend())}
+            disabled={showContinue && !running ? !canContinue : !canSend}
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35 mobile:h-11 mobile:w-11"
-            aria-label={showContinue ? '继续运行' : '发送'}
-            title={showContinue ? '继续当前任务' : '发送'}
+            aria-label={running ? '加入待发队列' : showContinue ? '继续运行' : '发送'}
+            title={running ? '当前任务结束后发送' : showContinue ? '继续当前任务' : '发送'}
           >
-            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : showContinue ? <Play className="h-4 w-4 fill-current" /> : <ArrowUp className="h-4 w-4" />}
+            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : showContinue && !running ? <Play className="h-4 w-4 fill-current" /> : <ArrowUp className="h-4 w-4" />}
           </button>
         )}
       </div>

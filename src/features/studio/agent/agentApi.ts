@@ -1,5 +1,6 @@
 import { buildApiUrl } from '@/app/api-base'
 import { buildAuthHeader } from '@/lib/auth-token'
+import type { AgentQueueAction, AgentQueueSnapshot, EnqueueAgentRequest } from '../../../../shared/contracts/agent-queue.js'
 import type {
   AgentSession,
   AgentSessionRunStatusPayload,
@@ -151,6 +152,16 @@ export function fetchAgentSessions(novelId?: string, options?: { query?: string;
   return requestData<{ items: AgentSession[] }>(
     `/api/agent/sessions?${query.toString()}`,
   )
+}
+
+export function enqueueAgentRequest(input: EnqueueAgentRequest): Promise<{ id: string }> {
+  return requestData('/api/agent/queue', { method: 'POST', body: JSON.stringify(input) })
+}
+export function fetchAgentQueue(sessionId: string): Promise<AgentQueueSnapshot> {
+  return requestData(`/api/agent/sessions/${sessionId}/queue`)
+}
+export function actOnAgentQueue(sessionId: string, id: string, action: AgentQueueAction, revision: number, prompt?: string): Promise<{ session?: AgentSession }> {
+  return requestData(`/api/agent/sessions/${sessionId}/queue/${id}`, { method: 'POST', body: JSON.stringify({ action, revision, prompt }) })
 }
 
 /** 侧栏任务窗口状态轮询：批量查各会话最新 run 状态（运行中/挂起），驱动绿黄红点与转圈 */

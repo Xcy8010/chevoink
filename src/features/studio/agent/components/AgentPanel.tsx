@@ -46,6 +46,9 @@ import { getNovelSkills } from '../../api'
 
 import {
   AgentApiError,
+  enqueueAgentRequest,
+  fetchAgentQueue,
+  actOnAgentQueue,
   continueAgentLoopRun,
   deleteAgentSession,
   deleteAgentSessionMessage,
@@ -64,6 +67,7 @@ import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shoul
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
+import { AgentQueueTray } from './AgentQueueTray'
 import { AgentMessageParts } from './AgentMessageParts'
 import { AgentPermissionCard } from './AgentPermissionCard'
 import { AgentQuestionCard } from './AgentQuestionCard'
@@ -206,6 +210,34 @@ export function AgentPanel({
   const skillRoute = useAgentStore((state) => state.skillRoute)
 
   const { connect, disconnect } = useAgentStream(onStreamEvent)
+  const queueQuery = useQuery({ queryKey: ['agent-queue', sessionId], queryFn: () => fetchAgentQueue(sessionId!), enabled: Boolean(sessionId), refetchInterval: 2000 })
+  const queueRetry = useRef<{ signature: string; id: string } | null>(null)
+  const viewSession = useRef(sessionId)
+  viewSession.current = sessionId
+
+  // Server dispatch works even with no browser open. Discover each new run and
+  // hydrate its history before connecting, including runs finished between polls.
+  useEffect(() => {
+    const latestId = queueQuery.data?.latestRunId
+    if (!sessionId || !latestId) return
+    const live = useAgentStore.getState()
+    if (live.loadedSessionId !== sessionId || live.runId === latestId || live.messages.some(message => message.runId === latestId)) return
+    let cancelled = false
+    void fetchAgentSessionMessages(sessionId, { runLimit: 50 }).then(payload => {
+      if (cancelled || viewSession.current !== sessionId) return
+      const now = useAgentStore.getState()
+      if (now.runId === latestId) return
+      if (payload.activeRunId) {
+        now.restoreMessages(payload.messages.filter(message => !(message.runId === payload.activeRunId && message.role === 'assistant')), sessionId)
+        now.resumeRun(payload.activeRunId, sessionId)
+        connect(payload.activeRunId, 0)
+      } else {
+        now.restoreMessages(payload.messages, sessionId)
+        now.noteResumeableRun(payload.resumeRunId ?? null)
+      }
+    }).catch(() => { /* Next queue poll retries; never erase existing history. */ })
+    return () => { cancelled = true }
+  }, [sessionId, queueQuery.data, queueQuery.dataUpdatedAt, connect])
 
   // 更早对话分页：每页最多 50 轮 run，用户手动点击顶部按钮加载更早内容
   const [olderPagination, setOlderPagination] = useState<{ hasMore: boolean; before: string | null } | null>(null)
@@ -726,13 +758,13 @@ export function AgentPanel({
           ensuredSessionId = await ensureSession()
           lazySessionRef.current = ensuredSessionId
         }
-        const startRun = (targetChapterId: string | null) =>
-          startAgentLoopRun({
+        const startRun = async (targetChapterId: string | null) => {
+          const input = {
             sessionId: ensuredSessionId,
             novelId,
             chapterId: targetChapterId,
             // Agent 默认最大权限：恒以 build 模式运行（后端路由也有强制兜底）
-            mode: 'build',
+            mode: 'build' as const,
             prompt,
             selection: selection ?? null,
             attachments: attachments.length > 0 ? attachments : undefined,
@@ -743,8 +775,24 @@ export function AgentPanel({
             reasoningEffort: selectedReasoningEffort,
             // 作者在「+」菜单里点选的技能：本轮绕过评分门槛必定装载
             pinnedSkillIds: pinnedSkillIds.length > 0 ? pinnedSkillIds : undefined,
-          })
-        let result: Awaited<ReturnType<typeof startAgentLoopRun>>
+          }
+          const enqueue = async () => {
+            const signature = JSON.stringify(input)
+            if (queueRetry.current?.signature !== signature) queueRetry.current = { signature, id: crypto.randomUUID() }
+            await enqueueAgentRequest({ id: queueRetry.current.id, input })
+            queueRetry.current = null
+            await queueQuery.refetch()
+            return null
+          }
+          if (isRunActive(useAgentStore.getState().phase) || (queueQuery.data?.items.length ?? 0) > 0) return enqueue()
+          try { return await startAgentLoopRun(input) }
+          catch (error) {
+            // Another tab/worker may start between the UI check and this request.
+            if (error instanceof AgentApiError && error.code === 'RUN_IN_PROGRESS') return enqueue()
+            throw error
+          }
+        }
+        let result: Awaited<ReturnType<typeof startAgentLoopRun>> | null
         try {
           result = await startRun(chapterId ?? null)
         } catch (error) {
@@ -762,6 +810,7 @@ export function AgentPanel({
             throw error
           }
         }
+        if (!result || (viewSession.current !== sessionId && viewSession.current !== ensuredSessionId)) return
         useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId, attachments)
         connect(result.runId)
       } catch (error) {
@@ -781,7 +830,7 @@ export function AgentPanel({
         throw error
       }
     },
-    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits],
+    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits, queueQuery],
   )
 
   const handleStop = useCallback(async () => {
@@ -1574,6 +1623,14 @@ export function AgentPanel({
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
+      {sessionId ? <div className="px-4"><AgentQueueTray key={sessionId} items={queueQuery.data?.items ?? []} onAction={async (item, action, prompt) => {
+        const result = await actOnAgentQueue(sessionId, item.id, action, item.revision, prompt)
+        await queueQuery.refetch()
+        if (result.session && viewSession.current === sessionId) {
+          if (onTaskForked) onTaskForked(result.session)
+          else onSelectSession?.(result.session.id)
+        }
+      }} /></div> : null}
       {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} recentMessage={recentConversationText} /> : null}
       <div data-agent-composer className="px-4 pb-4">
         <AgentComposer

@@ -39,6 +39,7 @@ import {
 import { executeAgentRun } from './loop.js'
 import { resolveApproval, resolveQuestionAnswer } from './permissions.js'
 import { isDefaultSessionTitle } from './session-title.js'
+import { withUserRunLock } from './run-lock.js'
 
 /**
  * Agent Loop 新链路的路由服务层（plan/13 §4.9）。
@@ -54,9 +55,19 @@ export type StartLoopRunOptions = {
    * 分开的理由：不能为了并行编排而放宽普通交互的额度，否则手工连点就能把模型并发打满。
    */
   concurrencyScope?: 'interactive' | 'orchestration'
+  queuedRequest?: { id: string; revision: number }
 }
 
 export async function startLoopRun(
+  userId: string,
+  input: StartAgentLoopRunRequest,
+  options: StartLoopRunOptions = {},
+): Promise<StartAgentLoopRunResponse> {
+  return withUserRunLock(userId, () => startLoopRunLocked(userId, input, options))
+}
+
+/** Internal: caller must hold withUserRunLock. */
+export async function startLoopRunLocked(
   userId: string,
   input: StartAgentLoopRunRequest,
   options: StartLoopRunOptions = {},
@@ -117,7 +128,7 @@ export async function startLoopRun(
         : input.agentProfile === 'lore'
           ? 'loreLibrarian'
           : 'writingOrchestrator'
-  const run = await prisma.agentRun.create({
+  const runData: Prisma.AgentRunCreateArgs = {
     data: {
       sessionId: session.id,
       userId,
@@ -134,7 +145,20 @@ export async function startLoopRun(
       customModelId: modelTier === 'custom' ? input.customModelId : null,
       reasoningEffort: modelRuntime.reasoningEffort,
     },
-  })
+  }
+  // A queue claim and run creation commit together. A crash can never re-send
+  // a claimed prompt; orphan recovery leaves that run visible for manual resume.
+  const queuedRequest = options.queuedRequest
+  const run = queuedRequest ? await prisma.$transaction(async tx => {
+    const claimed = await tx.agentQueuedRequest.updateMany({
+      where: { id: queuedRequest.id, userId, sessionId: session.id, status: 'pending', revision: queuedRequest.revision },
+      data: { status: 'dispatched', revision: { increment: 1 }, error: null },
+    })
+    if (claimed.count !== 1) throw new DataAccessError(409, 'QUEUE_CHANGED', '待发需求已变更，请刷新。')
+    const created = await tx.agentRun.create(runData)
+    await tx.agentQueuedRequest.update({ where: { id: queuedRequest.id }, data: { runId: created.id } })
+    return created
+  }) : await prisma.agentRun.create(runData)
 
   void import('./writing-experiments.js').then(({ recordSevenDayContinuation }) => recordSevenDayContinuation(userId, session.novelId)).catch(() => {})
 
@@ -397,6 +421,13 @@ export async function continueLoopRun(
   userId: string,
   runId: string,
 ): Promise<StartAgentLoopRunResponse> {
+  return withUserRunLock(userId, () => continueLoopRunLocked(userId, runId))
+}
+
+async function continueLoopRunLocked(
+  userId: string,
+  runId: string,
+): Promise<StartAgentLoopRunResponse> {
   const run = await findOwnedLoopRun(userId, runId)
 
   if (run.engine !== 'loop') {
@@ -426,6 +457,8 @@ export async function continueLoopRun(
     throw new DataAccessError(409, 'STALE_RESUME_TARGET', '当前会话已开始新任务，不能从旧入口续跑。请刷新后继续最新任务。')
   }
   const originalMessage = await prisma.agentMessage.findFirst({ where: { runId: run.id, role: 'user' }, orderBy: { createdAt: 'asc' }, select: { parts: true } })
+  const queued = await prisma.agentQueuedRequest.findFirst({ where: { runId: run.id, userId }, select: { payload: true } })
+  const queuedInput = queued?.payload as unknown as StartAgentLoopRunRequest | undefined
   const originalPrompt = Array.isArray(originalMessage?.parts)
     ? originalMessage.parts.flatMap(part => part && typeof part === 'object' && !Array.isArray(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
     : ''
@@ -444,7 +477,12 @@ export async function continueLoopRun(
     novelId: run.novelId,
     chapterId: run.chapterId,
     mode: run.mode === 'act' ? 'build' : run.mode,
-    prompt: originalPrompt || run.inputSummary || '请继续完成之前的任务。',
+    prompt: originalPrompt || queuedInput?.prompt || run.inputSummary || '请继续完成之前的任务。',
+    attachments: queuedInput?.attachments,
+    selection: queuedInput?.selection,
+    creativeFreedom: queuedInput?.creativeFreedom,
+    qualityMode: queuedInput?.qualityMode,
+    pinnedSkillIds: queuedInput?.pinnedSkillIds,
     resume: true,
     modelTier: run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier,
     customModelId: run.customModelId,
@@ -768,7 +806,7 @@ function resolveArtifactApplyStrategies(record: {
   return defaultArtifactApplyStrategies(record.artifactType)
 }
 
-function toAgentSession(record: {
+export function toAgentSession(record: {
   id: string
   userId: string
   novelId: string
@@ -1142,7 +1180,7 @@ function settledForkStatus(status: AgentRunRecord['status']): AgentRunRecord['st
 export async function forkAgentSessionData(
   userId: string,
   sessionId: string,
-  input?: { fromMessageId?: string },
+  input?: { fromMessageId?: string; onCreated?: (tx: Prisma.TransactionClient, sessionId: string) => Promise<void> },
 ) {
   const session = await ensureOwnedSession(userId, sessionId)
   const fromMessageId = input?.fromMessageId?.trim() || undefined
@@ -1238,6 +1276,7 @@ export async function forkAgentSessionData(
       .filter((row): row is NonNullable<typeof row> => row !== null)
     if (messageRows.length > 0) await tx.agentMessage.createMany({ data: messageRows })
 
+    await input?.onCreated?.(tx, created.id)
     return { created, runCount: runIdMap.size, messageCount: messageRows.length }
   })
 

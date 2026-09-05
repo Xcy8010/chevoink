@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { BookOpen, ChevronDown, Plus } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -36,20 +37,44 @@ export default function WorkspaceNovelSwitcher({
 }: WorkspaceNovelSwitcherProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const [position, setPosition] = useState({ left: 8, top: 56, width: 320, maxHeight: 420 })
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const rect = rootRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const viewport = window.visualViewport
+      const width = viewport?.width ?? window.innerWidth
+      const height = viewport?.height ?? window.innerHeight
+      const offsetLeft = viewport?.offsetLeft ?? 0
+      const offsetTop = viewport?.offsetTop ?? 0
+      const cardWidth = width < 768 ? width - 16 : Math.min(360, width - 24)
+      const top = Math.max(offsetTop + 8, Math.min(rect.bottom + 8, offsetTop + height - 160))
+      setPosition({ left: width < 768 ? offsetLeft + 8 : Math.max(offsetLeft + 8, Math.min(rect.left, offsetLeft + width - cardWidth - 8)), top, width: cardWidth, maxHeight: Math.max(120, offsetTop + height - top - 12) })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    window.visualViewport?.addEventListener('resize', place)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); window.visualViewport?.removeEventListener('resize', place) }
+  }, [open])
 
   useEffect(() => {
     if (!open) {
       return
     }
 
-    function handlePointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+    function handlePointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node) && !panelRef.current?.contains(event.target as Node)) {
         setOpen(false)
       }
     }
 
-    window.addEventListener('mousedown', handlePointerDown)
-    return () => window.removeEventListener('mousedown', handlePointerDown)
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); rootRef.current?.querySelector('button')?.focus() } }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', escape)
+    return () => { window.removeEventListener('pointerdown', handlePointerDown); window.removeEventListener('keydown', escape) }
   }, [open])
 
   return (
@@ -64,6 +89,8 @@ export default function WorkspaceNovelSwitcher({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-label={`选择作品：${currentNovelTitle}`}
         className={cn(
           'inline-flex h-10 min-w-0 max-w-full items-center gap-2 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-strong)]',
           fullWidth && 'w-full',
@@ -75,13 +102,8 @@ export default function WorkspaceNovelSwitcher({
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-[var(--text-secondary)] transition', open && 'rotate-180')} />
       </button>
 
-      {open ? (
-        /* 面板锚在按钮左边缘，按钮外侧还有壳层水平留白，宽度上限需同时扣掉左右两侧留白，
-           否则窄屏机型上面板右侧会被壳层主区 overflow-hidden 裁掉 */
-        <div className={cn(
-          'absolute left-0 top-full z-30 mt-2 overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 shadow-[0_20px_48px_rgba(15,23,42,0.16)]',
-          fullWidth ? 'right-0 w-auto max-w-none' : 'w-[20rem] max-w-[calc(100vw-3rem)]',
-        )}>
+      {open ? createPortal(
+        <div ref={panelRef} role="region" aria-label="我的作品" style={position} className="studio-workspace fixed z-[180] flex flex-col overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2 text-[var(--text-primary)] shadow-[0_20px_48px_rgba(15,23,42,0.16)]">
           <div className="flex items-center justify-between gap-3 px-2 py-2">
             <div className="min-w-0">
               <p className="text-xs tracking-[0.08em] text-[var(--text-secondary)]">我的作品</p>
@@ -107,7 +129,7 @@ export default function WorkspaceNovelSwitcher({
             </span>
           </button>
 
-          <div className="mt-2 max-h-[18rem] space-y-1 overflow-y-auto">
+          <div className="mt-2 min-h-0 space-y-1 overflow-y-auto overscroll-contain">
             {loading && novels.length === 0 ? (
               <NovelOptionSkeleton />
             ) : (
@@ -131,7 +153,7 @@ export default function WorkspaceNovelSwitcher({
                     {title.slice(0, 1)}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-[var(--text-primary)]">{title}</span>
+                    <span className="block whitespace-normal break-words text-sm font-medium text-[var(--text-primary)]">{title}</span>
                     <span className="block text-xs text-[var(--text-secondary)]">
                       {novel.chapterCount} 章 · {novel.wordCount} 字
                     </span>
@@ -141,7 +163,7 @@ export default function WorkspaceNovelSwitcher({
               })
             )}
           </div>
-        </div>
+        </div>, document.fullscreenElement ?? document.body
       ) : null}
     </div>
   )

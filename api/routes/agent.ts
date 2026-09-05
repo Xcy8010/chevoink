@@ -74,6 +74,27 @@ import {
 } from '../lib/agent/productivity.js'
 
 const router = Router()
+import { actOnQueuedRequest, enqueueRequest, listQueuedRequests } from '../lib/agent/request-queue.js'
+
+router.get('/sessions/:sessionId/queue', async (req, res) => {
+  const requestId = createRequestId()
+  try { res.json(buildSuccess(requestId, await listQueuedRequests(requireSessionUserId(req), String(req.params.sessionId)))) }
+  catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/queue', async (req, res) => {
+  const requestId = createRequestId()
+  try {
+    const body = parseBody(z.object({ id: z.string().uuid(), input: startAgentLoopRunSchema }), req.body, '待发需求参数无效。')
+    res.json(buildSuccess(requestId, await enqueueRequest(requireSessionUserId(req), body.id, body.input)))
+  } catch (error) { sendRouteError(res, requestId, error) }
+})
+router.post('/sessions/:sessionId/queue/:id', async (req, res) => {
+  const requestId = createRequestId()
+  try {
+    const body = parseBody(z.object({ action: z.enum(['edit', 'delete', 'steer', 'new', 'fork']), revision: z.number().int().min(0), prompt: z.string().trim().min(1).max(20_000).optional() }).refine(body => body.action !== 'edit' || Boolean(body.prompt)), req.body, '待发需求操作无效。')
+    res.json(buildSuccess(requestId, await actOnQueuedRequest(requireSessionUserId(req), String(req.params.sessionId), String(req.params.id), body.action, body.revision, body.prompt)))
+  } catch (error) { sendRouteError(res, requestId, error) }
+})
 
 /* ---------------- 请求体校验 schema（文案与历史提示保持一致） ---------------- */
 

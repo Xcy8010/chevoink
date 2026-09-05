@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ find: vi.fn(), message: vi.fn(), execute: vi.fn(), active: vi.fn(() => false) }))
 vi.mock('../../api/lib/prisma.js', () => ({
   DataAccessError: class extends Error { constructor(public status: number, public code: string, message: string) { super(message) } },
-  prisma: { agentRun: { findFirst: mocks.find }, agentMessage: { findFirst: mocks.message } },
+  prisma: { agentRun: { findFirst: mocks.find }, agentMessage: { findFirst: mocks.message }, agentQueuedRequest: { findFirst: vi.fn(async () => null) } },
 }))
 vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: vi.fn(), getModelTierRuntime: vi.fn() }))
 vi.mock('../../api/lib/agent/loop.js', () => ({ executeAgentRun: mocks.execute }))

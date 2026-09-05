@@ -25,6 +25,29 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('Agent voice draft integration', () => {
+  it.each(['', '\n', '   \n\u00a0', '\u200B\uFEFF'])('shows the placeholder for semantic blank %j', (draft) => {
+    useAgentStore.setState({ composerDraft: draft })
+    render(<AgentComposer {...props()} />)
+    expect(screen.getByText('告诉我要做什么，我会自主完成…')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('allows queued sending while running; failed enqueue preserves draft and duplicate clicks do not resubmit', async () => {
+    let reject!: (error: Error) => void
+    const input = { ...props(), running: true, onSend: vi.fn(() => new Promise<void>((_, fail) => { reject = fail })) }
+    render(<AgentComposer {...input} />)
+    const button = screen.getByRole('button', { name: '加入待发队列' })
+    fireEvent.click(button); fireEvent.click(button)
+    expect(input.onSend).toHaveBeenCalledTimes(1)
+    await act(async () => reject(new Error('offline')))
+    expect(useAgentStore.getState().composerDraft).toBe('已有草稿')
+    expect(input.onStop).not.toHaveBeenCalled()
+  })
+  it('IME Enter never sends a queued requirement', () => {
+    const input = { ...props(), running: true }
+    render(<AgentComposer {...input} />)
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', isComposing: true })
+    expect(input.onSend).not.toHaveBeenCalled()
+  })
   it('streaming prose never renders a blinking cursor even before a tool card arrives', () => {
     const { container } = render(<AgentMessageParts parts={[{ type: 'text', text: '参数简化后继续。' }]} streaming runActive />)
     expect(container.querySelector('p')?.textContent).toBe('参数简化后继续。')
