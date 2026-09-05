@@ -131,21 +131,34 @@ async function getGlobalSetting(db: CreditDb) {
   })
 }
 
+/**
+ * 新账户默认值的唯一入口：全局暂停期间新账户必须继承暂停状态。
+ * 所有建账点（注册事务、懒加载 ensure、管理端批量建账）都必须经过这里，
+ * 结构性防止再出现遗漏 suspendedAt 而绕过门禁的新建账路径。
+ */
+export function buildNewCreditAccountData(
+  userId: string,
+  setting: { dailyAllowanceMilli: number; globallyPaused: boolean },
+  window: CreditWindow,
+  now = new Date(),
+) {
+  return {
+    userId,
+    dailyAllowanceMilli: setting.dailyAllowanceMilli,
+    dailyUsedMilli: 0,
+    bonusBalanceMilli: 0,
+    periodStartedAt: window.startedAt,
+    periodEndsAt: window.endsAt,
+    suspendedAt: setting.globallyPaused ? now : null,
+  }
+}
+
 async function ensureAccountWithDb(db: CreditDb, userId: string, now = new Date()) {
   const setting = await getGlobalSetting(db)
   const window = getCreditWindow(now, setting.resetHourUtc8)
   await db.creditAccount.upsert({
     where: { userId },
-    create: {
-      userId,
-      dailyAllowanceMilli: setting.dailyAllowanceMilli,
-      dailyUsedMilli: 0,
-      bonusBalanceMilli: 0,
-      periodStartedAt: window.startedAt,
-      periodEndsAt: window.endsAt,
-      // 暂停期间注册/首次使用的账户必须继承全局状态；之后允许管理员单独恢复。
-      suspendedAt: setting.globallyPaused ? now : null,
-    },
+    create: buildNewCreditAccountData(userId, setting, window, now),
     update: {},
   })
   await db.creditAccount.updateMany({
@@ -653,17 +666,10 @@ export async function initializeNewUserCredits(
   referralCode?: string | null,
 ): Promise<void> {
   const setting = await getGlobalSetting(tx)
-  const window = getCreditWindow(new Date(), setting.resetHourUtc8)
-  await tx.creditAccount.create({
-    data: {
-      userId,
-      dailyAllowanceMilli: setting.dailyAllowanceMilli,
-      dailyUsedMilli: 0,
-      bonusBalanceMilli: 0,
-      periodStartedAt: window.startedAt,
-      periodEndsAt: window.endsAt,
-    },
-  })
+  const now = new Date()
+  const window = getCreditWindow(now, setting.resetHourUtc8)
+  // 注册即建账：暂停期间注册的新用户必须继承全局暂停，否则将绕过计费门禁。
+  await tx.creditAccount.create({ data: buildNewCreditAccountData(userId, setting, window, now) })
   await tx.referralCode.create({ data: { userId, code: makeReferralCode(userId) } })
 
   const normalizedCode = referralCode?.trim().toUpperCase()

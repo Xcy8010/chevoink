@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client'
 import type { AdminCreditsManagementPayload, AdminModelManagementPayload } from '../../shared/contracts/index.js'
 import type { ModelReasoningEffort } from '../../shared/contracts/index.js'
 import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
-import { ensureCreditAccount, getCreditWindow, parseModelCapabilities } from './credits.js'
+import { buildNewCreditAccountData, ensureCreditAccount, getCreditWindow, parseModelCapabilities } from './credits.js'
 import { stopActiveRunsByUser, stopAllActiveRuns } from './agent/active-runs.js'
 import { env } from '../config/env.js'
 import { DataAccessError, prisma } from './prisma.js'
@@ -19,16 +19,7 @@ async function ensureAllPublicBetaAccounts(setting: { dailyAllowanceMilli: numbe
   const users = await prisma.user.findMany({ select: { id: true } })
   if (users.length > 0) {
     await prisma.creditAccount.createMany({
-      data: users.map((user) => ({
-        userId: user.id,
-        dailyAllowanceMilli: setting.dailyAllowanceMilli,
-        dailyUsedMilli: 0,
-        bonusBalanceMilli: 0,
-        periodStartedAt: window.startedAt,
-        periodEndsAt: window.endsAt,
-        // 全局暂停是新账户的默认状态；否则暂停期间注册的用户会绕过门禁。
-        suspendedAt: setting.globallyPaused ? now : null,
-      })),
+      data: users.map((user) => buildNewCreditAccountData(user.id, setting, window, now)),
       skipDuplicates: true,
     })
   }
