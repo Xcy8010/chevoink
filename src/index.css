@@ -530,6 +530,16 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Work 默认收起查看器时：44px 轨道 + 44px 检查栏 + 296px 停靠卡 + 920px 对话。 */
+.studio-skeleton-work { container: studio-skeleton-work / inline-size; }
+@container studio-skeleton-work (min-width: 1304px) {
+  .studio-skeleton-activity-dock { display: block; }
+  [data-studio-region='desktop-activity'] { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-workspace .skeleton-shimmer { animation: none; }
+}
+
 @keyframes agent-fade-out {
   from {
     opacity: 1;

@@ -226,6 +226,46 @@ function StudioMessageLines({ compact = false }: { compact?: boolean }) {
   )
 }
 
+/** 与真实活动栏一致：桌面并排胶囊，手机融合成一条；不预先展开列表/待审操作。 */
+function StudioActivitySkeleton({ region }: { region: string }) {
+  return <div data-studio-region={region} aria-hidden="true" className="mb-2 flex min-w-0 shrink-0 justify-center">
+    <div data-studio-activity-capsules className="flex max-w-full items-center gap-2 mobile:w-80 mobile:gap-0 mobile:overflow-hidden mobile:rounded-2xl mobile:border mobile:border-[var(--border-subtle)] mobile:bg-[var(--surface-muted)]">
+      <div data-studio-activity-capsule="todo" className="flex h-9 w-40 min-w-0 items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-3 mobile:h-11 mobile:w-1/2 mobile:rounded-none mobile:border-0 mobile:bg-transparent mobile:px-2.5">
+        <Skeleton className="h-3.5 w-3.5 shrink-0 mobile:hidden" /><Skeleton className="h-3 w-6 shrink-0" /><Skeleton className="h-3 min-w-0 flex-1" /><Skeleton className="h-2 w-2 shrink-0" />
+      </div>
+      <div data-studio-activity-capsule="changes" className="flex h-9 w-52 min-w-0 items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-3 mobile:h-11 mobile:w-1/2 mobile:rounded-none mobile:border-0 mobile:border-l mobile:bg-transparent mobile:px-2.5">
+        <Skeleton className="h-3 min-w-0 flex-1" /><Skeleton className="h-3 w-8 shrink-0" /><Skeleton className="h-3 w-4 shrink-0" />
+      </div>
+    </div>
+  </div>
+}
+
+function StudioComposerSkeleton({ region }: { region: string }) {
+  return <div data-studio-region={region} aria-hidden="true" className="mb-4 flex min-h-[112px] min-w-0 shrink-0 flex-col rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2.5 shadow-sm mobile:mb-0 mobile:min-h-[120px]">
+    <div className="min-h-12 flex-1 px-1.5 pt-1"><Skeleton className="h-3.5 w-3/5" /></div>
+    <div data-studio-composer-toolbar className="mt-1.5 flex min-w-0 items-center gap-1.5">
+      <Skeleton className="h-6 w-6 shrink-0 rounded-lg" />
+      <Skeleton className="h-6 w-20 shrink-0 rounded-lg mobile:w-6" />
+      <span data-studio-skeleton-model-effort className="ml-auto min-w-0"><Skeleton className="h-6 w-20 max-w-full rounded-lg mobile:w-14" /></span>
+      <Skeleton className="h-9 w-9 shrink-0 rounded-full mobile:h-11 mobile:w-11" />
+      <Skeleton className="h-8 w-8 shrink-0 rounded-full mobile:h-11 mobile:w-11" />
+    </div>
+  </div>
+}
+
+/** 宽屏停靠区仍用纵向清单，与输入框上方胶囊互斥。 */
+function StudioActivityDockSkeleton() {
+  return <aside data-studio-region="desktop-activity-dock" aria-hidden="true" className="studio-skeleton-activity-dock hidden w-[296px] shrink-0 px-3 py-4">
+    <div className="rounded-[20px] bg-[var(--surface-muted)] p-3">
+      <div className="px-2 py-2"><Skeleton className="h-4 w-16" /></div>
+      <div className="flex h-9 items-center gap-2 px-2"><Skeleton className="h-3.5 w-3.5" /><Skeleton className="h-3 w-12" /><Skeleton className="h-3 w-16" /></div>
+      <div className="space-y-3 px-2 pb-3">{Array.from({ length: 3 }, (_, index) => <div key={index} className="flex items-start gap-2"><Skeleton className="h-3.5 w-3.5 shrink-0 rounded-full" /><Skeleton className="h-3 w-4/5 opacity-60" /></div>)}</div>
+      <div className="flex h-9 items-center gap-2 px-2"><Skeleton className="h-3.5 w-3.5" /><Skeleton className="h-3 w-24" /></div>
+      <div data-studio-dock-changes>{Array.from({ length: 5 }, (_, index) => <div key={index} className="flex h-9 items-center gap-2 px-2"><Skeleton className="h-3.5 w-3.5 shrink-0" /><Skeleton className="h-3 min-w-0 flex-1" /><Skeleton className="ml-3 h-3 w-8" /><Skeleton className="h-3 w-4" /></div>)}</div>
+    </div>
+  </aside>
+}
+
 /** 创作区骨架屏：按真实 Work 工作区分别适配桌面端与手机端 */
 const studioSkeletonMobileNav = ['exit', 'assistant', 'editor', 'chapters', 'more'] as const
 const studioSkeletonInspectorTabs = ['work', 'context', 'changes', 'memory', 'skills'] as const
@@ -263,27 +303,8 @@ export function StudioSkeleton() {
             </div>
           </div>
 
-          <div className="mb-2 shrink-0 overflow-hidden rounded-[18px] border border-[var(--border-subtle)]" data-studio-region="mobile-activity">
-            <div className="flex h-11 items-center gap-3 px-4">
-              <Skeleton className="h-4 w-4 rounded-full" />
-              <Skeleton className="h-3.5 w-28" />
-              <Skeleton className="ml-auto h-3 w-14" />
-            </div>
-            <div className="flex h-11 items-center gap-3 border-t border-[var(--border-subtle)] px-4">
-              <Skeleton className="h-4 w-4 rounded-[5px]" />
-              <Skeleton className="h-3.5 w-32" />
-            </div>
-          </div>
-
-          <div className="h-[126px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-4" data-studio-region="mobile-composer">
-            <Skeleton className="h-3.5 w-3/4" />
-            <div className="mt-12 flex items-center gap-3">
-              <Skeleton className="h-7 w-20 rounded-[var(--radius-pill)]" data-studio-skeleton-model-effort />
-              <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
-              <Skeleton className="h-7 w-7 rounded-[8px]" />
-              <Skeleton className="ml-auto h-10 w-10 rounded-full" />
-            </div>
-          </div>
+          <StudioActivitySkeleton region="mobile-activity" />
+          <StudioComposerSkeleton region="mobile-composer" />
         </div>
 
         <div
@@ -315,11 +336,13 @@ export function StudioSkeleton() {
         <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-3" data-studio-region="desktop-command-bar">
           <Skeleton className="h-8 w-8 rounded-[8px]" />
           <div className="h-6 w-px bg-[var(--border-subtle)]" />
-          <div><Skeleton className="h-3.5 w-32" /><Skeleton className="mt-1 h-2.5 w-20" /></div>
+          {perspective === 'work' ? <div className="flex min-w-0 gap-4" data-studio-command-menus>{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-3 w-6" />)}</div> : <div><Skeleton className="h-3.5 w-32" /><Skeleton className="mt-1 h-2.5 w-20" /></div>}
           <div className="ml-auto flex gap-2">
+            {perspective === 'ide' ? <>
             <Skeleton className="h-9 w-24 rounded-[4px]" />
             <Skeleton className="h-9 w-20 rounded-[4px]" />
             <Skeleton className="h-9 w-9 rounded-[4px]" />
+            </> : null}
             <Skeleton className="h-9 w-24 rounded-[4px]" />
           </div>
         </div>
@@ -375,7 +398,7 @@ export function StudioSkeleton() {
             </div>
           </div>
         ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="studio-skeleton-work flex min-h-0 flex-1 overflow-hidden">
           <main className="flex min-w-0 flex-1 justify-center overflow-hidden" data-studio-region="desktop-conversation">
             <div className="flex h-full min-h-0 w-full max-w-[960px] flex-col px-8">
               <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)]">
@@ -395,30 +418,12 @@ export function StudioSkeleton() {
                 <StudioMessageLines />
               </div>
 
-              <div className="mb-2 shrink-0 overflow-hidden rounded-[18px] border border-[var(--border-subtle)]" data-studio-region="desktop-activity">
-                <div className="flex h-10 items-center gap-3 px-4">
-                  <Skeleton className="h-4 w-4 rounded-full" />
-                  <Skeleton className="h-3.5 w-32" />
-                  <Skeleton className="ml-auto h-3 w-16" />
-                </div>
-                <div className="flex h-10 items-center gap-3 border-t border-[var(--border-subtle)] px-4">
-                  <Skeleton className="h-4 w-4 rounded-[5px]" />
-                  <Skeleton className="h-3.5 w-36" />
-                </div>
-              </div>
-
-              <div className="mb-4 h-[132px] shrink-0 rounded-[24px] border border-[var(--border-subtle)] p-5" data-studio-region="desktop-composer">
-                <Skeleton className="h-3.5 w-2/5" />
-                <div className="mt-14 flex items-center gap-3">
-                  <Skeleton className="h-7 w-20 rounded-[var(--radius-pill)]" data-studio-skeleton-model-effort />
-                  <Skeleton className="h-8 w-24 rounded-[var(--radius-pill)]" />
-                  <Skeleton className="h-7 w-7 rounded-[8px]" />
-                  <Skeleton className="ml-auto h-10 w-10 rounded-full" />
-                </div>
-              </div>
+              <StudioActivitySkeleton region="desktop-activity" />
+              <StudioComposerSkeleton region="desktop-composer" />
             </div>
           </main>
 
+          <StudioActivityDockSkeleton />
           <aside className="flex w-[46px] shrink-0 flex-col items-center border-l border-[var(--border-subtle)] py-2" data-studio-region="desktop-inspector-rail">
             <Skeleton className="h-8 w-8 rounded-[8px]" />
             <div className="my-3 h-px w-5 shrink-0 bg-[var(--border-subtle)]" />
