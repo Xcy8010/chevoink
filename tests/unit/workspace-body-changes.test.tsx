@@ -8,6 +8,15 @@ const chapter = (id: string, before: string, after: string): WorkspaceActivity =
 const plan: WorkspaceActivity = { callId: 'p', toolName: 'plan_save', label: '计划', chapterId: null, deltaChars: null, status: 'done', display: { kind: 'planFile', artifactId: 'plan-id', title: '计划一', content: '计划正文' } }
 const props = { activities: [chapter('c', '旧', '新正文'), plan], activitiesVersion: 1, todos: [{ content: '已完成', status: 'completed' as const }, { content: '写十九章', status: 'in_progress' as const }, { content: '校验', status: 'pending' as const }], todosVersion: 1, runActive: true, pendingReviewCount: 0, reviewBusy: false }
 afterEach(cleanup)
+it('limits the dock changes viewport to five fixed-height rows without discarding older changes', () => {
+  const activities = Array.from({ length: 8 }, (_, index) => ({ ...chapter(String(index), '', '正文'), chapterId: `c${index}`, display: undefined }))
+  render(<AgentActivityBar {...props} activities={activities} appearance="dock" />)
+  const list = screen.getByRole('list', { name: '工作区变更列表' })
+  expect(list.className).toContain('max-h-[11.25rem]')
+  expect(list.className).toContain('overflow-y-auto')
+  expect(list.children).toHaveLength(8)
+  expect([...list.querySelectorAll('button')].every(button => button.className.includes('h-9'))).toBe(true)
+})
 it('dock sections stay independent and retain manual collapse on updates, while changes still navigate', () => {
   const view = render(<AgentActivityBar {...props} appearance="dock" />)
   const todoHeader = screen.getByRole('button', { name: '待办 1/3 已完成' })

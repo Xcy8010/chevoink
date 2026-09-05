@@ -94,8 +94,8 @@ function AgentActivityDock({ activities, todos, runActive, pendingReviewCount, r
       </li>)}</ul>
     </DockSection> : null}
     {changes.length > 0 || pendingReviewCount > 0 ? <DockSection title="工作区变更" summary={`${changes.length} 个变更`} icon={<FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />}>
-      <ul className="max-h-60 overflow-y-auto overscroll-contain pb-1">{[...changes].reverse().map(change => <li key={change.key}>
-        <button type="button" onClick={() => useAgentStore.getState().requestToolNavigation(change.activity.toolName, { chapterId: change.activity.chapterId }, change.activity.display)} className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-[var(--surface-default)] focus-visible:bg-[var(--surface-default)]">
+      <ul aria-label="工作区变更列表" className="max-h-[11.25rem] overflow-y-auto overscroll-contain">{[...changes].reverse().map(change => <li key={change.key}>
+        <button type="button" onClick={() => useAgentStore.getState().requestToolNavigation(change.activity.toolName, { chapterId: change.activity.chapterId }, change.activity.display)} className="flex h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-[var(--surface-default)] focus-visible:bg-[var(--surface-default)]">
           <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 truncate text-[var(--text-primary)]" title={change.title}>{change.title}</span><Counts added={change.added} removed={change.removed} />
         </button>
       </li>)}</ul>

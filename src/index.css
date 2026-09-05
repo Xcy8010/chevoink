@@ -777,6 +777,11 @@ html[data-studio-reduced-motion='true'] .studio-settings-page * {
 .work-activity-dock { transition: opacity 160ms, clip-path 160ms; clip-path: inset(0 0 0 100%); opacity: 0; }
 .work-activity-dock.is-visible { clip-path: inset(0); opacity: 1; }
 .work-inspector-column { container-type: inline-size; }
+.studio-chapter-viewer { container: chapter-viewer / inline-size; }
+@container chapter-viewer (max-width: 480px) {
+  .studio-viewer-action-label { display: none; }
+  .studio-viewer-action { width: 1.75rem; padding-inline: 0; gap: 0; }
+}
 @container (max-width: 300px) { .work-inspector-nav button > span { display: none; } }
 .work-agent-compact { position: absolute !important; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(760px, calc(100% - 72px)); height: auto !important; max-height: calc(100% - 32px); z-index: 60; animation: work-composer-reveal 220ms cubic-bezier(.22,1,.36,1); }
 .work-agent-compact > :not([data-agent-composer]):not([data-agent-compact-restore]) { display: none !important; }
