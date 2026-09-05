@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, expect, it } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
 import { workspaceBodyChanges } from '../../src/features/studio/agent/workspace-body-changes'
 import { AgentActivityBar } from '../../src/features/studio/agent/components/AgentActivityBar'
 import { useAgentStore, type WorkspaceActivity } from '../../src/features/studio/agent/agentStore'
@@ -8,6 +8,31 @@ const chapter = (id: string, before: string, after: string): WorkspaceActivity =
 const plan: WorkspaceActivity = { callId: 'p', toolName: 'plan_save', label: '计划', chapterId: null, deltaChars: null, status: 'done', display: { kind: 'planFile', artifactId: 'plan-id', title: '计划一', content: '计划正文' } }
 const props = { activities: [chapter('c', '旧', '新正文'), plan], activitiesVersion: 1, todos: [{ content: '已完成', status: 'completed' as const }, { content: '写十九章', status: 'in_progress' as const }, { content: '校验', status: 'pending' as const }], todosVersion: 1, runActive: true, pendingReviewCount: 0, reviewBusy: false }
 afterEach(cleanup)
+it('keeps review actions inside the hover card, including review-only state and busy protection', () => {
+  const approve = vi.fn(), reject = vi.fn()
+  const view = render(<AgentActivityBar {...props} pendingReviewCount={2} onApproveAllReviews={approve} onRejectAllReviews={reject} />)
+  expect(screen.queryByRole('button', { name: '接受全部' })).toBeNull()
+  fireEvent.pointerEnter(screen.getByText('2 个工作区变更').closest('button')!.parentElement!.parentElement!)
+  const popup = screen.getByRole('dialog', { name: '工作区正文变更' })
+  fireEvent.click(within(popup).getByRole('button', { name: '接受全部' }))
+  fireEvent.click(within(popup).getByRole('button', { name: '拒绝全部' }))
+  expect(approve).toHaveBeenCalledTimes(1)
+  expect(reject).toHaveBeenCalledTimes(1)
+  expect(view.container.querySelector('[aria-label="待审变更操作"]')).toBeNull()
+  view.rerender(<AgentActivityBar {...props} activities={[]} pendingReviewCount={2} reviewBusy />)
+  expect(screen.getByText('0 个工作区变更')).toBeTruthy()
+  expect((within(popup).getByRole('button', { name: '接受全部' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.keyDown(window, { key: 'Escape' })
+  fireEvent.click(screen.getByText('0 个工作区变更'))
+  expect(screen.getByRole('dialog', { name: '工作区正文变更' })).toBeTruthy()
+})
+it('right dock review actions belong to the changes section and collapse with it', () => {
+  render(<AgentActivityBar {...props} appearance="dock" pendingReviewCount={1} />)
+  const header = screen.getByRole('button', { name: '工作区变更 2 个变更' })
+  expect(header.closest('section')?.contains(screen.getByRole('button', { name: '接受全部' }))).toBe(true)
+  fireEvent.click(header)
+  expect(screen.queryByRole('button', { name: '接受全部' })).toBeNull()
+})
 it('limits the dock changes viewport to five fixed-height rows without discarding older changes', () => {
   const activities = Array.from({ length: 8 }, (_, index) => ({ ...chapter(String(index), '', '正文'), chapterId: `c${index}`, display: undefined }))
   render(<AgentActivityBar {...props} activities={activities} appearance="dock" />)

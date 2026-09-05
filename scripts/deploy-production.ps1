@@ -232,7 +232,8 @@ try {
   $RemoteCommand = @"
 set -e
 mkdir -p $RemoteCurrentPath
-find $RemoteCurrentPath -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+# Overlay the release without deleting the live application's dependencies or runtime files.
+# Source-file removals must be handled explicitly, never by clearing the live directory.
 tar -xzf $RemoteArchivePath -C $RemoteCurrentPath
 cd $RemoteCurrentPath
 bash deploy/deploy-production.sh

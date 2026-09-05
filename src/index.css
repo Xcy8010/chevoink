@@ -557,6 +557,9 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
   color: transparent;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
+@media (prefers-reduced-motion: reduce) {
+  .agent-processing-shimmer { animation: none; background: none; color: var(--text-secondary); }
+}
 
 /* Agent 工具执行态：保留 Harness 式紧凑流程行，只让一像素进度线和状态文字轻微移动，
    不再用整块卡片闪烁抢占正文阅读。 */

@@ -27,8 +27,13 @@ if [[ -f "ecosystem.config.cjs" ]]; then
   pm2 save
 fi
 
-rm -rf "$WEB_ROOT"/*
-cp -R dist/. "$WEB_ROOT"/
+# Keep hashed assets from the previous release for already-open browser sessions.
+# Publish the entry page only after every referenced asset has been copied.
+while IFS= read -r -d '' entry; do
+  cp -R "$entry" "$WEB_ROOT/"
+done < <(find dist -mindepth 1 -maxdepth 1 ! -name index.html -print0)
+cp dist/index.html "$WEB_ROOT/.index.html.next"
+mv -f "$WEB_ROOT/.index.html.next" "$WEB_ROOT/index.html"
 
 if [[ -f "deploy/nginx.chevoink.conf" ]]; then
   # 配置文件不存在或内容有变更时自动刷新，无需手动设置 CHEVOINK_REFRESH_NGINX

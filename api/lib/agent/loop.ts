@@ -1127,9 +1127,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // 长任务防早停：待办清单（todo_write 维护）未全部完成就想收尾时，回填强指令让它接着执行
     // 续跑时从会话恢复既有清单，新任务从空开始（避免上一个任务的残留待办干扰）
     let todoItems: AgentTodoItem[] = continuingTask ? await loadSessionTodoItems(params.sessionId, await getTaskRunIds(params.sessionId, runId)) : []
-    let continuationPlanLoaded = todoItems.length > 0
     let todoReminders = 0
-    if (continuingTask) messages.push({ role: 'user', content: `[系统] 恢复指定任务 ${taskSpec.id}，不是恢复整个会话的历史工作。原目标：${taskSpec.goals.join('；')}。\n${renderTodoItems(todoItems)}\n历史中其他任务的并行窗口、待办与一次性指令不构成本任务的授权；禁止重新启动它们。被停止时生成但未成功执行的工具不是已保存成果。先核对本任务已保存进度，执行剩余工作；缺少清单时用 todo_write 建立剩余待办。不得仅回复下一步打算就结束，也不得将未完成项标为已完成。` })
+    if (continuingTask) messages.push({ role: 'user', content: `[系统] 恢复指定任务 ${taskSpec.id}，不是恢复整个会话的历史工作。原目标：${taskSpec.goals.join('；')}。\n${renderTodoItems(todoItems)}\n历史中其他任务的并行窗口、待办与一次性指令不构成本任务的授权；禁止重新启动它们。被停止时生成但未成功执行的工具不是已保存成果。先核对本任务已保存进度，执行剩余工作。仅尚有多个独立执行单元的长任务或复杂任务需要建立待办；没有清单不是未完成的证据，确已完成时直接交付，禁止在结尾补造已完成清单、提交空清单或覆盖历史待办。不得仅回复下一步打算就结束，也不得将未完成项标为已完成。` })
     let consecutiveStructureFailures = 0
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
@@ -1262,7 +1261,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       await persistMessage(noticeId, runId, params.sessionId, 'assistant', [{ type: 'text', text: notice }])
       messages.push({
         role: 'user',
-        content: `[系统] ${notice}。上下文已压缩，待办清单是唯一进展依据。立即继续执行下一条未完成待办：不要复述已完成工作、不要重新规划、不要询问作者是否继续。`,
+        content: `[系统] ${notice}。上下文已压缩，按本任务目标、已保存产出与本任务已有待办核对进展，继续剩余工作。没有清单时不要为收尾补建清单；不要复述已完成工作、不要重新规划、不要询问作者是否继续。`,
       })
       return true
     }
@@ -1467,15 +1466,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 防早停：待办清单还有未完成项就想结束（典型症状：连写六章只写两章就问“要不要继续”），
         // 回填强指令让它接着执行下一条待办，最多拦截 4 次避免死循环
         const unfinishedTodos = todoItems.filter((item) => item.status !== 'completed')
-        const missingContinuationPlan = continuingTask && !continuationPlanLoaded
-        const prematureFinish = unfinishedTodos.length > 0 || missingContinuationPlan || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
+        const prematureFinish = unfinishedTodos.length > 0 || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
         if (prematureFinish && todoReminders < 4) {
           todoReminders += 1
           await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
-            content: `[系统] 当前回复尚不足以交付：${missingContinuationPlan ? '续跑缺少剩余工作清单，请先核对历史并用 todo_write 记录真实进度（确已完成可提交空清单）。' : '仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。'}\n${renderTodoItems(unfinishedTodos)}\n只在原授权范围内继续下一步，不重新规划已完成工作。每项真实完成后更新 todo_write；无法完成的项必须保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
+            content: `[系统] 当前回复尚不足以交付：仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。\n${renderTodoItems(unfinishedTodos)}\n只在原授权范围内继续下一步，不重新规划已完成工作。有本任务既有清单时才更新真实完成进度；无清单且工作已完成时直接交付，不为结束任务补建空清单或已完成清单。无法完成的项保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
           })
           continue
         }
@@ -1495,8 +1493,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // the previous observation. Four consecutive blocked calls trigger a bounded stop.
         const signature = toolSignature(call.name, call.arguments)
         const tool = tools.find(candidate => candidate.name === call.name)
-        // todo_write may atomically accept only one completion from a batch. Its current
-        // snapshot is an execution input too, so the next legal advancement is not blocked.
+        // Todo updates depend on their current snapshot; completion of newly-started
+        // work must not be blocked by an identical call made against an older snapshot.
         const admissionSignature = call.name === 'todo_write' ? toolSignature(signature, JSON.stringify(todoItems)) : signature
         const admissionKey = admission.key(admissionSignature, Boolean(tool?.readOnly) || STATE_SENSITIVE_VALIDATORS.has(call.name))
         const previousObservation = REPEATABLE_TOOLS.has(call.name) ? undefined : admission.previous(admissionKey)
@@ -1544,7 +1542,6 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 同步待办清单快照：防早停拦截与预算收尾都依赖它判断任务是否真的做完
         if (call.name === 'todo_write' && outcome.part.status === 'success' && outcome.part.display?.kind === 'todoList') {
           todoItems = outcome.part.display.items
-          continuationPlanLoaded = true
         }
         if (STRUCTURE_MUTATION_TOOLS.has(call.name)) {
           if (outcome.part.status === 'success') {

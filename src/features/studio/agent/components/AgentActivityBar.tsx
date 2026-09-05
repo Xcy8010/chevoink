@@ -17,6 +17,14 @@ const capsule = 'agent-activity-capsule flex min-h-9 min-w-0 items-center rounde
 function Counts({ added, removed }: { added: number; removed: number }) {
   return <span className="flex shrink-0 gap-1.5 tabular-nums" aria-label={`新增 ${added} 字，减少 ${removed} 字`}><span className="text-emerald-600">+{added}</span><span className="text-rose-500">-{removed}</span></span>
 }
+function ReviewActions({ pendingReviewCount, reviewBusy, onApproveAllReviews, onRejectAllReviews, appearance }: Pick<Props, 'pendingReviewCount' | 'reviewBusy' | 'onApproveAllReviews' | 'onRejectAllReviews' | 'appearance'>) {
+  if (!pendingReviewCount) return null
+  return <div role="group" aria-label="待审变更操作" className={cn('sticky bottom-0 z-10 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]', appearance === 'dock' ? 'bg-[var(--surface-muted)]' : 'bg-[var(--surface-default)]')}>
+    <span className="mr-auto shrink-0">{pendingReviewCount} 项待审</span>
+    <button type="button" disabled={reviewBusy} onClick={onApproveAllReviews} className="min-h-9 rounded-lg px-2 hover:text-[var(--text-primary)] disabled:opacity-40 mobile:min-h-11">接受全部</button>
+    <button type="button" disabled={reviewBusy} onClick={onRejectAllReviews} className="min-h-9 rounded-lg px-2 hover:text-[var(--text-primary)] disabled:opacity-40 mobile:min-h-11">拒绝全部</button>
+  </div>
+}
 /** Both capsules share positioning, surface, animation and viewport constraints. */
 function ActivityPopover({ anchor, open, label, onClose, onEnter, onLeave, children }: {
   anchor: RefObject<HTMLDivElement>; open: boolean; label: string; onClose: () => void
@@ -99,8 +107,8 @@ function AgentActivityDock({ activities, todos, runActive, pendingReviewCount, r
           <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 truncate text-[var(--text-primary)]" title={change.title}>{change.title}</span><Counts added={change.added} removed={change.removed} />
         </button>
       </li>)}</ul>
+      <ReviewActions pendingReviewCount={pendingReviewCount} reviewBusy={reviewBusy} onApproveAllReviews={onApproveAllReviews} onRejectAllReviews={onRejectAllReviews} appearance="dock" />
     </DockSection> : null}
-    {pendingReviewCount > 0 ? <div className="flex flex-wrap items-center gap-2 px-2 text-xs text-[var(--text-secondary)]"><span>{pendingReviewCount} 项待审</span><button type="button" disabled={reviewBusy} onClick={onApproveAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-default)] disabled:opacity-40">接受全部</button><button type="button" disabled={reviewBusy} onClick={onRejectAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-default)] disabled:opacity-40">拒绝全部</button></div> : null}
   </div>
 }
 export function AgentActivityBar(props: Props) {
@@ -118,7 +126,7 @@ function AgentActivityCapsules({ activities, todos, runActive, pendingReviewCoun
   const total = useMemo(() => changes.reduce((sum, item) => ({ added: sum.added + item.added, removed: sum.removed + item.removed }), { added: 0, removed: 0 }), [changes])
   const completed = todos.filter(item => item.status === 'completed').length
   const current = todos.find(item => item.status === 'in_progress') ?? todos.find(item => item.status === 'pending')
-  const paired = todos.length > 0 && changes.length > 0
+  const paired = todos.length > 0 && (changes.length > 0 || pendingReviewCount > 0)
   if (!changes.length && !todos.length && !pendingReviewCount) return null
   return <div className="flex min-w-0 flex-col gap-2">
     <div data-agent-activity-capsules data-mobile-fused={paired} className="flex min-w-0 flex-wrap items-center justify-center gap-2 mobile:w-fit mobile:max-w-full mobile:flex-nowrap mobile:self-center mobile:gap-0 mobile:overflow-hidden mobile:rounded-2xl mobile:border mobile:border-[var(--border-subtle)] mobile:bg-[var(--surface-muted)]">
@@ -134,25 +142,26 @@ function AgentActivityCapsules({ activities, todos, runActive, pendingReviewCoun
           </li>)}</ul>
         </ActivityPopover>
       </div> : null}
-      {changes.length > 0 ? <div ref={changeAnchor} className={cn('min-w-0 max-w-full', paired && 'mobile:max-w-[50%] mobile:flex-1 mobile:border-l mobile:border-[var(--border-subtle)]')} onPointerEnter={event => { if (event.pointerType !== 'touch') { cancelClose(); setExpanded('changes') } }} onPointerLeave={closeSoon}>
+      {changes.length > 0 || pendingReviewCount > 0 ? <div ref={changeAnchor} className={cn('min-w-0 max-w-full', paired && 'mobile:max-w-[50%] mobile:flex-1 mobile:border-l mobile:border-[var(--border-subtle)]')} onPointerEnter={event => { if (event.pointerType !== 'touch') { cancelClose(); setExpanded('changes') } }} onPointerLeave={closeSoon}>
         <div className={capsule}>
           <button type="button" title="悬停查看正文变更，点击打开最近一次变更（单位：字）" aria-haspopup="dialog" aria-expanded={expanded === 'changes'} onPointerDown={event => { touchSummary.current = event.pointerType === 'touch' }} onKeyDown={event => {
             if (event.key === 'ArrowDown') { event.preventDefault(); cancelClose(); setExpanded('changes') }
           }} onClick={() => {
             if (touchSummary.current && expanded !== 'changes') { cancelClose(); setExpanded('changes'); return }
-            setExpanded(null)
             const change = changes[changes.length - 1]
+            if (!change) { cancelClose(); setExpanded('changes'); return }
+            setExpanded(null)
             useAgentStore.getState().requestToolNavigation(change.activity.toolName, { chapterId: change.activity.chapterId }, change.activity.display)
-          }} className="flex min-h-9 min-w-0 items-center gap-2 px-3 py-1.5 mobile:min-h-11 mobile:w-full mobile:gap-1.5 mobile:px-2.5"><span className="truncate mobile:hidden">{changes.length} 个工作区变更</span><span className="hidden truncate mobile:inline">{changes.length} 项变更</span><Counts {...total} /></button>
+          }} className="flex min-h-9 min-w-0 items-center gap-2 px-3 py-1.5 mobile:min-h-11 mobile:w-full mobile:gap-1.5 mobile:px-2.5"><span className="truncate mobile:hidden">{changes.length} 个工作区变更</span><span className="hidden truncate mobile:inline">{changes.length} 项变更</span><Counts {...total} />{pendingReviewCount > 0 ? <span title={`${pendingReviewCount} 项待审`} className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"><span className="sr-only">{pendingReviewCount} 项待审</span></span> : null}</button>
         </div>
         <ActivityPopover anchor={changeAnchor} open={expanded === 'changes'} label="工作区正文变更" onClose={() => setExpanded(value => value === 'changes' ? null : value)} onEnter={cancelClose} onLeave={closeSoon}>
           <ul className="p-1">{[...changes].reverse().map(change => <li key={change.key}><button type="button" onClick={() => {
             setExpanded(null)
             useAgentStore.getState().requestToolNavigation(change.activity.toolName, { chapterId: change.activity.chapterId }, change.activity.display)
           }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs transition-colors hover:bg-[var(--surface-muted)] focus-visible:bg-[var(--surface-muted)] mobile:min-h-11"><FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 truncate" title={change.title}>{change.title}</span><Counts added={change.added} removed={change.removed} /></button></li>)}</ul>
+          <ReviewActions pendingReviewCount={pendingReviewCount} reviewBusy={reviewBusy} onApproveAllReviews={onApproveAllReviews} onRejectAllReviews={onRejectAllReviews} />
         </ActivityPopover>
       </div> : null}
     </div>
-    {pendingReviewCount > 0 ? <div className="flex flex-wrap items-center justify-center gap-2 px-3 text-xs text-[var(--text-secondary)]"><span>{pendingReviewCount} 项待审</span><button type="button" disabled={reviewBusy} onClick={onApproveAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-muted)] disabled:opacity-40">接受全部</button><button type="button" disabled={reviewBusy} onClick={onRejectAllReviews} className="min-h-9 rounded-lg px-2 hover:bg-[var(--surface-muted)] disabled:opacity-40">拒绝全部</button></div> : null}
   </div>
 }

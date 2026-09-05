@@ -69,6 +69,20 @@ beforeEach(() => {
 })
 
 describe('Agent run admission and completion lifecycle (real loop, mocked provider/persistence)', () => {
+  it('allows a completed continuation without inventing a todo plan at the end', async () => {
+    queue(response('第二十二章正文已保存，校验已通过。'))
+    await run('请继续完成之前的任务。')
+    expect(mocks.chat).toHaveBeenCalledTimes(1)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
+    expect(events().filter(event => event.type === 'tool.call')).toHaveLength(0)
+  })
+  it('still follows through on promised work when a continuation has no todo list', async () => {
+    queue(response('先读取章节。'), response('', [call('read')]), response('核对完成。'))
+    await run('继续')
+    expect(mocks.tools[0].execute).toHaveBeenCalledTimes(1)
+    expect(mocks.chat).toHaveBeenCalledTimes(3)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
+  })
   it('bounds repeated invalid arguments instead of spending the entire long-task budget', async () => {
     queue(...['bad1', 'bad2', 'bad3'].map(id => response('', [call(id, 'chapter_read', '{')])), response('参数仍无效，已保存进度。'))
     await run()

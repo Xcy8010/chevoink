@@ -1,35 +1,37 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 
-/** 「正在处理...」占位：无容器、银色文字光泽；首个思考/动作事件到达后 visible 翻假，自然淡出再卸载 */
+/** 等待阶段的轻量动态反馈；支持多次入场，淡出不依赖 animationend 必达。 */
 export function ProcessingHint({ visible }: { visible: boolean }) {
-  const [leaving, setLeaving] = useState(false)
-  const wasVisibleRef = useRef(false)
+  const [retained, setRetained] = useState(visible)
 
   useEffect(() => {
     if (visible) {
-      wasVisibleRef.current = true
-      setLeaving(false)
-    } else if (wasVisibleRef.current) {
-      setLeaving(true)
+      setRetained(true)
+      return
     }
+    // 后台标签页/减少动态效果可能不触发动画结束事件，定时兜底防止提示残留。
+    const timer = setTimeout(() => setRetained(false), 250)
+    return () => clearTimeout(timer)
   }, [visible])
 
-  if (!visible && !leaving) {
+  if (!visible && !retained) {
     return null
   }
 
   return (
     <p
-      className={cn('px-1 text-xs', leaving ? 'animate-agent-fade-out' : 'animate-fade-in')}
+      role="status"
+      aria-hidden={!visible}
+      className={cn('px-1 text-xs text-[var(--text-secondary)] motion-reduce:animate-none', visible ? 'animate-fade-in' : 'animate-agent-fade-out')}
       onAnimationEnd={(event) => {
-        if (leaving && event.animationName === 'agent-fade-out') {
-          setLeaving(false)
+        if (!visible && event.animationName === 'agent-fade-out') {
+          setRetained(false)
         }
       }}
     >
-      <span className="agent-processing-shimmer">正在处理...</span>
+      <span className={visible ? 'agent-processing-shimmer' : undefined}>正在处理...</span>
     </p>
   )
 }

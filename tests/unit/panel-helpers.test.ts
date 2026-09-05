@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  assistantHasParts,
+  shouldShowProcessingHint,
   formatSessionTime,
   getMessageText,
   phaseLabel,
@@ -64,22 +64,34 @@ describe('formatSessionTime', () => {
   })
 })
 
-describe('assistantHasParts', () => {
-  it('无 runId 一律 false', () => {
-    expect(assistantHasParts([makeMessage('assistant', 'r1', [{ type: 'text', text: 'x' }])], null)).toBe(false)
+describe('shouldShowProcessingHint', () => {
+  const text = makeMessage('assistant', 'r1', [{ type: 'text', text: '开始构建场景。' }])
+  const thinking = makeMessage('assistant', 'r1', [{ type: 'reasoning', text: '分析场景' }])
+  const tool: AgentMessagePart = { type: 'tool-call', callId: 'c', toolName: 'scene_task_build', title: '构建场景任务', args: null, status: 'running' }
+  it('启动与正文后的参数生成阶段持续显示，不依赖参数增量是否创建了工具卡', () => {
+    expect(shouldShowProcessingHint([], 'r1', 'starting', [])).toBe(true)
+    expect(shouldShowProcessingHint([text], 'r1', 'running', [])).toBe(true)
+    expect(shouldShowProcessingHint([text], 'r1', 'running', [text.id])).toBe(true)
   })
-
-  it('最近一条匹配 run 的助手消息已有分部时为 true', () => {
-    const messages = [
-      makeMessage('user', 'r1'),
-      makeMessage('assistant', 'r1', [{ type: 'text', text: '回复' }]),
-    ]
-    expect(assistantHasParts(messages, 'r1')).toBe(true)
+  it('仅当前动态思考隐藏通用提示；已定稿思考和旧 run 不抑制它', () => {
+    expect(shouldShowProcessingHint([thinking], 'r1', 'running', [])).toBe(false)
+    expect(shouldShowProcessingHint([thinking], 'r1', 'running', [thinking.id])).toBe(true)
+    expect(shouldShowProcessingHint([thinking], 'r2', 'starting', [])).toBe(true)
   })
-
-  it('匹配的助手消息分部为空或无匹配 run 时为 false', () => {
-    expect(assistantHasParts([makeMessage('assistant', 'r1')], 'r1')).toBe(false)
-    expect(assistantHasParts([makeMessage('assistant', 'r1', [{ type: 'text', text: 'x' }])], 'r2')).toBe(false)
+  it('执行动画与等待提示交接：工具完成或失败后恢复，后续轮次也能恢复', () => {
+    expect(shouldShowProcessingHint([makeMessage('assistant', 'r1', [tool])], 'r1', 'running', [])).toBe(false)
+    for (const status of ['success', 'failed', 'denied'] as const) {
+      expect(shouldShowProcessingHint([makeMessage('assistant', 'r1', [{ ...tool, status }])], 'r1', 'running', [])).toBe(true)
+    }
+    expect(shouldShowProcessingHint([thinking, { ...text, id: 'next-turn' }], 'r1', 'running', [])).toBe(true)
+    expect(shouldShowProcessingHint([makeMessage('assistant', 'old', [tool]), text], 'r1', 'running', [])).toBe(true)
+  })
+  it.each(['idle', 'paused', 'succeeded', 'failed', 'cancelled', 'awaiting_approval', 'awaiting_input'])('在 %s 阶段不显示', phase => {
+    expect(shouldShowProcessingHint([text], 'r1', phase, [])).toBe(false)
+  })
+  it('无运行归属或已有待回答/待审批状态时不显示', () => {
+    expect(shouldShowProcessingHint([text], null, 'running', [])).toBe(false)
+    expect(shouldShowProcessingHint([text], 'r1', 'running', [], true)).toBe(false)
   })
 })
 

@@ -8,7 +8,7 @@ import { getTaskRunIds } from '../task-lineage.js'
 /**
  * 待办清单工具（plan/15 长任务连续性）：
  * - 复杂/多单元任务先建待办再逐项执行，每完成一项立即勾掉，防止中途早停
- * - 全量替换语义：每次调用传入完整清单，服务端按会话 upsert 一份持久化副本
+ * - 完整快照语义：按任务谱系保存；无效收尾忽略、漏带旧项保留，其他任务不覆盖
  * - 循环内核据此拦截"待办未完成就想收尾"的早停（loop.ts）
  */
 
@@ -22,19 +22,17 @@ const todoWriteParameters = z.object({
         status: todoStatusSchema.describe('pending=未开始；in_progress=进行中（同一时刻最多 1 项）；completed=已完成'),
       }),
     )
-    .min(1)
     .max(20)
     .superRefine((items, ctx) => {
       if (items.filter((item) => item.status === 'in_progress').length > 1) {
         ctx.addIssue({ code: 'custom', message: '同一时刻只能有一项待办处于进行中。' })
       }
     })
-    .describe('完整的待办清单（全量替换，不是增量）。更新单项状态时也必须把其余项原样带上，否则会丢失'),
+    .describe('本任务完整清单，保留原项。仅长任务/复杂任务在执行前建至少两项；不要在结尾补造清单。空数组只会忽略，不代表已完成，也不删除旧清单'),
 })
 
 /**
- * 待办进度状态机：一次只能真实完成一项，且必须先进入进行中。
- * 这是服务端纪律线，避免模型在收尾时一次性把整张清单全部打勾。
+ * 待办进度状态机：真实完成后允许批量确认，已完成项不可回退。
  */
 export function validateTodoProgression(previous: AgentTodoItem[], next: AgentTodoItem[]): string | null {
   const previousByContent = new Map(previous.map((item) => [item.content, item.status]))
@@ -49,7 +47,27 @@ export function validateTodoProgression(previous: AgentTodoItem[], next: AgentTo
   return null
 }
 
-/** 会话级待办清单在 agent_artifacts 里的定位条件（metadata.todoList=true，不进计划文件夹） */
+/** 不为收尾补造清单；空更新及无变化更新不触碰持久化和 UI。 */
+export function prepareTodoUpdate(previous: AgentTodoItem[], requested: AgentTodoItem[]): { items: AgentTodoItem[]; changed: boolean } {
+  const unchanged = { items: previous, changed: false }
+  if (requested.length === 0) return unchanged
+  if (previous.length === 0 && (requested.length < 2 || requested.every(item => item.status === 'completed'))) return unchanged
+  const previousByContent = new Map(previous.map(item => [item.content, item]))
+  // 不把新编造的已完成项当作进度；只允许结算已有工作。
+  if (requested.some(item => item.status === 'completed' && !previousByContent.has(item.content))) return unchanged
+  const items = requested.map(item => previousByContent.get(item.content)?.status === 'completed' ? { ...item, status: 'completed' as const } : item)
+  // 全量更新漏带旧项时保留：既保护已完成历史，也避免静默丢失未完成工作。
+  const requestedNames = new Set(items.map(item => item.content))
+  items.push(...previous.filter(item => !requestedNames.has(item.content)))
+  if (items.length > 20) return unchanged
+  let activeSeen = false
+  const normalized = items.map(item => item.status === 'in_progress'
+    ? activeSeen ? { ...item, status: 'pending' as const } : (activeSeen = true, item)
+    : item)
+  return { items: normalized, changed: JSON.stringify(normalized) !== JSON.stringify(previous) }
+}
+
+/** 待办副本定位条件；调用方传任务谱系 runIds，隔离同会话的其他任务。 */
 function todoArtifactWhere(sessionId: string, runIds?: string[]) {
   return {
     artifactType: 'chapterPlan' as const,
@@ -127,7 +145,7 @@ export const todoWriteTool = defineTool({
   name: 'todo_write',
   title: '更新待办清单',
   description:
-    '创建或全量更新本次任务的待办清单。作者的需求包含多个执行单元（如连写多章、多项修改）或步骤较多时，必须先用本工具把任务拆成待办清单，再逐步执行：开工前只把当前一项标为 in_progress；某项真实交付后即可标记为 completed（可一次把多项已交付项一起标记完成，服务端已放开该限制；pending 项完成后也可直接标记 completed）。已完成项不要回退。待办没有全部 completed 之前禁止结束任务、禁止停下来问作者“要不要继续”。每次调用都要传入完整清单（全量替换）。',
+    '仅用于长任务、复杂任务（如连写多章、跨章批量整改、多项独立交付步骤）：开工前建立至少两项真实待办，再逐项推进。简单问答、单处修改、简单单步操作不需要清单。首次创建不能全是 completed；禁止在收尾时补写完成清单或用一条总结覆盖旧清单。已真实交付的既有项可批量标记 completed，已完成项不回退、原项不遗漏。有未完成项就继续执行，无法完成时说明阻塞，不得假勾选。空数组不会清空旧清单；进度未变化不要重复调用。',
   parameters: todoWriteParameters,
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
@@ -172,7 +190,7 @@ export const todoWriteTool = defineTool({
   readOnly: true,
   async execute(ctx, args) {
     const runIds = await getTaskRunIds(ctx.sessionId, ctx.runId)
-    // 会话内 upsert：一份清单贯穿整个任务窗口，续跑/刷新都能恢复
+    // 任务谱系内 upsert：续跑/刷新恢复本任务清单，不覆盖其他任务副本。
     const existing = await prisma.agentArtifact.findFirst({
       where: todoArtifactWhere(ctx.sessionId, runIds),
       orderBy: { updatedAt: 'desc' },
@@ -185,29 +203,10 @@ export const todoWriteTool = defineTool({
     // 的 todo_write 清单），跨 run / 续跑也能拿到真实前态；避免 artifact 副本停在旧任务导致
     // previous 退化为空，从而把本应已完成的旧项误判为本轮“一次完成多项”而被拒。
     const previous = await loadSessionTodoItems(ctx.sessionId, runIds)
-    let items = args.items as AgentTodoItem[]
-    const progressionError = validateTodoProgression(previous, items)
-    // 模型偶发把多项一次打勾或 pending 直接打勾：不再把整次调用打成失败。
-    // 服务端收敛到一个合法原子进度，其余项保持前态，下一轮继续更新即可。
-    if (progressionError && previous.length > 0) {
-      const previousByContent = new Map(previous.map((item) => [item.content, item.status]))
-      let completionAccepted = false
-      items = items.map((item) => {
-        const before = previousByContent.get(item.content)
-        if (before === 'completed') return { ...item, status: 'completed' }
-        if (item.status === 'completed') {
-          if (!completionAccepted && before === 'in_progress') {
-            completionAccepted = true
-            return item
-          }
-          return { ...item, status: before ?? 'pending' }
-        }
-        return item
-      })
-      let activeSeen = false
-      items = items.map((item) => item.status === 'in_progress'
-        ? activeSeen ? { ...item, status: 'pending' } : (activeSeen = true, item)
-        : item)
+    const { items, changed } = prepareTodoUpdate(previous, args.items)
+    if (!changed) return {
+      output: `待办清单未变更，未清空或覆盖原清单。仅在长任务/复杂任务开工前建立至少两项未完成工作，或更新既有项真实进度；不要为收尾补造 completed 项，也不要重试无变化的清单。${previous.length ? `\n本任务原清单仍为：\n${renderTodoItems(previous)}` : '\n本任务没有清单；如已完成请直接交付，否则继续实际工作。'}`,
+      summary: '待办清单未变更',
     }
 
     const completed = items.filter((item) => item.status === 'completed').length

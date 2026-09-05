@@ -63,7 +63,7 @@ import {
   stopAgentLoopRun,
 } from '../agentApi'
 import { isRunActive, readSessionMessagesCache, useAgentStore, type ComposerReference } from '../agentStore'
-import { assistantHasParts, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages, skillPhaseLabel } from '../lib/panel-helpers'
+import { shouldShowProcessingHint, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages, skillPhaseLabel } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
@@ -362,9 +362,8 @@ export function AgentPanel({
     () => (skillsQuery.data?.items ?? []).filter((skill) => skill.enabled && skill.status === 'active'),
     [skillsQuery.data],
   )
-  // 「正在处理...」占位：run 活跃且无待审/待答且助手尚未产出任何输出时显示
-  const awaiting =
-    active && !pendingApproval && !pendingQuestion && !assistantHasParts(messages, runId)
+  // 参数生成、工具间等待等阶段也需要动态反馈；不能因已经输出过正文而永久隐藏。
+  const awaiting = shouldShowProcessingHint(messages, runId, phase, finalizedTextIds, Boolean(pendingApproval || pendingQuestion))
 
   // AgentPanel stays mounted while authors switch works. Re-hydrate the per-work
   // freedom setting instead of carrying the previous work's value into the new one.

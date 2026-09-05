@@ -47,18 +47,27 @@ export function formatSessionTime(iso: string): string {
     : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
-/** 当前 run 的助手消息是否已有输出（思考/动作/文本）：决定「正在处理...」占位的消失时机 */
-export function assistantHasParts(messages: AgentUIMessage[], runId: string | null): boolean {
-  if (!runId) {
-    return false
-  }
+/** 运行中没有其他动态反馈时显示等待提示；生成参数不等于工具已执行。 */
+export function shouldShowProcessingHint(
+  messages: AgentUIMessage[],
+  runId: string | null,
+  phase: string,
+  finalizedTextIds: readonly string[],
+  waitingForUser = false,
+): boolean {
+  if (!runId || waitingForUser || (phase !== 'starting' && phase !== 'running')) return false
+  let latest: AgentUIMessage | undefined
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role === 'assistant' && message.runId === runId) {
-      return message.parts.length > 0
+      latest ??= message
+      // 真正执行中的工具已有进度动画，不叠加一行通用提示。
+      if (message.parts.some(part => part.type === 'tool-call' && part.status === 'running')) return false
     }
   }
-  return false
+  // 与 AgentMessageParts 的思考动画条件保持一致；旧思考、已完成工具、
+  // 正文输出及尚未创建工具卡片的参数流都不能把等待提示永久关掉。
+  return !(latest?.parts.at(-1)?.type === 'reasoning' && !finalizedTextIds.includes(latest.id))
 }
 
 /** 首次发送时空历史请求可能晚于本地 beginRun 返回；此时旧响应不得覆盖正在直播的消息。 */
