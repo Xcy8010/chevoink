@@ -26,6 +26,21 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); delete document.documentElement.dataset.studioResizing })
 function move(root: Element, x: number) { fireEvent.pointerMove(root, { clientX: x }); act(() => vi.advanceTimersByTime(300)) }
+it('restores A/B/A widths and explicit collapsed flags, including remount', () => {
+  localStorage.setItem('chevoink:work-split-v2:task-a', JSON.stringify({ viewer: 260, inspector: 220, viewerCollapsed: true, inspectorCollapsed: true, chatCollapsed: false }))
+  localStorage.setItem('chevoink:work-split-v2:task-b', JSON.stringify({ viewer: 380, inspector: 240, viewerCollapsed: false, inspectorCollapsed: false, chatCollapsed: false }))
+  const view = render(<WorkPerspective {...props()} />)
+  expect(screen.getByRole('button', { name: '展开检查区' })).toBeTruthy()
+  view.rerender(<WorkPerspective {...props('task-b')} />)
+  act(() => vi.advanceTimersByTime(400))
+  expect(view.container.querySelector<HTMLElement>('[data-studio-panel="workViewer"]')?.style.width).toBe('380px')
+  view.rerender(<WorkPerspective {...props()} />)
+  expect(view.container.querySelector('[data-studio-panel="workViewer"]')?.getAttribute('aria-hidden')).toBe('true')
+  expect(screen.getByRole('button', { name: '展开检查区' })).toBeTruthy()
+  view.unmount()
+  render(<WorkPerspective {...props()} />)
+  expect(screen.getByRole('button', { name: '展开检查区' })).toBeTruthy()
+})
 it('retains pointer capture through pair fold and chat fold, preserving the exact input node', () => {
   const view = render(<WorkPerspective {...props()} />)
   const root = view.container.querySelector('[data-studio-layout]')!

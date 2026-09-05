@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentComposer } from '../../src/features/studio/agent/components/AgentComposer'
 import { AgentMessageParts } from '../../src/features/studio/agent/components/AgentMessageParts'
 import { useAgentStore } from '../../src/features/studio/agent/agentStore'
+import { activateComposerDraft } from '../../src/features/studio/agent/composer-drafts'
 
 const voice = vi.hoisted(() => ({ options: undefined as undefined | { onTranscript: (text: string) => void }, state: 'idle', start: vi.fn(), cancel: vi.fn(), removeModel: vi.fn() }))
 vi.mock('../../src/components/ui/toast-context', () => ({ useToast: () => ({ info: vi.fn() }) }))
@@ -20,6 +21,7 @@ function props(): Parameters<typeof AgentComposer>[0] {
 beforeEach(() => {
   voice.state = 'idle'
   vi.clearAllMocks()
+  activateComposerDraft('u:n1:t1')
   useAgentStore.setState({ composerDraft: '已有草稿', composerReferences: [], composerAttachments: [], composerUploading: 0, composerSkillIds: [] })
 })
 afterEach(cleanup)
@@ -102,6 +104,8 @@ describe('Agent voice draft integration', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     rerender(<AgentComposer {...input} voiceScopeKey="u:n1:t2" />)
     act(() => voice.options?.onTranscript('上个窗口的录音'))
+    expect(useAgentStore.getState().composerDraft).toBe('')
+    rerender(<AgentComposer {...input} />)
     expect(useAgentStore.getState().composerDraft).toBe('已有草稿')
   })
   it('locks editing and Enter sending while voice is active', () => {

@@ -783,6 +783,11 @@ html[data-studio-reduced-motion='true'] .studio-settings-page * {
 .work-agent-compact > [data-agent-composer] { filter: drop-shadow(0 8px 20px #0001); }
 .work-agent-compact > [data-agent-composer] > div { border-top-left-radius: 0; border-top-right-radius: 0; }
 .work-agent-compact > [data-agent-compact-restore] { z-index: 1; }
+.work-agent-compact .agent-queue-cap { margin-inline: 0; margin-bottom: 0; padding-bottom: 0; border-radius: 0; }
+@keyframes studio-change-reveal {
+  from { opacity: 0; clip-path: inset(12% 0 0 0 round 16px); }
+  to { opacity: 1; clip-path: inset(0 round 16px); }
+}
 @keyframes work-composer-reveal { from { opacity: .4; translate: 0 12px; } to { opacity: 1; translate: 0 0; } }
 @media (prefers-reduced-motion: reduce) {
   .reasoning-fill, .reasoning-thumb, .work-split-column, .work-activity-dock { transition: none; }

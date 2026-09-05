@@ -17,19 +17,25 @@ const items = [
   { key: 'work' as const, label: '作品', icon: BookCopy }, { key: 'context' as const, label: '记忆', icon: Brain },
   { key: 'changes' as const, label: '变更', icon: GitCompareArrows }, { key: 'memory' as const, label: '关系网', icon: Network }, { key: 'skills' as const, label: '技能', icon: Wrench },
 ]
-const storageKey = 'chevoink:work-split-v1'
+const storageKey = 'chevoink:work-split-v2:'
+function restoreSplit(scope: string | undefined, fallback: WorkSplit): WorkSplit {
+  if (!scope) return fallback
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey + scope) || 'null')
+    if (saved && Number.isFinite(saved.viewer) && Number.isFinite(saved.inspector)
+      && ['chatCollapsed', 'viewerCollapsed', 'inspectorCollapsed'].every(key => typeof saved[key] === 'boolean')) {
+      return { viewer: Math.max(WORK_SPLIT.viewer, Math.min(2000, saved.viewer)), inspector: Math.max(WORK_SPLIT.inspector, Math.min(1000, saved.inspector)), chatCollapsed: saved.chatCollapsed, viewerCollapsed: saved.viewerCollapsed, inspectorCollapsed: saved.inspectorCollapsed }
+    }
+  } catch { /* Optional preferences. */ }
+  return fallback
+}
 type Gesture = WorkSplitGesture & { pointer: number }
 
 export default function WorkPerspective({ conversationRail, conversation, activityDock, inspector, viewer, viewerIdentity, scopeKey, outerSidebarOpen = true, rightOpen, inspectorWidth, viewerWidth, onToggleRight, onSelectInspectorTab }: Props) {
   const root = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   const [split, setSplit] = useState<WorkSplit>(() => {
-    let sizes = { viewer: viewerWidth, inspector: inspectorWidth === 520 ? 320 : inspectorWidth }
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null')
-      if (saved && Number.isFinite(saved.viewer) && Number.isFinite(saved.inspector)) sizes = { viewer: Math.max(WORK_SPLIT.viewer, Math.min(2000, saved.viewer)), inspector: Math.max(WORK_SPLIT.inspector, Math.min(1000, saved.inspector)) }
-    } catch { /* Optional preferences. */ }
-    return { ...sizes, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen }
+    return restoreSplit(scopeKey, { viewer: viewerWidth, inspector: inspectorWidth === 520 ? 320 : inspectorWidth, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen })
   })
   const splitRef = useRef(split)
   splitRef.current = split
@@ -48,12 +54,27 @@ export default function WorkPerspective({ conversationRail, conversation, activi
   const motion = useWorkSplitMotion({ rail: geometry.rail, chat: Math.max(0, geometry.chat - (dockVisible && !floatDock ? 296 : 0)), viewer: viewerOpen ? geometry.viewer : 0, inspector: geometry.inspector, dock: dockVisible ? 296 : 0 }, `${geometry.chatCollapsed}:${viewerOpen}:${inspectorOpen}:${dockVisible}:${floatDock}`)
   const update = useCallback((value: WorkSplit) => {
     splitRef.current = value; setSplit(value)
+    if (previousScope.current && !drag.current) {
+      try { localStorage.setItem(storageKey + previousScope.current, JSON.stringify(value)) } catch { /* Optional preferences. */ }
+    }
   }, [])
   const expand = useCallback(() => update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: true, inspectorCollapsed: true }), [update])
   const context = useMemo(() => ({ collapsed: geometry.chatCollapsed, expand }), [geometry.chatCollapsed, expand])
-  useEffect(() => { update({ ...splitRef.current, inspectorCollapsed: !rightOpen, ...(!rightOpen ? { chatCollapsed: false } : {}) }) }, [rightOpen, update])
-  useEffect(() => { if (viewerIdentity) update({ ...splitRef.current, viewerCollapsed: false }) }, [viewerIdentity, update])
-  useEffect(() => { if (!hasViewer) update({ ...splitRef.current, chatCollapsed: false }) }, [hasViewer, update])
+  useEffect(() => {
+    const openDocument = () => update({ ...splitRef.current, viewerCollapsed: false, inspectorCollapsed: false })
+    window.addEventListener('chevoink:work-open-document', openDocument)
+    return () => window.removeEventListener('chevoink:work-open-document', openDocument)
+  }, [update])
+  // Prop changes caused by task hydration are not user open/close commands.
+  const inputs = useRef({ scopeKey, rightOpen, viewerIdentity, hasViewer })
+  useEffect(() => {
+    const old = inputs.current
+    inputs.current = { scopeKey, rightOpen, viewerIdentity, hasViewer }
+    if (old.scopeKey !== scopeKey) return
+    if (old.rightOpen !== rightOpen) update({ ...splitRef.current, inspectorCollapsed: !rightOpen, ...(!rightOpen ? { chatCollapsed: false } : {}) })
+    if (old.viewerIdentity !== viewerIdentity && viewerIdentity) update({ ...splitRef.current, viewerCollapsed: false })
+    if (old.hasViewer !== hasViewer && !hasViewer) update({ ...splitRef.current, chatCollapsed: false })
+  }, [scopeKey, rightOpen, viewerIdentity, hasViewer, update])
   useEffect(() => {
     if (viewer) { setRetainedViewer(viewer); return }
     const timer = window.setTimeout(() => setRetainedViewer(undefined), 240)
@@ -84,14 +105,17 @@ export default function WorkPerspective({ conversationRail, conversation, activi
     if (gesture && root.current?.hasPointerCapture(gesture.pointer)) root.current.releasePointerCapture(gesture.pointer)
     if (gesture) delete document.documentElement.dataset.studioResizing
     setDragging(false)
-    try { localStorage.setItem(storageKey, JSON.stringify({ viewer: Math.max(WORK_SPLIT.viewer, splitRef.current.viewer), inspector: Math.max(WORK_SPLIT.inspector, splitRef.current.inspector) })) } catch { /* Optional preferences. */ }
+    if (previousScope.current) {
+      try { localStorage.setItem(storageKey + previousScope.current, JSON.stringify(splitRef.current)) } catch { /* Optional preferences. */ }
+    }
   }, [flush])
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previousScope.current === scopeKey) return
     finish()
     previousScope.current = scopeKey
-    update({ ...splitRef.current, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen })
-  }, [scopeKey, rightOpen, finish, update])
+    const value = restoreSplit(scopeKey, { viewer: viewerWidth, inspector: inspectorWidth === 520 ? 320 : inspectorWidth, chatCollapsed: false, viewerCollapsed: false, inspectorCollapsed: !rightOpen })
+    splitRef.current = value; setSplit(value)
+  }, [scopeKey, rightOpen, viewerWidth, inspectorWidth, finish])
   useEffect(() => {
     window.addEventListener('blur', finish)
     return () => {

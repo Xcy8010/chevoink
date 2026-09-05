@@ -33,6 +33,7 @@ import { prepareAgentImage, readFileAsDataUrl, validateAgentFile } from '../agen
 import { uploadAgentAttachment } from '../agentApi'
 import { getChapterContent } from '../../api'
 import { useAgentStore, type ComposerReference } from '../agentStore'
+import { activateComposerDraft, updateComposerDraft } from '../composer-drafts'
 import { useVoiceInput } from '../hooks/useVoiceInput'
 import { AgentVoiceInputBar } from './AgentVoiceInputBar'
 import { insertVoiceTranscript } from '../voice-insertion'
@@ -256,6 +257,7 @@ export function AgentComposer({
   skills = [],
   onOpenSkillManager,
 }: AgentComposerProps) {
+  useLayoutEffect(() => { activateComposerDraft(voiceScopeKey) }, [voiceScopeKey])
   // 草稿与附件存在全局 store：面板在沉浸/普通视图间重挂载时不丢失未发送内容
   const prompt = useAgentStore((state) => state.composerDraft)
   const attachments = useAgentStore((state) => state.composerAttachments)
@@ -423,14 +425,18 @@ export function AgentComposer({
   }
 
   const uploadOne = async (kind: 'image' | 'file', name: string, dataUrl: string) => {
-    bumpUploading(1)
+    const origin = scope
+    if (origin) updateComposerDraft(origin, draft => ({ ...draft, composerUploading: draft.composerUploading + 1 }))
+    else bumpUploading(1)
     try {
       const meta = await uploadAgentAttachment({ kind, name, dataUrl })
-      addAttachment(meta)
+      if (origin) updateComposerDraft(origin, draft => ({ ...draft, composerAttachments: [...draft.composerAttachments, meta] }))
+      else addAttachment(meta)
     } catch (error) {
       setAttachError(error instanceof Error ? error.message : '附件上传失败，请重试。')
     } finally {
-      bumpUploading(-1)
+      if (origin) updateComposerDraft(origin, draft => ({ ...draft, composerUploading: Math.max(0, draft.composerUploading - 1) }))
+      else bumpUploading(-1)
     }
   }
 
@@ -523,11 +529,13 @@ export function AgentComposer({
         setAttachError(error instanceof Error ? error.message : '章节引用读取失败，请重试。')
         return
       } finally {
-        bumpUploading(-1)
+        if (scope) updateComposerDraft(scope, draft => ({ ...draft, composerUploading: Math.max(0, draft.composerUploading - 1) }))
+        else bumpUploading(-1)
       }
     }
-    addComposerReference({ ...reference, offset: prompt.length })
-    window.requestAnimationFrame(() => editorRef.current?.focus())
+    if (scope) updateComposerDraft(scope, draft => ({ ...draft, composerReferences: [...draft.composerReferences.filter(item => item.id !== reference.id), { ...reference, offset: draft.composerDraft.length }] }))
+    else addComposerReference({ ...reference, offset: prompt.length })
+    if (currentScope.current === scope) window.requestAnimationFrame(() => editorRef.current?.focus())
   }
 
   const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
@@ -566,6 +574,7 @@ export function AgentComposer({
     setSending(true)
     try {
       await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned)
+      if (sendingScope) updateComposerDraft(sendingScope, draft => draft.composerDraft === current.draft ? { ...draft, composerDraft: '', composerReferences: [], composerAttachments: [], composerSkillIds: [] } : draft)
       if (currentScope.current !== sendingScope) return
       setComposerContent('', [])
       setAttachments([])

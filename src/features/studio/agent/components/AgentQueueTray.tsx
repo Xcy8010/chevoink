@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CornerDownRight, ListEnd, MoreHorizontal, Trash2 } from 'lucide-react'
+import { CornerDownRight, GitBranch, ListEnd, MoreHorizontal, Pencil, SquarePlus, Trash2 } from 'lucide-react'
 import type { AgentQueueAction, AgentQueuedRequestView } from '../../../../../shared/contracts/agent-queue.js'
 
 type Props = {
@@ -44,7 +44,7 @@ export function AgentQueueTray({ items, onAction }: Props) {
   const selected = items.find(item => item.id === menu?.id)
   if (!items.length && !error) return null
   const actionClass = 'inline-flex h-9 min-w-9 shrink-0 items-center justify-center rounded-lg px-1 text-[var(--text-secondary)] hover:bg-[var(--surface-default)] focus-visible:outline focus-visible:outline-2 disabled:opacity-40 mobile:h-11 mobile:min-w-11'
-  return <section aria-label="待发需求" className="relative mx-2 mb-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] text-xs text-[var(--text-primary)]">
+  return <section aria-label="待发需求" className="agent-queue-cap relative mx-3 -mb-5 rounded-t-[20px] border border-b-0 border-[var(--border-subtle)] bg-[var(--surface-muted)] pb-5 text-xs text-[var(--text-primary)]">
     <div className="max-h-40 overflow-y-auto overscroll-contain p-1 mobile:max-h-[24dvh]">
       {items.map(item => <div key={item.id} className="border-b border-[var(--border-subtle)] last:border-b-0">
         <div className="flex min-w-0 items-center gap-1 pl-2">
@@ -72,7 +72,7 @@ export function AgentQueueTray({ items, onAction }: Props) {
         setMenu(null)
         if (action === 'edit') setEditing({ item: selected, text: selected.prompt })
         else void act(selected, action)
-      }}>{action === 'edit' ? '编辑' : action === 'new' ? '在新任务窗口发送' : '创建分支并发送'}</button>)}
+      }}>{action === 'edit' ? <Pencil className="mr-2 h-4 w-4 shrink-0" /> : action === 'new' ? <SquarePlus className="mr-2 h-4 w-4 shrink-0" /> : <GitBranch className="mr-2 h-4 w-4 shrink-0" />}{action === 'edit' ? '编辑' : action === 'new' ? '在新任务窗口发送' : '创建分支并发送'}</button>)}
     </div>, document.fullscreenElement ?? document.body) : null}
   </section>
 }

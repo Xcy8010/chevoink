@@ -79,6 +79,7 @@ export type WorkspaceActivity = {
   label: string
   chapterId: string | null
   deltaChars: number | null
+  display?: AgentToolDisplayPayload
   before?: string
   after?: string
   summary?: string
@@ -404,7 +405,7 @@ function deriveSessionStateFromMessages(messages: AgentUIMessage[]): {
       if (part.display?.kind === 'todoList') {
         todos = part.display.items
       }
-      if (!WORKSPACE_WRITE_TOOLS.has(part.toolName)) {
+      if (!WORKSPACE_WRITE_TOOLS.has(part.toolName) && part.display?.kind !== 'chapterDiff' && part.display?.kind !== 'planDiff') {
         continue
       }
       const extracted = activityFromDisplay(part.display)
@@ -414,6 +415,7 @@ function deriveSessionStateFromMessages(messages: AgentUIMessage[]): {
         label: extracted.label ?? WRITE_TOOL_LABELS[part.toolName] ?? part.title,
         chapterId: extracted.chapterId,
         deltaChars: extracted.deltaChars,
+        display: part.display,
         before: extracted.before,
         after: extracted.after,
         summary: part.summary,
@@ -1013,7 +1015,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             ...(clearQuestion ? { phase: 'running' as const, pendingQuestion: null, ...withoutActiveSessionSignal(state) } : {}),
             ...todoUpdate,
             liveToolDrafts: Object.fromEntries(Object.entries(state.liveToolDrafts).filter(([callId]) => callId !== event.callId)),
-            workspaceActivities: state.workspaceActivities.map((activity) =>
+            workspaceActivities: [...state.workspaceActivities, ...(event.ok && (event.display?.kind === 'chapterDiff' || event.display?.kind === 'planDiff') && !state.workspaceActivities.some(activity => activity.callId === event.callId)
+              ? [{ callId: event.callId, toolName: 'body_edit', label: extracted.label ?? '正文变更', chapterId: extracted.chapterId, deltaChars: extracted.deltaChars, status: 'done' as const }] : [])].map((activity) =>
               activity.callId === event.callId
                 ? {
                     ...activity,
@@ -1021,6 +1024,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                     label: extracted.label ?? activity.label,
                     chapterId: extracted.chapterId ?? activity.chapterId,
                     deltaChars: extracted.deltaChars ?? activity.deltaChars,
+                    display: event.display,
                     before: extracted.before ?? activity.before,
                     after: extracted.after ?? activity.after,
                     summary: event.summary,

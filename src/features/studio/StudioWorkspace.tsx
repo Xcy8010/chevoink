@@ -1,5 +1,8 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useLayoutEffect } from 'react'
+import { promoteComposerDraft } from './agent/composer-drafts'
+import { useShellStore } from '@/store/useShellStore'
 import { BookOpen, BookOpenText, Brain, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, SlidersHorizontal, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -63,7 +66,7 @@ import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREF
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 /** Work 检查区/查看器布局按作品记忆：切换作品时恢复该作品上次的界面 */
-type WorkPanelUiState = { rightOpen: boolean; viewer: 'chapter' | 'document' | null; inspectorTab: WorkInspectorTab }
+type WorkPanelUiState = { rightOpen: boolean; viewer: 'chapter' | 'document' | null; inspectorTab: WorkInspectorTab; selectedTreeItemId?: string | null; selectedChapterId?: string | null }
 const WORK_PANEL_UI_STORAGE_KEY = 'chevoink:studio-work-panel-ui'
 
 function readWorkPanelUi(novelId: string): WorkPanelUiState | null {
@@ -97,6 +100,7 @@ export default function StudioWorkspace() {
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeNovelId = novelId ?? DEFAULT_NOVEL_ID
+  const taskUiUserId = useShellStore(state => state.sessionUser?.id)
   const queryClient = useQueryClient()
 
   const studioQuery = useQuery({
@@ -182,20 +186,6 @@ export default function StudioWorkspace() {
   const [workViewer, setWorkViewer] = useState<'chapter' | 'document' | null>(null)
   // 切换作品时保存上一作品的检查区布局、恢复当前作品上次的布局（右侧栏开关/页签/查看器，
   // 含刷新后首次进入），像 Codex 一样每个作品回到自己当时的界面
-  const currentWorkPanelUiRef = useRef<WorkPanelUiState>({ rightOpen: false, viewer: null, inspectorTab: 'work' })
-  currentWorkPanelUiRef.current = { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab }
-  const prevWorkNovelUiRef = useRef<string | null>(null)
-  useEffect(() => {
-    const previous = prevWorkNovelUiRef.current
-    prevWorkNovelUiRef.current = activeNovelId
-    if (previous && previous !== activeNovelId) {
-      writeWorkPanelUi(previous, currentWorkPanelUiRef.current)
-    }
-    const restored = readWorkPanelUi(activeNovelId)
-    setWorkRightOpen(restored?.rightOpen ?? false)
-    setWorkViewer(restored?.viewer ?? null)
-    setWorkInspectorTab(restored?.inspectorTab ?? 'work')
-  }, [activeNovelId])
   const [ideTreeOpen, setIdeTreeOpen] = useState(true)
   const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
   const [ideAgentOpen, setIdeAgentOpen] = useState(true)
@@ -280,6 +270,27 @@ export default function StudioWorkspace() {
   // 当前任务窗口状态归属的作品：切换作品后状态水合落地前，快照写入效应
   // 不得用旧作品窗口写入/删除（会污染目标作品快照），仅状态归属当前作品时才允许写
   const [agentStateNovelId, setAgentStateNovelId] = useState(activeNovelId)
+  const taskUiScope = activeAgentTaskWindowId && agentStateNovelId === activeNovelId
+    ? `${taskUiUserId ?? queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined
+  const panelOwner = useRef<string>()
+  const taskLocationRef = useRef({ novelId: activeNovelId, taskId: activeAgentTaskWindowId })
+  taskLocationRef.current = { novelId: activeNovelId, taskId: activeAgentTaskWindowId }
+  const [workPanelScope, setWorkPanelScope] = useState<string>()
+  useLayoutEffect(() => {
+    if (!taskUiScope) return
+    if (panelOwner.current !== taskUiScope) {
+      panelOwner.current = taskUiScope
+      setWorkPanelScope(taskUiScope)
+      const restored = readWorkPanelUi(taskUiScope)
+      setWorkRightOpen(restored?.rightOpen ?? false)
+      setWorkViewer(restored?.viewer ?? null)
+      setWorkInspectorTab(restored?.inspectorTab ?? 'work')
+      if (restored?.selectedTreeItemId !== undefined) setSelectedTreeItemId(restored.selectedTreeItemId)
+      if (restored?.selectedChapterId !== undefined) setSelectedChapterId(restored.selectedChapterId)
+      return
+    }
+    writeWorkPanelUi(taskUiScope, { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab, selectedTreeItemId, selectedChapterId })
+  }, [taskUiScope, workRightOpen, workViewer, workInspectorTab, selectedTreeItemId, selectedChapterId])
   const [agentRunState, setAgentRunState] = useState<AgentRunState>(createIdleAgentRunState)
   const [agentArtifacts, setAgentArtifacts] = useState<AgentArtifact[]>([])
   const [activeAgentArtifactId, setActiveAgentArtifactId] = useState<string | null>(null)
@@ -1641,6 +1652,7 @@ export default function StudioWorkspace() {
       ? display.chapterId
       : typeof args.chapterId === 'string' ? args.chapterId : null
     if (chapterId) {
+      window.dispatchEvent(new Event('chevoink:work-open-document'))
       selectChapterFromToolRef.current(chapterId)
       if (workspacePerspective === 'work') {
         setWorkInspectorTab('work')
@@ -1656,6 +1668,7 @@ export default function StudioWorkspace() {
         : typeof args.planId === 'string' ? args.planId : null
       const target = savedPlanFiles.find((plan) => plan.id === artifactId || plan.backendArtifactId === artifactId)
       if (target) {
+        window.dispatchEvent(new Event('chevoink:work-open-document'))
         selectPlanFromToolRef.current(target.id)
         if (workspacePerspective === 'work') {
           setWorkInspectorTab('work')
@@ -4322,10 +4335,21 @@ export default function StudioWorkspace() {
     // 未命名空白作品一旦产生会话就属于用户真实内容；立即刷新全局导航会话，
     // 避免紧接着切换/新建作品时仍按“无会话引导作品”将它过滤掉。
     void queryClient.invalidateQueries({ queryKey: ['agent', 'sessions'] })
-    setAgentSessionId(createdSession.id)
-    setActiveAgentTaskWindowId(createdSession.id)
+    if (taskUiScope) {
+      const nextScope = `${taskUiUserId ?? queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'}:${activeNovelId}:${createdSession.id}`
+      promoteComposerDraft(taskUiScope, nextScope)
+      writeWorkPanelUi(nextScope, { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab, selectedTreeItemId, selectedChapterId })
+      try {
+        const split = localStorage.getItem(`chevoink:work-split-v2:${taskUiScope}`)
+        if (split) localStorage.setItem(`chevoink:work-split-v2:${nextScope}`, split)
+      } catch { /* Optional layout persistence. */ }
+    }
+    if (taskLocationRef.current.novelId === activeNovelId && taskLocationRef.current.taskId === currentTaskWindow?.id) {
+      setAgentSessionId(createdSession.id)
+      setActiveAgentTaskWindowId(createdSession.id)
+    }
     setAgentTaskWindows((current) =>
-      current.map((taskWindow) =>
+      taskLocationRef.current.novelId !== activeNovelId ? current : current.map((taskWindow) =>
         taskWindow.id === currentTaskWindow?.id
           ? {
               ...taskWindow,
@@ -4352,7 +4376,7 @@ export default function StudioWorkspace() {
   ) {
     return (
       <AgentPanel
-          voiceScopeKey={activeAgentTaskWindowId ? `${queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined}
+          voiceScopeKey={taskUiScope}
           voiceDisabled={studioSettingsOpen || studioQuery.isPlaceholderData}
           sessionId={agentSessionId}
           sessionResolving={agentSessionsResolving}
@@ -4954,7 +4978,7 @@ export default function StudioWorkspace() {
                 /> : undefined}
                 rightOpen={workRightOpen}
                 outerSidebarOpen={workspaceSidebarOpen}
-                scopeKey={`${currentNovel.id}:${activeAgentTaskWindowId ?? ''}`}
+                scopeKey={workPanelScope}
                 viewerIdentity={workViewer ? `${workViewer}:${selectedTreeItemId ?? ''}` : null}
                 inspectorWidth={panelWidths.workInspector}
                 viewerWidth={panelWidths.workViewer}

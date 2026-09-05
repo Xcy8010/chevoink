@@ -214,6 +214,8 @@ export function AgentPanel({
   const queueRetry = useRef<{ signature: string; id: string } | null>(null)
   const viewSession = useRef(sessionId)
   viewSession.current = sessionId
+  const viewScope = useRef(voiceScopeKey)
+  viewScope.current = voiceScopeKey
 
   // Server dispatch works even with no browser open. Discover each new run and
   // hydrate its history before connecting, including runs finished between polls.
@@ -756,7 +758,7 @@ export function AgentPanel({
         let ensuredSessionId = sessionId
         if (!ensuredSessionId) {
           ensuredSessionId = await ensureSession()
-          lazySessionRef.current = ensuredSessionId
+          if (viewScope.current === voiceScopeKey || viewSession.current === ensuredSessionId) lazySessionRef.current = ensuredSessionId
         }
         const startRun = async (targetChapterId: string | null) => {
           const input = {
@@ -811,9 +813,11 @@ export function AgentPanel({
           }
         }
         if (!result || (viewSession.current !== sessionId && viewSession.current !== ensuredSessionId)) return
+        if (viewScope.current !== voiceScopeKey && viewSession.current !== ensuredSessionId) return
         useAgentStore.getState().beginRun(result.runId, prompt, ensuredSessionId, attachments)
         connect(result.runId)
       } catch (error) {
+        if (viewScope.current !== voiceScopeKey) throw error
         // 会话已在服务端被删除（如用户删了历史任务后本地快照残留僵尸 sessionId）：
         // 重置为新对话而不是让用户死循环卡在「会话不存在或无权访问」里
         if (sessionId && error instanceof AgentApiError && error.status === 404 && error.code === 'NOT_FOUND') {
@@ -830,7 +834,7 @@ export function AgentPanel({
         throw error
       }
     },
-    [sessionId, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits, queueQuery],
+    [sessionId, voiceScopeKey, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits, queueQuery],
   )
 
   const handleStop = useCallback(async () => {
@@ -1623,16 +1627,16 @@ export function AgentPanel({
         onInvite={() => void openInviteDialog()}
         onClose={() => setQuotaDialogOpen(false)}
       />
-      {sessionId ? <div className="px-4"><AgentQueueTray key={sessionId} items={queueQuery.data?.items ?? []} onAction={async (item, action, prompt) => {
+      {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} recentMessage={recentConversationText} /> : null}
+      <div data-agent-composer className="px-4 pb-4">
+      {sessionId ? <AgentQueueTray key={sessionId} items={queueQuery.data?.items ?? []} onAction={async (item, action, prompt) => {
         const result = await actOnAgentQueue(sessionId, item.id, action, item.revision, prompt)
         await queueQuery.refetch()
         if (result.session && viewSession.current === sessionId) {
           if (onTaskForked) onTaskForked(result.session)
           else onSelectSession?.(result.session.id)
         }
-      }} /></div> : null}
-      {workConversation.collapsed ? <WorkConversationRestore onExpand={workConversation.expand} recentMessage={recentConversationText} /> : null}
-      <div data-agent-composer className="px-4 pb-4">
+      }} /> : null}
         <AgentComposer
           novelId={novelId}
           voiceScopeKey={voiceScopeKey}
