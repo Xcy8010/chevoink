@@ -39,6 +39,10 @@ it('acknowledges only after every editor has persisted', async () => {
   expect(await flushDesktopSaves()).toBe(true)
   first()
 })
+it('allows an idle desktop page to close without inventing pending work', async () => {
+  desktop()
+  expect(await flushDesktopSaves()).toBe(true)
+})
 it('save exceptions and scope changes fail closed', async () => {
   desktop()
   const remove = registerDesktopSave(() => { throw new Error('offline') })

@@ -101,6 +101,15 @@ pub fn request_close(window: &WebviewWindow) {
     let nonce = uuid::Uuid::new_v4().to_string();
     *pending = Some(nonce.clone());
     drop(pending);
+    // The packaged loading/error page cannot contain editor drafts or recordings.
+    if window
+        .url()
+        .is_ok_and(|url| crate::navigation::is_fallback_url(&url))
+        && state.downloads.load(Ordering::SeqCst) == 0
+    {
+        finish(window, &nonce);
+        return;
+    }
     let script = format!("window.dispatchEvent(new CustomEvent('chevoink:desktop-save', {{detail: {{nonce: {}}}}}));", serde_json::to_string(&nonce).unwrap());
     let _ = window.eval(&script);
     let window = window.clone();
@@ -112,7 +121,7 @@ pub fn request_close(window: &WebviewWindow) {
             .lock()
             .is_ok_and(|pending| pending.as_deref() == Some(&nonce));
         if timed_out {
-            confirm_discard(&window, &nonce);
+            confirm_discard(&window, &nonce, true);
         }
     });
 }
@@ -133,12 +142,12 @@ pub fn acknowledge(window: &WebviewWindow, report: SaveReport) -> Result<(), Str
     if report.saved && !report.recording && state.downloads.load(Ordering::SeqCst) == 0 {
         finish(window, &report.nonce);
     } else {
-        confirm_discard(window, &report.nonce);
+        confirm_discard(window, &report.nonce, false);
     }
     Ok(())
 }
 
-fn confirm_discard(window: &WebviewWindow, nonce: &str) {
+fn confirm_discard(window: &WebviewWindow, nonce: &str, unconfirmed: bool) {
     if window
         .state::<CloseState>()
         .confirming
@@ -149,10 +158,17 @@ fn confirm_discard(window: &WebviewWindow, nonce: &str) {
     let window = window.clone();
     let nonce = nonce.to_owned();
     std::thread::spawn(move || {
-        let answer = rfd::MessageDialog::new().set_title("仍有内容或操作尚未保存完成")
-            .set_description("建议留在当前窗口。退出可能丢失本次未保存输入或中断下载/录音；不会接受或拒绝待审查内容，也不会暂停云端任务。")
-            .set_buttons(rfd::MessageButtons::OkCancelCustom("留在窗口".into(), "放弃未保存内容并退出".into())).show();
-        if answer == rfd::MessageDialogResult::Custom("放弃未保存内容并退出".into()) {
+        let description = if unconfirmed {
+            "网页未及时回复保存状态，无法确认是否有未保存输入。这不代表正在下载。是否仍要退出？选择“是”退出，选择“否”留在窗口。云端任务不受影响。"
+        } else {
+            "尚有未保存输入、录音或下载未完成。是否放弃本次未完成操作并退出？选择“是”退出，选择“否”留在窗口。不会处理待审查内容，也不会暂停云端任务。"
+        };
+        let answer = rfd::MessageDialog::new()
+            .set_title("确认退出 Chevoink")
+            .set_description(description)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+        if should_exit(answer) {
             finish(&window, &nonce);
         } else {
             let state = window.state::<CloseState>();
@@ -168,6 +184,10 @@ fn confirm_discard(window: &WebviewWindow, nonce: &str) {
             .confirming
             .store(false, Ordering::SeqCst);
     });
+}
+
+fn should_exit(answer: rfd::MessageDialogResult) -> bool {
+    answer == rfd::MessageDialogResult::Yes
 }
 
 fn finish(window: &WebviewWindow, nonce: &str) {
@@ -190,6 +210,12 @@ fn finish(window: &WebviewWindow, nonce: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_close_buttons_use_portable_result_values() {
+        assert!(should_exit(rfd::MessageDialogResult::Yes));
+        assert!(!should_exit(rfd::MessageDialogResult::No));
+        assert!(!should_exit(rfd::MessageDialogResult::Cancel));
+    }
     #[test]
     fn restore_stays_inside_work_area_including_negative_monitor_coordinates() {
         assert_eq!(visible_coordinate(4000, 0, 1920, 1280), 640);

@@ -96,7 +96,7 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
                 let remote = url::Url::parse(&take_pwstr(uri)).is_ok_and(|url| is_app_url(&url));
                 let mut success = BOOL::default(); args.IsSuccess(&mut success)?;
                 if remote && success.as_bool() { loaded.store(true, Ordering::SeqCst); }
-                else if !success.as_bool() && !loaded.load(Ordering::SeqCst) {
+                else if remote && !success.as_bool() && !loaded.load(Ordering::SeqCst) {
                     let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
                     args.WebErrorStatus(&mut status)?;
                     // Replacing the initial local page deliberately cancels its navigation.
