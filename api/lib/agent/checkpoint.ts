@@ -62,6 +62,28 @@ export const savedRunUsageSchema = z.object({
   checkpoint: runCheckpointSchema.optional(),
 }).refine(value => value.totalTokens >= value.promptTokens + value.completionTokens)
 
+/** Pre-checkpoint releases left usage NULL. Recover only complete, run-owned receipts;
+ * this is budget accounting, never a new charge or a zero-budget reset. */
+export function recoverLegacyRunUsage(currentTurn: number, receipts: Array<{
+  turn: number | null; requestTokens: number | null; responseTokens: number | null
+}>) {
+  if (!Number.isSafeInteger(currentTurn) || currentTurn < 0) return null
+  const turns = new Set<number>()
+  let promptTokens = 0, completionTokens = 0
+  for (const receipt of receipts) {
+    if (!Number.isSafeInteger(receipt.requestTokens) || !Number.isSafeInteger(receipt.responseTokens)
+      || receipt.requestTokens === null || receipt.responseTokens === null
+      || receipt.requestTokens < 0 || receipt.responseTokens < 0) return null
+    promptTokens += receipt.requestTokens
+    completionTokens += receipt.responseTokens
+    if (receipt.turn !== null) turns.add(receipt.turn)
+  }
+  for (let turn = 1; turn <= currentTurn; turn++) if (!turns.has(turn)) return null
+  const totalTokens = promptTokens + completionTokens
+  if (!Number.isSafeInteger(totalTokens)) return null
+  return { promptTokens, completionTokens, totalTokens }
+}
+
 export function evaluateCheckpoint(input: CheckpointEvaluation): { ok: boolean; reason: string } {
   if (input.usedTokens !== undefined && input.tokenCeiling !== undefined && input.usedTokens >= input.tokenCeiling) return { ok: false, reason: '已达总 token 硬顶' }
   const maxResumes = input.maxResumes ?? CHECKPOINT_MAX_RESUMES

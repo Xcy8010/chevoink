@@ -214,7 +214,7 @@ mkdir -p $RemoteCurrentPath
 # Source-file removals must be handled explicitly, never by clearing the live directory.
 tar -xzf $RemoteArchivePath -C $RemoteCurrentPath
 cd $RemoteCurrentPath
-bash deploy/deploy-production.sh
+tr -d '\r' < deploy/deploy-production.sh | bash
 rm -f $RemoteArchivePath
 "@
   $sshArgs = Get-SshArgumentList -KeyPath $KeyPath

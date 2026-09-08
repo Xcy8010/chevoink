@@ -22,6 +22,8 @@ import {
   upsertStoryCharter,
   updateReaderPromise,
   validateStoryContinuity,
+  reserveContinuityRepair,
+  continuityRepairRounds,
 } from '../story-compiler.js'
 import { defineTool, type ToolContext } from './types.js'
 import { recalcNovelStats } from './novel-tools.js'
@@ -64,6 +66,7 @@ async function applyRigorousContinuityRepairs(
   findings: Array<{ signal: string; severity: string; evidence: string; suggestion: string }>,
   compilationId: string,
 ) {
+  if (!await reserveContinuityRepair(ctx.userId, ctx.novelId, compilationId)) return null
   let parsed: z.infer<typeof continuityRepairEnvelopeSchema> | null = null
   for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
     let response = ''
@@ -519,7 +522,7 @@ export const continuityValidateTool = defineTool({
     const sourceChapter = bridge.fromChapterId ? await prisma.chapter.findFirst({ where: { id: bridge.fromChapterId, novelId: ctx.novelId }, select: { revision: true } }) : null
     const sourceUnchanged = !bridge.fromChapterId || sourceChapter?.revision === bridge.sourceRevision
     const cachedValidation = compilation.validation as { independentCheck?: string; checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string; suggestion: string }>; errorCount?: number; warningCount?: number } | null
-    if (!args.focus && sourceUnchanged && cachedValidation?.independentCheck === 'complete' && cachedValidation.checkedRevision === chapter.revision) {
+    if ((!args.focus || continuityRepairRounds(compilation.validation) >= 2) && sourceUnchanged && cachedValidation?.independentCheck === 'complete' && cachedValidation.checkedRevision === chapter.revision) {
       const findings = cachedValidation.findings ?? []
       const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
       const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
@@ -587,9 +590,9 @@ export const continuityValidateTool = defineTool({
       }
     }
     return {
-      output: result.errorCount > 0
+      output: (continuityRepairRounds(compilation.validation) >= 2 ? '自动修订已达到两轮上限，本次仅复核，不再自动改写。不要重复调用检查来追求零警告；有错误时保留正文并明确报告未解决证据，禁止带错提交。\n' : '') + (result.errorCount > 0
         ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
-        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。${criticFallback ? '独立复核器本次未返回结构化内容，已完成 revision、章序、正文与场景任务等确定性检查兜底；可以调用 chapter_bridge_commit 提交本章终态。' : '可以调用 chapter_bridge_commit 提交本章终态。'}${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`,
+        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。可以调用 chapter_bridge_commit 提交本章终态。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`),
       summary: `连续性检查${criticFallback ? '（确定性兜底）' : ''} · ${result.errorCount} 错误 ${result.warningCount} 警告`,
       display: {
         kind: 'storyCompiler', compilationId: compilation.id, phase, title: '连续性检查',

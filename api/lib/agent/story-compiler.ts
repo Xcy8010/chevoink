@@ -36,6 +36,26 @@ const asStringArray = (value: unknown): string[] =>
 const clip = (value: string, max: number): string =>
   value.length <= max ? value : `${value.slice(0, max)}…`
 
+export function continuityRepairRounds(validation: unknown): number {
+  if (!validation || typeof validation !== 'object' || Array.isArray(validation)) return 0
+  const value = (validation as Record<string, unknown>).autoRepairRounds
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+/** Reserve before dispatch, so crashes/resumes cannot restart an automatic repair loop. */
+export async function reserveContinuityRepair(userId: string, novelId: string, compilationId: string) {
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM story_compilations WHERE id = ${compilationId} AND user_id = ${userId} AND novel_id = ${novelId} FOR UPDATE`
+    const compilation = await tx.storyCompilation.findFirst({ where: { id: compilationId, userId, novelId, status: 'active' } })
+    if (!compilation || continuityRepairRounds(compilation.validation) >= 2) return false
+    const previous = compilation.validation && typeof compilation.validation === 'object' && !Array.isArray(compilation.validation) ? compilation.validation : {}
+    await tx.storyCompilation.update({ where: { id: compilationId }, data: {
+      validation: { ...previous, autoRepairRounds: continuityRepairRounds(previous) + 1 } as Prisma.InputJsonValue,
+    } })
+    return true
+  })
+}
+
 const promptHash = (value: string): string =>
   createHash('sha256').update(value.trim()).digest('hex')
 
@@ -216,6 +236,11 @@ export async function prepareStoryCompilation(input: {
     openLoops: priorBridge ? asStringArray(priorBridge.openLoops) : memory.filter((item) => item.memoryType === 'foreshadowing').map((item) => `${item.title}：${clip(item.content, 240)}`),
   }
 
+  const priorRepairStates = await db.storyCompilation.findMany({
+    where: { userId: input.userId, novelId: input.novelId, ...scope, targetOrderIndex: target.targetOrderIndex },
+    select: { validation: true },
+  })
+  const autoRepairRounds = Math.max(0, ...priorRepairStates.map(item => continuityRepairRounds(item.validation)))
   await db.storyCompilation.updateMany({
     where: { userId: input.userId, novelId: input.novelId, ...scope, status: 'active' },
     data: { status: 'abandoned' },
@@ -238,6 +263,7 @@ export async function prepareStoryCompilation(input: {
       targetOrderIndex: target.targetOrderIndex,
       mode: input.mode,
       sourcePromptHash: promptHash(input.intentSummary),
+      validation: { autoRepairRounds },
       preparedContext: preparedContext as Prisma.InputJsonValue,
       bridge: {
         create: {
@@ -441,6 +467,7 @@ export async function validateStoryContinuity(input: {
   }
   const findings = [...deterministic, ...input.findings]
   const validation = {
+    autoRepairRounds: continuityRepairRounds(compilation.validation),
     checkedChapterId: compilation.chapter.id,
     checkedRevision: compilation.chapter.revision,
     checkedAt: new Date().toISOString(),

@@ -54,6 +54,7 @@ import {
   evaluateCheckpoint,
   resolveRunTokenBudget,
   savedRunUsageSchema,
+  recoverLegacyRunUsage,
   type RunCheckpointState,
 } from './checkpoint.js'
 import { autoNameSession } from './session-title.js'
@@ -580,6 +581,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   let maxTurns = env.agentMaxTurns
   let runTokenBudget = resolveRunTokenBudget(params.tokenBudget, env.agentRunTokenBudget, env.agentRunTokenBudgetCeiling)
   let checkpointRestored = !params.resume
+  const restoreSavedUsage = async (stored: { usage: unknown; currentTurn: number }, id: string) => {
+    if (stored.usage !== null) return savedRunUsageSchema.safeParse(stored.usage)
+    const receipts = await prisma.aiUsageLog.findMany({
+      where: { userId: params.userId, targetType: 'agentRun', targetId: id },
+      select: { turn: true, requestTokens: true, responseTokens: true },
+    })
+    return savedRunUsageSchema.safeParse(recoverLegacyRunUsage(stored.currentTurn, receipts))
+  }
   const checkpointSnapshot = (): RunCheckpointState => ({
     version: 1, runStartedAt, resumeCount, compactionCount, maxTurns, tokenBudget: runTokenBudget,
     writeProgress: writeProgressCount, writeBaseline: checkpointWriteBaseline,
@@ -632,7 +641,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     const storedRun = await startLegacyRuntimeRun(params.userId, runId, Boolean(params.resume))
     assertLegacyRuntimeCompatible(storedRun)
     if (params.resume) {
-      const saved = savedRunUsageSchema.safeParse(storedRun.usage)
+      const saved = await restoreSavedUsage(storedRun, runId)
       if (!saved.success) throw new Error('运行预算记录无法核实，已停止续跑；原记录保留，不能重置预算后继续。')
       usage.promptTokens = saved.data.promptTokens
       usage.completionTokens = saved.data.completionTokens
@@ -720,7 +729,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         throw new DataAccessError(409, 'TASK_AUTHORIZATION_BUDGET_UNCONFIRMED', '原任务预算链无法核实，不能创建新预算继续。')
       }
       for (const prior of priorRuns) {
-        const saved = savedRunUsageSchema.safeParse(prior.usage)
+        const saved = await restoreSavedUsage(prior, prior.id)
         if (!saved.success || ['queued', 'running', 'awaiting_approval'].includes(prior.status)) {
           throw new DataAccessError(409, 'TASK_AUTHORIZATION_BUDGET_UNCONFIRMED', '原任务仍在执行或累计预算记录无法核实，未启动重复执行。')
         }
@@ -728,7 +737,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         inheritedTurns += prior.currentTurn
         if (prior.startedAt) runStartedAt = Math.min(runStartedAt, prior.startedAt.getTime())
       }
-      const priorCheckpoint = savedRunUsageSchema.parse(previousTask.usage).checkpoint
+      const restoredPrior = await restoreSavedUsage(previousTask, previousTask.id)
+      const priorCheckpoint = restoredPrior.success ? restoredPrior.data.checkpoint : undefined
       if (priorCheckpoint) restoreCheckpointLimits(priorCheckpoint)
     }
     let taskSpec: TaskSpec = parsedTaskSpec.success
