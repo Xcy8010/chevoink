@@ -10,8 +10,9 @@ import {
   searchCraftLibrary,
 } from '../../api/lib/agent/craft-library.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 const AUTHOR_SAMPLE_BASE = '林舟把报表推回桌心，没有解释自己为什么拒绝。他问：“如果到账晚三天，谁来签字？”会议室里没人接话。顾棠合上电脑，把违约条款翻到最后一页。'
 
 afterAll(async () => {

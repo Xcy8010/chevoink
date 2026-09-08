@@ -4,7 +4,7 @@ import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 
 import { env } from '../config/env.js'
-import { getCreditActivity, getCreditSummary, getCreditUsage, getReferralPayload, parseModelCapabilities } from '../lib/credits.js'
+import { getCreditActivity, getCreditSummary, getCreditUsage, getTaskCreditUsage, getReferralPayload, parseModelCapabilities } from '../lib/credits.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import { buildSuccess, createRequestId } from '../lib/http.js'
 import { sendRouteError } from '../lib/route-error.js'
@@ -57,6 +57,16 @@ router.get('/usage', async (req: Request, res: Response): Promise<void> => {
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
+})
+
+router.get('/tasks/:runId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const query = z.object({ take: z.coerce.number().int().min(1).max(100).optional(), cursor: z.string().max(1024).optional() }).safeParse(req.query)
+    if (!query.success) throw new DataAccessError(400, 'CREDIT_PAGE_INVALID', '费用分页参数无效。')
+    res.json(buildSuccess(requestId, await getTaskCreditUsage(userId, req.params.runId, query.data)))
+  } catch (error) { sendRouteError(res, requestId, error) }
 })
 
 router.get('/activity', async (req: Request, res: Response): Promise<void> => {

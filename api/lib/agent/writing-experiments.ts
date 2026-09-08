@@ -15,9 +15,9 @@ function readCounters(value: Prisma.JsonValue): Record<string, number> {
   return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => typeof item === 'number' && Number.isFinite(item) ? [[key, item]] : []))
 }
 
-async function analyticsEnabled(userId: string, novelId: string): Promise<boolean> {
+async function analyticsEnabled(userId: string, novelId: string, db: Prisma.TransactionClient = prisma): Promise<boolean> {
   if (!isAgent2FeatureEnabled('feedbackFlywheel', userId)) return false
-  const control = await prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { productAnalyticsEnabled: true } })
+  const control = await db.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { productAnalyticsEnabled: true } })
   return control?.productAnalyticsEnabled ?? true
 }
 
@@ -48,15 +48,15 @@ export async function ensureWritingExperiment(input: {
   })
 }
 
-export async function recordWritingSignal(userId: string, novelId: string, signal: WritingSignal, amount = 1): Promise<void> {
-  if (!await analyticsEnabled(userId, novelId)) return
-  const experiments = await prisma.writingExperiment.findMany({ where: { userId, novelId, status: 'active' } })
+export async function recordWritingSignal(userId: string, novelId: string, signal: WritingSignal, amount = 1, db: Prisma.TransactionClient = prisma): Promise<void> {
+  if (!await analyticsEnabled(userId, novelId, db)) return
+  const experiments = await db.writingExperiment.findMany({ where: { userId, novelId, status: 'active' } })
   await Promise.all(experiments.map((experiment) => {
     const counters = readCounters(experiment.outcomes)
     if (['first_three_published', 'continued_after_seven_days'].includes(signal) && (counters[signal] ?? 0) > 0) return Promise.resolve(experiment)
     counters[signal] = (counters[signal] ?? 0) + amount
     const completes = signal === 'first_three_published'
-    return prisma.writingExperiment.update({
+    return db.writingExperiment.update({
       where: { id: experiment.id },
       data: { outcomes: counters as Prisma.InputJsonValue, ...(completes ? { status: 'completed' as const, completedAt: new Date() } : {}) },
     })

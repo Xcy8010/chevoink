@@ -21,7 +21,7 @@ export const craftSearchTool = defineTool({
   permission: ALLOW_ALL,
   readOnly: true,
   async execute(ctx, query) {
-    const result = await searchCraftLibrary({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, query })
+    const result = await searchCraftLibrary({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, query }, ctx.transaction)
     if (result.cards.length === 0) {
       return { output: '合法文笔库没有满足当前题材与场景边界的技法卡；不要强行套用其他题材，也不要联网抓取小说原文。', summary: '文笔库无合适技法卡' }
     }
@@ -71,7 +71,7 @@ export const styleProfileGetTool = defineTool({
   permission: ALLOW_ALL,
   readOnly: true,
   async execute(ctx) {
-    const profile = await getAuthorStyleProfile(ctx.userId, ctx.novelId)
+    const profile = await getAuthorStyleProfile(ctx.userId, ctx.novelId, false, ctx.transaction)
     if (!profile) return { output: '当前作品尚无已确认的作者 Style DNA。不要凭空推断作者文风。', summary: '未找到 Style DNA' }
     return {
       output: `Style DNA profileId=${profile.id}，样本 ${profile.sampleCount} 章/${profile.sampleChars} 字符，统计画像：${JSON.stringify(profile.stats)}。这些是柔性风格参照，不是逐句模板。`,
@@ -88,7 +88,7 @@ export const retrievalTraceReadTool = defineTool({
   permission: ALLOW_ALL,
   readOnly: true,
   async execute(ctx, args) {
-    const trace = await readRetrievalTrace(ctx.userId, ctx.novelId, args.traceId)
+    const trace = await readRetrievalTrace(ctx.userId, ctx.novelId, args.traceId, ctx.transaction)
     return { output: `检索查询：${JSON.stringify(trace.query)}\n选择结果：${JSON.stringify(trace.selected)}\n记录时间：${trace.createdAt.toISOString()}`, summary: '读取技法检索记录' }
   },
 })
@@ -104,7 +104,7 @@ export const styleLeakageCheckTool = defineTool({
   permission: ALLOW_ALL,
   readOnly: true,
   async execute(ctx, args) {
-    const result = await checkStyleLeakage({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: args.chapterId ?? ctx.chapterId, content: args.content })
+    const result = await checkStyleLeakage({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: args.chapterId ?? ctx.chapterId, content: args.content }, ctx.transaction)
     return {
       output: result.decision === 'blocked'
         ? `复写风险检查已阻断：最长连续重合 ${result.longestCommonSubstring} 字，8-gram 重合 ${(result.ngramOverlap * 100).toFixed(1)}%，语义近似 ${(result.semanticSimilarity * 100).toFixed(1)}%。必须脱离来源措辞重写后再检查。checkId=${result.id}`

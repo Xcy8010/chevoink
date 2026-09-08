@@ -14,8 +14,9 @@ import {
   selectQualityFindings,
 } from '../../api/lib/agent/humanity-quality.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
@@ -78,7 +79,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
     const deterministic = analyzeDeterministicQuality(chapter.content)
     const first = await persistHumanityQualityReport({
       userId, novelId, runId, chapterId, chapterRevision: chapter.revision, mode: 'balanced',
-      deterministicMetrics: deterministic.metrics, deterministicFindings: deterministic.findings,
+      deterministicMetrics: deterministic.metrics, deterministicFindings: deterministic.findings, criticComplete: true,
       criticFindings: [
         { signal: 'emotion_grounding', severity: 'warning', quote: '他感到无比悲伤。', explanation: '情绪只有标签，没有选择或后果。', suggestion: '用一个与父亲有关的具体回避动作替换。', confidence: 0.91 },
         { signal: 'orphaned_sophistication', severity: 'warning', quote: '正文里根本不存在的华丽句', explanation: '幻觉证据。', suggestion: '不应入库。', confidence: 0.99 },
@@ -103,7 +104,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
   it('局部修订绑定最新 revision，新检查重置修订预算且同报告内阻止第二轮自动循环', async () => {
     const secondChapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId } })
     const second = await persistHumanityQualityReport({
-      userId, novelId, runId, chapterId, chapterRevision: secondChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [],
+      userId, novelId, runId, chapterId, chapterRevision: secondChapter.revision, mode: 'balanced', deterministicMetrics: {}, deterministicFindings: [], criticComplete: true,
       criticFindings: [{ signal: 'reader_pull', severity: 'warning', quote: '林舟把钥匙塞回袖口，没再问父亲的事。', explanation: '动作没有改变当下关系。', suggestion: '让动作落到当前场景选择。', confidence: 0.8 }],
     })
     // 新检查 = 新报告：修订预算重置为 0，不再继承旧报告已用轮次（否则新 revision 上的新检查会被直接熔断成工具失败）

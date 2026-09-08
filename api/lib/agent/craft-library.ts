@@ -127,8 +127,8 @@ export function isWhitelistedPublicLicense(sourceClass: string, license: string)
   return PUBLIC_LICENSE_WHITELIST[sourceClass].has(license.trim())
 }
 
-async function assertOwnedNovel(userId: string, novelId: string): Promise<void> {
-  const novel = await prisma.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
+async function assertOwnedNovel(userId: string, novelId: string, db: Prisma.TransactionClient = prisma): Promise<void> {
+  const novel = await db.novel.findFirst({ where: { id: novelId, authorId: userId }, select: { id: true } })
   if (!novel) throw new DataAccessError(404, 'NOVEL_NOT_FOUND', '作品不存在或无权访问。')
 }
 
@@ -236,13 +236,13 @@ export async function extractAuthorStyleProfile(input: {
   return { profileId: result.profile.id, sourceId: result.source.id, documentId: result.document.id, stats }
 }
 
-export async function getAuthorStyleProfile(userId: string, novelId: string, respectDataControl = false) {
-  await assertOwnedNovel(userId, novelId)
+export async function getAuthorStyleProfile(userId: string, novelId: string, respectDataControl = false, db: Prisma.TransactionClient = prisma) {
+  await assertOwnedNovel(userId, novelId, db)
   if (respectDataControl) {
-    const dataControl = await prisma.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { privateStyleEnabled: true } })
+    const dataControl = await db.agentDataControl.findUnique({ where: { userId_novelId: { userId, novelId } }, select: { privateStyleEnabled: true } })
     if (dataControl?.privateStyleEnabled === false) return null
   }
-  return prisma.styleProfile.findFirst({
+  return db.styleProfile.findFirst({
     where: { userId, novelId, kind: 'author', confirmed: true },
     orderBy: { updatedAt: 'desc' },
     select: { id: true, sourceId: true, name: true, stats: true, sampleCount: true, sampleChars: true, contentHash: true, updatedAt: true },
@@ -278,9 +278,9 @@ function readStringArray(value: unknown): string[] {
 
 type SearchCard = Awaited<ReturnType<typeof loadSearchCards>>[number]
 
-async function loadSearchCards(userId: string, novelId: string) {
+async function loadSearchCards(userId: string, novelId: string, db: Prisma.TransactionClient = prisma) {
   const now = new Date()
-  return prisma.techniqueCard.findMany({
+  return db.techniqueCard.findMany({
     where: {
       active: true,
       source: {
@@ -296,7 +296,7 @@ async function loadSearchCards(userId: string, novelId: string) {
     },
     include: { source: { select: { sourceClass: true, rightsStatus: true } } },
     take: MAX_SEARCH_CANDIDATES,
-    orderBy: [{ genre: 'asc' }, { sceneType: 'asc' }, { createdAt: 'asc' }],
+    orderBy: [{ genre: 'asc' }, { sceneType: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   })
 }
 
@@ -342,11 +342,11 @@ export async function searchCraftLibrary(input: {
   novelId: string
   runId: string
   query: CraftSearchQuery
-}): Promise<{ traceId: string; cards: CraftTechniqueCardView[]; profile: { id: string; stats: unknown } | null }> {
-  await assertOwnedNovel(input.userId, input.novelId)
+}, db: Prisma.TransactionClient = prisma): Promise<{ traceId: string; cards: CraftTechniqueCardView[]; profile: { id: string; stats: unknown } | null }> {
+  await assertOwnedNovel(input.userId, input.novelId, db)
   const [cards, profile] = await Promise.all([
-    loadSearchCards(input.userId, input.novelId),
-    getAuthorStyleProfile(input.userId, input.novelId, true),
+    loadSearchCards(input.userId, input.novelId, db),
+    getAuthorStyleProfile(input.userId, input.novelId, true, db),
   ])
   const queryText = [input.query.genre, input.query.subgenre, input.query.sceneType, input.query.relationshipStage, input.query.pointOfView, input.query.narrativeDistance, input.query.pace, input.query.readerPromise, ...input.query.defectTargets].filter(Boolean).join(' ')
   const queryTokens = tokenize(queryText)
@@ -383,7 +383,7 @@ export async function searchCraftLibrary(input: {
     score: rounded(score),
     reasons,
   }))
-  const trace = await prisma.retrievalTrace.create({
+  const trace = await db.retrievalTrace.create({
     data: {
       userId: input.userId,
       novelId: input.novelId,
@@ -397,9 +397,9 @@ export async function searchCraftLibrary(input: {
   return { traceId: trace.id, cards: views, profile: profile ? { id: profile.id, stats: profile.stats } : null }
 }
 
-export async function readRetrievalTrace(userId: string, novelId: string, traceId: string) {
-  await assertOwnedNovel(userId, novelId)
-  const trace = await prisma.retrievalTrace.findFirst({ where: { id: traceId, userId, novelId } })
+export async function readRetrievalTrace(userId: string, novelId: string, traceId: string, db: Prisma.TransactionClient = prisma) {
+  await assertOwnedNovel(userId, novelId, db)
+  const trace = await db.retrievalTrace.findFirst({ where: { id: traceId, userId, novelId } })
   if (!trace) throw new DataAccessError(404, 'RETRIEVAL_TRACE_NOT_FOUND', '检索记录不存在或不属于当前作品。')
   return trace
 }
@@ -447,9 +447,13 @@ export async function checkStyleLeakage(input: {
   runId?: string | null
   chapterId?: string | null
   content: string
-}): Promise<LeakageCheckView> {
+}, db: Prisma.TransactionClient = prisma): Promise<LeakageCheckView> {
+  await assertOwnedNovel(input.userId, input.novelId, db)
+  if (input.chapterId && !await db.chapter.findFirst({ where: { id: input.chapterId, novelId: input.novelId, authorId: input.userId }, select: { id: true } })) {
+    throw new DataAccessError(404, 'CHAPTER_NOT_FOUND', '检查目标章节不存在或不属于当前作品。')
+  }
   const outputHash = sha256(input.content)
-  const passages = await prisma.corpusPassage.findMany({
+  const passages = await db.corpusPassage.findMany({
     where: {
       document: {
         status: 'indexed',
@@ -479,7 +483,7 @@ export async function checkStyleLeakage(input: {
   }
   const blocked = best.lcs >= 80 || best.overlap >= 0.48 || (best.lcs >= 40 && best.overlap >= 0.18) || (best.semantic >= 0.985 && best.lcs >= 24)
   const action = blocked ? '阻断自动写入；要求脱离来源措辞重新生成' : '允许写入'
-  const check = await prisma.leakageCheck.create({
+  const check = await db.leakageCheck.create({
     data: {
       userId: input.userId,
       novelId: input.novelId,
@@ -505,8 +509,8 @@ export async function checkStyleLeakage(input: {
   }
 }
 
-export async function assertCraftOutputSafe(input: Parameters<typeof checkStyleLeakage>[0]): Promise<LeakageCheckView> {
-  const result = await checkStyleLeakage(input)
+export async function assertCraftOutputSafe(input: Parameters<typeof checkStyleLeakage>[0], db: Prisma.TransactionClient = prisma): Promise<LeakageCheckView> {
+  const result = await checkStyleLeakage(input, db)
   if (result.decision === 'blocked') {
     throw new DataAccessError(409, 'STYLE_LEAKAGE_BLOCKED', `检测到可识别复写风险（最长连续重合 ${result.longestCommonSubstring} 字），本次未写入。请保留技法、完全重写措辞后重试。`)
   }

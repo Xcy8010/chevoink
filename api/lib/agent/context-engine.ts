@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { Prisma } from '@prisma/client'
 
 import type {
   AgentMessagePart,
@@ -87,8 +88,11 @@ export async function captureUserDirectives(input: {
   const candidates = extractDirectiveCandidates(input.prompt)
   const created: UserDirective[] = []
   for (const candidate of candidates) {
+    // Extraction identifies wording, not permission to apply it to future tasks.
+    const scope = /以后|今后|长期|始终|永久|后续所有章节|整部作品都|全书都/.test(candidate.text) ? 'global' as const : 'task' as const
     const existing = await prisma.userDirective.findFirst({
-      where: { novelId: input.novelId, status: 'active', kind: candidate.kind, text: candidate.text },
+      where: { userId: input.userId, novelId: input.novelId, status: 'active', kind: candidate.kind, text: candidate.text, scope,
+        ...(scope === 'task' ? { sessionId: input.sessionId, taskSpecId: input.taskSpec.id } : {}) },
     })
     if (existing) {
       created.push(directiveRecord(existing))
@@ -101,7 +105,7 @@ export async function captureUserDirectives(input: {
         sessionId: input.sessionId,
         chapterId: input.chapterId,
         taskSpecId: input.taskSpec.id,
-        scope: input.chapterId ? 'chapter' : 'global',
+        scope,
         kind: candidate.kind,
         text: candidate.text,
         sourceMessageId: input.sourceMessageId,
@@ -112,9 +116,24 @@ export async function captureUserDirectives(input: {
   return created
 }
 
-export async function listActiveDirectives(userId: string, novelId: string): Promise<UserDirective[]> {
-  const records = await prisma.userDirective.findMany({
-    where: { userId, novelId, status: 'active' },
+export async function listActiveDirectives(userId: string, novelId: string,
+  scope?: { sessionId: string; chapterId?: string | null; taskSpecId?: string; runId?: string },
+  db: Prisma.TransactionClient = prisma): Promise<UserDirective[]> {
+  let applicable: Prisma.UserDirectiveWhereInput[] | undefined
+  if (scope) {
+    applicable = [{ scope: 'global' }]
+    const chapter = scope.chapterId ? await db.chapter.findFirst({ where: { id: scope.chapterId, novelId, authorId: userId }, select: { id: true, volumeId: true } }) : null
+    if (chapter) applicable.push({ scope: 'chapter', chapterId: chapter.id }, { scope: 'volume', volumeId: chapter.volumeId })
+    const run = !scope.taskSpecId && scope.runId ? await db.agentRun.findFirst({ where: { id: scope.runId, userId, novelId, sessionId: scope.sessionId }, select: { taskRootId: true, taskSpec: true } }) : null
+    const spec = run?.taskSpec && typeof run.taskSpec === 'object' && !Array.isArray(run.taskSpec) ? run.taskSpec : null
+    const taskSpecId = scope.taskSpecId ?? run?.taskRootId ?? (typeof spec?.id === 'string' ? spec.id : undefined)
+    if (taskSpecId) applicable.push({ scope: 'task', sessionId: scope.sessionId, taskSpecId })
+    // Older directive_save records used the run ID as provenance, not a task ID.
+    // They may apply to that exact run, never every later run in the session.
+    if (scope.runId) applicable.push({ scope: 'task', sessionId: scope.sessionId, taskSpecId: null, sourceMessageId: scope.runId })
+  }
+  const records = await db.userDirective.findMany({
+    where: { userId, novelId, status: 'active', ...(applicable ? { OR: applicable } : {}) },
     orderBy: [{ scope: 'asc' }, { createdAt: 'asc' }],
   })
   return records.map(directiveRecord)
@@ -123,28 +142,35 @@ export async function listActiveDirectives(userId: string, novelId: string): Pro
 export async function saveDirective(input: {
   userId: string; novelId: string; sessionId: string; chapterId: string | null; sourceMessageId: string
   text: string; kind: UserDirective['kind']; scope: UserDirective['scope']
-}): Promise<UserDirective> {
-  const record = await prisma.userDirective.create({ data: { ...input, volumeId: null } })
+  taskSpecId?: string
+}, db: Prisma.TransactionClient = prisma): Promise<UserDirective> {
+  const existing = await db.userDirective.findFirst({ where: { userId: input.userId, novelId: input.novelId, scope: input.scope,
+    kind: input.kind, text: input.text, status: 'active',
+    ...(input.scope === 'task' ? { sessionId: input.sessionId, ...(input.taskSpecId ? { taskSpecId: input.taskSpecId } : { taskSpecId: null, sourceMessageId: input.sourceMessageId }) }
+      : input.scope === 'chapter' ? { chapterId: input.chapterId } : {}),
+  }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
+  if (existing) return directiveRecord(existing)
+  const record = await db.userDirective.create({ data: { ...input, volumeId: null } })
   return directiveRecord(record)
 }
 
-export async function supersedeDirective(userId: string, novelId: string, directiveId: string, replacement?: string): Promise<UserDirective> {
-  const current = await prisma.userDirective.findFirst({ where: { id: directiveId, userId, novelId, status: 'active' } })
+export async function supersedeDirective(userId: string, novelId: string, directiveId: string, replacement?: string, transaction?: Prisma.TransactionClient): Promise<UserDirective> {
+  if (!transaction) return prisma.$transaction(tx => supersedeDirective(userId, novelId, directiveId, replacement, tx))
+  const current = await transaction.userDirective.findFirst({ where: { id: directiveId, userId, novelId, status: 'active' } })
   if (!current) throw new DataAccessError(404, 'DIRECTIVE_NOT_FOUND', '指令不存在、已失效或不属于当前作品。')
-  if (!replacement?.trim()) {
-    return directiveRecord(await prisma.userDirective.update({ where: { id: current.id }, data: { status: 'cancelled' } }))
-  }
+  const text = replacement?.trim()
   const nextId = randomUUID()
-  const [, next] = await prisma.$transaction([
-    prisma.userDirective.update({ where: { id: current.id }, data: { status: 'superseded', supersededBy: nextId } }),
-    prisma.userDirective.create({
+  const changed = await transaction.userDirective.updateMany({ where: { id: current.id, userId, novelId, status: 'active', updatedAt: current.updatedAt },
+    data: text ? { status: 'superseded', supersededBy: nextId } : { status: 'cancelled' } })
+  if (changed.count !== 1) throw new DataAccessError(409, 'DIRECTIVE_CHANGED', '指令已变化，请重新读取后处理。')
+  if (!text) return directiveRecord(await transaction.userDirective.findUniqueOrThrow({ where: { id: current.id } }))
+  const next = await transaction.userDirective.create({
       data: {
         id: nextId, userId, novelId, sessionId: current.sessionId, volumeId: current.volumeId,
         chapterId: current.chapterId, taskSpecId: current.taskSpecId, scope: current.scope, kind: current.kind,
-        text: replacement.trim(), sourceMessageId: current.sourceMessageId,
+        text, sourceMessageId: current.sourceMessageId,
       },
-    }),
-  ])
+    })
   return directiveRecord(next)
 }
 
@@ -181,8 +207,15 @@ function checkpointRecord(record: {
   }
 }
 
-export function renderCheckpointDigest(checkpoint: ContextCheckpoint): string {
-  const s = checkpoint.summary
+export function renderCheckpointDigest(checkpoint: ContextCheckpoint, current?: { runId: string; directives: UserDirective[] }): string {
+  const s = current ? { ...checkpoint.summary,
+    // A session checkpoint can span prior tasks. Keep their completed work and
+    // receipts as history, but never carry their pending objectives forward.
+    goals: checkpoint.runId === current.runId ? checkpoint.summary.goals : [],
+    pending: checkpoint.runId === current.runId ? checkpoint.summary.pending : [],
+    constraints: current.directives.filter(item => item.kind === 'must' || item.kind === 'must_not').map(item => item.text),
+    decisions: current.directives.filter(item => item.kind === 'decision').map(item => item.text),
+  } : checkpoint.summary
   return `[系统] 已验证的历史上下文检查点（checkpointId=${checkpoint.id}）：\n目标：${s.goals.join('；') || '无'}\n约束：${s.constraints.join('；') || '无'}\n决策：${s.decisions.join('；') || '无'}\n已完成：${s.completed.join('；') || '无'}\n待处理：${s.pending.join('；') || '无'}\n工具凭据：${s.toolReceipts.map((item) => `${item.toolName}:${item.summary}${item.artifactId ? `(${item.artifactId})` : ''}`).join('；') || '无'}。如需原文细节请重新调用读取工具，禁止凭摘要补写事实。`
 }
 

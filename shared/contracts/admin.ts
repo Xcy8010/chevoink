@@ -417,6 +417,7 @@ export type AdminCreditsManagementPayload = {
 export type AdminModelManagementPayload = {
   models: Array<{
     id: string
+    pricing?: import('./credits.js').CreditLedgerItem['pricing']
     tier: string | null
     modelKind: 'text' | 'image_generation' | 'vision' | 'web_search'
     provider: string

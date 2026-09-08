@@ -117,15 +117,15 @@ export function getAdminCreditsManagement(): Promise<AdminCreditsManagementPaylo
   return requestJson<AdminCreditsManagementPayload>('/api/admin/credits')
 }
 
-export function resetAdminUserCredits(userId: string, payload: { captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ stoppedRuns: number }> {
+export function resetAdminUserCredits(userId: string, payload: { captchaId: string; captchaAnswer: string; confirmation: string; requestKey?: string }): Promise<{ stoppedRuns: number }> {
   return requestJson(`/api/admin/credits/users/${userId}/reset`, { method: 'POST', body: JSON.stringify(payload) })
 }
 
-export function resetAllAdminCredits(payload: { captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; stoppedRuns: number }> {
+export function resetAllAdminCredits(payload: { captchaId: string; captchaAnswer: string; confirmation: string; requestKey?: string }): Promise<{ users: number; stoppedRuns: number }> {
   return requestJson('/api/admin/credits/reset-all', { method: 'POST', body: JSON.stringify(payload) })
 }
 
-export function resetSelectedAdminCredits(payload: { userIds: string[]; captchaId: string; captchaAnswer: string; confirmation: string }): Promise<{ users: number; stoppedRuns: number }> {
+export function resetSelectedAdminCredits(payload: { userIds: string[]; captchaId: string; captchaAnswer: string; confirmation: string; requestKey?: string }): Promise<{ users: number; stoppedRuns: number }> {
   return requestJson('/api/admin/credits/users/reset-selected', { method: 'POST', body: JSON.stringify(payload) })
 }
 

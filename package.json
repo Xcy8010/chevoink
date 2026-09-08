@@ -4,6 +4,11 @@
   "version": "0.0.0",
   "license": "AGPL-3.0",
   "type": "module",
+  "engines": {
+    "node": "22.23.2",
+    "npm": "10.9.8"
+  },
+  "packageManager": "npm@10.9.8",
   "scripts": {
     "client:dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
@@ -11,6 +16,10 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:db:verify": "tsx scripts/assert-test-database.ts",
+    "test:db:migrate": "tsx scripts/migrate-test-database.ts",
+    "audit:baseline": "tsx scripts/capture-engineering-baseline.ts",
+    "runtime:verify": "tsx scripts/assert-runtime.ts",
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "voice:prepare": "node scripts/prepare-voice-assets.mjs",
@@ -41,12 +50,15 @@
     "linkedom": "^0.18.13",
     "lucide-react": "^0.511.0",
     "mammoth": "^1.12.1",
+    "mdast-util-from-markdown": "2.0.3",
     "modern-screenshot": "^4.7.0",
     "node-edge-tts": "^1.2.10",
     "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "10.1.0",
     "react-router-dom": "^7.3.0",
+    "remark-gfm": "4.0.1",
     "sharp": "^0.35.3",
     "svg-captcha": "^1.4.0",
     "tailwind-merge": "^3.0.2",
@@ -70,7 +82,7 @@
     "@vitejs/plugin-react": "^4.4.1",
     "@vitest/coverage-v8": "^3.2.7",
     "autoprefixer": "^10.4.21",
-    "concurrently": "^9.2.0",
+    "concurrently": "^9.2.4",
     "eslint": "^9.25.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
@@ -89,6 +101,11 @@
     "vitest": "^3.2.7"
   },
   "overrides": {
+    "@xmldom/xmldom": "0.8.15",
+    "brace-expansion@1": "1.1.18",
+    "browserslist": "4.28.7",
+    "js-yaml": "4.3.1",
+    "qs": "6.16.0",
     "uuid": "^11.1.1"
   },
   "prisma": {

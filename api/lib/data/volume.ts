@@ -1,4 +1,5 @@
 import type { Chapter, Prisma, Volume as PrismaVolume } from '@prisma/client'
+import { createHash } from 'node:crypto'
 
 import type {
   CreateVolumeRequest,
@@ -171,9 +172,9 @@ export async function placeCreatedChapter(
   await rewriteChapterLayout(tx, layout.volumes, layout.byVolume)
 }
 
-export async function listVolumesData(userId: string, novelId: string): Promise<VolumeListItem[]> {
-  await ensureNovelOwner(userId, novelId)
-  const records = await prisma.volume.findMany({
+export async function listVolumesData(userId: string, novelId: string, transaction: Prisma.TransactionClient = prisma): Promise<VolumeListItem[]> {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const records = await transaction.volume.findMany({
     where: { novelId },
     include: volumeListItemInclude,
     orderBy: { orderIndex: 'asc' },
@@ -181,9 +182,9 @@ export async function listVolumesData(userId: string, novelId: string): Promise<
   return records.map(toVolumeListItem)
 }
 
-export async function createVolumeData(userId: string, novelId: string, input: CreateVolumeRequest): Promise<Volume> {
-  await ensureNovelOwner(userId, novelId)
-  return prisma.$transaction(async (tx) => {
+export async function createVolumeData(userId: string, novelId: string, input: CreateVolumeRequest, transaction?: Prisma.TransactionClient): Promise<Volume> {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const create = async (tx: Prisma.TransactionClient) => {
     const volumes = await tx.volume.findMany({ where: { novelId }, orderBy: { orderIndex: 'asc' } })
     const created = await tx.volume.create({
       data: {
@@ -197,7 +198,8 @@ export async function createVolumeData(userId: string, novelId: string, input: C
     await rewriteVolumeOrder(tx, volumes)
     const record = await tx.volume.findUniqueOrThrow({ where: { id: created.id } })
     return toVolume(record)
-  })
+  }
+  return transaction ? create(transaction) : prisma.$transaction(create)
 }
 
 export async function updateVolumeData(
@@ -205,20 +207,23 @@ export async function updateVolumeData(
   novelId: string,
   volumeId: string,
   input: UpdateVolumeRequest,
+  transaction?: Prisma.TransactionClient,
 ): Promise<Volume | null> {
-  await ensureNovelOwner(userId, novelId)
-  const existing = await prisma.volume.findFirst({ where: { id: volumeId, novelId } })
-  if (!existing) return null
-  assertExpectedRevision(input.expectedRevision, existing.revision, '卷')
-  const updated = await prisma.volume.update({
-    where: { id: volumeId },
-    data: {
-      title: input.title?.trim(),
-      summary: input.summary === undefined ? undefined : input.summary?.trim() || null,
-      revision: { increment: 1 },
-    },
-  })
-  return toVolume(updated)
+  await ensureNovelOwner(userId, novelId, transaction)
+  const update = async (tx: Prisma.TransactionClient) => {
+    const existing = await tx.volume.findFirst({ where: { id: volumeId, novelId } })
+    if (!existing) return null
+    assertExpectedRevision(input.expectedRevision, existing.revision, '卷')
+    const title = input.title?.trim() ?? existing.title
+    const summary = input.summary === undefined ? existing.summary : input.summary?.trim() || null
+    if (title === existing.title && summary === existing.summary) return toVolume(existing)
+    const updated = await tx.volume.update({
+      where: { id: volumeId, revision: existing.revision },
+      data: { title, summary, revision: { increment: 1 } },
+    })
+    return toVolume(updated)
+  }
+  return transaction ? update(transaction) : prisma.$transaction(update)
 }
 
 export async function moveVolumeData(
@@ -226,9 +231,10 @@ export async function moveVolumeData(
   novelId: string,
   volumeId: string,
   input: MoveVolumeRequest,
+  transaction?: Prisma.TransactionClient,
 ): Promise<Volume | null> {
-  await ensureNovelOwner(userId, novelId)
-  return prisma.$transaction(async (tx) => {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const move = async (tx: Prisma.TransactionClient) => {
     const volumes = await tx.volume.findMany({ where: { novelId }, orderBy: { orderIndex: 'asc' } })
     const currentIndex = volumes.findIndex((item) => item.id === volumeId)
     if (currentIndex < 0) return null
@@ -239,12 +245,13 @@ export async function moveVolumeData(
     const layout = await loadLayout(tx, novelId)
     await rewriteChapterLayout(tx, volumes, layout.byVolume)
     return toVolume(await tx.volume.findUniqueOrThrow({ where: { id: volumeId } }))
-  })
+  }
+  return transaction ? move(transaction) : prisma.$transaction(move)
 }
 
-export async function deleteVolumeData(userId: string, novelId: string, volumeId: string): Promise<boolean> {
-  await ensureNovelOwner(userId, novelId)
-  return prisma.$transaction(async (tx) => {
+export async function deleteVolumeData(userId: string, novelId: string, volumeId: string, transaction?: Prisma.TransactionClient): Promise<boolean> {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const remove = async (tx: Prisma.TransactionClient) => {
     const volumes = await tx.volume.findMany({ where: { novelId }, orderBy: { orderIndex: 'asc' } })
     const target = volumes.find((item) => item.id === volumeId)
     if (!target) return false
@@ -256,7 +263,8 @@ export async function deleteVolumeData(userId: string, novelId: string, volumeId
     const remaining = volumes.filter((item) => item.id !== volumeId)
     await rewriteVolumeOrder(tx, remaining)
     return true
-  })
+  }
+  return transaction ? remove(transaction) : prisma.$transaction(remove)
 }
 
 export async function moveChapterData(
@@ -264,9 +272,10 @@ export async function moveChapterData(
   novelId: string,
   chapterId: string,
   input: MoveChapterRequest,
+  transaction?: Prisma.TransactionClient,
 ) {
-  await ensureNovelOwner(userId, novelId)
-  return prisma.$transaction(async (tx) => {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const move = async (tx: Prisma.TransactionClient) => {
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, novelId } })
     if (!chapter) return null
     assertExpectedRevision(input.expectedRevision, chapter.revision, '章节')
@@ -280,7 +289,8 @@ export async function moveChapterData(
     target.splice(clampPosition(input.position, target.length), 0, chapter)
     await rewriteChapterLayout(tx, layout.volumes, layout.byVolume)
     return toChapter(await tx.chapter.findUniqueOrThrow({ where: { id: chapterId } }))
-  })
+  }
+  return transaction ? move(transaction) : prisma.$transaction(move)
 }
 
 export async function splitChapterData(
@@ -288,9 +298,10 @@ export async function splitChapterData(
   novelId: string,
   chapterId: string,
   input: SplitChapterRequest,
+  transaction?: Prisma.TransactionClient,
 ) {
-  await ensureNovelOwner(userId, novelId)
-  return prisma.$transaction(async (tx) => {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const split = async (tx: Prisma.TransactionClient) => {
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, novelId } })
     if (!chapter) return null
     assertExpectedRevision(input.expectedRevision, chapter.revision, '章节')
@@ -324,7 +335,8 @@ export async function splitChapterData(
       first: toChapter(await tx.chapter.findUniqueOrThrow({ where: { id: chapter.id } })),
       second: toChapter(await tx.chapter.findUniqueOrThrow({ where: { id: created.id } })),
     }
-  })
+  }
+  return transaction ? split(transaction) : prisma.$transaction(split)
 }
 
 export async function mergeChaptersData(
@@ -332,12 +344,13 @@ export async function mergeChaptersData(
   novelId: string,
   targetChapterId: string,
   input: MergeChaptersRequest,
+  transaction?: Prisma.TransactionClient,
 ) {
-  await ensureNovelOwner(userId, novelId)
+  await ensureNovelOwner(userId, novelId, transaction)
   if (targetChapterId === input.sourceChapterId) {
     throw new DataAccessError(400, 'INVALID_MERGE_TARGET', '不能把章节与自身合并。')
   }
-  return prisma.$transaction(async (tx) => {
+  const merge = async (tx: Prisma.TransactionClient) => {
     const [target, source] = await Promise.all([
       tx.chapter.findFirst({ where: { id: targetChapterId, novelId } }),
       tx.chapter.findFirst({ where: { id: input.sourceChapterId, novelId } }),
@@ -354,26 +367,50 @@ export async function mergeChaptersData(
     await normalizeNovelStructure(tx, novelId)
     await recalculateNovelStats(tx, novelId)
     return toChapter(await tx.chapter.findUniqueOrThrow({ where: { id: target.id } }))
-  })
+  }
+  return transaction ? merge(transaction) : prisma.$transaction(merge)
 }
 
-export async function getStructureReportData(userId: string, novelId: string): Promise<StructureReport> {
-  await ensureNovelOwner(userId, novelId)
-  const volumes = await prisma.volume.findMany({
+/** Revision vector, not a content read: prevents applying a saved structural
+ * decision to a layout changed after the observation. */
+export async function getStructureRevisionHash(tx: Prisma.TransactionClient, novelId: string): Promise<string> {
+  const volumes = await tx.volume.findMany({ where: { novelId }, orderBy: { id: 'asc' },
+    select: { id: true, revision: true, orderIndex: true } })
+  const chapters = await tx.chapter.findMany({ where: { novelId }, orderBy: { id: 'asc' },
+    select: { id: true, revision: true, volumeId: true, orderIndex: true, orderInVolume: true } })
+  return createHash('sha256').update(JSON.stringify({ volumes, chapters })).digest('hex')
+}
+
+export async function getStructureReportData(userId: string, novelId: string, transaction: Prisma.TransactionClient = prisma): Promise<StructureReport> {
+  return (await getStructureReportObservation(userId, novelId, transaction)).report
+}
+
+export async function getStructureReportObservation(userId: string, novelId: string, transaction: Prisma.TransactionClient = prisma) {
+  await ensureNovelOwner(userId, novelId, transaction)
+  const volumes = await transaction.volume.findMany({
     where: { novelId },
     orderBy: { orderIndex: 'asc' },
-    include: { chapters: { orderBy: { orderInVolume: 'asc' } } },
+    select: { id: true, title: true, orderIndex: true,
+      chapters: { orderBy: [{ orderInVolume: 'asc' }, { id: 'asc' }],
+        select: { id: true, title: true, novelId: true, volumeId: true, orderIndex: true, orderInVolume: true } } },
   })
   const issues: StructureIssue[] = []
+  // Separate FKs allow a chapter's novel and its volume's novel to disagree.
+  // Such chapters must not silently disappear from a valid structure report.
+  const misplaced = await transaction.chapter.findMany({ where: { novelId, volume: { novelId: { not: novelId } } },
+    select: { id: true, volumeId: true }, orderBy: { id: 'asc' } })
+  for (const chapter of misplaced) issues.push({ code: 'CHAPTER_VOLUME_MISMATCH', message: '章节所在卷不属于当前作品。', entityId: chapter.id })
   let expectedGlobal = 1
   for (let volumeIndex = 0; volumeIndex < volumes.length; volumeIndex += 1) {
     const volume = volumes[volumeIndex]
+    if (!volume.title.trim()) issues.push({ code: 'STRUCTURE_TITLE_EMPTY', message: '卷标题不能为空。', entityId: volume.id })
     if (volume.orderIndex !== volumeIndex + 1) {
       issues.push({ code: 'VOLUME_ORDER_GAP', message: `卷序应为 ${volumeIndex + 1}，实际为 ${volume.orderIndex}。`, entityId: volume.id })
     }
     for (let chapterIndex = 0; chapterIndex < volume.chapters.length; chapterIndex += 1) {
       const chapter = volume.chapters[chapterIndex]
-      if (chapter.volumeId !== volume.id) {
+      if (!chapter.title.trim()) issues.push({ code: 'STRUCTURE_TITLE_EMPTY', message: '章节标题不能为空。', entityId: chapter.id })
+      if (chapter.volumeId !== volume.id || chapter.novelId !== novelId) {
         issues.push({ code: 'CHAPTER_VOLUME_MISMATCH', message: '章节卷归属不一致。', entityId: chapter.id })
       }
       if (chapter.orderInVolume !== chapterIndex + 1) {
@@ -386,5 +423,7 @@ export async function getStructureReportData(userId: string, novelId: string): P
     }
   }
   const chapterCount = expectedGlobal - 1
-  return { valid: issues.length === 0, volumeCount: volumes.length, chapterCount, issues }
+  const stateHash = createHash('sha256').update(JSON.stringify({ misplaced, volumes: volumes.map(volume => ({ id: volume.id, title: volume.title, orderIndex: volume.orderIndex,
+    chapters: volume.chapters.map(chapter => ({ id: chapter.id, title: chapter.title, novelId: chapter.novelId, volumeId: chapter.volumeId, orderIndex: chapter.orderIndex, orderInVolume: chapter.orderInVolume })) })) })).digest('hex')
+  return { report: { valid: issues.length === 0, volumeCount: volumes.length, chapterCount, issues }, stateHash }
 }

@@ -30,6 +30,7 @@ export type AgentRunPhase =
   | 'cancelled'
 
 export type PendingApproval = {
+  approvalId?: string
   callId: string
   toolName: string
   title: string
@@ -45,6 +46,7 @@ export type SessionSignal = { runId: string; kind: SessionSignalKind; at: number
 
 /** ask_user 工具挂起中的提问，驱动专门的提问卡片 UI */
 export type PendingQuestion = {
+  requestId?: string
   callId: string
   question: string
   options: Array<{ label: string; detail?: string }>
@@ -55,7 +57,7 @@ function parseQuestionArgs(callId: string, args: unknown): PendingQuestion | nul
   if (!args || typeof args !== 'object') {
     return null
   }
-  const payload = args as { question?: unknown; options?: unknown }
+  const payload = args as { question?: unknown; options?: unknown; requestId?: unknown }
   if (typeof payload.question !== 'string' || !payload.question.trim()) {
     return null
   }
@@ -69,7 +71,7 @@ function parseQuestionArgs(callId: string, args: unknown): PendingQuestion | nul
           detail: typeof option.detail === 'string' ? option.detail : undefined,
         }))
     : []
-  return { callId, question: payload.question, options }
+  return { callId, question: payload.question, options, ...(typeof payload.requestId === 'string' ? { requestId: payload.requestId } : {}) }
 }
 
 /** 本次 run 对工作区（章节/作品）的写入活动，驱动变更条 UI 与动效 */
@@ -858,6 +860,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           }
 
         case 'message.start':
+          if (state.messages.some(message => message.id === event.messageId)) return base
           return {
             ...base,
             messages: [
@@ -879,6 +882,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
               appendDelta(parts, 'text', event.delta),
             ),
           }
+
+        case 'execution.progress':
+          return base
 
         case 'text.final':
           return {
@@ -1052,6 +1058,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             ...base,
             phase: 'awaiting_approval',
             pendingApproval: {
+              approvalId: event.approvalId,
               callId: event.callId,
               toolName: event.toolName,
               title: event.title,
@@ -1063,6 +1070,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           }
 
         case 'permission.resolved':
+          if (!state.pendingApproval || state.pendingApproval.callId !== event.callId
+            || state.pendingApproval.approvalId !== event.approvalId) return base
           return { ...base, phase: 'running', pendingApproval: null, ...withoutActiveSessionSignal(state) }
 
         case 'step.finish':
@@ -1086,6 +1095,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           return {
             ...base,
             phase: 'paused',
+            ...(event.reason === 'model_stalled' ? { outputSummary: '模型暂未完成任务，已保留进度并暂停。请补充指示后继续。' } : {}),
             pendingApproval: null,
             pendingQuestion: null,
             liveToolDrafts: {},

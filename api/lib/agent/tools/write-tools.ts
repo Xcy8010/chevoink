@@ -4,7 +4,8 @@ import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../../prisma.js'
 import { saveStoryMemory } from '../story-memory.js'
-import { defineTool } from './types.js'
+import { defineTool, type ToolResult } from './types.js'
+import { executeDurablePlanSave } from './durable-plan.js'
 
 /**
  * 记忆与计划写工具集。
@@ -98,8 +99,9 @@ export const memorySaveTool = defineTool({
         sourceId: args.sourceChapterId ?? ctx.runId,
         confidence: 1,
       },
-    })
+    }, ctx.transaction)
     return {
+      savedMemoryId: result.id,
       output: result.action === 'conflict'
         ? `检测到记忆冲突：[${args.memoryType}] ${args.title} 未覆盖旧事实，候选 ${result.id} 已进入作者审核箱。`
         : `已${result.action === 'created' ? '保存' : '在原卡片上更新'}记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}，含来源证据）。`,
@@ -238,19 +240,27 @@ export const planSaveTool = defineTool({
   },
   permission: { plan: 'allow', build: 'allow', review: 'deny' },
   readOnly: false,
-  async execute(ctx, args) {
+  async execute(ctx, args): Promise<ToolResult> {
+    if (ctx.durablePlan) {
+      const capturedCtx = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), protectedChapterIds: new Set(ctx.protectedChapterIds) }
+      const capturedArgs = { ...args }
+      return executeDurablePlanSave(capturedCtx, capturedArgs,
+        raw => Object.fromEntries(Object.entries(planSaveTool.parameters.parse(planSaveTool.coerceArgs!(raw))).filter(([, value]) => value !== undefined)),
+        tx => planSaveTool.execute({ ...capturedCtx, durablePlan: undefined, transaction: tx }, capturedArgs))
+    }
+    const db = ctx.transaction ?? prisma
     const title = args.title.trim()
 
     // 优先 planId 精确定位；不传时按同作品同标题兜底去重，防止模型忘传 planId 导致重复落盘
     const existing = args.planId
-      ? await prisma.agentArtifact.findFirst({
+      ? await db.agentArtifact.findFirst({
           where: {
             id: args.planId,
             artifactType: 'chapterPlan',
             run: { userId: ctx.userId, novelId: ctx.novelId },
           },
         })
-      : await prisma.agentArtifact.findFirst({
+      : await db.agentArtifact.findFirst({
           where: {
             artifactType: 'chapterPlan',
             title,
@@ -264,6 +274,7 @@ export const planSaveTool = defineTool({
       return {
         output: `未找到 planId=${args.planId} 对应的计划，本次未执行任何写入。请核对 planId，或不传 planId 重试（同名计划会自动就地更新）。`,
         summary: '计划更新失败：planId 不存在',
+        outcome: 'failed',
       }
     }
 
@@ -280,6 +291,7 @@ export const planSaveTool = defineTool({
           ? `已拦截本次计划更新：传入内容疑似占位或不完整（${nextContent.length} 字，原计划 ${beforeLength} 字），计划《${existing.title}》保持原样未被修改。plan_save 必须一次传入完整的计划正文（Markdown 全文），请带上 planId=${existing.id} 和完整内容重新调用；如确需删除计划请改用 plan_delete。`
           : `已拦截本次计划写入：传入内容疑似占位文本（「${nextContent.slice(0, 20)}」），未创建任何计划。请携带完整的计划正文（Markdown 全文）重新调用 plan_save。`,
         summary: '计划写入已拦截：疑似占位/不完整内容',
+        outcome: 'failed',
       }
     }
 
@@ -290,7 +302,7 @@ export const planSaveTool = defineTool({
         ...((existing.metadata as Record<string, unknown> | null) ?? {}),
         savedAsPlan: true,
       }
-      const updated = await prisma.agentArtifact.update({
+      const updated = await db.agentArtifact.update({
         where: { id: existing.id },
         data: { title, content: args.content, metadata: metadata as Prisma.InputJsonValue },
       })
@@ -309,7 +321,7 @@ export const planSaveTool = defineTool({
       }
     }
 
-    const artifact = await prisma.agentArtifact.create({
+    const artifact = await db.agentArtifact.create({
       data: {
         runId: ctx.runId,
         artifactType: 'chapterPlan',
@@ -339,7 +351,8 @@ export const planRenameTool = defineTool({
   permission: { plan: 'allow', build: 'allow', review: 'deny' },
   readOnly: false,
   async execute(ctx, args) {
-    const existing = await prisma.agentArtifact.findFirst({
+    const db = ctx.transaction ?? prisma
+    const existing = await db.agentArtifact.findFirst({
       where: {
         id: args.planId,
         artifactType: 'chapterPlan',
@@ -351,12 +364,13 @@ export const planRenameTool = defineTool({
       return {
         output: `未找到 planId=${args.planId} 对应的计划，未执行重命名。请核对 planId。`,
         summary: '计划重命名失败：planId 不存在',
+        outcome: 'failed' as const,
       }
     }
 
     const beforeTitle = existing.title
     const title = args.title.trim()
-    await prisma.agentArtifact.update({
+    await db.agentArtifact.update({
       where: { id: existing.id },
       data: { title },
     })
@@ -380,7 +394,8 @@ export const planDeleteTool = defineTool({
   permission: { plan: 'allow', build: 'ask', review: 'deny' },
   readOnly: false,
   async execute(ctx, args) {
-    const existing = await prisma.agentArtifact.findFirst({
+    const db = ctx.transaction ?? prisma
+    const existing = await db.agentArtifact.findFirst({
       where: {
         id: args.planId,
         artifactType: 'chapterPlan',
@@ -392,6 +407,7 @@ export const planDeleteTool = defineTool({
       return {
         output: `未找到 planId=${args.planId} 对应的计划，未执行删除。请核对 planId。`,
         summary: '计划删除失败：planId 不存在',
+        outcome: 'failed' as const,
       }
     }
 
@@ -399,7 +415,7 @@ export const planDeleteTool = defineTool({
       ...((existing.metadata as Record<string, unknown> | null) ?? {}),
       savedAsPlan: false,
     }
-    await prisma.agentArtifact.update({
+    await db.agentArtifact.update({
       where: { id: existing.id },
       data: { metadata: metadata as Prisma.InputJsonValue },
     })

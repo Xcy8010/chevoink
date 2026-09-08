@@ -10,6 +10,8 @@ import type {
 } from '../../../../shared/contracts/index.js'
 import type { AgentStreamEventBody } from '../../../../shared/contracts/index.js'
 import type { getModelTierRuntime } from '../../credits.js'
+import type { ToolAuthority } from '../tool-authority.js'
+import type { RunLeaseToken } from '../runtime-lease.js'
 
 /** 工具执行上下文：身份与作用域由服务端注入，绝不信任模型给出的 ID */
 export type ToolContext = {
@@ -20,6 +22,23 @@ export type ToolContext = {
   runId: string
   /** 作者明确要求“已有/前文保持不变”时，本轮启动前已存在的章节集合。 */
   protectedChapterIds?: ReadonlySet<string>
+  /** Current server admission ceiling; inline children must inherit and intersect it. */
+  toolAuthority?: ToolAuthority
+  /** Internal, frozen at admission. Never populated from model arguments. */
+  durableContent?: { lease: RunLeaseToken; operationKey: string; chapterId: string; expectedRevision: number;
+    cursor?: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durablePlan?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor;
+    expected: { id: string | null; hash: string | null } }
+  durableRead?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durableTask?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durableMemory?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durableMetadata?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durableCompiler?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor;
+    baseline: { id: string; hash: string } | null }
+  durableCreate?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor }
+  durableStructure?: { lease: RunLeaseToken; operationKey: string; cursor: import('../runtime-tool-cursor.js').ToolExecutionCursor; expectedHash: string }
+  /** Internal DB-only tool adapter; never accepted from tool arguments. */
+  transaction?: import('@prisma/client').Prisma.TransactionClient
   /** 当前工具调用的 callId：供 ask_user 等需要挂起等待前端回应的工具使用 */
   callId: string
   /** 当前轮 assistant 消息 id：子 Agent 等需要发进度事件的工具用它锚定直播位置 */
@@ -35,6 +54,18 @@ export type ToolContext = {
 }
 
 export type ToolResult = {
+  savedMemoryId?: string
+  observedMemories?: Array<{ kind: 'memory'; id: string; hash: string }>
+  observedOutputPage?: { operationId: string; resultHash: string; offset: number; end: number; totalChars: number }
+  /** Internal affected IDs for transactional revision/memory bookkeeping. */
+  affectedChapterIds?: string[]
+  observedStructure?: { kind: 'structure'; id: string; hash: string }
+  /** Server-produced validation evidence; completion checks must match current stateHash. */
+  validationEvidence?: { code: 'STRUCTURE_VALIDATED'; passed: boolean; novelId: string; stateHash: string; issues: string[] }
+  /** Internal observed revision used by durable write admission; not model authority. */
+  observedState?: { kind: 'chapter'; id: string; revision: number } | { kind: 'plan'; id: string; hash: string } | { kind: 'volume'; id: string; revision: number } | { kind: 'novel'; id: string; hash: string } | { kind: 'charter'; id: string; hash: string }
+  /** Explicit observed failure; never infer success just because execute resolved. */
+  outcome?: 'failed'
   /** 回填给模型的观察结果：简洁、面向下一步决策 */
   output: string
   /** 给前端渲染的结构化数据（diff、封面图、计划等） */

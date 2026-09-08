@@ -6,9 +6,11 @@ import { z } from 'zod'
 import {
   getUploadsRootDirectory,
   MANAGED_AGENT_ATTACHMENT_PREFIX,
+  readAuthorizedAgentAttachment,
   resolveManagedAttachmentPath,
 } from '../../agent-attachment-storage.js'
 import { extractFileText } from '../../file-extract.js'
+import { getPublicHttpBytes } from '../../public-http.js'
 import { prisma } from '../../prisma.js'
 import { describeImageWithVision } from '../../vision-service.js'
 import { defineTool } from './types.js'
@@ -31,48 +33,12 @@ const EXT_TO_MIME: Record<string, string> = {
   webp: 'image/webp',
 }
 
-const MIME_ALLOWED = new Set(Object.values(EXT_TO_MIME))
 const MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024
 /** 外网下载时限：生图 CDN 跨境较慢（实测 2MB+ 需 ~20s），放宽到 60s */
 const REMOTE_FETCH_TIMEOUT_MS = 60000
-const REMOTE_FETCH_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-
-/** 外网图片 URL 安全校验：仅 https、禁止 IP/localhost/内网段（防 SSRF 打云元数据/内网探测） */
-function isSafeRemoteImageUrl(url: string): boolean {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return false
-  }
-  if (parsed.protocol !== 'https:') {
-    return false
-  }
-  const host = parsed.hostname.toLowerCase()
-  if (!host || host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) {
-    return false
-  }
-  // IPv4 字面量
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
-    return false
-  }
-  // IPv6 字面量（hostname 含冒号）
-  if (host.includes(':')) {
-    return false
-  }
-  if (/^(10\.|192\.168\.|127\.|0\.|169\.254\.)/.test(host)) {
-    return false
-  }
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
-    return false
-  }
-  return true
-}
-
 /** 魔数嗅探：Content-Type/扩展名都不可靠时的兜底格式判定 */
 function sniffImageMime(buffer: Buffer): string | null {
-  if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+  if (buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]))) {
     return 'image/png'
   }
   if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
@@ -87,50 +53,20 @@ function sniffImageMime(buffer: Buffer): string | null {
 /** 下载外网图片：禁跳转、限时限体积、仅放行 png/jpeg/webp */
 async function downloadRemoteImage(
   url: string,
+  signal: AbortSignal,
 ): Promise<{ buffer: Buffer; mime: string } | null> {
-  if (!isSafeRemoteImageUrl(url)) {
-    return null
-  }
-
-  let response: Response
+  signal.throwIfAborted()
   try {
-    response = await fetch(url, {
-      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
-      headers: { 'user-agent': REMOTE_FETCH_USER_AGENT },
-      redirect: 'manual',
+    const { bytes } = await getPublicHttpBytes(url, {
+      signal, timeoutMs: REMOTE_FETCH_TIMEOUT_MS, maxBytes: MAX_REMOTE_IMAGE_BYTES,
     })
+    // Neither a URL extension nor a remote Content-Type proves these are image bytes.
+    const mime = sniffImageMime(bytes)
+    return mime ? { buffer: bytes, mime } : null
   } catch {
+    signal.throwIfAborted()
     return null
   }
-
-  if (!response.ok) {
-    return null
-  }
-
-  const declaredLength = Number(response.headers.get('content-length') ?? 0)
-  if (declaredLength > MAX_REMOTE_IMAGE_BYTES) {
-    return null
-  }
-
-  const contentType = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
-  const extMime = EXT_TO_MIME[(path.extname(new URL(url).pathname).slice(1) || '').toLowerCase()]
-
-  const body = await response.arrayBuffer()
-  if (!body.byteLength || body.byteLength > MAX_REMOTE_IMAGE_BYTES) {
-    return null
-  }
-  const buffer = Buffer.from(body)
-
-  // 格式判定优先级：可信 Content-Type > 魔数嗅探 > 扩展名
-  const mime = MIME_ALLOWED.has(contentType)
-    ? contentType
-    : (sniffImageMime(buffer) ?? extMime)
-
-  if (!mime || !MIME_ALLOWED.has(mime)) {
-    return null
-  }
-
-  return { buffer, mime }
 }
 
 /** URL → 磁盘绝对路径：仅放行本站附件与封面候选两个托管前缀（防 SSRF/越权读盘） */
@@ -172,6 +108,7 @@ export const viewImageTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
+    ctx.signal.throwIfAborted()
     let buffer: Buffer | null = null
     let mime: string | undefined
     // display 用真实图片地址：入参可能是 coverAssetId（UUID），直接展示会 404 破图
@@ -179,7 +116,7 @@ export const viewImageTool = defineTool({
 
     if (args.url.startsWith('http://') || args.url.startsWith('https://')) {
       // 外网图片（历史 AI 生图直存的远程封面等）：安全校验后下载
-      const remote = await downloadRemoteImage(args.url)
+      const remote = await downloadRemoteImage(args.url, ctx.signal)
       if (!remote) {
         return {
           output:
@@ -210,10 +147,14 @@ export const viewImageTool = defineTool({
         }
       }
 
-      try {
-        buffer = await readFile(diskPath)
-      } catch {
-        return { output: 'view_image 失败：图片文件不存在或已失效，请作者重新发送附件。' }
+      if (displayUrl.startsWith(MANAGED_AGENT_ATTACHMENT_PREFIX)) {
+        buffer = await readAuthorizedAgentAttachment(displayUrl, ctx.userId)
+      } else {
+        try {
+          buffer = await readFile(diskPath)
+        } catch {
+          return { output: 'view_image 失败：图片文件不存在或已失效，请作者重新发送附件。' }
+        }
       }
 
       mime = EXT_TO_MIME[(path.extname(diskPath).slice(1) || '').toLowerCase()]
@@ -223,11 +164,13 @@ export const viewImageTool = defineTool({
       }
     }
 
+    ctx.signal.throwIfAborted()
     try {
       const description = await describeImageWithVision(
         { buffer, mime },
         args.focus?.trim() ||
           '请详细描述这张图片的内容：主体、场景、文字（如有，逐字列出）、构图与风格，供网文写作与封面校验参考。',
+        { userId: ctx.userId, runId: ctx.runId, signal: ctx.signal },
       )
 
       return {
@@ -264,7 +207,7 @@ export const readFileTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(_ctx, args) {
+  async execute(ctx, args) {
     const diskPath = resolveManagedAttachmentPath(args.url)
 
     if (!diskPath) {
@@ -273,12 +216,7 @@ export const readFileTool = defineTool({
       }
     }
 
-    let buffer: Buffer
-    try {
-      buffer = await readFile(diskPath)
-    } catch {
-      return { output: 'read_file 失败：文件不存在或已失效，请作者重新发送。' }
-    }
+    const buffer = await readAuthorizedAgentAttachment(args.url, ctx.userId)
 
     try {
       const result = await extractFileText(buffer, path.basename(diskPath), args.offset ?? 0)

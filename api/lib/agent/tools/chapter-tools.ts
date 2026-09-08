@@ -11,6 +11,9 @@ import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { resolveAgentChapterVolumeId } from './chapter-placement.js'
 import { recordStoryCompilerWrite } from '../story-compiler.js'
 import { assertCraftOutputSafe } from '../craft-library.js'
+import { executeDurableChapter } from './durable-chapter.js'
+import { executeDurableCreate } from './durable-create.js'
+import { chapterWriteArguments, chapterAppendArguments, chapterEditArguments } from './chapter-arguments.js'
 
 /**
  * 章节写工具集（自 write-tools.ts 模块级拆分而来，工具定义逐字保留）：
@@ -32,7 +35,7 @@ function resolveChapterId(ctx: ToolContext, chapterId: string | undefined): stri
   if (trimmed) {
     return trimmed
   }
-  return getLastTouchedChapter(ctx.runId) ?? ctx.chapterId
+  return ctx.durableContent?.chapterId ?? getLastTouchedChapter(ctx.runId) ?? ctx.chapterId
 }
 
 const MISSING_CHAPTER_HINT =
@@ -187,12 +190,21 @@ export const chapterCreateTool = defineTool({
   }),
   permission: WRITE_PERMISSION,
   readOnly: false,
-  async execute(ctx, args) {
+  async execute(ctx, args): Promise<ToolResult> {
     const content = args.content ?? ''
-    if (isAgent2FeatureEnabled('craftLibrary', ctx.userId) && content.trim().length >= 80) {
+    if (!ctx.transaction && isAgent2FeatureEnabled('craftLibrary', ctx.userId) && content.trim().length >= 80) {
       await assertCraftOutputSafe({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, content })
     }
-    const alreadyCreatedId = getCreatedChapter(ctx.runId, args.title)
+    if (ctx.durableCreate) {
+      const captured = { ...ctx, protectedChapterIds: new Set(ctx.protectedChapterIds), toolAuthority: new Map(ctx.toolAuthority), durableCreate: { ...ctx.durableCreate, lease: { ...ctx.durableCreate.lease }, cursor: { ...ctx.durableCreate.cursor } } }
+      const normalize = (raw: unknown) => {
+        const parsed = chapterCreateTool.parameters.parse(raw)
+        return Object.fromEntries(Object.entries({ ...parsed, title: parsed.title.trim() }).filter(([, value]) => value !== undefined))
+      }
+      const effective = chapterCreateTool.parameters.parse(normalize(args))
+      return executeDurableCreate(captured, effective, normalize, tx => chapterCreateTool.execute({ ...captured, durableCreate: undefined, transaction: tx }, effective))
+    }
+    const alreadyCreatedId = ctx.transaction ? null : getCreatedChapter(ctx.runId, args.title)
     if (alreadyCreatedId) {
       const existing = await findOwnedChapter(ctx, alreadyCreatedId)
       if (existing) {
@@ -204,7 +216,7 @@ export const chapterCreateTool = defineTool({
       }
     }
 
-    const chapter = await prisma.$transaction(async (tx) => {
+    const create = async (tx: Prisma.TransactionClient) => {
       const volumeByOrder = args.volumeOrder !== undefined
         ? await tx.volume.findFirst({ where: { novelId: ctx.novelId, orderIndex: args.volumeOrder } })
         : null
@@ -249,14 +261,17 @@ export const chapterCreateTool = defineTool({
         where: { id: created.id },
         include: { volume: { select: { title: true, orderIndex: true } } },
       })
-    })
-    await recalcNovelStats(ctx.novelId)
-    recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
-    recordCreatedChapter(ctx.runId, chapter.title, chapter.id)
+    }
+    const chapter = ctx.transaction ? await create(ctx.transaction) : await prisma.$transaction(create)
+    await recalcNovelStats(ctx.novelId, ctx.transaction)
+    if (!ctx.transaction) {
+      recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
+      recordCreatedChapter(ctx.runId, chapter.title, chapter.id)
+    }
     if (content && isAgent2FeatureEnabled('memory2', ctx.userId)) {
       await enqueueChapterMemoryExtraction({
         novelId: ctx.novelId, chapterId: chapter.id, chapterRevision: chapter.revision, before: '', after: content,
-      })
+      }, ctx.transaction)
     }
     if (content && isAgent2FeatureEnabled('storyCompiler', ctx.userId)) {
       await recordStoryCompilerWrite({
@@ -266,11 +281,12 @@ export const chapterCreateTool = defineTool({
         chapterId: chapter.id,
         chapterOrderIndex: chapter.orderIndex,
         chapterRevision: chapter.revision,
-      })
+      }, ctx.transaction)
     }
 
     return {
       output: `已原子创建全书第 ${chapter.orderIndex} 章《${chapter.title}》，位于第 ${chapter.volume.orderIndex} 卷《${chapter.volume.title}》卷内第 ${chapter.orderInVolume} 章，chapterId=${chapter.id}${args.position || args.positionInVolume ? '，后续章节顺序已自动校正' : ''}${content ? `，写入 ${content.length} 字` : '（暂无正文）'}。创建已成功，后续必须复用该 chapterId，禁止重建同名章。`,
+      observedState: { kind: 'chapter', id: chapter.id, revision: chapter.revision },
       summary: `新建第 ${chapter.orderIndex} 章《${chapter.title}》 · ${chapter.volume.title}`,
       // 带正文创建时返回 chapterDiff（空基线→全绿新增），前端才能挂上绿增红减的审查条；空章节仍用 chapterRef
       display: content
@@ -296,10 +312,7 @@ export const chapterWriteTool = defineTool({
   title: '写入章节正文',
   description:
     '用新内容整体覆盖指定章节的正文。需要已存在的 chapterId（新章节请先 chapter_create）。覆盖前建议先 chapter_read 了解现有内容；如只是接着写请用 chapter_append。覆盖前必须确认该章节确实是作者所指：作者按「第N章」指称时，若该排位章节的标题序号对不上（作者删过章导致错位），不要覆盖，改用 chapter_create 传 position 在正确位置插入。',
-  parameters: z.object({
-    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认写入最近操作/当前正在编辑的章节'),
-    content: z.string().min(1).describe('完整的新正文'),
-  }),
+  parameters: chapterWriteArguments,
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
@@ -307,6 +320,7 @@ export const chapterWriteTool = defineTool({
     if (!chapterId) {
       return { output: MISSING_CHAPTER_HINT }
     }
+    if (ctx.durableContent) return executeDurableChapter(ctx, 'chapter_write', { ...args, chapterId })
     return writeChapterContent(ctx, chapterId, () => args.content, '覆盖写入', args.content)
   },
 })
@@ -315,10 +329,7 @@ export const chapterAppendTool = defineTool({
   name: 'chapter_append',
   title: '追加章节正文',
   description: '把生成的内容追加到指定章节正文末尾（自动补一个空行分隔），用于续写场景。',
-  parameters: z.object({
-    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认追加到最近操作/当前正在编辑的章节'),
-    content: z.string().min(1).describe('要追加的内容'),
-  }),
+  parameters: chapterAppendArguments,
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
@@ -326,6 +337,7 @@ export const chapterAppendTool = defineTool({
     if (!chapterId) {
       return { output: MISSING_CHAPTER_HINT }
     }
+    if (ctx.durableContent) return executeDurableChapter(ctx, 'chapter_append', { ...args, chapterId })
     return writeChapterContent(
       ctx,
       chapterId,
@@ -341,16 +353,7 @@ export const chapterEditRangeTool = defineTool({
   title: '改写章节片段',
   description:
     '按原文锚点或字符区间替换章节正文的一个片段（选区级改写/润色），避免整章覆盖。推荐传 oldText（逐字拷贝要替换的原文片段，系统自动定位并计算下标，严禁自己数字数算下标）；start/end 字符下标（含头不含尾）仅在作者选区提供精确坐标时使用。',
-  parameters: z.object({
-    chapterId: z.string().optional().describe('目标章节 ID；缺省时默认操作最近操作/当前正在编辑的章节'),
-    oldText: z
-      .string()
-      .optional()
-      .describe('要替换的原文片段（从 chapter_read 返回的正文逐字拷贝，含标点换行）；系统自动定位，须在正文中唯一，不唯一就向两侧多拷几句'),
-    start: z.number().int().min(0).optional().describe('片段起始字符位置（仅作者选区给出精确坐标时传；常规改写用 oldText 定位）'),
-    end: z.number().int().min(0).optional().describe('片段结束字符位置（不含）'),
-    newText: z.string().describe('替换后的新文本'),
-  }),
+  parameters: chapterEditArguments,
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
@@ -358,6 +361,7 @@ export const chapterEditRangeTool = defineTool({
     if (!chapterId) {
       return { output: MISSING_CHAPTER_HINT }
     }
+    if (ctx.durableContent) return executeDurableChapter(ctx, 'chapter_edit_range', { ...args, chapterId })
     const chapter = await findOwnedChapter(ctx, chapterId)
 
     if (!chapter) {

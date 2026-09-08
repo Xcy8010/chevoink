@@ -19,13 +19,16 @@ export type FileExtractResult = {
 
 async function extractPdf(buffer: Buffer): Promise<string> {
   try {
-    const mod = await import('pdf-parse')
-    // pdf-parse 为 CJS 默认导出；动态 import 在 ESM 下挂 default
-    const pdfParse = (mod as { default?: unknown }).default as (
-      data: Buffer,
-    ) => Promise<{ text?: string }>
-    const parsed = await pdfParse(buffer)
-    return parsed.text ?? ''
+    const { PDFParse } = await import('pdf-parse')
+    const parser = new PDFParse({ data: buffer, isEvalSupported: false })
+    try {
+      // v2 adds page labels by default; they are not part of the uploaded text.
+      const parsed = await parser.getText({ pageJoiner: '' })
+      return parsed.text ?? ''
+    } finally {
+      // Release workers/document resources on successful and failed extraction.
+      await parser.destroy()
+    }
   } catch {
     throw new DataAccessError(
       502,

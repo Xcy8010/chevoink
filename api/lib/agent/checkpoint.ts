@@ -1,18 +1,21 @@
+import { z } from 'zod'
+
 /**
  * plan/18 P4 检查点式自动续跑：纯函数判定 + 预算 clamp。
  *
- * 设计对照 codex（openai/codex）长任务架构：codex 靠「run 内 auto-compaction + 无预算出口 +
- * 进度外部化」连跑数小时；其缺陷见 issue #31351（compaction 后丢状态重复同一计划 → 再 compaction
- * → 无限循环烧掉 30% 配额）——codex 没有 compaction 计数与进展检测。
- *
- * 本项目取两者之长：预算/轮次耗尽不直接终止，而是做「检查点评估」；全部用确定性信号判定，
+ * 预算/轮次耗尽不直接终止，而是做「检查点评估」；全部用确定性信号判定，
  * 满足则同 run 内压缩上下文 + 刷新预算片/轮次片继续跑；不满足走既有 wrap-up 收尾。
- * compaction 防 loop 专条 = 相邻两次压缩之间必须有真实写类进展（条件 b），否则禁止续跑。
+ * 29 R08：待办不是完成真源；相邻检查点须有真实写入或去重后的读取证据，否则禁止续跑。
  */
 
 export interface CheckpointEvaluation {
-  /** 当前未完成的待办数（0 = 任务已做完，无须续跑） */
+  /** 当前未完成的待办数；没有清单不构成任务已完成的证据。 */
   todoLeft: number
+  /** 执行循环尚未接受最终交付。显式 false 优先于遗留待办。 */
+  taskPending?: boolean
+  /** 本次运行已去重的有效只读观察数，不含失败/重复调用或模型叙述。 */
+  readProgress?: number
+  readBaseline?: number
   /** 本 checkpoint 区间内成功的写类工具次数（chapter_write/append/edit_range、plan_save、memory_save 等） */
   writeProgress: number
   /** 上一个检查点时的写类进展基线（区间增量 = writeProgress - writeBaseline） */
@@ -38,15 +41,37 @@ export const CHECKPOINT_BUDGET_SLICE = 2_000_000
 /** 每次续跑刷新的轮次片 */
 export const CHECKPOINT_TURN_SLICE = 50
 
+/** Internal metadata inside the existing run usage JSON, not a new UI/API field. */
+export const runCheckpointSchema = z.object({
+  version: z.literal(1), runStartedAt: z.number().int().positive(),
+  resumeCount: z.number().int().min(0).max(CHECKPOINT_MAX_RESUMES),
+  compactionCount: z.number().int().min(0).max(CHECKPOINT_MAX_COMPACTIONS),
+  maxTurns: z.number().int().positive(), tokenBudget: z.number().int().positive(),
+  writeProgress: z.number().int().nonnegative(), writeBaseline: z.number().int().nonnegative(),
+  readProgress: z.number().int().nonnegative(), readBaseline: z.number().int().nonnegative(),
+  progressSignatures: z.array(z.string()),
+  // Usage/currentTurn remain per-run for existing UI and accounting consumers.
+  // Only the budget guard includes preceding runs of the same explicit task.
+  inheritedTokens: z.number().int().nonnegative().default(0),
+  inheritedTurns: z.number().int().nonnegative().default(0),
+}).strict().refine(value => value.writeBaseline <= value.writeProgress && value.readBaseline <= value.readProgress)
+export type RunCheckpointState = z.infer<typeof runCheckpointSchema>
+
+export const savedRunUsageSchema = z.object({
+  promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative(),
+  checkpoint: runCheckpointSchema.optional(),
+}).refine(value => value.totalTokens >= value.promptTokens + value.completionTokens)
+
 export function evaluateCheckpoint(input: CheckpointEvaluation): { ok: boolean; reason: string } {
   if (input.usedTokens !== undefined && input.tokenCeiling !== undefined && input.usedTokens >= input.tokenCeiling) return { ok: false, reason: '已达总 token 硬顶' }
   const maxResumes = input.maxResumes ?? CHECKPOINT_MAX_RESUMES
   const maxCompactions = input.maxCompactions ?? CHECKPOINT_MAX_COMPACTIONS
-  // 条件 a：待办全部完成 = 任务做完，续跑没有意义
-  if (input.todoLeft <= 0) return { ok: false, reason: '待办已全部完成' }
-  // 条件 b（含 compaction 防 loop）：本区间内必须有真实写类进展，
-  // 否则「压缩 → 丢失进展记忆 → 重复同一计划 → 再压缩」的 codex #31351 死循环会在本项目复现
-  if (input.writeProgress <= input.writeBaseline) return { ok: false, reason: '本区间无新的写类进展' }
+  // 任务完成由执行循环决定；兼容未传 taskPending 的旧调用方。
+  if (!(input.taskPending ?? input.todoLeft > 0)) return { ok: false, reason: '任务已结束，无需续跑' }
+  // 新读取证据也可推进研究/检查任务，但重复观察、待办改名不能购买预算片。
+  if (input.writeProgress <= input.writeBaseline && (input.readProgress ?? 0) <= (input.readBaseline ?? 0)) {
+    return { ok: false, reason: '本区间无新的有效进展' }
+  }
   // 条件 c：续跑链与 compaction 次数硬上限
   if (input.resumeCount >= maxResumes) return { ok: false, reason: `续跑次数已达上限 ${maxResumes}` }
   if (input.compactionCount >= maxCompactions) return { ok: false, reason: `压缩次数已达上限 ${maxCompactions}` }

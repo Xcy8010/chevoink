@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { requestJson } from '@/app/api-client'
 import AppImage from '@/components/ui/AppImage'
 import Avatar from '@/features/community/components/Avatar'
+import { useToast } from '@/components/ui/toast-context'
 import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
@@ -84,6 +85,7 @@ const menuItemClass =
   'flex items-center justify-between gap-3 rounded-[10px] px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[#f4f4f2] hover:text-[var(--text-primary)] dark:hover:bg-[var(--surface-muted)]'
 
 export default function AccountLayout({ active, withSidebar = true, children }: Props) {
+  const toast = useToast()
   const user = useShellStore((state) => state.sessionUser)
   const setGuest = useShellStore((state) => state.setGuest)
   const navigate = useNavigate()
@@ -118,7 +120,8 @@ export default function AccountLayout({ active, withSidebar = true, children }: 
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
     } catch {
-      // 服务端退出失败也照清本地会话，避免卡在已失效登录态
+      toast.error('暂时无法确认退出登录，请稍后重试。')
+      return
     }
     setGuest()
     navigate('/login', { replace: true })

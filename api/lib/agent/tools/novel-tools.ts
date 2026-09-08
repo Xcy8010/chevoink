@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../../prisma.js'
 import { ALL_NOVEL_TAGS, MAX_NOVEL_TAGS } from '../../../../shared/contracts/novel-tags.js'
@@ -13,8 +14,8 @@ import { defineTool } from './types.js'
 const WRITE_PERMISSION = { plan: 'deny', build: 'allow', review: 'deny' } as const
 const DANGEROUS_PERMISSION = { plan: 'deny', build: 'ask', review: 'deny' } as const
 
-export async function recalcNovelStats(novelId: string) {
-  const chapters = await prisma.chapter.findMany({
+export async function recalcNovelStats(novelId: string, db: Prisma.TransactionClient = prisma) {
+  const chapters = await db.chapter.findMany({
     where: { novelId },
     orderBy: { orderIndex: 'asc' },
     select: { wordCount: true, title: true, status: true, publishedAt: true },
@@ -27,7 +28,7 @@ export async function recalcNovelStats(novelId: string) {
     .reverse()
     .find((chapter) => chapter.status === 'published' && chapter.publishedAt)
 
-  await prisma.novel.update({
+  await db.novel.update({
     where: { id: novelId },
     data: {
       wordCount,
@@ -93,16 +94,16 @@ export const novelRenameTool = defineTool({
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const novel = await prisma.novel.findFirst({
+    const novel = await (ctx.transaction ?? prisma).novel.findFirst({
       where: { id: ctx.novelId, authorId: ctx.userId },
       select: { title: true },
     })
 
     if (!novel) {
-      return { output: '未找到当前作品。' }
+      return { outcome: 'failed' as const, output: '未找到当前作品。' }
     }
 
-    await prisma.novel.update({
+    await (ctx.transaction ?? prisma).novel.update({
       where: { id: ctx.novelId },
       data: { title: args.title.trim(), displayTitle: args.title.trim() },
     })
@@ -126,17 +127,17 @@ export const novelUpdateMetaTool = defineTool({
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const novel = await prisma.novel.findFirst({
+    const novel = await (ctx.transaction ?? prisma).novel.findFirst({
       where: { id: ctx.novelId, authorId: ctx.userId },
       select: { summary: true, tagNames: true },
     })
 
     if (!novel) {
-      return { output: '未找到当前作品。' }
+      return { outcome: 'failed' as const, output: '未找到当前作品。' }
     }
 
     if (args.summary === undefined && args.tags === undefined) {
-      return { output: '没有提供任何要修改的字段（summary / tags）。' }
+      return { outcome: 'failed' as const, output: '没有提供任何要修改的字段（summary / tags）。' }
     }
 
     // 标签合法性校验：只接受站内标签库里的标签，越界的挑出来提示模型改用库内标签
@@ -149,12 +150,13 @@ export const novelUpdateMetaTool = defineTool({
 
       if (nextTags.length === 0 && rejectedTags.length > 0) {
         return {
+          outcome: 'failed' as const,
           output: `标签未保存：「${rejectedTags.join('、')}」不在站内标签库中。请从上下文给出的标签库里重新选择（如：玄幻、都市、系统、重生、爽文……）。`,
         }
       }
     }
 
-    await prisma.novel.update({
+    await (ctx.transaction ?? prisma).novel.update({
       where: { id: ctx.novelId },
       data: {
         summary: args.summary?.trim() || undefined,
@@ -189,19 +191,19 @@ export const coverPromptSetTool = defineTool({
   permission: WRITE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const novel = await prisma.novel.findFirst({
+    const novel = await (ctx.transaction ?? prisma).novel.findFirst({
       where: { id: ctx.novelId, authorId: ctx.userId },
       select: { coverPrompt: true, title: true, displayTitle: true },
     })
 
     if (!novel) {
-      return { output: '未找到当前作品。' }
+      return { outcome: 'failed' as const, output: '未找到当前作品。' }
     }
 
     // 服务端强制保险：与 cover_generate 同一口径，落库的提示词必须要求封面带书名标题文字
     const finalPrompt = enforceCoverTitleInPrompt(args.prompt.trim(), novel.title, novel.displayTitle)
 
-    await prisma.novel.update({ where: { id: ctx.novelId }, data: { coverPrompt: finalPrompt } })
+    await (ctx.transaction ?? prisma).novel.update({ where: { id: ctx.novelId }, data: { coverPrompt: finalPrompt } })
 
     return {
       output: '封面提示词已保存到作品设置。',

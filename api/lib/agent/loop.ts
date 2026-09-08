@@ -33,16 +33,19 @@ import {
   rejectAllApprovals,
   waitForApproval,
 } from './permissions.js'
-import { getToolByName, toOpenAITools } from './tools/registry.js'
-import { coerceToolArgumentEnvelope } from './tools/argument-coercion.js'
+import { toOpenAITools } from './tools/registry.js'
+import { intersectToolAuthority, snapshotToolAuthority, restrictToolsToTask } from './tool-authority.js'
+import { assertTaskAuthorizationRuntimeReady } from './task-authorization.js'
+import { assertLegacyRuntimeCompatible, startLegacyRuntimeRun } from './runtime-identity.js'
+import { normalizeToolInput, validateToolInput } from './tools/input-validation.js'
 import { loadSessionTodoItems, renderTodoItems } from './tools/todo-tools.js'
-import { jsonrepair } from 'jsonrepair'
+import { parseToolArgsTolerant } from './tool-argument-parser.js'
 import { getTaskRunIds } from './task-lineage.js'
 import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
 import { toolSignature, ToolAdmissionGuard } from './tool-signature.js'
-import { hasDurableProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
+import { hasDurableProgress, hasReadProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
 import { createRepeatDetector } from './repeat-detect.js'
 import {
   CHECKPOINT_BUDGET_SLICE,
@@ -50,9 +53,11 @@ import {
   CHECKPOINT_TURN_SLICE,
   evaluateCheckpoint,
   resolveRunTokenBudget,
+  savedRunUsageSchema,
+  type RunCheckpointState,
 } from './checkpoint.js'
 import { autoNameSession } from './session-title.js'
-import { buildTaskSpec } from './task-spec.js'
+import { buildTaskSpec, narrowLegacyResearchTask } from './task-spec.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
 import {
   collapseEarlyToolRounds,
@@ -72,6 +77,8 @@ import {
  */
 
 export type ExecuteAgentRunParams = {
+  /** Server-created original message, committed with new-run admission. */
+  admittedMessageId?: string
   runId: string
   sessionId: string
   userId: string
@@ -87,6 +94,8 @@ export type ExecuteAgentRunParams = {
   qualityMode?: StoryCompilerMode
   /** 从 paused 恢复：历史含本 run 已持久化的消息，prompt 换成续跑指令 */
   resume?: boolean
+  /** Server-owned journal high water mark, never accepted from model/user input. */
+  eventStartSeq?: number
   modelTier?: CreditModelTier
   customModelId?: string | null
   reasoningEffort?: import('../../../shared/contracts/index.js').ModelReasoningEffort
@@ -97,10 +106,19 @@ export type ExecuteAgentRunParams = {
 
 const emptyUsage = (): AgentTokenUsage => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
 
-function addUsage(total: AgentTokenUsage, delta: AgentTokenUsage) {
-  total.promptTokens += delta.promptTokens
-  total.completionTokens += delta.completionTokens
-  total.totalTokens += delta.totalTokens
+/** One tracker per request: retain reported partial usage on interruption,
+ * then include only the remaining delta when the complete result arrives. */
+function trackRequestUsage(total: AgentTokenUsage) {
+  let observed = emptyUsage()
+  return (value: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null }) => {
+    const promptTokens = Math.max(observed.promptTokens, value.promptTokens ?? 0)
+    const completionTokens = Math.max(observed.completionTokens, value.completionTokens ?? 0)
+    const totalTokens = Math.max(observed.totalTokens, value.totalTokens ?? 0, promptTokens + completionTokens)
+    total.promptTokens += promptTokens - observed.promptTokens
+    total.completionTokens += completionTokens - observed.completionTokens
+    total.totalTokens += totalTokens - observed.totalTokens
+    observed = { promptTokens, completionTokens, totalTokens }
+  }
 }
 
 function isAbortError(error: unknown): boolean {
@@ -195,312 +213,7 @@ type ToolCallOutcome = {
   extraParts?: AgentMessagePart[]
 }
 
-/** 容错 JSON 解析：模型生成长正文参数时最常见的三类毛病可自动修复，
- * 避免一整章内容因一个未转义换行符就全部作废重写：
- * 1. 字符串内部出现未转义的控制字符（真换行/制表符）
- * 2. 参数被 ```json 围栏或前后多余文本包裹
- * 3. 输出被 length 截断导致字符串/花括号未闭合 */
-export function parseToolArgsTolerant(raw: string, allowTruncation = true): unknown {
-  // Normal calls stay linear and byte-for-byte intact. Repair full syntax before any legacy truncation fallback.
-  try { return JSON.parse(raw) } catch { /* syntax repair below */ }
-  if (!allowTruncation) {
-    // Syntax repair may add commas/escapes, but cannot invent the end of an execution payload.
-    const stack: string[] = []
-    let quote = ''
-    for (let index = 0; index < raw.length; index++) {
-      const char = raw[index]
-      if (quote) {
-        if (char === '\\') index++
-        else if (char === quote) quote = ''
-      } else if (char === '"' || char === "'") quote = char
-      else if (char === '{' || char === '[') stack.push(char === '{' ? '}' : ']')
-      else if (char === '}' || char === ']') {
-        if (stack.pop() !== char) throw new Error('工具参数结构不完整')
-      }
-    }
-    if (quote || stack.length) throw new Error('工具参数结构不完整')
-  }
-  if (/[}\]]\s*$/.test(raw)) {
-    try { return JSON.parse(jsonrepair(raw)) } catch { /* legacy compatibility below */ }
-  }
-  const attempts: string[] = [raw]
-
-  // 剥离 Markdown 围栏与前后多余文本：取第一个 { 到最后一个 } 之间
-  const first = raw.indexOf('{')
-  const last = raw.lastIndexOf('}')
-  if (first > 0 || (first >= 0 && last >= 0 && last < raw.length - 1)) {
-    attempts.push(raw.slice(first, last + 1))
-  }
-
-  // 转义字符串内部的裸控制字符（逐字符扫描，只在引号内替换，不破坏结构性空白）
-  const escapeControlChars = (input: string): string => {
-    let out = ''
-    let inString = false
-    for (let i = 0; i < input.length; i++) {
-      const char = input[i]
-      if (inString) {
-        if (char === '\\' && i + 1 < input.length) {
-          out += char + input[i + 1]
-          i += 1
-          continue
-        }
-        if (char === '"') {
-          inString = false
-          out += char
-          continue
-        }
-        if (char === '\n') {
-          out += '\\n'
-          continue
-        }
-        if (char === '\r') {
-          out += '\\r'
-          continue
-        }
-        if (char === '\t') {
-          out += '\\t'
-          continue
-        }
-        out += char
-        continue
-      }
-      if (char === '"') {
-        inString = true
-      }
-      out += char
-    }
-    return out
-  }
-
-  for (const candidate of [...attempts]) {
-    attempts.push(escapeControlChars(candidate))
-  }
-
-  // 截断修复：扫描未闭合的字符串与括号栈，补齐后再试
-  const repairTruncated = (input: string): string => {
-    let inString = false
-    const stack: string[] = []
-    for (let i = 0; i < input.length; i++) {
-      const char = input[i]
-      if (inString) {
-        if (char === '\\') {
-          i += 1
-        } else if (char === '"') {
-          inString = false
-        }
-        continue
-      }
-      if (char === '"') {
-        inString = true
-      } else if (char === '{' || char === '[') {
-        stack.push(char === '{' ? '}' : ']')
-      } else if (char === '}' || char === ']') {
-        stack.pop()
-      }
-    }
-    let repaired = input
-    if (inString) {
-      repaired += '"'
-    }
-    while (stack.length > 0) {
-      repaired += stack.pop()
-    }
-    return repaired
-  }
-
-  // 深度截断修复：朴素补括号救不了截断留下的悬垂逗号/冒号/悬垂键/尾部孤反斜杠
-  // （如 {...,"mode": 或 {"a":"x\ 截断），这些残尾会让补完后的 JSON 依旧非法
-  const repairTruncatedDeep = (input: string): string => {
-    let inString = false
-    let stringStart = -1
-    let prevSignificant = ''
-    // 对象上下文里「已闭合但还没等到冒号/值」的键起点：EOF 时仍是悬垂键则连键一起切掉
-    let pendingKeyStart: number | null = null
-    const stack: string[] = []
-    for (let i = 0; i < input.length; i += 1) {
-      const char = input[i]
-      if (inString) {
-        if (char === '\\') {
-          i += 1
-        } else if (char === '"') {
-          inString = false
-          prevSignificant = '"'
-        }
-        continue
-      }
-      if (char === '"') {
-        inString = true
-        stringStart = i
-        pendingKeyStart = stack[stack.length - 1] === '}' && (prevSignificant === '{' || prevSignificant === ',') ? i : null
-      } else if (char === '{' || char === '[') {
-        stack.push(char === '{' ? '}' : ']')
-        prevSignificant = char
-        pendingKeyStart = null
-      } else if (char === '}' || char === ']') {
-        stack.pop()
-        prevSignificant = char
-        pendingKeyStart = null
-      } else if (char === ':') {
-        prevSignificant = char
-        // 冒号坐实了前面的字符串是键：保留 pending，等值出现再清
-      } else if (char === ',') {
-        prevSignificant = char
-        pendingKeyStart = null
-      } else if (char.trim()) {
-        prevSignificant = char
-        pendingKeyStart = null
-      }
-    }
-    let body = input
-    const trailingBackslashes = body.match(/\\+$/)?.[0].length ?? 0
-    if (inString) {
-      // 尾部孤反斜杠会把补上的闭引号转义掉，先切掉
-      if (trailingBackslashes % 2 === 1) body = body.slice(0, -1)
-      const isKey = prevSignificant === '{' || prevSignificant === ','
-      if (isKey) {
-        body = body.slice(0, stringStart)
-      } else {
-        body += '"'
-      }
-    } else if (trailingBackslashes % 2 === 1) {
-      body = body.slice(0, -1)
-    }
-    body = body.replace(/[\s,:]+$/, '')
-    if (!inString && pendingKeyStart != null) {
-      body = body.slice(0, pendingKeyStart).replace(/[\s,]+$/, '')
-    }
-    const closers: string[] = []
-    let inStr = false
-    for (let i = 0; i < body.length; i += 1) {
-      const char = body[i]
-      if (inStr) {
-        if (char === '\\') i += 1
-        else if (char === '"') inStr = false
-        continue
-      }
-      if (char === '"') inStr = true
-      else if (char === '{' || char === '[') closers.push(char === '{' ? '}' : ']')
-      else if (char === '}' || char === ']') closers.pop()
-    }
-    let repaired = body
-    while (closers.length > 0) repaired += closers.pop()
-    return repaired
-  }
-
-  // 单引号字符串修复：模型常见用单引号包字符串（JSON 不认单引号），逐字符把不在双引号内的
-  // 单引号当成字符串定界符换成双引号；双引号内内容原样保留，避免误伤；“撇号”位于双引号内会被
-  // 正常跳过。这条只是候选之一，parse 失败时继续尝试其它候选，不会破坏原 JSON。
-  const repairSingleQuoteStrings = (input: string): string => {
-    let out = ''
-    let inDouble = false
-    let inSingle = false
-    let i = 0
-    while (i < input.length) {
-      const char = input[i]
-      if (inDouble) {
-        out += char
-        if (char === '\\') {
-          out += input[i + 1] ?? ''
-          i += 2
-          continue
-        }
-        if (char === '"') inDouble = false
-        i += 1
-        continue
-      }
-      if (inSingle) {
-        if (char === '\\') {
-          out += '\\\\'
-          i += 1
-          continue
-        }
-        if (char === "'") {
-          out += '"'
-          inSingle = false
-          i += 1
-          continue
-        }
-        if (char === '"') {
-          out += '\\"'
-          i += 1
-          continue
-        }
-        if (char === '\n') {
-          out += '\\n'
-          i += 1
-          continue
-        }
-        if (char === '\r') {
-          out += '\\r'
-          i += 1
-          continue
-        }
-        if (char === '\t') {
-          out += '\\t'
-          i += 1
-          continue
-        }
-        out += char
-        i += 1
-        continue
-      }
-      if (char === '"') {
-        inDouble = true
-        out += char
-        i += 1
-        continue
-      }
-      if (char === "'") {
-        inSingle = true
-        out += '"'
-        i += 1
-        continue
-      }
-      out += char
-      i += 1
-    }
-    return out
-  }
-
-  for (const candidate of [...attempts]) {
-    attempts.push(repairTruncated(candidate))
-  }
-
-  for (const candidate of [...attempts]) {
-    attempts.push(repairSingleQuoteStrings(candidate))
-  }
-
-  // 复合损伤（字符串内裸换行 + 截断未闭括号同时存在）在长参数场景很常见，
-  // 上面的单项修复候选都只治一种，这里补两个顺序组合候选兜底
-  for (const candidate of [...attempts]) {
-    attempts.push(repairTruncated(escapeControlChars(candidate)))
-    attempts.push(escapeControlChars(repairTruncated(candidate)))
-  }
-
-  for (const candidate of attempts) {
-    try {
-      return JSON.parse(candidate)
-    } catch {
-      // 继续下一个候选
-    }
-  }
-
-  // 二遍兜底：一遍候选全失败才进深度修复（正常路径零开销），
-  // 专救截断残尾（悬垂逗号/冒号/悬垂键/孤反斜杠）这类朴素补括号救不了的损伤
-  for (const candidate of [...attempts]) {
-    attempts.push(repairTruncatedDeep(candidate))
-  }
-
-  for (const candidate of attempts) {
-    try {
-      return JSON.parse(candidate)
-    } catch {
-      // 继续下一个候选
-    }
-  }
-
-  throw new Error('参数无法解析为 JSON')
-}
+export { parseToolArgsTolerant } from './tool-argument-parser.js'
 
 /** 从尚未闭合的工具 JSON 中读取已生成的字符串字段，用于编辑器实时预览。 */
 function readStreamingJsonString(raw: string, key: string): string | undefined {
@@ -557,7 +270,10 @@ export async function handleToolCall(
   subagent?: { callId: string },
 ): Promise<ToolCallOutcome> {
   const startedAt = Date.now()
-  const tool = tools.find((candidate) => candidate.name === call.name) ?? getToolByName(call.name)
+  const admitted = tools.find((candidate) => candidate.name === call.name)
+  const tool = admitted && ctx.toolAuthority
+    ? intersectToolAuthority([admitted], ctx.mode, ctx.toolAuthority)[0]
+    : admitted
   // 子 Agent 归属标记：随事件与持久化分部下发，前端据此把卡片分组到所属子 Agent 容器内
   const subagentMark = subagent ? { subagentCallId: subagent.callId } : {}
   const basePart = {
@@ -566,6 +282,17 @@ export async function handleToolCall(
     toolName: call.name,
     title: tool?.title ?? call.name,
     ...subagentMark,
+  }
+
+  // Authorization precedes parsing/coercion/approval. Registry presence is not a grant.
+  if (!tool) {
+    const summary = '当前任务未授权此工具'
+    bus.emit({ type: 'tool.call', messageId, callId: call.id, toolName: call.name, title: basePart.title, args: null, autoApproved: false, ...subagentMark })
+    bus.emit({ type: 'tool.result', messageId, callId: call.id, toolName: call.name, ok: false, summary, durationMs: Date.now() - startedAt, ...subagentMark })
+    return {
+      observation: `工具 ${call.name} 不在本次执行的授权集合中，未执行。只能使用当前允许的工具；不得换用隐藏工具、子任务或历史指令绕过限制。需要额外权限时向用户说明。`,
+      part: { ...basePart, args: null, status: 'denied', summary },
+    }
   }
 
   // 参数解析与校验：先容错修复常见格式毛病，实在修不好再作为观察回填让模型自行修正
@@ -595,9 +322,14 @@ export async function handleToolCall(
 
   // 先统一修复兼容网关常见的二次包装、字符串化 JSON、参数列表与顶层 null，
   // 再交给复杂工具做字段级语义归一化。
-  parsedArgs = coerceToolArgumentEnvelope(parsedArgs)
-  if (tool?.coerceArgs) {
-    parsedArgs = tool.coerceArgs(parsedArgs)
+  let coercionFailed = false
+  try {
+    parsedArgs = normalizeToolInput(tool, parsedArgs)
+  } catch {
+    // A normalizer failure is a rejected invocation, not an unclosed running card.
+    // Do not expose exception text (which may include private payloads).
+    coercionFailed = true
+    parsedArgs = null
   }
 
   // 审批预判（与下方执行前判定同一公式）：提前给事件流打标，供前端与审计识别自动批准的工具调用
@@ -623,11 +355,11 @@ export async function handleToolCall(
     return { observation, part: { ...basePart, args: parsedArgs, status, summary } }
   }
 
-  if (!tool) {
-    return fail('未知工具', `工具 ${call.name} 不存在。可用工具见 tools 列表，请换用正确的工具。`, 'failed')
-  }
-
   const permission = tool.permission[ctx.mode]
+
+  if (coercionFailed) {
+    return fail('参数归一化失败', `工具 ${call.name} 的参数无法安全归一化，本次未执行。请按已公布的参数结构修正，不要重复发送同一参数。`, 'failed')
+  }
 
   if (permission === 'deny') {
     return fail(
@@ -637,7 +369,7 @@ export async function handleToolCall(
     )
   }
 
-  const validated = tool.parameters.safeParse(parsedArgs)
+  const validated = validateToolInput(tool, parsedArgs)
 
   if (!validated.success) {
     const issues = validated.error.issues
@@ -695,6 +427,7 @@ export async function handleToolCall(
 
   try {
     const result = await tool.execute(ctx, validated.data)
+    if (result.outcome === 'failed') return fail(result.summary ?? '执行未完成', wrapToolOutput(tool.name, result.output), 'failed')
     const durationMs = Date.now() - startedAt
     const summary = result.summary ?? `${tool.title}完成`
 
@@ -725,13 +458,17 @@ export async function handleToolCall(
     }
   } catch (error) {
     if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
+    if (error instanceof DataAccessError && error.code.startsWith('WEB_READ_')) {
+      // Access/quality refusals are not successful reads or permission to bypass the gate.
+      return fail('网页读取未完成', error.message, 'failed')
+    }
     // 错误即观察：不中断 run，把错误回填给模型自行重试或换路
     const message = error instanceof Error ? error.message : String(error)
     return fail('执行失败', `工具 ${call.name} 执行失败：${message}。可以调整参数重试，或换用其他工具。`, 'failed')
   }
 }
 
-async function finalizeRun(
+async function finalizeLegacyRun(
   runId: string,
   bus: RunEventBus,
   status: 'succeeded' | 'failed' | 'cancelled' | 'paused',
@@ -739,52 +476,68 @@ async function finalizeRun(
   currentTurn: number,
   outputSummary: string,
   errorMessage?: string,
+  allowContextSideEffects = true,
+  checkpoint?: RunCheckpointState,
 ) {
   // 事件协议用 succeeded，DB 枚举用 completed
   const dbStatus = status === 'succeeded' ? 'completed' : status
 
-  const finalizedRun = await prisma.agentRun
-    .update({
-      where: { id: runId },
+  const terminalBody = status === 'paused'
+    ? { type: 'run.paused' as const, reason: 'user_stop' as const }
+    : { type: 'run.finished' as const, status, usage, artifacts: [], outputSummary }
+  const committed = await bus.commitTerminal(terminalBody, tx => tx.agentRun.update({
+      where: { id: runId, runtimeProtocolVersion: 0, taskRootId: null },
       data: {
         status: dbStatus,
         outputSummary: outputSummary || null,
         errorMessage: errorMessage ?? null,
-        usage: usage as unknown as object,
+        usage: { ...usage, ...(checkpoint ? { checkpoint } : {}) },
         currentTurn,
         finishedAt: status === 'paused' ? null : new Date(),
       },
-      select: { userId: true, sessionId: true, novelId: true },
-    })
-    .catch((error) => {
-      console.error('[agent-loop] run 状态落库失败', runId, error)
+      select: { userId: true, sessionId: true, novelId: true, taskSpec: true },
+    }))
+    .catch(() => {
+      console.error('[agent-loop] run 状态落库未确认', { runId, requestedStatus: dbStatus })
       return null
     })
+  const finalizedRun = committed?.result
 
-  if (status !== 'paused' && finalizedRun) {
+  if (status !== 'paused' && finalizedRun && allowContextSideEffects) {
     await Promise.all([
       compactSessionContext(finalizedRun.userId, finalizedRun.sessionId, false).catch((error) => {
         console.error('[agent-loop] 对话结束后自动整理上下文失败', runId, error)
       }),
-      syncNovelMemoryProjection(finalizedRun.userId, finalizedRun.novelId).catch((error) => {
+      taskSpecSchema.safeParse(finalizedRun.taskSpec).data?.intent === 'research_analysis' ? Promise.resolve() : syncNovelMemoryProjection(finalizedRun.userId, finalizedRun.novelId).catch((error) => {
         console.error('[agent-loop] 对话结束后自动更新作品记忆失败', runId, error)
       }),
     ])
   }
 
-  if (status === 'paused') {
-    bus.emit({ type: 'run.paused', reason: 'user_stop' })
+  if (!finalizedRun) {
+    // R01/R09: a DB failure is not proof of either completion or rollback.
+    // Preserve saved messages, stop the local executor, and report uncertainty;
+    // do not fabricate run.finished or retry finalization as a different status.
+    bus.emit({ type: 'error', code: 'run_status_unconfirmed', recoverable: false,
+      message: '任务执行已停止，但最终状态尚未确认。已保存内容保留，请稍后刷新核对；不要重复发送同一任务。' })
   } else {
-    bus.emit({ type: 'run.finished', status, usage, artifacts: [], outputSummary })
+    committed?.publish()
   }
 
   rejectAllApprovals(runId)
   cancelAllQuestions(runId)
-  if (status !== 'paused') {
+  if (finalizedRun && status !== 'paused') {
     clearRunBaselines(runId)
   }
   deregisterActiveRun(runId)
-  await disposeRunEventBus(runId)
+  try {
+    await disposeRunEventBus(runId)
+  } catch {
+    // A failed notification journal is not a second business failure. The bus
+    // retains its pending batch for recovery; do not re-enter finalize or emit
+    // another terminal event on the now-sealed bus.
+    console.error('[agent-loop] 终态事件仍待持久化', { runId, status })
+  }
 }
 
 /** 启动（或续跑）一次 Agent Loop run：异步执行，调用方不等待 */
@@ -792,7 +545,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const runId = params.runId
   const agent: AgentDefinition = getAgentDefinition(params.agentType ?? 'orchestrator')
   const controller = new AbortController()
-  const bus = createRunEventBus(runId)
+  const bus = createRunEventBus(runId, params.eventStartSeq ?? 0)
 
   registerActiveRun(runId, { controller, bus, sessionId: params.sessionId, userId: params.userId })
 
@@ -802,7 +555,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   // —— plan/18 防护状态（全部 run 级内存滑窗，不跨 run）——
   // P2 墙钟：总帽防无限烧 credits；空转帽防低速空转。审批/提问等待发生在工具执行内部，
   // 工具返回即刷新活动钟，天然排除挂起期误杀
-  const runStartedAt = Date.now()
+  let runStartedAt = Date.now()
   let lastActivityAt = Date.now()
   // P0 重复签名滑窗：只记成功执行；失败后同签名正当重试不计次
   const admission = new ToolAdmissionGuard()
@@ -819,6 +572,41 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   let compactionCount = 0
   let writeProgressCount = 0
   let checkpointWriteBaseline = 0
+  let readProgressCount = 0
+  let checkpointReadBaseline = 0
+  let inheritedTokens = 0
+  let inheritedTurns = 0
+  const taskTokens = () => usage.totalTokens + inheritedTokens
+  let maxTurns = env.agentMaxTurns
+  let runTokenBudget = resolveRunTokenBudget(params.tokenBudget, env.agentRunTokenBudget, env.agentRunTokenBudgetCeiling)
+  let checkpointRestored = !params.resume
+  const checkpointSnapshot = (): RunCheckpointState => ({
+    version: 1, runStartedAt, resumeCount, compactionCount, maxTurns, tokenBudget: runTokenBudget,
+    writeProgress: writeProgressCount, writeBaseline: checkpointWriteBaseline,
+    readProgress: readProgressCount, readBaseline: checkpointReadBaseline,
+    progressSignatures: [...progressSignatures],
+    inheritedTokens, inheritedTurns,
+  })
+  const persistCheckpoint = () => prisma.agentRun.update({
+    where: { id: runId, userId: params.userId, runtimeProtocolVersion: 0, taskRootId: null },
+    data: { currentTurn: turn, usage: { ...usage, checkpoint: checkpointSnapshot() } },
+  })
+  const finalizeRun = (...args: Parameters<typeof finalizeLegacyRun>) => {
+    args[8] = checkpointSnapshot()
+    return finalizeLegacyRun(...args)
+  }
+  const restoreCheckpointLimits = (checkpoint: RunCheckpointState) => {
+    runStartedAt = Math.min(runStartedAt, checkpoint.runStartedAt)
+    resumeCount = checkpoint.resumeCount
+    compactionCount = checkpoint.compactionCount
+    maxTurns = Math.min(checkpoint.maxTurns, env.agentMaxTurns + resumeCount * CHECKPOINT_TURN_SLICE)
+    runTokenBudget = Math.min(checkpoint.tokenBudget, env.agentRunTokenBudgetCeiling)
+    writeProgressCount = checkpoint.writeProgress
+    checkpointWriteBaseline = checkpoint.writeBaseline
+    readProgressCount = checkpoint.readProgress
+    checkpointReadBaseline = checkpoint.readBaseline
+    checkpoint.progressSignatures.forEach(signature => progressSignatures.add(signature))
+  }
 
   // 进行中的轮次缓冲：中止/崩溃时当前轮消息还没走到轮末落库点，
   // 不兜底补偿的话作者刷新后会丢掉整个进行中轮次（只看到上一轮为止的进度）
@@ -841,13 +629,28 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   }
 
   try {
+    const storedRun = await startLegacyRuntimeRun(params.userId, runId, Boolean(params.resume))
+    assertLegacyRuntimeCompatible(storedRun)
+    if (params.resume) {
+      const saved = savedRunUsageSchema.safeParse(storedRun.usage)
+      if (!saved.success) throw new Error('运行预算记录无法核实，已停止续跑；原记录保留，不能重置预算后继续。')
+      usage.promptTokens = saved.data.promptTokens
+      usage.completionTokens = saved.data.completionTokens
+      usage.totalTokens = saved.data.totalTokens
+      turn = storedRun.currentTurn
+      runStartedAt = storedRun.startedAt?.getTime() ?? runStartedAt
+      const checkpoint = saved.data.checkpoint
+      if (checkpoint) {
+        inheritedTokens = checkpoint.inheritedTokens
+        inheritedTurns = checkpoint.inheritedTurns
+        restoreCheckpointLimits(checkpoint)
+      }
+      // Historical runs keep their known consumption, without inventing earned slices.
+      checkpointRestored = true
+    }
     const modelRuntime = await getModelTierRuntime(params.modelTier ?? 'speed', params.userId, params.customModelId, params.reasoningEffort)
     const runtimeModelName = modelRuntime.modelName ?? agent.model
-    const storedRun = await prisma.agentRun.update({
-      where: { id: runId },
-      data: { status: 'running', startedAt: new Date(), errorMessage: null },
-      select: { taskSpec: true },
-    })
+    assertTaskAuthorizationRuntimeReady(storedRun.taskSpec, { userId: params.userId, sessionId: params.sessionId, novelId: params.novelId })
     await prisma.agentSession.update({
       where: { id: params.sessionId },
       data: { lastRunAt: new Date() },
@@ -869,18 +672,65 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       url: attachment.url,
       size: attachment.size,
     }))
-    const userMessageId = randomUUID()
-    await persistMessage(userMessageId, runId, params.sessionId, 'user', [
+    const userMessageId = params.admittedMessageId ?? randomUUID()
+    const userParts: AgentMessagePart[] = [
       { type: 'text', text: prompt },
       ...attachmentParts,
-    ])
+    ]
+    if (params.admittedMessageId) {
+      const admitted = await prisma.agentMessage.findFirst({ where: { id: userMessageId, runId, sessionId: params.sessionId, role: 'user' }, select: { parts: true } })
+      const { runtimeJson } = await import('./runtime-common.js')
+      if (params.resume || !admitted || runtimeJson(admitted.parts).hash !== runtimeJson(JSON.parse(JSON.stringify(userParts))).hash) {
+        throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '原始请求与已保存消息不一致，不能覆盖或猜测任务。')
+      }
+    } else await persistMessage(userMessageId, runId, params.sessionId, 'user', userParts)
 
     const continuingTask = Boolean(params.resume) || isContinuationRequest(params.prompt)
     // Typed “continue” starts a new run but must retain the original task scope/constraints.
     const previousTask = continuingTask && !storedRun.taskSpec
-      ? await prisma.agentRun.findFirst({ where: { sessionId: params.sessionId, userId: params.userId, novelId: params.novelId, id: { not: runId }, engine: 'loop' }, orderBy: { createdAt: 'desc' }, select: { taskSpec: true } })
+      ? await prisma.agentRun.findFirst({ where: { sessionId: params.sessionId, userId: params.userId, novelId: params.novelId, id: { not: runId }, engine: 'loop' }, orderBy: { createdAt: 'desc' }, select: { id: true, taskSpec: true, taskRootId: true, runtimeProtocolVersion: true, usage: true, currentTurn: true, startedAt: true } })
       : null
+    if (previousTask) assertLegacyRuntimeCompatible(previousTask)
+    assertTaskAuthorizationRuntimeReady(previousTask?.taskSpec, { userId: params.userId, sessionId: params.sessionId, novelId: params.novelId })
     const parsedTaskSpec = taskSpecSchema.safeParse(storedRun.taskSpec ?? previousTask?.taskSpec)
+    let contextPrompt = params.prompt
+    if (previousTask && parsedTaskSpec.success && !params.resume) {
+      // The typed-continue path must recover the same full request as the
+      // resume button. Task goals and history summaries are deliberately short.
+      const original = await prisma.agentMessage.findFirst({ where: {
+        sessionId: params.sessionId, role: 'user', run: {
+          userId: params.userId, novelId: params.novelId,
+          taskSpec: { path: ['id'], equals: parsedTaskSpec.data.id },
+        },
+      }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { parts: true } })
+      const originalPrompt = Array.isArray(original?.parts) ? original.parts.flatMap(part =>
+        part && typeof part === 'object' && !Array.isArray(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n') : ''
+      if (!originalPrompt.trim() || isContinuationRequest(originalPrompt)) {
+        throw new DataAccessError(409, 'RUN_INPUT_REQUIRED', '原任务缺少完整原始需求，不能根据历史摘要猜测继续；请重新说明任务，已保存成果保留。')
+      }
+      contextPrompt = `${originalPrompt}\n\n[用户本次要求] ${params.prompt}`
+      // Sum local counters once per run, never cumulative snapshot totals. Do not
+      // include unrelated tasks merely because they share a novel or session.
+      const priorRuns = await prisma.agentRun.findMany({
+        where: { sessionId: params.sessionId, userId: params.userId, novelId: params.novelId,
+          id: { not: runId }, engine: 'loop', taskSpec: { path: ['id'], equals: parsedTaskSpec.data.id } },
+        select: { id: true, status: true, usage: true, currentTurn: true, startedAt: true },
+      })
+      if (!priorRuns.some(prior => prior.id === previousTask.id)) {
+        throw new DataAccessError(409, 'TASK_AUTHORIZATION_BUDGET_UNCONFIRMED', '原任务预算链无法核实，不能创建新预算继续。')
+      }
+      for (const prior of priorRuns) {
+        const saved = savedRunUsageSchema.safeParse(prior.usage)
+        if (!saved.success || ['queued', 'running', 'awaiting_approval'].includes(prior.status)) {
+          throw new DataAccessError(409, 'TASK_AUTHORIZATION_BUDGET_UNCONFIRMED', '原任务仍在执行或累计预算记录无法核实，未启动重复执行。')
+        }
+        inheritedTokens += saved.data.totalTokens
+        inheritedTurns += prior.currentTurn
+        if (prior.startedAt) runStartedAt = Math.min(runStartedAt, prior.startedAt.getTime())
+      }
+      const priorCheckpoint = savedRunUsageSchema.parse(previousTask.usage).checkpoint
+      if (priorCheckpoint) restoreCheckpointLimits(priorCheckpoint)
+    }
     let taskSpec: TaskSpec = parsedTaskSpec.success
       ? { ...parsedTaskSpec.data, runId }
       : buildTaskSpec({
@@ -893,6 +743,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           qualityMode: params.qualityMode,
         })
     let taskSpecChanged = !parsedTaskSpec.success || Boolean(previousTask)
+    if (params.resume || previousTask) {
+      const narrowed = narrowLegacyResearchTask(taskSpec, contextPrompt)
+      taskSpecChanged ||= narrowed !== taskSpec
+      taskSpec = narrowed
+    }
     const protectsEarlierContent = taskSpec.postconditions.some((item) => item.code === 'EARLIER_CONTENT_UNCHANGED')
     if (protectsEarlierContent && (!continuingTask || !taskSpec.scope.chapterIds?.length)) {
       const existingChapters = await prisma.chapter.findMany({
@@ -906,9 +761,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       taskSpecChanged = true
     }
     if (taskSpecChanged) {
-      await prisma.agentRun.update({ where: { id: runId }, data: { taskSpec: taskSpec as unknown as object } })
-    }
-    if (!params.resume) {
+      // Scope and inherited budget must become durable together, including if
+      // execution is stopped before its first provider response.
+      await prisma.agentRun.update({ where: { id: runId }, data: {
+        taskSpec: taskSpec as unknown as object, usage: { ...usage, checkpoint: checkpointSnapshot() },
+      } })
+    } else await persistCheckpoint()
+    if (!params.resume && taskSpec.intent !== 'research_analysis') {
       await captureUserDirectives({
         userId: params.userId,
         novelId: params.novelId,
@@ -936,7 +795,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
     const imageAttachments = (params.attachments ?? []).filter((attachment) => attachment.kind === 'image')
     const directImageInputs = modelRuntime.visionEnabled
-      ? await Promise.all(imageAttachments.map(async (attachment) => ({ attachment, dataUrl: await readManagedImageDataUrl(attachment.url) })))
+      ? await Promise.all(imageAttachments.map(async (attachment) => ({ attachment, dataUrl: await readManagedImageDataUrl(attachment.url, params.userId) })))
       : []
     const directVisionEnabled = imageAttachments.length > 0
       && directImageInputs.length === imageAttachments.length
@@ -946,12 +805,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       agent,
       mode: params.mode,
       sessionId: params.sessionId,
-      // 续跑时不排除本 run 已持久化的消息（'' 匹配所有 run）
-      runId: params.resume ? '' : runId,
+      runId,
+      includeCurrentRunHistory: Boolean(params.resume),
       userId: params.userId,
       novelId: params.novelId,
       chapterId: params.chapterId,
-      prompt,
+      prompt: contextPrompt,
       selection: params.selection,
       attachments: params.attachments ?? [],
       visionEnabled: directVisionEnabled,
@@ -1040,7 +899,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
     const featureFlags = resolveAgent2FeatureFlags(params.userId)
     const sessionPolicy = await prisma.agentSession.findUnique({ where: { id: params.sessionId }, select: { toolPolicy: true, sandboxMode: true, spawnedFromSessionId: true } })
-    const scopedTools = getToolsForAgent(agent, params.mode, featureFlags)
+    const scopedTools = restrictToolsToTask(getToolsForAgent(agent, params.mode, featureFlags), taskSpec)
     // 派生窗口禁用跨任务编排：否则 b 再派生 e、e 再派生 f 会指数级打爆并发与额度，
     // 而且互相等待还会直接死锁；派生窗口的职责就是干完自己那一份并交回摘要
     const orchestrationScopedTools = sessionPolicy?.spawnedFromSessionId
@@ -1096,8 +955,6 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       return { beforeTokens, afterTokens, fits: afterTokens <= contextBudget.hardRequestTokens }
     }
     // plan/18：轮次片/预算片可被检查点续跑刷新，改 let；预算从「只能下调」改为 clamp 到硬顶（默认 500 万）
-    let maxTurns = env.agentMaxTurns
-    let runTokenBudget = resolveRunTokenBudget(params.tokenBudget, env.agentRunTokenBudget, env.agentRunTokenBudgetCeiling)
 
     const toolContext: ToolContext = {
       userId: params.userId,
@@ -1106,6 +963,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       sessionId: params.sessionId,
       runId,
       protectedChapterIds: protectsEarlierContent ? new Set(taskSpec.scope.chapterIds ?? []) : undefined,
+      toolAuthority: snapshotToolAuthority(tools, params.mode),
       callId: '',
       mode: params.mode,
       creativeFreedom: taskSpec.creativeFreedom,
@@ -1121,7 +979,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     let pseudoToolCallRetries = 0
     const toolNameList = tools.map((tool) => tool.name)
     // C3：规划类任务必须以 plan_save 落盘收尾，只聊天不落盘时回填提醒
-    const expectsPlanSave = params.mode === 'plan' && /(规划|大纲|计划)/.test(params.prompt)
+    const expectsPlanSave = taskSpec.intent !== 'research_analysis' && params.mode === 'plan' && /(规划|大纲|计划)/.test(params.prompt)
     let planSavePerformed = false
     let planSaveReminders = 0
     // 长任务防早停：待办清单（todo_write 维护）未全部完成就想收尾时，回填强指令让它接着执行
@@ -1133,7 +991,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // A4：长上下文提醒消息（单实例，每轮移除后重新追加到队尾，保证只存在一条且最靠近当前轮）
     const contextReminder: ChatMessage = {
       role: 'user',
-      content: `[系统提醒] 对话已较长，重申信道纪律：正文信道每个关键节点可给作者一句可见进展（刚完成什么、下一步做什么）；收尾时写交付说明（不超过 2 句 80 字）；规划产出走 plan_save，修订带 planId；需要作者决策用 ask_user。当前模式：${params.mode}。`,
+      content: `[系统提醒] 对话已较长，重申信道纪律：正文信道每个关键节点可给作者一句可见进展（刚完成什么、下一步做什么）；执行类任务收尾写简短交付说明（不超过 2 句 80 字）。若作者要求提问、检查、对比、分析或报告，正文就是交付物，须完整输出结论与证据，不受80字限制，可用标准Markdown但不用原始HTML或远程图片；不得用泛化文字填补来源缺口。规划产出走 plan_save，修订带 planId；需要作者决策用 ask_user。当前模式：${params.mode}。`,
     }
 
     /** P1 信道重复命中处置：观察模式只记日志零干预；干预模式首次提醒、二次命中强制收尾 */
@@ -1164,7 +1022,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         content: `[系统] ${reasonText}请立即停止调用工具，用一段话总结目前的进展与剩余工作。`,
       })
       const wrapBudget = prepareContextForRequest([], 'wrap-up')
-      if (!wrapBudget.fits || usage.totalTokens >= runTokenBudget) {
+      if (!wrapBudget.fits || taskTokens() >= runTokenBudget) {
         const fallbackText = `${reasonText}系统已停止继续请求，未把剩余工作标为完成。已完成的写入均已保存；可点击「继续执行」恢复剩余工作。`
         bus.emit({ type: 'text.delta', messageId: wrapMessageId, delta: fallbackText })
         bus.emit({ type: 'text.final', messageId: wrapMessageId, text: fallbackText, asReasoning: false })
@@ -1172,7 +1030,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         await finalizeRun(runId, bus, 'failed', usage, turn, fallbackText.slice(0, 300), fallbackText)
         return
       }
+      const observeWrapUsage = trackRequestUsage(usage)
       const wrapUp = await chatWithTools({
+        onUsage: observeWrapUsage,
         messages,
         tools: [],
         model: runtimeModelName,
@@ -1201,7 +1061,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           multiplierBps: modelRuntime.multiplierBps,
         },
       })
-      addUsage(usage, wrapUp.usage)
+      observeWrapUsage(wrapUp.usage)
       const cleanWrapUp = humanizeAgentVisibleText(stripAgentProtocolArtifacts(wrapUp.content))
       // 无论是否有干净文本都发 text.final：前端据此停掉收尾正文尾部的流式光标
       bus.emit({ type: 'text.final', messageId: wrapMessageId, text: cleanWrapUp, asReasoning: false })
@@ -1227,31 +1087,36 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       await finalizeRun(runId, bus, 'failed', usage, turn, cleanWrapUp.slice(0, 300), reasonText)
     }
 
-    /** P4 检查点式自动续跑：预算片/轮次片耗尽不是终止条件，四条件全满足则同 run 内压缩上下文+刷新片继续跑；
-     * 条件 b（区间内必须有新写类进展）兼作 compaction 防 loop：无进展则禁止再压缩，直接走 wrap-up，
-     * 杜绝 codex #31351 式「压缩→丢进展→重复计划→再压缩」死循环 */
+    /** 29 R08：未结束且有新写入/读取证据时才刷新预算片；保留次数、时间和总量硬顶。 */
     const tryCheckpointResume = async (trigger: 'budget' | 'turns'): Promise<boolean> => {
       const checkpoint = evaluateCheckpoint({
         todoLeft: todoItems.filter((item) => item.status !== 'completed').length,
+        // Every accepted terminal response returns before reaching this boundary.
+        // A missing/completed checklist is not proof that pending tool work is done.
+        taskPending: true,
         writeProgress: writeProgressCount,
         writeBaseline: checkpointWriteBaseline,
+        readProgress: readProgressCount,
+        readBaseline: checkpointReadBaseline,
         resumeCount,
         compactionCount,
         elapsedMs: Date.now() - runStartedAt,
         longWallClockLimitMs: env.agentRunWallClockLongMinutes * 60_000,
-        usedTokens: usage.totalTokens,
+        usedTokens: taskTokens(),
         tokenCeiling: env.agentRunTokenBudgetCeiling,
       })
       if (!checkpoint.ok) return false
       resumeCount += 1
       compactionCount += 1
       checkpointWriteBaseline = writeProgressCount
+      checkpointReadBaseline = readProgressCount
       runTokenBudget = Math.min(env.agentRunTokenBudgetCeiling, runTokenBudget + CHECKPOINT_BUDGET_SLICE)
       maxTurns += CHECKPOINT_TURN_SLICE
+      await persistCheckpoint()
       // compaction：先压缩久远工具参数与输出；下一轮发送前再按真实 token 预算判断是否需要折叠完整工具轮。
       compactEarlyToolPayloads(messages, CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS)
       const todoLeft = todoItems.filter((item) => item.status !== 'completed').length
-      const notice = `已到检查点 ${resumeCount}/${CHECKPOINT_MAX_RESUMES}（${trigger === 'budget' ? '预算片用尽' : '轮次片用尽'}） · 累计消耗 ${(usage.totalTokens / 10_000).toFixed(0)} 万 tokens · 剩余待办 ${todoLeft} 项 · 自动续跑中`
+      const notice = `已到检查点 ${resumeCount}/${CHECKPOINT_MAX_RESUMES}（${trigger === 'budget' ? '预算片用尽' : '轮次片用尽'}） · 累计消耗 ${(taskTokens() / 10_000).toFixed(0)} 万 tokens · 剩余待办 ${todoLeft} 项 · 自动续跑中`
       // 检查点可见性：落库+直播的系统行，刷新后仍在（产品化参照 codex 的自动 compaction 提示）
       const noticeId = randomUUID()
       bus.emit({ type: 'message.start', messageId: noticeId, role: 'assistant' })
@@ -1267,10 +1132,10 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
 
     // 轮次片耗尽时在 while 条件里做检查点续跑（成功则 maxTurns 已刷新、继续循环），不可续跑才落入下方收尾
-    while (turn < maxTurns || await tryCheckpointResume('turns')) {
+    while (turn + inheritedTurns < maxTurns || await tryCheckpointResume('turns')) {
       if (controller.signal.aborted) throw new DOMException('run aborted', 'AbortError')
       // Every request path, including no-tool/protocol retries, passes this budget gate.
-      if (usage.totalTokens >= runTokenBudget && !(await tryCheckpointResume('budget'))) {
+      if (taskTokens() >= runTokenBudget && !(await tryCheckpointResume('budget'))) {
         await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
         return
       }
@@ -1320,7 +1185,9 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const visibleTextStreamer = createVisibleTextStreamer()
       const visibleReasoningStreamer = createVisibleTextStreamer()
 
+      const observeTurnUsage = trackRequestUsage(usage)
       const result = await chatWithTools({
+        onUsage: observeTurnUsage,
         messages,
         tools: openAITools,
         model: runtimeModelName,
@@ -1383,8 +1250,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         },
       })
 
-      addUsage(usage, result.usage)
-      await prisma.agentRun.update({ where: { id: runId }, data: { currentTurn: turn } }).catch(() => {})
+      observeTurnUsage(result.usage)
+      await persistCheckpoint()
 
       const recoveredToolCalls = result.toolCalls.length === 0
         ? recoverAgentProtocolToolCalls(result.content).map((call, index) => ({
@@ -1466,19 +1333,43 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 防早停：待办清单还有未完成项就想结束（典型症状：连写六章只写两章就问“要不要继续”），
         // 回填强指令让它接着执行下一条待办，最多拦截 4 次避免死循环
         const unfinishedTodos = todoItems.filter((item) => item.status !== 'completed')
-        const prematureFinish = unfinishedTodos.length > 0 || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
+        const reportMinimum = taskSpec.intent === 'research_analysis'
+          ? Math.max(0, ...taskSpec.expectedOutputs.filter(item => item.required).map(item => item.minimumChineseCharacters ?? 0)) : 0
+        const report = taskSpec.intent === 'research_analysis' ? await (await import('./research-sources.js')).readResearchReportForDelivery({
+          userId: params.userId, novelId: params.novelId, sessionId: params.sessionId, runId,
+        }) : null
+        const reportIncomplete = Boolean(report && report.chineseCharacters < reportMinimum)
+        const reportReminder = reportIncomplete
+          ? `\n本任务报告main已保存${report!.chineseCharacters}个汉字，要求至少${reportMinimum}个。先用research_report_read核对区块与revision，再用research_report_save只保存缺失或待修订区块；不得重写整份或凑字。来源读取失败时先核对搜索实际返回的URL、错误分类及页面真实链接，在既有预算内尝试可用来源，不编造地址、不重复请求已失败且未变化的来源。记录未取得的资料与受限原因，不能把简介或乱码当正文，也不能宣称已读全书；仅在确实需要用户提供信息时使用ask_user，不把上传小说作为排查404的前提。` : ''
+        const prematureFinish = reportIncomplete || unfinishedTodos.length > 0 || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
         if (prematureFinish && todoReminders < 4) {
           todoReminders += 1
           await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
-            content: `[系统] 当前回复尚不足以交付：仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。\n${renderTodoItems(unfinishedTodos)}\n只在原授权范围内继续下一步，不重新规划已完成工作。有本任务既有清单时才更新真实完成进度；无清单且工作已完成时直接交付，不为结束任务补建空清单或已完成清单。无法完成的项保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
+            content: `[系统] 当前回复尚不足以交付：仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。\n${renderTodoItems(unfinishedTodos)}${reportReminder}\n只在原授权范围内继续下一步，不重新规划已完成工作。有本任务既有清单时才更新真实完成进度；无清单且工作已完成时直接交付，不为结束任务补建空清单或已完成清单。无法完成的项保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
           })
           continue
         }
 
-        await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+        if (!prematureFinish && report?.content) {
+          // Deliver the exact persisted report through the existing text UI;
+          // a short model wrap-up cannot hide it or trigger paid regeneration.
+          const evidence = report.evidence
+          const evidenceNote = evidence && evidence.discoveredPages > 0
+            ? `> 联网资料范围：发现 ${evidence.discoveredPages} 个来源，保存可读文章的来源 ${evidence.readablePages} 个，保存目录/简介的来源 ${evidence.metadataPages} 个，仍有读取失败记录的来源 ${evidence.failedSources} 个；报告引用 ${evidence.citedVersions} 个已保存页面版本。各类来源可能重叠；这些数字不包含附件，不代表已读章节数或全书覆盖，未核实全书阅读完整性。\n\n` : ''
+          const delivered = evidenceNote + humanizeAgentVisibleText(stripAgentProtocolArtifacts(report.content))
+          for (let index = parts.length - 1; index >= 0; index -= 1) {
+            if (parts[index].type === 'text') parts.splice(index, 1)
+          }
+          parts.push({ type: 'text', text: delivered })
+          lastAssistantText = delivered
+          await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+          bus.emit({ type: 'text.final', messageId, text: delivered, asReasoning: false })
+        } else {
+          await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+        }
         bus.emit({ type: 'step.finish', turn, usage: result.usage })
         await finalizeRun(runId, bus, prematureFinish ? 'failed' : 'succeeded', usage, turn, lastAssistantText.slice(0, 300), prematureFinish ? '连续多轮没有推进剩余工作，已保存进度并安全停止；任务未完成。' : undefined)
         return
@@ -1528,11 +1419,15 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
             ? durableProgress
             : Boolean(tool && !tool.readOnly && !STATE_SENSITIVE_VALIDATORS.has(call.name) && !REPEATABLE_TOOLS.has(call.name) && call.name !== 'todo_write')
           admission.record(admissionKey, outcome.observation, stateChanged)
-          const progressKey = toolSignature(signature, outcome.observation)
+          const readProgress = Boolean(tool?.readOnly) && hasReadProgress(outcome.part)
+          const progressKey = toolSignature(call.name, outcome.observation)
           if (!progressSignatures.has(progressKey)) {
             progressSignatures.add(progressKey)
-            todoReminders = 0
-            if (durableProgress) writeProgressCount += 1
+            if (durableProgress || readProgress) todoReminders = 0
+            // Checklist bookkeeping may reset a reminder, but is not new work
+            // evidence and cannot renew the paid execution budget.
+            if (durableProgress && display?.kind !== 'todoList') writeProgressCount += 1
+            if (readProgress) readProgressCount += 1
           }
           blockedRepeat = 0
         }
@@ -1570,6 +1465,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         }
       }
       await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
+      await persistCheckpoint()
       bus.emit({ type: 'step.finish', turn, usage: result.usage })
 
       if (blockedRepeat >= 4) forceWrapUpReason = '连续重复调用已拦截，且未产生新的工具进展（防空转循环）。'
@@ -1592,8 +1488,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         return
       }
 
-      if (usage.totalTokens >= runTokenBudget) {
-        // P4：预算片耗尽不是终止条件——先做检查点评估，有真实进展且待办未完则同 run 自动续跑
+      if (taskTokens() >= runTokenBudget) {
+        // 预算片耗尽先检查任务进展，不能用是否建过待办来决定自动续跑。
         if (await tryCheckpointResume('budget')) continue
         await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
         return
@@ -1611,6 +1507,33 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       `已达最大轮次上限（${maxTurns} 轮），任务未完成。可点击"继续"让 Agent 接着执行。`,
     )
   } catch (error) {
+    if (error instanceof DataAccessError && error.code === 'TASK_AUTHORIZATION_RUNTIME_UPGRADE_REQUIRED') {
+      // Admission did not succeed. In particular a rejected resume must not
+      // overwrite another execution's status via the budget-restoration branch.
+      bus.emit({ type: 'error', code: error.code.toLowerCase(), message: error.message, recoverable: false })
+      deregisterActiveRun(runId)
+      try { await disposeRunEventBus(runId) } catch { console.error('[agent-loop] 准入拒绝通知仍待持久化', { runId }) }
+      return
+    }
+    if (!checkpointRestored) {
+      // Never replace an unreadable saved budget with the zero-initialized local state.
+      await prisma.agentRun.update({
+        where: { id: runId, userId: params.userId, runtimeProtocolVersion: 0, taskRootId: null },
+        data: { status: 'paused', errorMessage: '运行预算记录尚未核实，原记录保留。' },
+      }).catch(() => {})
+      bus.emit({ type: 'error', code: 'run_checkpoint_unconfirmed', recoverable: false,
+        message: '运行预算记录尚未核实，已停止续跑并保留原记录。' })
+      deregisterActiveRun(runId)
+      try { await disposeRunEventBus(runId) } catch { console.error('[agent-loop] 预算核实通知仍待持久化', { runId }) }
+      return
+    }
+    if (error instanceof DataAccessError && (error.code.startsWith('TASK_AUTHORIZATION_')
+      || error.code === 'RUN_INPUT_REQUIRED' || error.code === 'RUN_INPUT_MISMATCH')) {
+      bus.emit({ type: 'error', code: error.code.toLowerCase(), message: error.message, recoverable: false })
+      // Admission failure must not compact/update world memory as a side effect of finalization.
+      await finalizeRun(runId, bus, 'failed', usage, turn, '', error.message, false)
+      return
+    }
     if (isAbortError(error) || controller.signal.aborted) {
       // 先补落库进行中的轮次再收尾：否则刷新后作者会丢掉被停止那一轮的全部内容
       await flushLiveTurn()

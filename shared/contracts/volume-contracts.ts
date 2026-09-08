@@ -66,6 +66,7 @@ export const structureIssueSchema = z.object({
     'CHAPTER_ORDER_GAP',
     'GLOBAL_ORDER_GAP',
     'CHAPTER_VOLUME_MISMATCH',
+    'STRUCTURE_TITLE_EMPTY',
   ]),
   message: z.string(),
   entityId: z.string().nullable(),

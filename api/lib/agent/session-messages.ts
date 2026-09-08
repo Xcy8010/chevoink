@@ -2,6 +2,31 @@ import type { AgentRollbackSnapshot, AgentUIMessage } from '../../../shared/cont
 import type { AgentMessagePart } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { getActiveRunIdBySession, hasActiveRunInSession } from './active-runs.js'
+import { publishDurableEvents } from './runtime-event-projection.js'
+
+const historyRunState = { select: { runtimeProtocolVersion: true, taskRoot: { select: { status: true } } } } as const
+
+function visibleHistoryParts(parts: AgentMessagePart[], run: { runtimeProtocolVersion: number; taskRoot: { status: string } | null }): AgentMessagePart[] {
+  const stopped = run.runtimeProtocolVersion === 1 && ['paused', 'completed'].includes(run.taskRoot?.status ?? '')
+  return parts.map(part => {
+    if (part.type !== 'tool-call') return part
+    const visible = part.snapshot ? { ...part, snapshot: undefined } : part
+    // Match the existing live terminal reducer without marking the operation
+    // failed in execution storage: an unknown result still needs reconciliation.
+    return stopped && part.status === 'running' ? { ...visible, status: 'failed' as const, summary: run.taskRoot?.status === 'paused' ? '已停止' : '已中断' } : visible
+  })
+}
+
+async function synchronizeDurableHistory(userId: string, runs: Array<{ id: string; runtimeProtocolVersion: number; taskRootId: string | null }>) {
+  const roots = new Set<string>()
+  for (const run of runs) {
+    if (run.runtimeProtocolVersion !== 1 || !run.taskRootId || roots.has(run.taskRootId)) continue
+    roots.add(run.taskRootId)
+    // History must also work when no browser was connected during execution.
+    // Batches are bounded; all writes remain the same root-locked projection.
+    while ((await publishDurableEvents(userId, run.id, 200)).length >= 200) { /* drain committed history */ }
+  }
+}
 
 /**
  * 任务会话消息服务（自 run-service.ts 模块级拆分而来，行为原样保留）：
@@ -45,15 +70,18 @@ async function normalizeLegacyViewedImageUrls(userId: string, parts: AgentMessag
 /** 刷新后「继续执行」按钮的数据来源：当前无活跃 run 时，仅当会话「最近一个」run 停在 failed/paused 才供前端续跑。
  * 不能取历史任意 failed run：旧 run 失败后作者已开新 run 并正常收尾时，任务已闭环，
  * 刷新后不应再冒「继续执行」按钮（作者反馈：收尾完成后刷新仍见按钮）。 */
-async function getResumeRunIdBySession(sessionId: string): Promise<string | null> {
-  if (getActiveRunIdBySession(sessionId)) return null
+async function getSessionRunState(sessionId: string): Promise<{ activeRunId: string | null; resumeRunId: string | null }> {
+  const local = getActiveRunIdBySession(sessionId)
+  if (local) return { activeRunId: local, resumeRunId: null }
   const run = await prisma.agentRun.findFirst({
     where: { sessionId },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, status: true },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    select: { id: true, status: true, runtimeProtocolVersion: true, taskRoot: { select: { status: true } } },
   })
-  if (!run) return null
-  return run.status === 'failed' || run.status === 'paused' ? run.id : null
+  const durableActive = run?.runtimeProtocolVersion === 1 && run.taskRoot?.status === 'active'
+    && ['queued', 'running', 'awaiting_approval'].includes(run.status)
+  return { activeRunId: durableActive ? run.id : null,
+    resumeRunId: run && (run.status === 'failed' || run.status === 'paused') ? run.id : null }
 }
 
 /** 拉取会话消息（parts 结构），用于历史恢复与切换会话；回滚快照仅服务端使用，返回前剥离；
@@ -111,19 +139,24 @@ export async function listLoopSessionMessages(
     })
     const hasMore = runs.length > runLimit
     const pageRuns = runs.slice(0, runLimit)
+    await synchronizeDurableHistory(userId, pageRuns)
     const pageRunIds = pageRuns.map((run) => run.id)
+    const pageRootIds = pageRuns.flatMap(run => run.runtimeProtocolVersion === 1 && run.taskRootId ? [run.taskRootId] : [])
     const records = pageRunIds.length
       ? await prisma.agentMessage.findMany({
-          where: { sessionId, runId: { in: pageRunIds } },
+          // A resumed durable run shares the original task's message identities.
+          // Keep that logical task whole even when its original run is outside
+          // this page; otherwise a fresh reload can lose the prompt/tool cards.
+          where: { sessionId, ...(pageRootIds.length ? { OR: [{ runId: { in: pageRunIds } }, { run: { taskRootId: { in: pageRootIds } } }] }
+            : { runId: { in: pageRunIds } }) },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          include: { run: historyRunState },
         })
       : []
 
     const pagedMessages: AgentUIMessage[] = []
     for (const record of records) {
-      const stripped = (record.parts as unknown as AgentMessagePart[]).map((part) =>
-        part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
-      )
+      const stripped = visibleHistoryParts(record.parts as unknown as AgentMessagePart[], record.run)
       pagedMessages.push({
         id: record.id,
         runId: record.runId,
@@ -135,8 +168,7 @@ export async function listLoopSessionMessages(
 
     return {
       messages: pagedMessages,
-      activeRunId: getActiveRunIdBySession(sessionId),
-      resumeRunId: await getResumeRunIdBySession(sessionId),
+      ...await getSessionRunState(sessionId),
       pagination: {
         hasMore,
         earliestRunStartedAt: pageRuns.length ? pageRuns[pageRuns.length - 1].createdAt.toISOString() : null,
@@ -146,6 +178,10 @@ export async function listLoopSessionMessages(
   }
 
   // 全量模式（删除/回退后的界面重拉等低频操作）：保留大窗口，避免已加载内容变少
+  const durableRuns = await prisma.agentRun.findMany({ where: { sessionId, runtimeProtocolVersion: 1, taskRootId: { not: null } },
+    orderBy: { createdAt: 'desc' }, distinct: ['taskRootId'], take: 2000,
+    select: { id: true, runtimeProtocolVersion: true, taskRootId: true } })
+  await synchronizeDurableHistory(userId, durableRuns)
   const newestRecords = await prisma.agentMessage.findMany({
     where: { sessionId },
     // 必须先取最新窗口再恢复为时间正序。旧实现按 asc + take 会永久截掉
@@ -154,6 +190,7 @@ export async function listLoopSessionMessages(
     // 截掉的会是最早几轮（开场/前几章的总结与操作），刷新后像“前面的内容丢了”。
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 2000,
+    include: { run: historyRunState },
   })
   const records = newestRecords.reverse()
 
@@ -170,6 +207,7 @@ export async function listLoopSessionMessages(
       const remainder = await prisma.agentMessage.findMany({
         where: { sessionId, runId: boundary.runId },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        include: { run: historyRunState },
       })
       const known = new Set(records.map((record) => record.id))
       records.unshift(...remainder.filter((record) => !known.has(record.id)))
@@ -178,9 +216,7 @@ export async function listLoopSessionMessages(
 
   const messages: AgentUIMessage[] = []
   for (const record of records) {
-    const stripped = (record.parts as unknown as AgentMessagePart[]).map((part) =>
-      part.type === 'tool-call' && part.snapshot ? { ...part, snapshot: undefined } : part,
-    )
+    const stripped = visibleHistoryParts(record.parts as unknown as AgentMessagePart[], record.run)
     messages.push({
       id: record.id,
       runId: record.runId,
@@ -192,8 +228,7 @@ export async function listLoopSessionMessages(
 
   return {
     messages,
-    activeRunId: getActiveRunIdBySession(sessionId),
-    resumeRunId: await getResumeRunIdBySession(sessionId),
+    ...await getSessionRunState(sessionId),
     pagination: { hasMore: false, earliestRunStartedAt: null },
     fork,
   }
@@ -217,7 +252,7 @@ async function findOwnedSessionMessage(userId: string, sessionId: string, messag
     throw new DataAccessError(404, 'NOT_FOUND', '消息不存在或已被删除。')
   }
 
-  if (hasActiveRunInSession(sessionId)) {
+  if (hasActiveRunInSession(sessionId) || (await getSessionRunState(sessionId)).activeRunId) {
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话有任务正在执行，请先停止后再操作。')
   }
 

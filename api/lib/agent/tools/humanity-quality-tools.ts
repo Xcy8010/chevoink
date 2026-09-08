@@ -8,7 +8,6 @@ import {
   experienceAnchorInputSchema,
   humanityQualitySignalSchema,
 } from '../../../../shared/contracts/index.js'
-import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { recordChapterBaseline } from '../baseline.js'
 import {
   analyzeDeterministicQuality,
@@ -28,11 +27,9 @@ import {
   saveExperienceAnchor,
   selectQualityFindings,
 } from '../humanity-quality.js'
-import { enqueueChapterMemoryExtraction } from '../story-memory.js'
-import { recordStoryCompilerWrite } from '../story-compiler.js'
-import { recalcNovelStats } from './novel-tools.js'
 import { defineTool, type ToolContext } from './types.js'
 import { coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js'
+import { qualityReportMatchesContent } from '../quality-report-contract.js'
 
 const READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const WRITE = { plan: 'deny', build: 'allow', review: 'allow' } as const
@@ -45,9 +42,10 @@ const REPAIR_BLOCK_CODES = new Set([
   'QUALITY_EVIDENCE_STALE',
   'QUALITY_PATCH_OVERLAP',
   'QUALITY_FINDING_SCOPE_INVALID',
+  'QUALITY_REPAIR_NO_CHANGE',
 ])
 
-const criticEnvelopeSchema = z.object({ findings: z.array(criticQualityFindingSchema).max(24).default([]) })
+const criticEnvelopeSchema = z.object({ findings: z.array(criticQualityFindingSchema).max(24) })
 const repairEnvelopeSchema = z.object({
   patches: z.array(z.object({ findingId: z.string().min(1), replacement: z.string().max(2_000) })).min(1).max(12),
 })
@@ -77,7 +75,7 @@ function findingLabel(signal: string): string {
   } as Record<string, string>)[signal] ?? signal
 }
 
-function reportDisplay(report: Awaited<ReturnType<typeof getQualityReport>>) {
+export function reportDisplay(report: Awaited<ReturnType<typeof getQualityReport>>) {
   return {
     kind: 'qualityReport' as const,
     reportId: report.id,
@@ -99,7 +97,7 @@ function reportDisplay(report: Awaited<ReturnType<typeof getQualityReport>>) {
   }
 }
 
-function buildCriticSystem(lens: 'balanced' | 'story' | 'style'): string {
+export function buildCriticSystem(lens: 'balanced' | 'story' | 'style'): string {
   const lensRule = lens === 'story'
     ? '本轮优先审查 plot_progress、emotion_grounding、causal_gap、chapter_bridge、reader_pull、character_voice。'
     : lens === 'style'
@@ -159,18 +157,8 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
   // 模型若仍漏掉个别项，只应用已逐字绑定的安全补丁，并把漏项退回待审，不让整章修订归零。
   await selectQualityFindings(ctx.userId, ctx.novelId, report.id, replacements.map((patch) => patch.findingId))
   const result = await applyQualityRepair({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, reportId: report.id, replacements })
-  await recalcNovelStats(ctx.novelId)
   recordChapterBaseline(ctx.runId, result.updated.id, result.updated.revision)
-  if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
-    await enqueueChapterMemoryExtraction({ novelId: ctx.novelId, chapterId: result.updated.id, chapterRevision: result.updated.revision, before: result.before, after: result.after })
-  }
-  if (isAgent2FeatureEnabled('storyCompiler', ctx.userId)) {
-    await recordStoryCompilerWrite({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, chapterId: result.updated.id, chapterOrderIndex: result.updated.orderIndex, chapterRevision: result.updated.revision })
-  }
-  await prisma.agentArtifact.create({
-    data: { runId: ctx.runId, artifactType: 'rewriteSelection', title: `${result.updated.title} · 人类感自动局部修订`, content: JSON.stringify(replacements), summary: `${replacements.length} 个证据范围 / r${report.chapterRevision}→r${result.updated.revision}`, metadata: { reportId: report.id, findingIds: result.repairedFindingIds, sourceRevision: report.chapterRevision, targetRevision: result.updated.revision, phase: 'humanity_revision_auto' } },
-  })
-  return { result, patchCount: replacements.length, missingCount: selected.length - replacements.length, report: await getQualityReport(ctx.userId, ctx.novelId, report.id) }
+  return { result, patchCount: result.repairedFindingIds.length, missingCount: selected.length - result.repairedFindingIds.length, report: await getQualityReport(ctx.userId, ctx.novelId, report.id) }
 }
 
 export const qualityAnalyzeTool = defineTool({
@@ -195,10 +183,13 @@ export const qualityAnalyzeTool = defineTool({
   async execute(ctx, args) {
     const chapterId = args.chapterId ?? ctx.chapterId
     if (!chapterId) return { output: '请先指定要检查的章节，或在章节查看器中打开目标章节。' }
-    const bundle = await buildHumanityQualityContext(ctx.userId, ctx.novelId, chapterId)
+    const bundle = await buildHumanityQualityContext(ctx.userId, ctx.novelId, chapterId, ctx.runId)
+    if (args.compilationId && args.compilationId !== bundle.compilation?.id) return {
+      outcome: 'failed' as const, output: '指定的编译不属于当前任务与章节的活跃状态；请核对章节桥。本次未调用质量模型，也不会改用其他任务的编译。', summary: '质量检查目标不匹配',
+    }
     if (!bundle.chapter.content.trim()) return { output: '章节正文为空，无法执行人类感质量检查。', summary: '质量检查跳过空正文' }
     const existing = await getLatestQualityReport(ctx.userId, ctx.novelId, chapterId)
-    if (existing?.chapterRevision === bundle.chapter.revision && existing.criticVersion === HUMANITY_CRITIC_VERSION) {
+    if (existing && existing.compilationId === (bundle.compilation?.id ?? null) && existing.criticVersion === HUMANITY_CRITIC_VERSION && qualityReportMatchesContent(existing, bundle.chapter.revision, bundle.chapter.content)) {
       const hydrated = await getQualityReport(ctx.userId, ctx.novelId, existing.id)
       return { output: `当前 revision 已有质量报告 ${hydrated.id}，已直接复用；不会再次调用 Critic 或自动重试修订。`, summary: '复用当前质量报告', display: reportDisplay(hydrated) }
     }
@@ -235,7 +226,7 @@ ${bundle.chapter.content}
       userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
       compilationId: args.compilationId ?? bundle.compilation?.id,
       chapterId, chapterRevision: bundle.chapter.revision, mode: ctx.qualityMode,
-      deterministicMetrics: deterministic.metrics, deterministicFindings: deterministic.findings, criticFindings,
+      deterministicMetrics: deterministic.metrics, deterministicFindings: deterministic.findings, criticFindings, criticComplete: !criticFallback,
     })
     if (created.compilationId) {
       await prisma.storyCompilation.updateMany({
@@ -244,6 +235,7 @@ ${bundle.chapter.content}
       })
     }
     const report = await getQualityReport(ctx.userId, ctx.novelId, created.id)
+    if (report.status === 'failed') return { outcome: 'failed' as const, output: '独立质量检查没有完整、可定位的结果。确定性报告已保留，但不能视为质量通过；本次未自动修订，也不能据此提交章节桥。', summary: '独立质量检查未完成', display: reportDisplay(report) }
     const warningCount = report.findings.filter((finding) => finding.severity === 'warning').length
     const advisoryCount = report.findings.filter((finding) => finding.severity === 'advisory').length
     const selected = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(report.chapterId)
@@ -294,7 +286,7 @@ export const qualityReportGetTool = defineTool({
   description: '读取指定质量报告及作者反馈状态。只在继续修订、作者询问证据或报告卡需要恢复时调用；禁止每轮例行读取。',
   parameters: z.object({ reportId: z.string().min(1) }), permission: READ, readOnly: true,
   async execute(ctx, args) {
-    const report = await getQualityReport(ctx.userId, ctx.novelId, args.reportId)
+    const report = await getQualityReport(ctx.userId, ctx.novelId, args.reportId, ctx.transaction)
     return { output: report.findings.map((finding) => `[${finding.id}/${findingLabel(finding.signal)}/${finding.disposition}] 「${finding.evidenceExcerpt}」→${finding.suggestion}`).join('\n') || '报告没有 finding。', summary: '读取质量报告', display: reportDisplay(report) }
   },
 })
@@ -346,7 +338,7 @@ export const characterVoiceGetTool = defineTool({
   description: '仅在写含该人物的对白、审查人物声音或作者询问角色声口时读取确认版 Voice DNA；普通叙述和无对白任务不调用。',
   parameters: z.object({ characterName: z.string().max(128).optional() }), permission: READ, readOnly: true,
   async execute(ctx, args) {
-    const profiles = (await listCharacterVoiceProfiles(ctx.userId, ctx.novelId)).filter((profile) => !args.characterName || profile.characterName === args.characterName)
+    const profiles = (await listCharacterVoiceProfiles(ctx.userId, ctx.novelId, ctx.transaction)).filter((profile) => !args.characterName || profile.characterName === args.characterName)
     return { output: profiles.map((profile) => `${profile.characterName}@r${profile.revision} [${profile.status}]：词汇=${profile.vocabularyLevel}；压力反应=${profile.pressureResponse}；关注=${JSON.stringify(profile.attentionBias)}；禁知=${JSON.stringify(profile.forbiddenKnowledge)}`).join('\n') || '没有匹配的 Voice DNA。不得临时编造为确认设定。', summary: `人物声口 · ${profiles.length} 项` }
   },
 })
@@ -366,7 +358,7 @@ export const experienceAnchorGetTool = defineTool({
   description: '只在情绪场景涉及指定人物时按需读取 1–3 个确认经历锚点；普通场景禁止加载整份人物经历。',
   parameters: z.object({ characterName: z.string().min(1).max(128) }), permission: READ, readOnly: true,
   async execute(ctx, args) {
-    const anchors = (await listExperienceAnchors(ctx.userId, ctx.novelId, args.characterName)).slice(0, 3)
+    const anchors = (await listExperienceAnchors(ctx.userId, ctx.novelId, args.characterName, ctx.transaction)).slice(0, 3)
     return { output: anchors.map((anchor) => `${anchor.title}：${anchor.concreteDetail}；触发=${anchor.triggerEvent}；习惯反应=${anchor.habitualResponse}；情感含义=${anchor.emotionalMeaning}`).join('\n') || '没有确认经历锚点；不得用攥拳、颤抖、眼眶发热等模板反应补位。', summary: `经历锚点 · ${anchors.length} 项` }
   },
 })

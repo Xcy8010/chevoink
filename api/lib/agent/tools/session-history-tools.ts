@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
 
 import type { AgentMessagePart } from '../../../../shared/contracts/index.js'
-import { prisma } from '../../prisma.js'
+import { DataAccessError, prisma } from '../../prisma.js'
 import { defineTool } from './types.js'
 
 const READ_PERMISSION = { plan: 'allow', build: 'allow', review: 'allow' } as const
@@ -24,9 +25,9 @@ function visibleTranscript(parts: AgentMessagePart[]): string {
     .trim()
 }
 
-async function assertOwnedSession(userId: string, sessionId: string): Promise<void> {
-  const session = await prisma.agentSession.findFirst({ where: { id: sessionId, userId }, select: { id: true } })
-  if (!session) throw new Error('当前会话不存在或无权访问。')
+async function assertOwnedSession(userId: string, sessionId: string, db: Prisma.TransactionClient): Promise<void> {
+  const session = await db.agentSession.findFirst({ where: { id: sessionId, userId }, select: { id: true } })
+  if (!session) throw new DataAccessError(404, 'TOOL_READ_NOT_FOUND', '当前会话不存在或无权访问。')
 }
 
 function roleLabel(role: string): string {
@@ -51,7 +52,8 @@ export const sessionHistorySearchTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
-    await assertOwnedSession(ctx.userId, ctx.sessionId)
+    const db = ctx.transaction ?? prisma
+    await assertOwnedSession(ctx.userId, ctx.sessionId, db)
     const roleWhere = args.mode === 'first_user_prompt'
       ? 'user'
       : args.role === 'all'
@@ -59,7 +61,7 @@ export const sessionHistorySearchTool = defineTool({
         : args.role
 
     if (args.mode === 'first_user_prompt') {
-      const record = await prisma.agentMessage.findFirst({
+      const record = await db.agentMessage.findFirst({
         where: { sessionId: ctx.sessionId, role: 'user' },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true, role: true, parts: true, createdAt: true },
@@ -72,7 +74,7 @@ export const sessionHistorySearchTool = defineTool({
       }
     }
 
-    const records = await prisma.agentMessage.findMany({
+    const records = await db.agentMessage.findMany({
       where: { sessionId: ctx.sessionId, ...(roleWhere ? { role: roleWhere } : {}) },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: args.mode === 'recent' ? args.limit : SEARCH_SCAN_LIMIT,
@@ -110,12 +112,13 @@ export const sessionMessageReadTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
-    await assertOwnedSession(ctx.userId, ctx.sessionId)
-    const record = await prisma.agentMessage.findFirst({
+    const db = ctx.transaction ?? prisma
+    await assertOwnedSession(ctx.userId, ctx.sessionId, db)
+    const record = await db.agentMessage.findFirst({
       where: { id: args.messageId, sessionId: ctx.sessionId },
       select: { id: true, role: true, parts: true, createdAt: true },
     })
-    if (!record) return { output: '未找到该消息，可能已删除或不属于当前会话。' }
+    if (!record) return { output: '未找到该消息，可能已删除或不属于当前会话。', outcome: 'failed' as const }
     const text = visibleTranscript(record.parts as unknown as AgentMessagePart[])
     const content = text.slice(args.offset, args.offset + args.maxChars)
     const nextOffset = args.offset + content.length < text.length ? args.offset + content.length : null

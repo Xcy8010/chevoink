@@ -879,6 +879,7 @@ export function AgentPanel({
       try {
         await resolveAgentApproval(runId, {
           callId: pendingApproval.callId,
+          approvalId: pendingApproval.approvalId,
           approved,
           alwaysAllow,
         })
@@ -896,6 +897,7 @@ export function AgentPanel({
       }
       try {
         await resolveAgentQuestion(runId, {
+          requestId: pendingQuestion.requestId,
           callId: pendingQuestion.callId,
           answer,
         })

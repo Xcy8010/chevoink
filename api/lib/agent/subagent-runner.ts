@@ -9,6 +9,7 @@ import { resolveAgent2FeatureFlags } from '../agent2-feature-flags.js'
 import { handleToolCall } from './loop.js'
 import { toOpenAITools } from './tools/registry.js'
 import type { ToolContext } from './tools/types.js'
+import { intersectToolAuthority, snapshotToolAuthority } from './tool-authority.js'
 import {
   collapseEarlyToolRounds,
   compactEarlyToolPayloads,
@@ -56,7 +57,7 @@ export type SubagentInlineParams = {
   modelRuntime: Awaited<ReturnType<typeof getModelTierRuntime>>
   /** 最小事件接口：主 run 传入 RunEventBus，工具层用 ctx.emit 包装（结构兼容） */
   bus: { emit: (event: AgentStreamEventBody) => void }
-  /** 父 run 的 ToolContext（含 signal/emit/creativeFreedom 等），子 Agent 循环在其上覆写 callId */
+  /** 父 run 的 ToolContext；子执行覆写 mode/callId，并收窄服务端工具授权。 */
   toolContextBase: ToolContext
   sessionPolicy: { toolPolicy: unknown; sandboxMode: string } | null
 }
@@ -102,6 +103,20 @@ function buildSubagentMessages(params: SubagentInlineParams): ChatMessage[] {
 
 /** 执行子 Agent 精简工具循环，返回报告与内部工具卡片 */
 export async function runSubagentInline(params: SubagentInlineParams): Promise<SubagentInlineResult> {
+  // Legacy/corrupt stored definitions must not fall back to the unrestricted orchestrator.
+  if (!['research', 'continuity', 'quality', 'lore'].includes(params.role)) {
+    return {
+      ok: false, denied: true, report: '子 Agent 角色无效，未启动；不能回退为主控角色。',
+      turns: 0, toolCallCount: 0, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, extraParts: [],
+    }
+  }
+  const parentAuthority = params.toolContextBase.toolAuthority
+  if (!parentAuthority) {
+    return {
+      ok: false, denied: true, report: '父任务授权快照缺失，子 Agent 未启动；请由主任务重新核验授权。',
+      turns: 0, toolCallCount: 0, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, extraParts: [],
+    }
+  }
   const definition = getAgentDefinition(params.role)
   const featureFlags = resolveAgent2FeatureFlags(params.userId)
   const scopedTools = getToolsForAgent(definition, params.mode, featureFlags)
@@ -109,7 +124,12 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
     ? params.sessionPolicy.sandboxMode
     : 'workspace'
   // 写操作沿用父会话策略：策略为 ask 的工具在子 Agent 内触发审批，透传到父 run 由作者批复
-  const tools = applySessionToolPolicy(scopedTools, params.mode, params.sessionPolicy?.toolPolicy, sandboxMode)
+  const tools = intersectToolAuthority(
+    applySessionToolPolicy(scopedTools, params.mode, params.sessionPolicy?.toolPolicy, sandboxMode),
+    params.mode,
+    parentAuthority,
+  )
+  const toolAuthority = snapshotToolAuthority(tools, params.mode)
   const openAITools = toOpenAITools(tools)
 
   const messages = buildSubagentMessages(params)
@@ -208,7 +228,7 @@ export async function runSubagentInline(params: SubagentInlineParams): Promise<S
         const outcome = await handleToolCall(
           call,
           tools,
-          { ...params.toolContextBase, callId: call.id },
+          { ...params.toolContextBase, mode: params.mode, toolAuthority, callId: call.id },
           params.bus,
           params.messageId,
           params.parentRunId,

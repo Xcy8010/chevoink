@@ -70,6 +70,15 @@ export function resolveAgentContextBudget(contextWindowTokens: number, maxOutput
   }
 }
 
+/** Admission reserves the full configured response, never a reduced answer. */
+export function resolveDurableInputLimit(contextWindowTokens: number, maxOutputTokens: number): number {
+  if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 1
+    || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1) return 0
+  const budget = resolveAgentContextBudget(contextWindowTokens, maxOutputTokens)
+  return Math.max(0, Math.floor(Math.min(budget.hardRequestTokens,
+    contextWindowTokens - maxOutputTokens - Math.max(2048, contextWindowTokens * 0.05))))
+}
+
 function summarizeArgumentValue(value: unknown, depth = 0): unknown {
   if (depth >= 2) {
     if (Array.isArray(value)) return `[数组 ${value.length} 项]`
@@ -110,6 +119,32 @@ export type InRunCompactionResult = {
   collapsedToolRounds: number
 }
 
+/** Pair only contiguous replies owned by one assistant round. Providers may
+ * reuse call IDs in later rounds; a global ID map can silently steal a reply. */
+function completedToolRounds(messages: ChatMessage[], keepRecent: number) {
+  const replies = messages.filter((message): message is Extract<ChatMessage, { role: 'tool' }> => message.role === 'tool')
+  const keep = Number.isFinite(keepRecent) ? Math.max(0, Math.floor(keepRecent)) : 8
+  const protectedReplies = new Set(keep ? replies.slice(-keep) : [])
+  const rounds: Array<{ index: number; assistant: Extract<ChatMessage, { role: 'assistant' }>; outputs: Extract<ChatMessage, { role: 'tool' }>[] }> = []
+  for (let index = 0; index < messages.length; index++) {
+    const assistant = messages[index]
+    if (assistant.role !== 'assistant' || !assistant.toolCalls?.length) continue
+    const outputs: Extract<ChatMessage, { role: 'tool' }>[] = []
+    for (let next = index + 1; next < messages.length; next++) {
+      const output = messages[next]
+      if (output.role !== 'tool') break
+      outputs.push(output)
+    }
+    const ids = new Set(assistant.toolCalls.map(call => call.id))
+    if (ids.size !== assistant.toolCalls.length || outputs.length !== ids.size
+      || new Set(outputs.map(output => output.toolCallId)).size !== ids.size
+      || outputs.some(output => !ids.has(output.toolCallId) || protectedReplies.has(output))
+      || assistant.toolCalls.some(call => call.incomplete)) continue
+    rounds.push({ index, assistant, outputs })
+  }
+  return rounds
+}
+
 /**
  * First-stage, protocol-preserving compaction. Old tool-call arguments remain
  * valid JSON and call IDs are untouched; matching tool outputs become bounded
@@ -117,21 +152,19 @@ export type InRunCompactionResult = {
  */
 export function compactEarlyToolPayloads(messages: ChatMessage[], keepRecentToolOutputs = 8): InRunCompactionResult {
   const beforeTokens = estimateChatMessagesTokens(messages)
-  const toolMessages = messages.flatMap((message, index) => message.role === 'tool' ? [{ message, index }] : [])
-  const protectedCallIds = new Set(toolMessages.slice(-keepRecentToolOutputs).map(({ message }) => message.toolCallId))
+  const rounds = completedToolRounds(messages, keepRecentToolOutputs)
   let compactedToolArguments = 0
   let compactedToolOutputs = 0
 
-  for (const { message } of toolMessages.slice(0, Math.max(0, toolMessages.length - keepRecentToolOutputs))) {
+  for (const message of rounds.flatMap(round => round.outputs)) {
     if (message.content.length <= LONG_TOOL_PAYLOAD_CHARS || message.content.startsWith('[工具输出已压缩]')) continue
-    message.content = `[工具输出已压缩] ${message.content.slice(0, TOOL_OUTPUT_EXCERPT_CHARS)}…（原 ${message.content.length} 字，内容已落库，需要时重新调用读取工具获取）`
+    message.content = `[工具输出已压缩] ${message.content.slice(0, TOOL_OUTPUT_EXCERPT_CHARS)}…（原 ${message.content.length} 字；仅为历史观察片段，不代表执行成功，需要细节时读取原记录或核验当前内容）`
     compactedToolOutputs += 1
   }
 
-  for (const message of messages) {
-    if (message.role !== 'assistant' || !message.toolCalls?.length) continue
-    for (const call of message.toolCalls) {
-      if (protectedCallIds.has(call.id) || call.arguments.length <= LONG_TOOL_PAYLOAD_CHARS || call.arguments.includes('"_contextCompacted":true')) continue
+  for (const { assistant } of rounds) {
+    for (const call of assistant.toolCalls!) {
+      if (call.arguments.length <= LONG_TOOL_PAYLOAD_CHARS || call.arguments.includes('"_contextCompacted":true')) continue
       call.arguments = compactToolArguments(call.arguments)
       compactedToolArguments += 1
     }
@@ -153,25 +186,19 @@ export function compactEarlyToolPayloads(messages: ChatMessage[], keepRecentTool
  */
 export function collapseEarlyToolRounds(messages: ChatMessage[], keepRecentToolOutputs = 8): InRunCompactionResult {
   const beforeTokens = estimateChatMessagesTokens(messages)
-  const toolMessages = messages.filter((message): message is Extract<ChatMessage, { role: 'tool' }> => message.role === 'tool')
-  const protectedCallIds = new Set(toolMessages.slice(-keepRecentToolOutputs).map((message) => message.toolCallId))
-  const toolByCallId = new Map(toolMessages.map((message) => [message.toolCallId, message]))
   const remove = new Set<ChatMessage>()
   let collapsedToolRounds = 0
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (message.role !== 'assistant' || !message.toolCalls?.length) continue
-    if (message.toolCalls.some((call) => protectedCallIds.has(call.id) || !toolByCallId.has(call.id))) continue
-    const receipts = message.toolCalls.map((call) => {
-      const toolResult = toolByCallId.get(call.id)!
+  for (const { index, assistant: message, outputs } of completedToolRounds(messages, keepRecentToolOutputs)) {
+    const receipts = message.toolCalls!.map((call) => {
+      const toolResult = outputs.find(output => output.toolCallId === call.id)!
       remove.add(toolResult)
       const excerpt = toolResult.content.replace(/^\[工具输出已压缩\]\s*/, '').slice(0, 180)
       return `${call.name}：${excerpt}${toolResult.content.length > 180 ? '…' : ''}`
     })
     messages[index] = {
       role: 'assistant',
-      content: `[早前工具轮已压缩；操作结果已落库，需要细节请重新读取]\n${receipts.join('\n')}`,
+      content: [message.content, `[早前工具轮已压缩；以下仅为历史观察片段，不证明任务完成，需要细节请读取原记录或核验当前内容]\n${receipts.join('\n')}`].filter(Boolean).join('\n\n'),
     }
     collapsedToolRounds += 1
   }
@@ -188,4 +215,27 @@ export function collapseEarlyToolRounds(messages: ChatMessage[], keepRecentToolO
     compactedToolOutputs: 0,
     collapsedToolRounds,
   }
+}
+
+/** Durable variant: the source frame is immutable and remains readable through
+ * execution_context_read. Never substitute excerpts for original observations.
+ * User/system text and assistant prose are preserved, including task decisions. */
+export function archiveEarlyToolRounds(messages: ChatMessage[], source: { revision: number; hash: string }, keepRecentToolOutputs = 8) {
+  if (!Number.isSafeInteger(source.revision) || source.revision < 0 || !/^[a-f0-9]{64}$/.test(source.hash)) throw new Error('Invalid context archive source')
+  const archived = structuredClone(messages)
+  const removed = new Set<ChatMessage>()
+  let archivedRounds = 0
+  for (const { index, assistant, outputs } of completedToolRounds(archived, keepRecentToolOutputs)) {
+    const references = [index, ...outputs.map(output => archived.indexOf(output))].map(messageIndex => ({
+      revision: source.revision, hash: source.hash, messageIndex,
+    }))
+    archived[index] = { role: 'assistant', content: [assistant.content,
+      `[历史工具原文已归档；不代表成功或完成。需要参数、结果或失败细节时，调用 execution_context_read 按以下位置分页读取，不得猜测。]\n${JSON.stringify({
+        tools: assistant.toolCalls!.map(call => ({ id: call.id, name: call.name })), references,
+      })}`,
+    ].filter(Boolean).join('\n\n') }
+    for (const output of outputs) removed.add(output)
+    archivedRounds++
+  }
+  return { messages: archived.filter(message => !removed.has(message)), archivedRounds }
 }

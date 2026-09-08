@@ -3,7 +3,8 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronUp, Compass, FileText, Home, LoaderCircle, LogOut, MessageSquareMore, MoonStar, PenSquare, Plus, Settings, SunMedium, UserRound, Users, WifiOff } from 'lucide-react'
 
-import { ApiClientError, requestJson } from '@/app/api-client'
+import { requestJson } from '@/app/api-client'
+import { useToast } from '@/components/ui/toast-context'
 import Button from '@/components/ui/Button'
 import AppImage from '@/components/ui/AppImage'
 import Surface from '@/components/ui/Surface'
@@ -37,6 +38,7 @@ const bottomNavRefreshKeys: Record<string, readonly (readonly string[])[]> = {
 const NAV_REFRESH_COOLDOWN_MS = 3_000
 
 export default function AppShell({ title, description, children }: AppShellProps) {
+  const toast = useToast()
   const navigate = useNavigate()
   const location = useLocation()
   const quickCreateOpen = useShellStore((state) => state.quickCreateOpen)
@@ -266,15 +268,13 @@ export default function AppShell({ title, description, children }: AppShellProps
   async function handleLogout() {
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
-    } catch (error) {
-      if (!(error instanceof ApiClientError)) {
-        return
-      }
-    } finally {
-      setDesktopAccountMenuOpen(false)
-      setGuest()
-      navigate('/login', { replace: true })
+    } catch {
+      toast.error('暂时无法确认退出登录，请稍后重试。')
+      return
     }
+    setDesktopAccountMenuOpen(false)
+    setGuest()
+    navigate('/login', { replace: true })
   }
 
   const accountActionClass =

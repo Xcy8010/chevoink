@@ -1,5 +1,6 @@
 import type { AgentStreamEvent, AgentStreamEventBody } from '../../../shared/contracts/index.js'
 import { prisma } from '../prisma.js'
+import type { Prisma } from '@prisma/client'
 
 /**
  * run 级事件总线：发射 + 持久化 + SSE 桥接（plan/13 §4.6）。
@@ -16,15 +17,19 @@ export class RunEventBus {
   private history: AgentStreamEvent[] = []
   private listeners = new Set<EventListener>()
   private pendingPersist: AgentStreamEvent[] = []
-  private flushing = false
+  private flushPromise: Promise<void> | null = null
   private closed = false
+  private committingTerminal = false
+  private terminalWrite: Promise<unknown> | null = null
 
-  constructor(runId: string) {
+  constructor(runId: string, initialSeq = 0) {
+    if (!Number.isSafeInteger(initialSeq) || initialSeq < 0) throw new Error('无效的事件序号')
     this.runId = runId
+    this.seq = initialSeq
   }
 
   emit(body: AgentStreamEventBody): AgentStreamEvent {
-    if (this.closed) {
+    if (this.closed || this.committingTerminal) {
       throw new Error(`事件总线已关闭：${this.runId}`)
     }
 
@@ -37,7 +42,9 @@ export class RunEventBus {
 
     this.history.push(event)
     this.pendingPersist.push(event)
-    void this.flush()
+    // Live delivery is non-blocking; flush logs a sanitized failure and retains
+    // the batch. close/dispose still observe rejection instead of claiming success.
+    void this.flush().catch(() => {})
 
     for (const listener of this.listeners) {
       try {
@@ -55,7 +62,7 @@ export class RunEventBus {
    * 不写 agent_run_events，避免把同一篇正文的所有中间副本反复落库；正式 tool.call/result 仍完整持久化。
    */
   emitTransient(body: AgentStreamEventBody): AgentStreamEvent {
-    if (this.closed) throw new Error(`事件总线已关闭：${this.runId}`)
+    if (this.closed || this.committingTerminal) throw new Error(`事件总线已关闭：${this.runId}`)
     const event: AgentStreamEvent = { seq: ++this.seq, runId: this.runId, ts: new Date().toISOString(), ...body }
     for (const listener of this.listeners) {
       try { listener(event) } catch { /* 单个订阅者异常不影响其它订阅者 */ }
@@ -76,7 +83,7 @@ export class RunEventBus {
       }
     }
 
-    this.listeners.add(listener)
+    if (!this.closed) this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
     }
@@ -86,47 +93,98 @@ export class RunEventBus {
     return this.seq
   }
 
+  /** State and terminal journal entry share one transaction. Publication stays
+   * with the caller so existing post-run housekeeping retains its ordering. */
+  async commitTerminal<T>(body: Extract<AgentStreamEventBody, { type: 'run.finished' | 'run.paused' }>,
+    work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<{ result: T; publish: () => void }> {
+    if (this.closed || this.committingTerminal) throw new Error(`事件总线已关闭：${this.runId}`)
+    this.committingTerminal = true
+    try {
+      await this.flush()
+      if (this.seq >= 2147483647) throw new Error('事件序号已达上限，不能回绕')
+      const event: AgentStreamEvent = { ...structuredClone(body), runId: this.runId, seq: ++this.seq, ts: new Date().toISOString() }
+      const transaction = prisma.$transaction(async tx => {
+        const value = await work(tx)
+        await tx.agentRunEvent.create({ data: { runId: this.runId, seq: event.seq, type: event.type, payload: event as object } })
+        return value
+      })
+      this.terminalWrite = transaction
+      const result = await transaction
+      let published = false
+      return { result, publish: () => {
+        if (published) return
+        published = true
+        this.committingTerminal = false
+        this.closed = true
+        this.history.push(event)
+        for (const listener of this.listeners) {
+          try { listener(event) } catch { /* A disconnected listener cannot undo the commit. */ }
+        }
+      } }
+    } catch (error) {
+      this.committingTerminal = false
+      // Do not reuse the reserved seq after an ambiguous commit response.
+      throw error
+    } finally {
+      this.terminalWrite = null
+    }
+  }
+
   /** run 结束后调用：等待落库完成并释放内存 */
   async close(): Promise<void> {
     this.closed = true
     await this.flush()
+    await this.terminalWrite
     this.listeners.clear()
     this.history = []
   }
 
-  private async flush(): Promise<void> {
-    if (this.flushing) {
-      return
-    }
+  private flush(): Promise<void> {
+    if (this.flushPromise) return this.flushPromise
+    if (this.pendingPersist.length === 0) return Promise.resolve()
 
-    this.flushing = true
-    try {
-      while (this.pendingPersist.length > 0) {
-        const batch = this.pendingPersist.splice(0, this.pendingPersist.length)
-        try {
-          await prisma.agentRunEvent.createMany({
-            data: batch.map((event) => ({
-              runId: this.runId,
-              seq: event.seq,
-              type: event.type,
-              payload: event as object,
-            })),
-            skipDuplicates: true,
-          })
-        } catch (error) {
-          console.error('[agent-events] 事件持久化失败', this.runId, error)
-        }
-      }
-    } finally {
-      this.flushing = false
+    this.flushPromise = this.persistPending().then(() => {
+      this.flushPromise = null
+      // An emit can land after persistPending returns but before this microtask.
+      // Join that tail as well, so a closer never observes a false empty flush.
+      if (this.pendingPersist.length > 0) return this.flush()
+    }, (error: unknown) => {
+      this.flushPromise = null
+      // Prisma errors can contain SQL, credentials or event payloads. Log only
+      // operational identifiers; propagate the error to the explicit closer.
+      console.error('[agent-events] 事件持久化失败，批次保留待重试', {
+        runId: this.runId,
+        pendingCount: this.pendingPersist.length,
+      })
+      throw error
+    })
+    return this.flushPromise
+  }
+
+  private async persistPending(): Promise<void> {
+    while (this.pendingPersist.length > 0) {
+      const batch = this.pendingPersist.slice()
+      await prisma.agentRunEvent.createMany({
+        data: batch.map((event) => ({
+          runId: this.runId,
+          seq: event.seq,
+          type: event.type,
+          payload: event as object,
+        })),
+        // Retry an ambiguous commit using the same (runId, seq), never a new ID.
+        skipDuplicates: true,
+      })
+      // Only the confirmed prefix is removed; emits during await remain queued.
+      this.pendingPersist.splice(0, batch.length)
     }
   }
 }
 
 const busByRun = new Map<string, RunEventBus>()
 
-export function createRunEventBus(runId: string): RunEventBus {
-  const bus = new RunEventBus(runId)
+export function createRunEventBus(runId: string, initialSeq = 0): RunEventBus {
+  if (busByRun.has(runId)) throw new Error('事件总线尚未完成清理，不能覆盖')
+  const bus = new RunEventBus(runId, initialSeq)
   busByRun.set(runId, bus)
   return bus
 }
@@ -138,9 +196,22 @@ export function getRunEventBus(runId: string): RunEventBus | undefined {
 export async function disposeRunEventBus(runId: string): Promise<void> {
   const bus = busByRun.get(runId)
   if (bus) {
-    busByRun.delete(runId)
     await bus.close()
+    if (busByRun.get(runId) === bus) busByRun.delete(runId)
   }
+}
+
+/** Called only after admission has confirmed this run has no active executor.
+ * A resume must flush the old journal before replacing it and continue its seq.
+ * This is a single-process bridge; durable owner/epoch fencing is still required.
+ */
+export async function prepareRunEventResume(runId: string): Promise<number> {
+  const memorySeq = busByRun.get(runId)?.lastSeq ?? 0
+  await disposeRunEventBus(runId)
+  const latest = await prisma.agentRunEvent.findFirst({
+    where: { runId }, orderBy: { seq: 'desc' }, select: { seq: true },
+  })
+  return Math.max(memorySeq, latest?.seq ?? 0)
 }
 
 /** run 已结束（无 live 总线）时，从 DB 读事件做 replay */

@@ -30,7 +30,7 @@ import {
   novelGetContextTool,
   planReadTool,
 } from './read-tools.js'
-import { webReadTool, webSearchTool } from './search-tools.js'
+import { webReadTool, webSearchTool, researchReportSaveTool, researchReportReadTool } from './search-tools.js'
 import type { AgentTool } from './types.js'
 import { todoWriteTool } from './todo-tools.js'
 import { subAgentDelegateTool, subAgentRunTool } from './subagent-tools.js'
@@ -120,6 +120,8 @@ export const allTools: AgentTool<any>[] = [
   planReadTool,
   webSearchTool,
   webReadTool,
+  researchReportSaveTool,
+  researchReportReadTool,
   platformNovelSearchTool,
   platformNovelReadTool,
   viewImageTool,

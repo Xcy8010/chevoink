@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { FIXED_NOVEL_COVER_SIZE } from '../../../../shared/contracts/index.js'
 import { generateCoverImageData } from '../../ai-service.js'
+import { recoverCoverAssetStorageData } from '../../data-access.js'
 import { prisma } from '../../prisma.js'
 import { enforceCoverTitleInPrompt } from './cover-prompt.js'
 import { defineTool } from './types.js'
@@ -101,6 +102,11 @@ export const coverApplyTool = defineTool({
     if (!novel) {
       return { output: '未找到当前作品。' }
     }
+
+    // Applying a retained provider result retries only its local storage. It
+    // must not generate a replacement image or incur another fixed fee.
+    const recovered = await recoverCoverAssetStorageData(ctx.userId, asset.id)
+    asset.imageUrl = recovered.imageUrl
 
     await prisma.$transaction([
       prisma.coverAsset.update({ where: { id: asset.id }, data: { novelId: ctx.novelId } }),

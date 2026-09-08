@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SseDataDecoder } from '../../api/lib/ai-sse.js'
 vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: vi.fn(), consumeTokenCredits: vi.fn(async () => ({ chargedMilli: 0 })) }))
-vi.mock('../../api/lib/prisma.js', () => ({ DataAccessError: class extends Error {}, prisma: { aiUsageLog: { create: vi.fn(async () => ({ id: 'usage' })) } } }))
+vi.mock('../../api/lib/prisma.js', () => ({ DataAccessError: class extends Error {}, prisma: { aiUsageLog: { create: vi.fn(async () => ({ id: 'usage' })), update: vi.fn(async () => ({ id: 'usage' })), updateMany: vi.fn(async () => ({ count: 1 })) } } }))
+vi.mock('../../api/lib/billing/resolve-token-price.js', async original => ({ ...await original<object>(),
+  resolveTokenPrice: async () => ({ version: 'credits-v1-exact', modelTier: 'speed', multiplierBps: 10000 }) }))
 import { chatWithTools } from '../../api/lib/ai-service.js'
 
 afterEach(() => vi.unstubAllGlobals())

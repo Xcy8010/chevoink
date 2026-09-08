@@ -1,14 +1,34 @@
 import { Prisma, PrismaClient } from '@prisma/client'
+// Resolve the application's selected environment before deriving pool options.
+import '../config/env.js'
 
 declare global {
    
   var __chevoinkPrisma__: PrismaClient | undefined
 }
 
+/** Prisma maps timestamp-without-time-zone to UTC. PostgreSQL defaults such as
+ * CURRENT_TIMESTAMP must use the same clock representation on every pooled
+ * connection, regardless of the host/database timezone. Preserve other options. */
+export function databaseUrlWithUtcSession(value: string | undefined): string | undefined {
+  if (!value) return value
+  try {
+    const url = new URL(value)
+    if (!['postgres:', 'postgresql:'].includes(url.protocol)) return value
+    const options = url.searchParams.get('options')?.trim()
+    url.searchParams.set('options', [options, '-c timezone=UTC'].filter(Boolean).join(' '))
+    return url.toString()
+  } catch {
+    // Keep Prisma's original configuration diagnostics, without logging secrets.
+    return value
+  }
+}
+
 const prismaClient =
   globalThis.__chevoinkPrisma__ ??
   new PrismaClient({
     log: ['error'],
+    datasourceUrl: databaseUrlWithUtcSession(process.env.DATABASE_URL),
   })
 
 if (process.env.NODE_ENV !== 'production') {

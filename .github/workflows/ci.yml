@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # 测试库容器：迁移与集成测试共用（库名含 test，过 tests/setup.ts 守卫）
+    # Ephemeral cluster: bootstrap a non-superuser before any migration/test.
     services:
       postgres:
         image: postgres:16
@@ -32,31 +32,49 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/chevoink_test
+      DATABASE_URL: postgresql://chevoink_test_runner:isolated-ci-only@127.0.0.1:5432/chevoink_test
+      APP_ENV: test
+      TEST_DATABASE_REQUIRED: 'true'
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node 22
+      - name: 安装固定候选运行时
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
       - name: 安装依赖
         run: npm ci
 
+      - name: 验证 Node/npm 与锁文件合同
+        run: npm run runtime:verify
+
       - name: 生成 Prisma Client
         run: npx prisma generate
 
+      - name: 创建最小权限测试账号
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE chevoink_test_runner LOGIN PASSWORD 'isolated-ci-only'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+          ALTER DATABASE chevoink_test OWNER TO chevoink_test_runner;
+          SQL
+
+      - name: 迁移前验证测试数据库及账号
+        run: npm run test:db:verify
+
       - name: 应用数据库迁移
-        run: npx prisma migrate deploy
+        run: npm run test:db:migrate
 
       - name: 准备测试环境变量
         run: |
           cp tests/.env.test.example tests/.env.test
-          sed -i 's|postgresql://127.0.0.1:5432/chevoink_test|postgresql://postgres:postgres@127.0.0.1:5432/chevoink_test|' tests/.env.test
+          # DATABASE_URL is inherited from the verified job environment.
 
       - name: 类型检查
         run: npm run check
@@ -84,3 +102,6 @@ jobs:
 
       - name: 生产依赖安全审计
         run: npm audit --omit=dev --audit-level=high
+
+      - name: 构建与测试依赖安全审计
+        run: npm audit --audit-level=high

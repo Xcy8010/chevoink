@@ -1,22 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import type { AgentStreamEventBody, AgentTodoItem } from '../../shared/contracts/index.js'
-import type { AgentTool, ToolResult } from '../../api/lib/agent/tools/types.js'
+import type { AgentStreamEventBody, AgentTodoItem, TaskSpec } from '../../shared/contracts/index.js'
+import type { AgentTool, ToolContext, ToolResult } from '../../api/lib/agent/tools/types.js'
 import type { chatWithTools as chatType } from '../../api/lib/ai-service.js'
 
 const mocks = vi.hoisted(() => ({
-  chat: vi.fn(), emit: vi.fn(), persist: vi.fn(async () => ({})),
-  update: vi.fn(async () => ({ taskSpec: null })), previous: vi.fn(async () => null),
+  chat: vi.fn(), emit: vi.fn(), persist: vi.fn(async () => ({})), dispose: vi.fn(async () => {}),
+  update: vi.fn<(input: { data: Record<string, unknown> }) => Promise<{ taskSpec: TaskSpec | null; usage?: unknown; currentTurn?: number; startedAt?: Date }>>(async () => ({ taskSpec: null })), previous: vi.fn(async () => null),
   todos: vi.fn(async (): Promise<AgentTodoItem[]> => []),
+  priorRuns: vi.fn(),
+  report: vi.fn(async () => ({ chineseCharacters: 0, content: '' })),
+  original: vi.fn<() => Promise<{ parts: Array<{ type: string; text: string }> } | null>>(async () => ({ parts: [{ type: 'text', text: '核对原任务的剩余工作。' }] })),
   tools: [] as AgentTool[],
+  hiddenTools: [] as AgentTool[],
 }))
 vi.mock('../../api/lib/ai-service.js', () => ({ chatWithTools: mocks.chat }))
 vi.mock('../../api/lib/prisma.js', () => ({
-  DataAccessError: class extends Error {},
+  DataAccessError: class extends Error {
+    constructor(readonly status: number, readonly code: string, message: string) { super(message) }
+  },
   prisma: {
-    agentRun: { update: mocks.update, findFirst: mocks.previous },
+    agentRun: { update: mocks.update, findFirst: mocks.previous, findMany: mocks.priorRuns },
     agentSession: { update: vi.fn(async () => ({})), findUnique: vi.fn(async () => null) },
-    agentMessage: { upsert: mocks.persist, findUnique: vi.fn(async () => null) },
+    agentMessage: { upsert: mocks.persist, findUnique: vi.fn(async () => null), findFirst: mocks.original },
   },
 }))
 vi.mock('../../api/lib/credits.js', () => ({ getModelTierRuntime: vi.fn(async () => ({ tier: 'speed', contextWindowTokens: 128000 })) }))
@@ -25,29 +31,37 @@ vi.mock('../../api/lib/agent/agents.js', () => ({
   getToolsForAgent: () => mocks.tools,
   applySessionToolPolicy: (tools: AgentTool[]) => tools,
 }))
-vi.mock('../../api/lib/agent/tools/registry.js', () => ({ allTools: [], getToolByName: (name: string) => mocks.tools.find(tool => tool.name === name), toOpenAITools: () => [] }))
+vi.mock('../../api/lib/agent/tools/registry.js', () => ({ allTools: [], getToolByName: (name: string) => [...mocks.tools, ...mocks.hiddenTools].find(tool => tool.name === name), toOpenAITools: () => [] }))
 vi.mock('../../api/lib/agent/active-runs.js', () => ({ registerActiveRun: vi.fn(), deregisterActiveRun: vi.fn() }))
 vi.mock('../../api/lib/agent/baseline.js', () => ({ clearRunBaselines: vi.fn() }))
 vi.mock('../../api/lib/agent/context.js', () => ({ assembleContext: vi.fn(async () => ({ messages: [] })), insertSubagentCatalog: vi.fn() }))
 vi.mock('../../api/lib/agent/context-engine.js', () => ({ captureUserDirectives: vi.fn(), compactSessionContext: vi.fn(async () => null) }))
 vi.mock('../../api/lib/agent/story-memory.js', () => ({ syncNovelMemoryProjection: vi.fn(async () => null) }))
+vi.mock('../../api/lib/agent/research-sources.js', () => ({ readResearchReportForDelivery: mocks.report }))
 vi.mock('../../api/lib/agent2-feature-flags.js', () => ({ resolveAgent2FeatureFlags: () => ({}) }))
-vi.mock('../../api/lib/agent/events.js', () => ({ createRunEventBus: () => ({ emit: mocks.emit, emitTransient: mocks.emit }), disposeRunEventBus: vi.fn() }))
+vi.mock('../../api/lib/agent/events.js', () => ({ createRunEventBus: () => ({ emit: mocks.emit, emitTransient: mocks.emit,
+  commitTerminal: async (body: AgentStreamEventBody, work: (tx: { agentRun: { update: typeof mocks.update } }) => Promise<unknown>) => ({
+    result: await work({ agentRun: { update: mocks.update } }), publish: () => mocks.emit(body),
+  }),
+}), disposeRunEventBus: mocks.dispose }))
 vi.mock('../../api/lib/agent/permissions.js', () => ({ cancelAllQuestions: vi.fn(), grantAlwaysAllow: vi.fn(), hasAlwaysAllow: () => false, rejectAllApprovals: vi.fn(), waitForApproval: vi.fn() }))
 vi.mock('../../api/lib/agent/tools/todo-tools.js', () => ({ loadSessionTodoItems: mocks.todos, renderTodoItems: (items: AgentTodoItem[]) => JSON.stringify(items) }))
 vi.mock('../../api/lib/agent/task-lineage.js', () => ({ getTaskRunIds: async () => ['run'] }))
 vi.mock('../../api/lib/agent/tools/task-orchestration-tools.js', () => ({ ORCHESTRATION_TOOL_NAMES: new Set(), assertOrchestrationResumeGuard: vi.fn(), buildOrchestrationResumeNote: vi.fn() }))
 vi.mock('../../api/lib/agent/session-title.js', () => ({ autoNameSession: vi.fn() }))
 
-const { executeAgentRun } = await import('../../api/lib/agent/loop.js')
+const { executeAgentRun, handleToolCall } = await import('../../api/lib/agent/loop.js')
+const { runSubagentInline } = await import('../../api/lib/agent/subagent-runner.js')
 const { env } = await import('../../api/config/env.js')
 const { buildTaskSpec } = await import('../../api/lib/agent/task-spec.js')
+const { DataAccessError } = await import('../../api/lib/prisma.js')
+const { assembleContext } = await import('../../api/lib/agent/context.js')
 type Response = Awaited<ReturnType<typeof chatType>>
-const response = (content = '已完成。', toolCalls: Response['toolCalls'] = [], tokens = 10): Response => ({ content, toolCalls, reasoning: '', finishReason: toolCalls.length ? 'tool_calls' : 'stop', usage: { promptTokens: tokens, completionTokens: 0, totalTokens: tokens } })
+const response = (content = '已完成。', toolCalls: Response['toolCalls'] = [], tokens = 10): Response => ({ content, toolCalls, reasoning: '', finishReason: toolCalls.length ? 'tool_calls' : 'stop', usage: { promptTokens: tokens, completionTokens: 0, totalTokens: tokens, promptCacheHitTokens: null, promptCacheMissTokens: null } })
 const call = (id: string, name = 'chapter_read', args = '{}') => ({ id, name, arguments: args })
 const events = () => mocks.emit.mock.calls.map(([event]) => event as AgentStreamEventBody)
 function tool(name: string, execute: () => Promise<ToolResult>, readOnly = true): AgentTool {
-  return { name, title: name, description: '', readOnly, parameters: z.any(), permission: { plan: 'allow', build: 'allow' }, execute: vi.fn(execute) }
+  return { name, title: name, description: '', readOnly, parameters: z.any(), permission: { plan: 'allow', build: 'allow', review: 'allow' }, execute: vi.fn(execute) }
 }
 async function run(prompt = '检查当前章节', tokenBudget?: number) {
   await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null, mode: 'build', prompt, tokenBudget })
@@ -63,12 +77,365 @@ function queue(...responses: Response[]) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.chat.mockReset()
+  mocks.report.mockReset()
+  mocks.report.mockResolvedValue({ chineseCharacters: 0, content: '' })
+  mocks.original.mockReset()
+  mocks.original.mockResolvedValue({ parts: [{ type: 'text', text: '核对原任务的剩余工作。' }] })
   mocks.todos.mockResolvedValue([])
   mocks.previous.mockResolvedValue(null)
+  mocks.priorRuns.mockReset()
+  mocks.priorRuns.mockResolvedValue([])
   mocks.tools = [tool('chapter_read', async () => ({ output: '当前章节正文' }))]
+  mocks.hiddenTools = []
+})
+
+function context(): ToolContext {
+  return {
+    userId: 'user', novelId: 'novel', chapterId: null, sessionId: 'session', runId: 'run',
+    callId: 'call', mode: 'build', creativeFreedom: 'balanced', qualityMode: 'premium',
+    signal: new AbortController().signal, emit: mocks.emit,
+  }
+}
+
+describe('original task context on resume', () => {
+  it('restores the complete research request on typed continue and does not revive legacy writing authority', async () => {
+    const originalPrompt = '搜索并拆解这本小说，不要写章节。' + '核对人物与情节证据。'.repeat(130)
+    const taskSpec = { ...buildTaskSpec({ runId: 'original', novelId: 'novel', prompt: originalPrompt }), intent: 'write' as const }
+    const prior = { id: 'original', taskSpec, usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 },
+      status: 'paused', currentTurn: 1, startedAt: new Date() }
+    mocks.previous.mockResolvedValue(prior as never)
+    mocks.priorRuns.mockResolvedValue([prior])
+    mocks.original.mockResolvedValue({ parts: [{ type: 'text', text: originalPrompt }] })
+    const write = tool('chapter_write', async () => ({ output: 'must not write' }), false)
+    mocks.tools.push(write)
+    queue(response('', [call('forbidden', 'chapter_write')]), response('资料不足，未改动作品。'))
+    await run('继续')
+    expect(write.execute).not.toHaveBeenCalled()
+    expect(assembleContext).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: originalPrompt + '\n\n[用户本次要求] 继续',
+      taskSpec: expect.objectContaining({ id: taskSpec.id, intent: 'research_analysis' }),
+    }))
+    expect(mocks.original).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      sessionId: 'session', role: 'user', run: expect.objectContaining({ userId: 'user', novelId: 'novel',
+        taskSpec: { path: ['id'], equals: taskSpec.id } }),
+    }) }))
+  })
+  it('does not call the model when typed continuation has lost the original request', async () => {
+    const taskSpec = buildTaskSpec({ runId: 'original', novelId: 'novel', prompt: '分析这本小说' })
+    mocks.previous.mockResolvedValue({ id: 'original', taskSpec } as never)
+    mocks.original.mockResolvedValue(null)
+    await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null,
+      mode: 'build', prompt: '继续' })
+    expect(mocks.chat).not.toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'error', code: 'run_input_required' }))
+  })
+  it('does not accept a claimed complete report when persisted sections are still short', async () => {
+    mocks.chat.mockResolvedValue(response('完整研究报告已完成。'))
+    await run('拆解这本小说，研究报告至少10000字。')
+    expect(mocks.report).toHaveBeenCalledTimes(5)
+    expect(mocks.report).toHaveBeenCalledWith({ userId: 'user', novelId: 'novel', sessionId: 'session', runId: 'run' })
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
+    expect(mocks.tools.some(item => item.name === 'todo_write')).toBe(false)
+  })
+  it('continues missing report sections and finishes only after persisted length reaches the requirement', async () => {
+    let saved = 100
+    const content = '# 研究报告\n\n已经保存的结构与人物分析。'
+    mocks.report.mockImplementation(async () => ({ chineseCharacters: saved, content }))
+    mocks.tools.push(tool('research_report_save', async () => {
+      saved = 10000
+      return { output: '已保存缺失区块，报告共10000个汉字。' }
+    }, false))
+    queue(response('报告已完成。'), response('', [call('save-section', 'research_report_save')]), response('研究结果如下。'))
+    await run('拆解这本小说，研究报告至少10000字。')
+    expect(mocks.report).toHaveBeenCalledTimes(2)
+    expect(mocks.tools.at(-1)?.execute).toHaveBeenCalledTimes(1)
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'text.final', text: content, asReasoning: false }))
+    expect(mocks.persist).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({
+      parts: expect.arrayContaining([{ type: 'text', text: content }]),
+    }) }))
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
+  })
+  it('does not require a research artifact for ordinary chapter tasks', async () => {
+    queue(response('已完成。'))
+    await run('写第十九章。')
+    expect(mocks.report).not.toHaveBeenCalled()
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
+  })
+  it('narrows a legacy misclassified research run on explicit resume and persists the same task identity', async () => {
+    const prompt = '搜索并拆解这本小说，不要写章节。'
+    const legacy = { ...buildTaskSpec({ runId: 'run', novelId: 'novel', prompt }), intent: 'write' as const }
+    mocks.update.mockResolvedValueOnce({ ...{ taskSpec: legacy }, usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 },
+      currentTurn: 1, startedAt: new Date() })
+    const write = tool('chapter_write', async () => ({ output: 'must not write' }), false)
+    mocks.tools.push(write)
+    queue(response('', [call('blocked-resume', 'chapter_write')]), response('资料不足，未改动作品。'))
+    await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null,
+      mode: 'build', prompt, resume: true })
+    expect(write.execute).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      taskSpec: expect.objectContaining({ id: legacy.id, intent: 'research_analysis' }),
+    }) }))
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'tool.result', callId: 'blocked-resume', ok: false }))
+  })
+  it.each(['chapter_write', 'plan_save', 'memory_save', 'task_send', 'subagent_delegate'])('rejects model-requested %s during book research even with an allowed registry tool', async toolName => {
+    const write = tool(toolName, async () => ({ output: 'must not write' }), false)
+    mocks.tools.push(write)
+    queue(response('', [call('forbidden-write', toolName)]), response('资料不足，未改动作品。'))
+    await run('搜索并拆解这本小说，不要写章节。')
+    expect(write.execute).not.toHaveBeenCalled()
+    const { captureUserDirectives } = await import('../../api/lib/agent/context-engine.js')
+    expect(captureUserDirectives).not.toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'tool.result', callId: 'forbidden-write', ok: false }))
+  })
+  it.each([false, true])('preserves the exact request and run identity when resume=%s', async resume => {
+    const prompt = '只完成第19章，不能重开旧章节的任务窗口。' + '原始详细要求。'.repeat(100)
+    queue(response('已完成。'))
+    if (resume) mocks.update.mockResolvedValueOnce({ taskSpec: null,
+      ...{ usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 }, currentTurn: 1, startedAt: new Date() } })
+    await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null,
+      mode: 'build', prompt, resume, selection: { text: '本次选区', start: 0, end: 4 } })
+    expect(assembleContext).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run', prompt,
+      includeCurrentRunHistory: resume, selection: { text: '本次选区', start: 0, end: 4 } }))
+    expect(events().filter(event => event.type === 'error')).toEqual([])
+  })
+})
+
+describe('persisted legacy checkpoint budgets', () => {
+  const resume = () => executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel',
+    chapterId: null, mode: 'build', prompt: '继续原任务', resume: true })
+  it('retains cumulative usage, earned slices, progress and the original clock on resume', async () => {
+    const started = Date.now() - 1000
+    const checkpoint = { version: 1, runStartedAt: started, resumeCount: 1, compactionCount: 1,
+      maxTurns: env.agentMaxTurns + 50, tokenBudget: 4000000,
+      writeProgress: 2, writeBaseline: 2, readProgress: 3, readBaseline: 3, progressSignatures: ['existing-evidence'] }
+    mocks.update.mockResolvedValueOnce({ taskSpec: null, ...{ currentTurn: 2, startedAt: new Date(started),
+      usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120, checkpoint } } })
+    queue(response('已完成。'))
+    await resume()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished',
+      usage: expect.objectContaining({ promptTokens: 110, completionTokens: 20, totalTokens: 130 }) }))
+    const terminal = mocks.update.mock.calls.find(([input]) => input.data.status === 'completed')?.[0]
+    expect(terminal?.data).toMatchObject({ currentTurn: 3, usage: { checkpoint } })
+    expect(mocks.update.mock.calls[0]?.[0].data).not.toHaveProperty('startedAt')
+  })
+
+  it('does not call the provider or overwrite corrupt saved usage with zero', async () => {
+    mocks.update.mockResolvedValueOnce({ taskSpec: null, ...{ currentTurn: 8,
+      usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120, checkpoint: { version: 999 } } } })
+    await resume()
+    expect(mocks.chat).not.toHaveBeenCalled()
+    expect(mocks.update.mock.calls.every(([input]) => !Object.hasOwn(input.data, 'usage'))).toBe(true)
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'error', code: 'run_checkpoint_unconfirmed' }))
+  })
+
+  it('does not grant a fresh budget or a paid wrap-up to an exhausted historical run', async () => {
+    mocks.update.mockResolvedValueOnce({ taskSpec: null, ...{ currentTurn: 2, startedAt: new Date(),
+      usage: { promptTokens: env.agentRunTokenBudgetCeiling, completionTokens: 0, totalTokens: env.agentRunTokenBudgetCeiling } } })
+    await resume()
+    expect(mocks.chat).not.toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished', status: 'failed',
+      usage: expect.objectContaining({ totalTokens: env.agentRunTokenBudgetCeiling }) }))
+  })
+
+  it('keeps confirmed stream usage when stopped before a complete model response', async () => {
+    mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      input.onUsage?.({ promptTokens: 40, completionTokens: null, totalTokens: null })
+      input.onUsage?.({ promptTokens: 40, completionTokens: 10, totalTokens: 50 })
+      throw new DOMException('stopped', 'AbortError')
+    })
+    await run('检查当前章节')
+    const paused = mocks.update.mock.calls.find(([input]) => input.data.status === 'paused')?.[0]
+    expect(paused?.data.usage).toMatchObject({ promptTokens: 40, completionTokens: 10, totalTokens: 50 })
+    expect(mocks.chat).toHaveBeenCalledOnce()
+  })
+
+  it('counts the final usage delta once after intermediate stream observations', async () => {
+    mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      input.onUsage?.({ promptTokens: 20, completionTokens: null, totalTokens: null })
+      input.onUsage?.({ promptTokens: 40, completionTokens: 0, totalTokens: 40 })
+      return response('已完成。', [], 50)
+    })
+    await run('检查当前章节')
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished',
+      usage: { promptTokens: 50, completionTokens: 0, totalTokens: 50 } }))
+  })
+})
+
+describe('tool execution authority (real dispatch, mocked global registry)', () => {
+  it('closes a resolved failure with a failed terminal event, without claiming an effect', async () => {
+    const admitted = tool('chapter_write', async () => ({ outcome: 'failed', output: '正文已由作者修改，未覆盖。', summary: '正文变更未执行' }), false)
+    const result = await handleToolCall(call('conflict', admitted.name), [admitted], context(), { emit: mocks.emit }, 'message', 'run')
+    expect(admitted.execute).toHaveBeenCalledOnce()
+    expect(result.part).toMatchObject({ status: 'failed', summary: '正文变更未执行' })
+    expect(result.part.snapshot).toBeUndefined()
+    expect(result.observation).toContain('未覆盖')
+    expect(events().filter(event => event.type === 'tool.result')).toEqual([
+      expect.objectContaining({ callId: 'conflict', ok: false, summary: '正文变更未执行' }),
+    ])
+  })
+
+  it('closes a throwing normalizer without executing or exposing its private exception', async () => {
+    const admitted = { ...tool('scene_task_build', async () => ({ output: '不应执行' })), coerceArgs: vi.fn(() => { throw new Error('private-payload') }) }
+    const result = await handleToolCall(call('normalize', admitted.name), [admitted], context(), { emit: mocks.emit }, 'message', 'run')
+    expect(admitted.execute).not.toHaveBeenCalled()
+    expect(result.part.status).toBe('failed')
+    expect(result.observation).not.toContain('private-payload')
+    expect(events().filter(event => event.type === 'tool.call')).toHaveLength(1)
+    expect(events().filter(event => event.type === 'tool.result')).toEqual([
+      expect.objectContaining({ callId: 'normalize', ok: false, summary: '参数归一化失败' }),
+    ])
+  })
+
+  it.each(['chapter_write', 'task_create', 'subagent_delegate', 'memory_save'])('cannot resurrect excluded %s from the global registry', async name => {
+    const hidden = tool(name, async () => ({ output: '不应执行' }), false)
+    mocks.hiddenTools = [hidden]
+    const result = await handleToolCall(call('excluded', name), mocks.tools, context(), { emit: mocks.emit }, 'message', 'run')
+    expect(hidden.execute).not.toHaveBeenCalled()
+    expect(result.part.status).toBe('denied')
+    expect(events().filter(event => event.type === 'tool.result')).toEqual([
+      expect.objectContaining({ callId: 'excluded', ok: false }),
+    ])
+  })
+
+  it('rejects an excluded malformed call before coercion or retry advice', async () => {
+    const hidden = { ...tool('chapter_write', async () => ({ output: '' }), false), coerceArgs: vi.fn(() => ({})) }
+    mocks.hiddenTools = [hidden]
+    const result = await handleToolCall(call('excluded', hidden.name, '{'), [], context(), { emit: mocks.emit }, 'message', 'run')
+    expect(result.part.status).toBe('denied')
+    expect(result.observation).not.toContain('请修正后重试')
+    expect(hidden.coerceArgs).not.toHaveBeenCalled()
+    expect(hidden.execute).not.toHaveBeenCalled()
+  })
+
+  it('still executes an explicitly admitted writing tool', async () => {
+    const admitted = tool('chapter_write', async () => ({ output: '合法写作' }), false)
+    const result = await handleToolCall(call('allowed', admitted.name), [admitted], context(), { emit: mocks.emit }, 'message', 'run')
+    expect(admitted.execute).toHaveBeenCalledOnce()
+    expect(result.part.status).toBe('success')
+  })
+
+  it('does not regain a hidden writing tool during a real continuation loop', async () => {
+    const hidden = tool('chapter_write', async () => ({ output: '不应执行' }), false)
+    mocks.hiddenTools = [hidden]
+    queue(response('', [call('hidden-resume', hidden.name)]), response('当前任务无写入授权，未修改正文。'))
+    await run('继续')
+    expect(hidden.execute).not.toHaveBeenCalled()
+    expect(events().filter(event => event.type === 'tool.result')).toContainEqual(expect.objectContaining({ callId: 'hidden-resume', ok: false }))
+  })
+
+  it.each(['granted', 'empty', 'missing', 'unknown-role', 'orchestrator-role'] as const)('respects a %s parent snapshot through the real inline runner', async authority => {
+    const candidate = tool('chapter_read', async () => ({ output: '已读' }))
+    candidate.permission = { plan: 'deny', build: 'deny', review: 'allow' }
+    mocks.tools = [candidate]
+    const parent = context()
+    parent.mode = 'plan'
+    if (authority !== 'missing') parent.toolAuthority = authority !== 'empty'
+      ? new Map([['chapter_read', { permission: 'allow', alwaysConfirm: false, dangerous: false }]])
+      : new Map()
+    queue(response('', [call('child-read')]), response('已读取。'))
+    const result = await runSubagentInline({
+      subagentCallId: 'child', subtaskRunId: 'subrun', name: '一致性', role: authority === 'unknown-role' ? 'invalid' : authority === 'orchestrator-role' ? 'orchestrator' : 'continuity',
+      triggerCondition: '', prompt: '', task: '读取', mode: 'review', parentRunId: 'run',
+      sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null, messageId: 'message',
+      modelRuntime: await (await import('../../api/lib/credits.js')).getModelTierRuntime(),
+      bus: { emit: mocks.emit }, toolContextBase: parent, sessionPolicy: null,
+    })
+    if (authority === 'granted') {
+      expect(candidate.execute).toHaveBeenCalledOnce()
+      expect(vi.mocked(candidate.execute).mock.calls[0][0].mode).toBe('review')
+    } else {
+      expect(candidate.execute).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ ok: false, denied: true })
+      if (authority !== 'empty') expect(mocks.chat).not.toHaveBeenCalled()
+    }
+  })
+
+  it('honors an inherited forced confirmation even with automatic approval enabled', async () => {
+    const admitted = tool('chapter_write', async () => ({ output: '不应执行' }), false)
+    const ctx = context()
+    ctx.toolAuthority = new Map([[admitted.name, { permission: 'ask', alwaysConfirm: true, dangerous: true }]])
+    const { waitForApproval } = await import('../../api/lib/agent/permissions.js')
+    vi.mocked(waitForApproval).mockResolvedValueOnce({ approved: false, alwaysAllow: false, timedOut: false })
+    const previous = env.agentAutoApprove
+    env.agentAutoApprove = true
+    try {
+      const result = await handleToolCall(call('confirm', admitted.name), [admitted], ctx, { emit: mocks.emit }, 'message', 'run')
+      expect(waitForApproval).toHaveBeenCalledOnce()
+      expect(admitted.execute).not.toHaveBeenCalled()
+      expect(result.part.status).toBe('denied')
+    } finally { env.agentAutoApprove = previous }
+  })
 })
 
 describe('Agent run admission and completion lifecycle (real loop, mocked provider/persistence)', () => {
+  it('does not pause or zero a run when resume admission loses its state fence', async () => {
+    mocks.update.mockRejectedValueOnce(new DataAccessError(409, 'TASK_AUTHORIZATION_RUNTIME_UPGRADE_REQUIRED', '任务状态已变化'))
+    await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel',
+      chapterId: null, mode: 'build', prompt: '原任务', resume: true })
+    expect(mocks.update).toHaveBeenCalledOnce()
+    expect(mocks.chat).not.toHaveBeenCalled()
+    expect(mocks.persist).not.toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'error', code: 'task_authorization_runtime_upgrade_required' }))
+    expect(events().some(event => event.type === 'run.finished' || event.type === 'run.paused')).toBe(false)
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+  })
+
+  it.each(['stored', 'previous'] as const)('does not downgrade a durable %s task into the legacy executor even when authorization JSON is absent', async source => {
+    const durable = { taskSpec: null, taskRootId: 'durable-root', runtimeProtocolVersion: 1 }
+    if (source === 'stored') mocks.update.mockResolvedValueOnce(durable as never)
+    else mocks.previous.mockResolvedValueOnce(durable as never)
+    const logger = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null, mode: 'build', prompt: '继续' })
+      expect(mocks.chat).not.toHaveBeenCalled()
+      expect(events()).toContainEqual(expect.objectContaining({ type: 'error', code: 'task_authorization_runtime_upgrade_required' }))
+      expect(mocks.update).toHaveBeenCalledOnce()
+      const { syncNovelMemoryProjection } = await import('../../api/lib/agent/story-memory.js')
+      expect(syncNovelMemoryProjection).not.toHaveBeenCalled()
+    } finally { logger.mockRestore() }
+  })
+
+  it.each(['stored', 'previous'] as const)('does not rebuild corrupt %s authorization as a default write task', async source => {
+    const invalid = { taskSpec: { id: 'root', authorization: { version: 99 } } }
+    if (source === 'stored') mocks.update.mockResolvedValueOnce(invalid as never)
+    else mocks.previous.mockResolvedValueOnce(invalid as never)
+    const write = tool('chapter_write', async () => ({ output: '不应写入' }), false)
+    mocks.tools = [write]
+    queue(response('', [call('must-not-write', 'chapter_write')]), response())
+    const logger = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null, mode: 'build', prompt: '继续' })
+      expect(write.execute).not.toHaveBeenCalled()
+      expect(mocks.chat).not.toHaveBeenCalled()
+      expect(events()).toContainEqual(expect.objectContaining({ type: 'error', code: 'task_authorization_invalid' }))
+      const { syncNovelMemoryProjection } = await import('../../api/lib/agent/story-memory.js')
+      expect(syncNovelMemoryProjection).not.toHaveBeenCalled()
+    } finally { logger.mockRestore() }
+  })
+  it('terminates a blocked Reader card as failed without suggesting access-control bypass retries', async () => {
+    mocks.tools = [tool('web_read', async () => { throw new DataAccessError(422, 'WEB_READ_BLOCKED', '[WEB_READ_BLOCKED] 目标页面要求登录，不得绕过。') })]
+    queue(response('读取参考页面。', [call('reader-blocked', 'web_read')]), response('该来源要求登录，未取得正文。'))
+    await run('读取公开网页资料')
+    const results = events().filter(event => event.type === 'tool.result')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ callId: 'reader-blocked', ok: false, summary: '网页读取未完成' })
+    const nextContext = JSON.stringify(mocks.chat.mock.calls[1][0].messages)
+    expect(nextContext).toContain('不得绕过')
+    expect(nextContext).not.toContain('可以调整参数重试')
+  })
+  it('does not finalize a successful run again when its terminal journal flush fails', async () => {
+    const logger = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.dispose.mockRejectedValueOnce(new Error('journal offline'))
+    try {
+      queue(response('核对完成。'))
+      await run()
+      expect(events().filter(event => event.type === 'run.finished')).toEqual([
+        expect.objectContaining({ status: 'succeeded' }),
+      ])
+      expect(mocks.update.mock.calls.flatMap(([input]) => input.data.status ? [input.data.status] : [])).toEqual(['running', 'completed'])
+      expect(mocks.dispose).toHaveBeenCalledOnce()
+    } finally { logger.mockRestore() }
+  })
   it('allows a completed continuation without inventing a todo plan at the end', async () => {
     queue(response('第二十二章正文已保存，校验已通过。'))
     await run('请继续完成之前的任务。')
@@ -133,6 +500,8 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
   it('resets consecutive no-progress reminders after actual advancement, supporting more than four milestones', async () => {
     mocks.todos.mockResolvedValue([{ content: '整改全书', status: 'pending' }])
     mocks.tools.push(tool('todo_write', async () => ({ output: '已完成', display: { kind: 'todoList', items: [{ content: '整改全书', status: 'completed' }] } }), false))
+    let chapter = 0
+    mocks.tools[0] = tool('chapter_read', async () => ({ output: `第${++chapter}章的不同正文证据` }))
     for (let index = 0; index < 7; index++) queue(response('先读取章节。'), response('', [call(`r${index}`, 'chapter_read', JSON.stringify({ chapter: index }))]))
     queue(response('', [call('done', 'todo_write')]), response())
     await run('继续')
@@ -158,11 +527,36 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
 
   it('inherits the original goal on a typed continuation and persists it on the new run', async () => {
     const taskSpec = buildTaskSpec({ runId: 'original', novelId: 'novel', chapterId: null, prompt: '整改前七章的人物动机' })
-    mocks.previous.mockResolvedValue({ taskSpec } as never)
+    const previous = { id: 'original', taskSpec, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 },
+      status: 'paused', currentTurn: 1, startedAt: new Date() }
+    mocks.previous.mockResolvedValue(previous as never)
+    mocks.priorRuns.mockResolvedValue([previous])
     mocks.todos.mockResolvedValue([{ content: '整改前七章', status: 'completed' }])
     queue(response())
     await run('请继续完成之前的任务。')
-    expect(mocks.update.mock.calls).toContainEqual([{ where: { id: 'run' }, data: { taskSpec: { ...taskSpec, runId: 'run' } } }])
+    expect(mocks.update.mock.calls).toContainEqual([expect.objectContaining({ where: { id: 'run' },
+      data: expect.objectContaining({ taskSpec: { ...taskSpec, runId: 'run' },
+        usage: expect.objectContaining({ checkpoint: expect.objectContaining({ inheritedTokens: 100, inheritedTurns: 1 }) }) }) })])
+    expect(mocks.priorRuns).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      sessionId: 'session', userId: 'user', novelId: 'novel', taskSpec: { path: ['id'], equals: taskSpec.id },
+    }) }))
+  })
+
+  it('typed continuation includes all local run usage once, without double-counting inherited snapshots', async () => {
+    const taskSpec = buildTaskSpec({ runId: 'original', novelId: 'novel', chapterId: null, prompt: '检查章节' })
+    const base = { status: 'paused', currentTurn: 1, startedAt: new Date(), taskSpec }
+    const first = { ...base, id: 'first', usage: { promptTokens: 300, completionTokens: 0, totalTokens: 300 } }
+    const second = { ...base, id: 'second', usage: { promptTokens: 200, completionTokens: 0, totalTokens: 200,
+      checkpoint: { version: 1, runStartedAt: Date.now(), resumeCount: 0, compactionCount: 0,
+        maxTurns: env.agentMaxTurns, tokenBudget: 500, writeProgress: 0, writeBaseline: 0, readProgress: 0,
+        readBaseline: 0, progressSignatures: [], inheritedTokens: 300, inheritedTurns: 1 } } }
+    mocks.previous.mockResolvedValue(second as never)
+    mocks.priorRuns.mockResolvedValue([first, second])
+    await run('继续')
+    expect(mocks.chat).not.toHaveBeenCalled()
+    const terminal = mocks.update.mock.calls.find(([input]) => input.data.status === 'failed')?.[0]
+    expect(terminal?.data.usage).toMatchObject({ totalTokens: 0,
+      checkpoint: { inheritedTokens: 500, inheritedTurns: 2, tokenBudget: 500 } })
   })
 
   it('does not stop a batch that contains duplicates followed by new productive work', async () => {
@@ -196,5 +590,63 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
       expect(events().filter(event => event.type === 'text.final' && event.text.includes('已到检查点'))).toHaveLength(1)
       expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
     } finally { env.agentRunTokenBudgetCeiling = original }
+  })
+
+  it.each([
+    { toolName: 'chapter_read', prompt: '读取章节并完成检查' },
+    { toolName: 'research_report_read', prompt: '分析这本小说' },
+  ])('29 R08: a productive $toolName crosses a checkpoint without inventing todos', async ({ toolName, prompt }) => {
+    mocks.tools = [tool(toolName, async () => ({ output: '已保存的正文片段，包含可核验的材料。' }))]
+    queue(response('', [call('read', toolName)], 600), response('检查完成，结果如下。'))
+    await run(prompt, 500)
+    expect(mocks.chat).toHaveBeenCalledTimes(2)
+    expect(events().filter(event => event.type === 'text.final' && event.text.includes('已到检查点'))).toHaveLength(1)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
+    expect(mocks.todos).not.toHaveBeenCalled()
+  })
+
+  it('29 R08: marking a checklist item complete alone cannot purchase a checkpoint', async () => {
+    mocks.todos.mockResolvedValue([{ content: '整改正文', status: 'pending' }])
+    mocks.tools = [tool('todo_write', async () => ({ output: '清单已完成',
+      display: { kind: 'todoList', items: [{ content: '整改正文', status: 'completed' }] } }), false)]
+    queue(response('', [call('todo', 'todo_write')], 600))
+    await run('继续', 500)
+    expect(mocks.chat).toHaveBeenCalledTimes(1)
+    expect(events().filter(event => event.type === 'text.final' && event.text.includes('已到检查点'))).toHaveLength(0)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
+  })
+
+  it('29 R08: changed read arguments returning identical evidence cannot buy another slice', async () => {
+    queue(response('', [call('read1', 'chapter_read', '{"start":0}')], 600),
+      response('', [call('read2', 'chapter_read', '{"start":1}')], 2_000_000))
+    await run('读取并检查章节', 500)
+    expect(mocks.chat).toHaveBeenCalledTimes(2)
+    expect(events().filter(event => event.type === 'text.final' && event.text.includes('已到检查点'))).toHaveLength(1)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
+  })
+
+  it('29 R08: failed reads do not renew a checkpoint', async () => {
+    mocks.tools = [tool('chapter_read', async () => ({ outcome: 'failed', output: '正文读取失败' }))]
+    queue(response('', [call('read')], 600))
+    await run('读取并检查章节', 500)
+    expect(mocks.chat).toHaveBeenCalledTimes(1)
+    expect(events().filter(event => event.type === 'text.final' && event.text.includes('已到检查点'))).toHaveLength(0)
+    expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'failed' })
+  })
+
+  it('29 R01/R09: unconfirmed DB finalization never emits a fabricated terminal status', async () => {
+    const original = mocks.update.getMockImplementation()!
+    mocks.update.mockImplementation(async input => {
+      if (input.data.status === 'completed') throw new Error('fixture connection lost at commit')
+      return original(input)
+    })
+    try {
+      queue(response('已经完成的结果。'))
+      await executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel', chapterId: null, mode: 'build', prompt: '解释这段内容' })
+      expect(events().filter(event => event.type === 'run.finished' || event.type === 'run.paused')).toHaveLength(0)
+      expect(events().at(-1)).toMatchObject({ type: 'error', code: 'run_status_unconfirmed' })
+      expect(mocks.update.mock.calls.filter(([input]) => ['completed', 'failed', 'paused'].includes(String(input.data.status)))).toHaveLength(1)
+      expect(mocks.dispose).toHaveBeenCalledOnce()
+    } finally { mocks.update.mockImplementation(original) }
   })
 })

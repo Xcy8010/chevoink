@@ -23,9 +23,13 @@ describe('Agent attachment path isolation', () => {
     expect(resolveManagedAttachmentPath('/other/user/a.txt')).toBeNull()
   })
 
-  it('enforces the owner segment while preserving legacy URLs', () => {
+  it.each(['user/../a.txt', 'user/./a.txt', 'user//a.txt', '/a.txt', 'user/a.txt/', 'user/%61.txt', 'user/a.txt?x=1'])('rejects noncanonical relative path %s', relative => {
+    expect(resolveManagedAttachmentPath(`/api/uploads/agent-attachments/${relative}`)).toBeNull()
+  })
+
+  it('enforces the owner segment without treating legacy URLs as ownership proof', () => {
     expect(isManagedAttachmentOwnedBy('/api/uploads/agent-attachments/user-1/file.webp', 'user-1')).toBe(true)
     expect(isManagedAttachmentOwnedBy('/api/uploads/agent-attachments/user-2/file.webp', 'user-1')).toBe(false)
-    expect(isManagedAttachmentOwnedBy('/api/uploads/agent-attachments/legacy.webp', 'user-1')).toBe(true)
+    expect(isManagedAttachmentOwnedBy('/api/uploads/agent-attachments/legacy.webp', 'user-1')).toBe(false)
   })
 })

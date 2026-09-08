@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import type { Prisma, StoryCompilationStage } from '@prisma/client'
+import type { Prisma, StoryCompilationStage, StoryCharter, ReaderPromise, SceneTask } from '@prisma/client'
 
 import type {
   ContinuityFindingInput,
@@ -12,6 +12,7 @@ import type {
 } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { saveStoryMemory } from './story-memory.js'
+import { qualityReportMatchesContent } from './quality-report-contract.js'
 
 type PreparedBridge = {
   lastUnfinishedAction: string
@@ -47,8 +48,8 @@ function lastParagraph(content: string): string {
   return clip(paragraphs.at(-1) ?? '', 180)
 }
 
-async function assertOwnedNovel(userId: string, novelId: string) {
-  const novel = await prisma.novel.findFirst({
+async function assertOwnedNovel(userId: string, novelId: string, db: Prisma.TransactionClient = prisma) {
+  const novel = await db.novel.findFirst({
     where: { id: novelId, authorId: userId },
     select: { id: true, chapterCount: true },
   })
@@ -56,20 +57,20 @@ async function assertOwnedNovel(userId: string, novelId: string) {
   return novel
 }
 
-export async function getStoryCharterBundle(userId: string, novelId: string) {
-  await assertOwnedNovel(userId, novelId)
+export async function getStoryCharterBundle(userId: string, novelId: string, db: Prisma.TransactionClient = prisma, includeClosed = false) {
+  await assertOwnedNovel(userId, novelId, db)
   const [charter, promises] = await Promise.all([
-    prisma.storyCharter.findFirst({ where: { userId, novelId } }),
-    prisma.readerPromise.findMany({
-      where: { userId, novelId, status: { in: ['open', 'deferred'] } },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    db.storyCharter.findFirst({ where: { userId, novelId } }),
+    db.readerPromise.findMany({
+      where: { userId, novelId, ...(includeClosed ? {} : { status: { in: ['open', 'deferred'] } }) },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
     }),
   ])
   return { charter, promises }
 }
 
-export async function upsertStoryCharter(userId: string, novelId: string, input: StoryCharterInput) {
-  await assertOwnedNovel(userId, novelId)
+export async function upsertStoryCharter(userId: string, novelId: string, input: StoryCharterInput, db: Prisma.TransactionClient = prisma) {
+  await assertOwnedNovel(userId, novelId, db)
   const data = {
     ...input,
     genreRules: input.genreRules as Prisma.InputJsonValue,
@@ -79,21 +80,25 @@ export async function upsertStoryCharter(userId: string, novelId: string, input:
     forbiddenZones: input.forbiddenZones as Prisma.InputJsonValue,
     antiExamples: input.antiExamples as Prisma.InputJsonValue,
   }
-  return prisma.storyCharter.upsert({
+  const existing = await db.storyCharter.findUnique({ where: { novelId } })
+  // A repeated identical save is not a new revision or new writing progress.
+  if (existing && Object.entries(data).every(([key, value]) =>
+    JSON.stringify(existing[key as keyof typeof existing]) === JSON.stringify(value))) return existing
+  return db.storyCharter.upsert({
     where: { novelId },
     create: { userId, novelId, ...data },
     update: { ...data, revision: { increment: 1 } },
   })
 }
 
-export async function saveReaderPromise(userId: string, novelId: string, input: ReaderPromiseInput) {
-  await assertOwnedNovel(userId, novelId)
-  const existing = await prisma.readerPromise.findFirst({
+export async function saveReaderPromise(userId: string, novelId: string, input: ReaderPromiseInput, db: Prisma.TransactionClient = prisma) {
+  await assertOwnedNovel(userId, novelId, db)
+  const existing = await db.readerPromise.findFirst({
     where: { userId, novelId, title: input.title, status: { in: ['open', 'deferred'] } },
   })
   return existing
-    ? prisma.readerPromise.update({ where: { id: existing.id }, data: { ...input, status: 'open' } })
-    : prisma.readerPromise.create({ data: { userId, novelId, ...input } })
+    ? db.readerPromise.update({ where: { id: existing.id }, data: { ...input, status: 'open', paidAtChapter: null } })
+    : db.readerPromise.create({ data: { userId, novelId, ...input } })
 }
 
 export async function updateReaderPromise(input: {
@@ -102,28 +107,33 @@ export async function updateReaderPromise(input: {
   promiseId: string
   status: 'open' | 'paid' | 'deferred' | 'abandoned'
   paidAtChapter?: number
-}) {
-  const promise = await prisma.readerPromise.findFirst({
+}, db: Prisma.TransactionClient = prisma) {
+  const promise = await db.readerPromise.findFirst({
     where: { id: input.promiseId, userId: input.userId, novelId: input.novelId },
   })
   if (!promise) throw new DataAccessError(404, 'READER_PROMISE_NOT_FOUND', '读者承诺不存在或不属于当前作品。')
   if (input.status === 'paid' && input.paidAtChapter === undefined) {
     throw new DataAccessError(400, 'PAYOFF_CHAPTER_REQUIRED', '标记已兑现时必须记录兑现章节序号。')
   }
-  return prisma.readerPromise.update({
+  if (input.status === 'paid') {
+    const chapter = await db.chapter.findFirst({ where: { novelId: input.novelId, authorId: input.userId, orderIndex: input.paidAtChapter }, select: { content: true } })
+    if (!chapter?.content.trim()) throw new DataAccessError(400, 'PAYOFF_CHAPTER_REQUIRED', '兑现章节不存在或正文为空，不能标记已兑现。')
+  }
+  if (promise.status === input.status && promise.paidAtChapter === (input.status === 'paid' ? input.paidAtChapter : null)) return promise
+  return db.readerPromise.update({
     where: { id: promise.id },
     data: { status: input.status, paidAtChapter: input.status === 'paid' ? input.paidAtChapter : null },
   })
 }
 
-async function resolveTarget(userId: string, novelId: string, chapterId?: string, targetOrderIndex?: number) {
+async function resolveTarget(userId: string, novelId: string, chapterId: string | undefined, targetOrderIndex: number | undefined, db: Prisma.TransactionClient) {
   const chapter = chapterId
-    ? await prisma.chapter.findFirst({
+    ? await db.chapter.findFirst({
         where: { id: chapterId, novelId, authorId: userId },
         select: { id: true, title: true, orderIndex: true, revision: true, content: true },
       })
     : targetOrderIndex
-      ? await prisma.chapter.findFirst({
+      ? await db.chapter.findFirst({
           where: { novelId, authorId: userId, orderIndex: targetOrderIndex },
           select: { id: true, title: true, orderIndex: true, revision: true, content: true },
         })
@@ -131,7 +141,7 @@ async function resolveTarget(userId: string, novelId: string, chapterId?: string
   if (chapterId && !chapter) {
     throw new DataAccessError(404, 'CHAPTER_NOT_FOUND', '目标章节不存在或不属于当前作品。')
   }
-  const last = await prisma.chapter.findFirst({
+  const last = await db.chapter.findFirst({
     where: { novelId, authorId: userId },
     orderBy: { orderIndex: 'desc' },
     select: { orderIndex: true },
@@ -153,17 +163,20 @@ export async function prepareStoryCompilation(input: {
   targetOrderIndex?: number
   mode: StoryCompilerMode
   intentSummary: string
-}) {
-  await assertOwnedNovel(input.userId, input.novelId)
-  const target = await resolveTarget(input.userId, input.novelId, input.chapterId, input.targetOrderIndex)
+}, transaction?: Prisma.TransactionClient): Promise<{ compilation: Prisma.StoryCompilationGetPayload<{ include: { bridge: true } }>; charter: StoryCharter | null; promises: ReaderPromise[]; bridge: PreparedBridge }> {
+  if (!transaction) return prisma.$transaction(tx => prepareStoryCompilation(input, tx))
+  const db = transaction
+  const scope = await compilationRunScope(db, input)
+  await assertOwnedNovel(input.userId, input.novelId, db)
+  const target = await resolveTarget(input.userId, input.novelId, input.chapterId, input.targetOrderIndex, db)
   const [bundle, previousChapter, recentChapters] = await Promise.all([
-    getStoryCharterBundle(input.userId, input.novelId),
-    prisma.chapter.findFirst({
+    getStoryCharterBundle(input.userId, input.novelId, db),
+    db.chapter.findFirst({
       where: { novelId: input.novelId, authorId: input.userId, orderIndex: { lt: target.targetOrderIndex } },
       orderBy: { orderIndex: 'desc' },
       select: { id: true, title: true, orderIndex: true, revision: true, content: true },
     }),
-    prisma.chapter.findMany({
+    db.chapter.findMany({
       where: { novelId: input.novelId, authorId: input.userId, orderIndex: { lt: target.targetOrderIndex } },
       orderBy: { orderIndex: 'desc' },
       take: 2,
@@ -171,12 +184,12 @@ export async function prepareStoryCompilation(input: {
     }),
   ])
   const priorBridge = previousChapter
-    ? await prisma.chapterBridge.findFirst({
+    ? await db.chapterBridge.findFirst({
         where: { userId: input.userId, novelId: input.novelId, toChapterId: previousChapter.id, committedAt: { not: null } },
         orderBy: { committedAt: 'desc' },
       })
     : null
-  const memory = await prisma.projectMemoryEntry.findMany({
+  const memory = await db.projectMemoryEntry.findMany({
     where: {
       novelId: input.novelId,
       status: { in: ['confirmed', 'inferred'] },
@@ -203,8 +216,8 @@ export async function prepareStoryCompilation(input: {
     openLoops: priorBridge ? asStringArray(priorBridge.openLoops) : memory.filter((item) => item.memoryType === 'foreshadowing').map((item) => `${item.title}：${clip(item.content, 240)}`),
   }
 
-  await prisma.storyCompilation.updateMany({
-    where: { userId: input.userId, novelId: input.novelId, runId: input.runId, status: 'active' },
+  await db.storyCompilation.updateMany({
+    where: { userId: input.userId, novelId: input.novelId, ...scope, status: 'active' },
     data: { status: 'abandoned' },
   })
   const preparedContext = {
@@ -216,7 +229,7 @@ export async function prepareStoryCompilation(input: {
       : null,
     memory: memory.map((item) => ({ type: item.memoryType, title: item.title, content: clip(item.content, 300), confidence: item.confidence })),
   }
-  const compilation = await prisma.storyCompilation.create({
+  const compilation = await db.storyCompilation.create({
     data: {
       userId: input.userId,
       novelId: input.novelId,
@@ -261,11 +274,14 @@ export async function saveSceneTasks(input: {
   compilationId: string
   tasks: SceneTaskInput[]
   alternatives?: Array<{ label: string; tradeoff: string; rejectedReason: string }>
-}) {
+}, transaction?: Prisma.TransactionClient): Promise<SceneTask[]> {
+  if (!transaction) return prisma.$transaction(tx => saveSceneTasks(input, tx))
+  const tx = transaction
   if (input.tasks.length < 1 || input.tasks.length > 4) {
     throw new DataAccessError(400, 'SCENE_TASK_COUNT_INVALID', '每章必须建立 1–4 个 Scene Task。')
   }
-  const compilation = await prisma.storyCompilation.findFirst({
+  await tx.$queryRaw`SELECT id FROM story_compilations WHERE id = ${input.compilationId} AND user_id = ${input.userId} AND novel_id = ${input.novelId} FOR UPDATE`
+  const compilation = await tx.storyCompilation.findFirst({
     where: { id: input.compilationId, userId: input.userId, novelId: input.novelId, status: 'active' },
   })
   if (!compilation) throw new DataAccessError(404, 'COMPILATION_NOT_FOUND', '写作编译任务不存在、已结束或不属于当前作品。')
@@ -273,38 +289,44 @@ export async function saveSceneTasks(input: {
     throw new DataAccessError(409, 'COMPILATION_STAGE_CONFLICT', `当前已进入 ${compilation.stage} 阶段，不能覆盖场景任务。`)
   }
   const beatCandidates = normalizeBeatCandidates(input.tasks, input.alternatives)
-  return prisma.$transaction(async (tx) => {
-    await tx.sceneTask.deleteMany({ where: { compilationId: compilation.id } })
-    await tx.sceneTask.createMany({
-      data: input.tasks.map((task, index) => ({
-        userId: input.userId,
-        novelId: input.novelId,
-        compilationId: compilation.id,
-        chapterId: compilation.chapterId,
-        ordinal: index + 1,
-        purpose: task.purpose,
-        entryState: task.entryState as Prisma.InputJsonValue,
-        goal: task.goal,
-        obstacle: task.obstacle,
-        choice: task.choice,
-        cost: task.cost,
-        turn: task.turn,
-        exitState: task.exitState as Prisma.InputJsonValue,
-        styleBudget: task.styleBudget as Prisma.InputJsonValue,
-      })),
-    })
-    const context = compilation.preparedContext && typeof compilation.preparedContext === 'object' && !Array.isArray(compilation.preparedContext)
-      ? compilation.preparedContext as Record<string, unknown>
-      : {}
-    await tx.storyCompilation.update({
-      where: { id: compilation.id },
-      data: {
-        stage: 'beat',
-        preparedContext: { ...context, beatCandidates } as Prisma.InputJsonValue,
-      },
-    })
-    return tx.sceneTask.findMany({ where: { compilationId: compilation.id }, orderBy: { ordinal: 'asc' } })
+  await tx.sceneTask.deleteMany({ where: { compilationId: compilation.id } })
+  await tx.sceneTask.createMany({
+    data: input.tasks.map((task, index) => ({
+      userId: input.userId,
+      novelId: input.novelId,
+      compilationId: compilation.id,
+      chapterId: compilation.chapterId,
+      ordinal: index + 1,
+      purpose: task.purpose,
+      entryState: task.entryState as Prisma.InputJsonValue,
+      goal: task.goal,
+      obstacle: task.obstacle,
+      choice: task.choice,
+      cost: task.cost,
+      turn: task.turn,
+      exitState: task.exitState as Prisma.InputJsonValue,
+      styleBudget: task.styleBudget as Prisma.InputJsonValue,
+    })),
   })
+  const context = compilation.preparedContext && typeof compilation.preparedContext === 'object' && !Array.isArray(compilation.preparedContext)
+    ? compilation.preparedContext as Record<string, unknown>
+    : {}
+  await tx.storyCompilation.update({
+    where: { id: compilation.id },
+    data: {
+      stage: 'beat',
+      preparedContext: { ...context, beatCandidates } as Prisma.InputJsonValue,
+    },
+  })
+  return tx.sceneTask.findMany({ where: { compilationId: compilation.id }, orderBy: { ordinal: 'asc' } })
+}
+
+/** Only explicit durable identity joins runs; historical conversation is not authority. */
+async function compilationRunScope(db: Prisma.TransactionClient, input: { userId: string; novelId: string; runId: string }): Promise<Prisma.StoryCompilationWhereInput> {
+  const run = await db.agentRun.findFirst({ where: { id: input.runId, userId: input.userId, novelId: input.novelId }, select: { taskRootId: true, runtimeProtocolVersion: true } })
+  if (!run) throw new DataAccessError(404, 'RUN_NOT_FOUND', '章节编译运行不存在或不属于当前任务。')
+  if (run.runtimeProtocolVersion > 0 && !run.taskRootId) throw new DataAccessError(409, 'RUNTIME_SCOPE_MISMATCH', '持久运行缺少原任务身份。')
+  return run.taskRootId ? { run: { taskRootId: run.taskRootId } } : { runId: input.runId }
 }
 
 /**
@@ -345,12 +367,14 @@ export async function recordStoryCompilerWrite(input: {
   chapterId: string
   chapterOrderIndex: number
   chapterRevision: number
-}) {
-  const compilation = await prisma.storyCompilation.findFirst({
+}, transaction?: Prisma.TransactionClient): Promise<{ compilationId: string; stage: StoryCompilationStage } | null> {
+  if (!transaction) return prisma.$transaction(tx => recordStoryCompilerWrite(input, tx))
+  const scope = await compilationRunScope(transaction, input)
+  const compilation = await transaction.storyCompilation.findFirst({
     where: {
       userId: input.userId,
       novelId: input.novelId,
-      runId: input.runId,
+      ...scope,
       status: 'active',
       OR: [{ chapterId: input.chapterId }, { chapterId: null, targetOrderIndex: input.chapterOrderIndex }],
     },
@@ -358,20 +382,18 @@ export async function recordStoryCompilerWrite(input: {
   })
   if (!compilation) return null
   const stage: StoryCompilationStage = compilation.stage === 'check' ? 'repair' : 'write'
-  await prisma.$transaction([
-    prisma.storyCompilation.update({
+  await transaction.storyCompilation.update({
       where: { id: compilation.id },
       data: { chapterId: input.chapterId, stage },
-    }),
-    prisma.sceneTask.updateMany({
+    })
+  await transaction.sceneTask.updateMany({
       where: { compilationId: compilation.id },
       data: { chapterId: input.chapterId, status: 'writing' },
-    }),
-    prisma.chapterBridge.update({
+    })
+  await transaction.chapterBridge.update({
       where: { compilationId: compilation.id },
       data: { toChapterId: input.chapterId, targetRevision: input.chapterRevision },
-    }),
-  ])
+    })
   return { compilationId: compilation.id, stage }
 }
 
@@ -380,14 +402,23 @@ export async function validateStoryContinuity(input: {
   novelId: string
   compilationId: string
   findings: ContinuityFindingInput[]
-}) {
-  const compilation = await prisma.storyCompilation.findFirst({
+  expectedChapterRevision?: number
+  independentCheck?: 'complete' | 'unavailable'
+  coverage?: { version: 1; contentHash: string; charCount: number; sourceHash: string | null }
+}, transaction?: Prisma.TransactionClient): Promise<{ checkedChapterId: string; checkedRevision: number; checkedAt: string; independentCheck: 'complete' | 'unavailable'; findings: ContinuityFindingInput[]; errorCount: number; warningCount: number }> {
+  if (!transaction) return prisma.$transaction(tx => validateStoryContinuity(input, tx))
+  const db = transaction
+  await db.$queryRaw`SELECT id FROM story_compilations WHERE id = ${input.compilationId} AND user_id = ${input.userId} AND novel_id = ${input.novelId} FOR UPDATE`
+  const compilation = await db.storyCompilation.findFirst({
     where: { id: input.compilationId, userId: input.userId, novelId: input.novelId, status: 'active' },
     include: { bridge: true, sceneTasks: true, chapter: { select: { id: true, revision: true, content: true, orderIndex: true } } },
   })
   if (!compilation) throw new DataAccessError(404, 'COMPILATION_NOT_FOUND', '写作编译任务不存在、已结束或不属于当前作品。')
   if (!compilation.chapter || !compilation.bridge) {
     throw new DataAccessError(409, 'COMPILATION_NOT_WRITTEN', '目标章节尚未完成写入，不能进入连续性检查。')
+  }
+  if (input.expectedChapterRevision !== undefined && compilation.chapter.revision !== input.expectedChapterRevision) {
+    throw new DataAccessError(409, 'CONTINUITY_INPUT_STALE', '独立检查期间正文已变化，旧结果不能验证新revision。请重新检查当前正文。')
   }
   const deterministic: ContinuityFindingInput[] = []
   if (compilation.sceneTasks.length < 1 || compilation.sceneTasks.length > 4) {
@@ -400,12 +431,12 @@ export async function validateStoryContinuity(input: {
     deterministic.push({ signal: 'structure', severity: 'error', evidence: '目标章节正文为空。', suggestion: '完成正文后再提交章节桥。' })
   }
   if (compilation.bridge.fromChapterId && compilation.bridge.sourceRevision !== null) {
-    const source = await prisma.chapter.findFirst({
+    const source = await db.chapter.findFirst({
       where: { id: compilation.bridge.fromChapterId, novelId: input.novelId },
       select: { revision: true, title: true },
     })
-    if (source && source.revision !== compilation.bridge.sourceRevision) {
-      deterministic.push({ signal: 'structure', severity: 'error', evidence: `桥接来源《${source.title}》已从 r${compilation.bridge.sourceRevision} 变为 r${source.revision}。`, suggestion: '重新执行 story_compiler_prepare，基于最新前章生成桥接。' })
+    if (!source || source.revision !== compilation.bridge.sourceRevision) {
+      deterministic.push({ signal: 'structure', severity: 'error', evidence: source ? `桥接来源《${source.title}》已从 r${compilation.bridge.sourceRevision} 变为 r${source.revision}。` : '桥接来源章节已不存在。', suggestion: '重新执行 story_compiler_prepare，基于最新前章生成桥接。' })
     }
   }
   const findings = [...deterministic, ...input.findings]
@@ -413,11 +444,13 @@ export async function validateStoryContinuity(input: {
     checkedChapterId: compilation.chapter.id,
     checkedRevision: compilation.chapter.revision,
     checkedAt: new Date().toISOString(),
+    independentCheck: input.independentCheck ?? 'unavailable' as const,
+    ...(input.coverage ? { coverage: input.coverage } : {}),
     findings,
     errorCount: findings.filter((item) => item.severity === 'error').length,
     warningCount: findings.filter((item) => item.severity === 'warning').length,
   }
-  await prisma.storyCompilation.update({
+  await db.storyCompilation.update({
     where: { id: compilation.id },
     data: { stage: 'check', validation: validation as Prisma.InputJsonValue },
   })
@@ -435,24 +468,48 @@ export async function commitChapterBridge(input: {
   delayedHookReason: string
   openingStructure: string
   endingStructure: string
-}) {
-  const compilation = await prisma.storyCompilation.findFirst({
+  requireQuality?: boolean
+  qualityReportId?: string
+}, transaction?: Prisma.TransactionClient): Promise<{ compilationId: string; chapterId: string; chapterRevision: number }> {
+  if (!transaction) return prisma.$transaction(tx => commitChapterBridge(input, tx))
+  const db = transaction
+  await db.$queryRaw`SELECT id FROM story_compilations WHERE id = ${input.compilationId} AND user_id = ${input.userId} AND novel_id = ${input.novelId} FOR UPDATE`
+  const compilation = await db.storyCompilation.findFirst({
     where: { id: input.compilationId, userId: input.userId, novelId: input.novelId, status: 'active' },
     include: { bridge: true, sceneTasks: true, chapter: true },
   })
   if (!compilation?.chapter || !compilation.bridge) {
     throw new DataAccessError(404, 'COMPILATION_NOT_FOUND', '写作编译任务不存在、未写入章节或不属于当前作品。')
   }
-  const validation = compilation.validation as { checkedRevision?: number; errorCount?: number } | null
+  await db.$queryRaw`SELECT id FROM chapters WHERE id = ${compilation.chapter.id} FOR UPDATE`
+  const chapter = await db.chapter.findUniqueOrThrow({ where: { id: compilation.chapter.id }, select: { revision: true, content: true } })
+  const validation = compilation.validation as { checkedRevision?: number; errorCount?: number; independentCheck?: string } | null
+  if (chapter.revision !== compilation.chapter.revision || chapter.content !== compilation.chapter.content || validation?.independentCheck !== 'complete') {
+    throw new DataAccessError(409, 'CONTINUITY_CHECK_REQUIRED', '当前章节尚未完成独立连续性复核，不能把确定性兜底或旧报告当作通过。')
+  }
   if (!validation || validation.checkedRevision !== compilation.chapter.revision) {
     throw new DataAccessError(409, 'CONTINUITY_CHECK_REQUIRED', '必须先对当前章节最新 revision 执行 continuity_validate。')
   }
   if ((validation.errorCount ?? 0) > 0) {
     throw new DataAccessError(409, 'CONTINUITY_ERRORS_REMAIN', `仍有 ${validation.errorCount} 个连续性错误，修复并重新检查后才能提交章节桥。`)
   }
+  if (input.requireQuality) {
+    const report = input.qualityReportId ? await db.chapterQualityReport.findFirst({ where: { id: input.qualityReportId, userId: input.userId, novelId: input.novelId,
+      chapterId: compilation.chapter.id, chapterRevision: chapter.revision }, include: { findings: true } }) : null
+    if (!report || !qualityReportMatchesContent(report, chapter.revision, chapter.content)
+      || report.compilationId && report.compilationId !== compilation.id
+      || report.findings.some(finding => finding.severity === 'error' && finding.disposition !== 'repaired')) {
+      throw new DataAccessError(409, 'QUALITY_CHECK_REQUIRED', '当前正文没有完整且匹配的独立质量检查，不能使用失败、旧版或其他编译的报告提交。')
+    }
+  }
+  if (compilation.bridge.fromChapterId) {
+    await db.$queryRaw`SELECT id FROM chapters WHERE id = ${compilation.bridge.fromChapterId} FOR SHARE`
+    const source = await db.chapter.findFirst({ where: { id: compilation.bridge.fromChapterId, novelId: input.novelId }, select: { revision: true } })
+    if (!source || source.revision !== compilation.bridge.sourceRevision) throw new DataAccessError(409, 'CONTINUITY_CHECK_REQUIRED', '桥接来源章节已变化，请重新准备并检查，不沿用旧桥提交。')
+  }
   const now = new Date()
-  await prisma.$transaction([
-    prisma.chapterBridge.update({
+  await Promise.all([
+    db.chapterBridge.update({
       where: { id: compilation.bridge.id },
       data: {
         targetRevision: compilation.chapter.revision,
@@ -472,8 +529,8 @@ export async function commitChapterBridge(input: {
         committedAt: now,
       },
     }),
-    prisma.sceneTask.updateMany({ where: { compilationId: compilation.id }, data: { status: 'completed' } }),
-    prisma.storyCompilation.update({
+    db.sceneTask.updateMany({ where: { compilationId: compilation.id }, data: { status: 'completed' } }),
+    db.storyCompilation.update({
       where: { id: compilation.id },
       data: { stage: 'commit', status: 'completed', completedAt: now },
     }),
@@ -492,7 +549,7 @@ export async function commitChapterBridge(input: {
       confidence: 1,
       status: 'confirmed',
       evidence: { sourceType: 'chapter', sourceId: compilation.chapter.id, revision: compilation.chapter.revision, confidence: 1 },
-    }),
+    }, db),
     saveStoryMemory({
       userId: input.userId,
       novelId: input.novelId,
@@ -506,7 +563,7 @@ export async function commitChapterBridge(input: {
       confidence: 1,
       status: 'confirmed',
       evidence: { sourceType: 'chapter', sourceId: compilation.chapter.id, revision: compilation.chapter.revision, confidence: 1 },
-    }),
+    }, db),
   ])
   return { compilationId: compilation.id, chapterId: compilation.chapter.id, chapterRevision: compilation.chapter.revision }
 }

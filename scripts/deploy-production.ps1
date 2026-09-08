@@ -173,6 +173,8 @@ try {
   if (-not $SkipLocalChecks) {
     Write-Step "Running local checks"
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "check") -WorkingDirectory $ProjectRoot
+    Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "lint") -WorkingDirectory $ProjectRoot
+    Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "runtime:verify") -WorkingDirectory $ProjectRoot
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("test") -WorkingDirectory $ProjectRoot
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("audit", "--omit=dev", "--audit-level=high") -WorkingDirectory $ProjectRoot
     Invoke-CheckedCommand -FilePath "npm.cmd" -ArgumentList @("run", "build") -WorkingDirectory $ProjectRoot
@@ -202,6 +204,7 @@ try {
     "src",
     ".env.example",
     ".gitignore",
+    ".node-version",
     "ecosystem.config.cjs",
     "eslint.config.js",
     "index.html",

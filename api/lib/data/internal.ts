@@ -939,8 +939,8 @@ export async function ensureUserExists(userId: string) {
 
 
 
-export async function ensureNovelOwner(userId: string, novelId: string) {
-  const novel = await prisma.novel.findUnique({
+export async function ensureNovelOwner(userId: string, novelId: string, transaction: Prisma.TransactionClient = prisma) {
+  const novel = await transaction.novel.findUnique({
     where: { id: novelId },
     include: novelInclude,
   })

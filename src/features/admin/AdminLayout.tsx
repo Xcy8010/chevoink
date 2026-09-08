@@ -20,6 +20,7 @@ import {
 import BottomSheet from '@/components/layout/BottomSheet'
 import Button from '@/components/ui/Button'
 import TextInput from '@/components/ui/TextInput'
+import { useToast } from '@/components/ui/toast-context'
 import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { cn } from '@/lib/utils'
 import { useShellStore } from '@/store/useShellStore'
@@ -70,6 +71,7 @@ const mobileMoreNav = [
 ]
 
 export default function AdminLayout({ children }: { children?: ReactNode }) {
+  const toast = useToast()
   const { admin, isLoading, denied } = useAdminSession()
   const navigate = useNavigate()
   const location = useLocation()
@@ -99,8 +101,9 @@ export default function AdminLayout({ children }: { children?: ReactNode }) {
     try {
       await adminLogout()
     } catch {
-      // 登出失败也强制回登录页：cookie 兜底由登录页重新建立
-    }
+      toast.error('暂时无法确认退出登录，请稍后重试。')
+      return
+    } finally { setIsLoggingOut(false) }
     navigate('/admin/login', { replace: true })
   }
 

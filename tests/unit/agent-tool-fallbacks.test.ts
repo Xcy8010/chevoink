@@ -76,6 +76,9 @@ describe('Agent 工具协议与结构化输出兜底', () => {
 
   it('连续性复核无 JSON 时退回空 finding，并兼容 issues 别名', () => {
     expect(parseIndependentContinuityResult('无有效内容')).toEqual({ findings: [], structured: false })
+    expect(parseIndependentContinuityResult('{}')).toEqual({ findings: [], structured: false })
+    expect(parseIndependentContinuityResult('{"findings":null}')).toEqual({ findings: [], structured: false })
+    expect(parseIndependentContinuityResult('{"findings":[]}')).toEqual({ findings: [], structured: true })
     expect(parseIndependentContinuityResult(JSON.stringify({ issues: [{ signal: 'body', severity: 'warning', evidence: '伤势前后不一致', suggestion: '保留伤势限制' }] }))).toMatchObject({ structured: true, findings: [{ signal: 'body' }] })
     const tool = getToolByName('continuity_validate')
     expect(tool?.parameters.safeParse(tool.coerceArgs?.({ compilation_id: 'compilation-1' })).success).toBe(true)

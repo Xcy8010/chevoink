@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { CalendarDays, Gift, LoaderCircle, RefreshCcw, UserPlus } from 'lucide-react'
 
 import Button from '@/components/ui/Button'
-import { fetchCreditUsage, fetchReferral } from './credits-api'
+import { fetchCreditUsage, fetchReferral, fetchTaskCreditUsage } from './credits-api'
 import InviteCreditsDialog from './InviteCreditsDialog'
 import { formatCreditAmount, roundCreditAmount } from './credit-format'
 import { ledgerLabel } from './ledger-label'
@@ -14,7 +14,7 @@ function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
 }
 
-function LedgerRow({ item }: { item: CreditLedgerItem }) {
+function LedgerRow({ item, onTask }: { item: CreditLedgerItem; onTask?: (runId: string) => void }) {
   const displayedDelta = roundCreditAmount(item.delta)
   const positive = displayedDelta > 0
   const cacheTotal = item.promptCacheHitTokens !== null && item.promptCacheMissTokens !== null
@@ -27,11 +27,17 @@ function LedgerRow({ item }: { item: CreditLedgerItem }) {
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-[#efefec] px-5 py-4 last:border-b-0 dark:border-[var(--border-subtle)]">
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{ledgerLabel(item)}</p>
+        {item.taskRunId && onTask && <button type="button" onClick={() => onTask(item.taskRunId!)}
+          className="mt-1 text-xs underline underline-offset-4">查看所属任务费用</button>}
         <p className="mt-1 text-xs text-[var(--text-tertiary)]">
           {formatDateTime(item.createdAt)}
           {item.requestTokens !== null || item.responseTokens !== null ? ` · 输入 ${new Intl.NumberFormat('zh-CN').format(item.requestTokens ?? 0)} / 输出 ${new Intl.NumberFormat('zh-CN').format(item.responseTokens ?? 0)}` : ''}
           {cacheLabel}
         </p>
+        {item.pricing && <p className="mt-1 break-words text-xs leading-5 text-[var(--text-tertiary)]">
+          分项计费 · 输入 {item.pricing.inputPerMillion} / 缓存 {item.pricing.cachePerMillion} / 输出 {item.pricing.outputPerMillion} Credits/百万 Token
+          <span className="block">按本次费率版本结算，已含档位倍率</span>
+        </p>}
       </div>
       <span className={`text-sm font-medium tabular-nums ${positive ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--text-primary)]'}`}>
         {positive ? '+' : ''}{formatCreditAmount(displayedDelta)}
@@ -40,7 +46,33 @@ function LedgerRow({ item }: { item: CreditLedgerItem }) {
   )
 }
 
+function TaskUsage({ runId, onClose }: { runId: string; onClose: () => void }) {
+  const sectionRef = useRef<HTMLElement>(null)
+  useEffect(() => { sectionRef.current?.focus() }, [])
+  const query = useInfiniteQuery({ queryKey: ['credits', 'task', runId], initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchTaskCreditUsage(runId, pageParam), getNextPageParam: page => page.nextCursor ?? undefined,
+    staleTime: 20_000 })
+  const summary = query.data?.pages[0]
+  return <section ref={sectionRef} tabIndex={-1} aria-label="任务费用明细" className="mt-5 rounded-2xl border border-[var(--border-subtle)] p-4">
+    <div className="flex items-center justify-between gap-3"><h3 className="font-medium">任务费用（含续跑）</h3>
+      <Button onClick={onClose}>关闭</Button></div>
+    {query.isPending && <p role="status" className="mt-3 flex items-center gap-2 text-sm"><LoaderCircle className="h-4 w-4 animate-spin" />正在读取账单…</p>}
+    {summary && <>
+      <p className="mt-3 text-sm leading-6">已扣 {formatCreditAmount(summary.charged)} · 已退 {formatCreditAmount(summary.refunded)} · 净扣 {formatCreditAmount(summary.netCharged)} Credits</p>
+      {summary.pendingRefund > 0 && <p className="text-sm">待退款 {formatCreditAmount(summary.pendingRefund)} Credits（尚未计入已退）</p>}
+      {(summary.pendingModelSettlements ?? 0) > 0 && <p className="text-sm">{summary.pendingModelSettlements} 次模型调用待核实或结算，未计入已扣额度，不代表免费。</p>}
+      <p className="mt-1 text-xs text-[var(--text-tertiary)]">账单截至 {formatDateTime(summary.asOf)}；供应商成本不等于用户扣费。
+        {summary.unresolvedProviderAttempts === null ? '旧任务无完整供应商对账记录。' : summary.unresolvedProviderAttempts > 0 ? `仍有 ${summary.unresolvedProviderAttempts} 次调用待核实，金额并非最终结算。` : ''}</p>
+      <ul>{query.data!.pages.flatMap(page => page.ledger).map(item => <LedgerRow key={item.id} item={item} />)}</ul>
+      {summary.ledger.length === 0 && <p className="py-3 text-sm">暂无已记录的费用。</p>}
+      {query.hasNextPage && <Button disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{query.isFetchingNextPage ? '加载中…' : '加载更多任务记录'}</Button>}
+    </>}
+    {query.isError && <div role="alert" className="mt-3 text-sm">任务费用暂时无法读取。<Button onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>重试</Button></div>}
+  </section>
+}
+
 export default function AccountUsagePage() {
+  const [taskRunId, setTaskRunId] = useState<string | null>(null)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [ledgerFilter, setLedgerFilter] = useState<'used' | 'earned'>('used')
@@ -106,6 +138,18 @@ export default function AccountUsagePage() {
             <h1 className="mt-2 text-3xl font-semibold tracking-[-.03em]">用量明细</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">每日额度在 UTC+8 15:00 重置；邀请奖励独立累计，不随每日重置清零。</p>
           </header>
+          {summary.models.some(model => model.pricing) && <section className="mt-6 rounded-[16px] border border-[var(--border-subtle)] p-5" aria-label="当前分项费率">
+            <h2 className="text-sm font-semibold">当前分项费率</h2>
+            <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">单位为 Credits / 百万 Token，已含档位倍率。按非缓存输入、缓存输入和输出分别计算，每次调用合计后向上取整至 0.001 Credit；历史调用按原费率结算。</p>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-xs tabular-nums">
+                <thead><tr>{['档位', '输入', '缓存输入', '输出'].map(label => <th key={label} className="px-2 py-2 font-medium">{label}</th>)}</tr></thead>
+                <tbody>{summary.models.filter(model => model.pricing).map(model => <tr key={model.tier} className="border-t border-[var(--border-subtle)]">
+                  <td className="px-2 py-2">{model.label}</td><td className="px-2 py-2">{model.pricing!.inputPerMillion}</td><td className="px-2 py-2">{model.pricing!.cachePerMillion}</td><td className="px-2 py-2">{model.pricing!.outputPerMillion}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          </section>}
           <section className="mt-8 grid gap-4 xl:grid-cols-2">
             <article className="rounded-[16px] border border-[#e9e9e6] bg-white p-5 sm:p-6 dark:border-[var(--border-subtle)] dark:bg-[var(--surface-default)]">
               <div className="flex items-start justify-between gap-4">
@@ -162,7 +206,7 @@ export default function AccountUsagePage() {
             <div className="mt-4 overflow-hidden rounded-[16px] border border-[#e9e9e6] bg-white dark:border-[var(--border-subtle)] dark:bg-[var(--surface-default)]">
               {filteredLedger.length > 0 ? (
                 <>
-                  <ul>{visibleLedger.map((item) => <LedgerRow key={item.id} item={item} />)}</ul>
+                  <ul>{visibleLedger.map((item) => <LedgerRow key={item.id} item={item} onTask={setTaskRunId} />)}</ul>
                   {hasMoreLedger ? (
                     <div className="border-t border-[#efefec] p-3 dark:border-[var(--border-subtle)]">
                       <button
@@ -180,6 +224,7 @@ export default function AccountUsagePage() {
               )}
             </div>
           </section>
+          {taskRunId && <TaskUsage key={taskRunId} runId={taskRunId} onClose={() => setTaskRunId(null)} />}
         </div>
       </div>
       <InviteCreditsDialog open={inviteOpen} referral={referralQuery.data ?? null} copied={copied} onCopy={() => void copyInviteLink()} onClose={() => { autoCopyInviteRef.current = false; setInviteOpen(false) }} />

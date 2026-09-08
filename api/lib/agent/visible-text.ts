@@ -1,4 +1,5 @@
 import { allTools } from './tools/registry.js'
+import { mapAgentVisibleProse } from '../../../shared/agent-output.js'
 
 /**
  * 正文/思考信道面向作者的可见性清洗：工具英文名、参数名、内部系统英文名与编号原文
@@ -46,6 +47,10 @@ const PROTOCOL_PARENTHETICAL = new RegExp(`[（(]\\s*${PROTOCOL_EQ_SUBJECT}\\s*[
 const OPEN_PROTOCOL_PARENTHETICAL = new RegExp(`[（(]\\s*${PROTOCOL_EQ_SUBJECT}\\s*[=＝:：]\\s*[^()（）]*$`)
 
 export function humanizeAgentVisibleText(text: string): string {
+  return mapAgentVisibleProse(text, humanizeProse)
+}
+
+function humanizeProse(text: string): string {
   if (!text) return text
   let out = text.replace(PROTOCOL_PARENTHETICAL, '')
   out = out.replace(OPAQUE_IDENTIFIER, '编号')
@@ -99,7 +104,8 @@ export function createVisibleTextStreamer() {
       if (!safe.startsWith(emitted)) {
         // 清洗结果与已下发前缀不一致（极罕见边例）：本轮停发增量，等轮末整段结算替换，
         // 宁可少播一拍也不让英文漏出或文本错乱
-        emitted = safe
+        // This prefix was NOT delivered. Keep the actual emitted prefix so a
+        // later compatible snapshot can catch up without silently dropping text.
         return ''
       }
       const increment = safe.slice(emitted.length)

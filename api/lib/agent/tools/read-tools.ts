@@ -3,7 +3,10 @@ import { z } from 'zod'
 import { prisma } from '../../prisma.js'
 import { searchStoryMemory } from '../story-memory.js'
 import { recordChapterBaseline } from '../baseline.js'
-import { defineTool } from './types.js'
+import { defineTool, type ToolResult } from './types.js'
+import { executeDurableRead } from './durable-read.js'
+import { planTargetHash } from './durable-plan.js'
+import { novelMetadataHash } from './durable-metadata.js'
 
 const READ_PERMISSION = { plan: 'allow', build: 'allow', review: 'allow' } as const
 
@@ -57,8 +60,14 @@ export const novelGetContextTool = defineTool({
   parameters: z.object({}),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx) {
-    const novel = await prisma.novel.findFirst({
+  async execute(ctx): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      return executeDurableRead(captured, 'novel_get_context', {}, raw => novelGetContextTool.parameters.parse(raw),
+        tx => novelGetContextTool.execute({ ...captured, durableRead: undefined, transaction: tx }, {}))
+    }
+    const db = ctx.transaction ?? prisma
+    const novel = await db.novel.findFirst({
       where: { id: ctx.novelId, authorId: ctx.userId },
       select: {
         title: true,
@@ -75,10 +84,10 @@ export const novelGetContextTool = defineTool({
     })
 
     if (!novel) {
-      return { output: '未找到当前作品，可能已被删除。' }
+      return { outcome: 'failed', output: '未找到当前作品，可能已被删除。' }
     }
 
-    const volumes = await prisma.volume.findMany({
+    const volumes = await db.volume.findMany({
       where: { novelId: ctx.novelId },
       orderBy: { orderIndex: 'asc' },
       include: {
@@ -105,9 +114,9 @@ export const novelGetContextTool = defineTool({
 
     const output = [
       `作品：《${novel.displayTitle ?? novel.title}》 状态：${novel.status} 总字数：${novel.wordCount} 章节数：${novel.chapterCount}`,
-      `简介：${clip(novel.summary, 400)}`,
+      `简介：${ctx.transaction ? novel.summary : clip(novel.summary, 400)}`,
       novel.tagNames.length ? `标签：${novel.tagNames.join('、')}${novel.categoryName ? ` 分类：${novel.categoryName}` : ''}` : '',
-      novel.coverPrompt ? `封面提示词：${clip(novel.coverPrompt, 160)}` : '',
+      novel.coverPrompt ? `封面提示词：${ctx.transaction ? novel.coverPrompt : clip(novel.coverPrompt, 160)}` : '',
       novel.coverAsset?.imageUrl
         ? `正式封面地址：${novel.coverAsset.imageUrl}（调用 view_image 即可查看当前封面画面效果）`
         : '正式封面：暂无',
@@ -119,7 +128,8 @@ export const novelGetContextTool = defineTool({
       .filter(Boolean)
       .join('\n')
 
-    return { output, summary: `读取《${novel.displayTitle ?? novel.title}》上下文 · ${chapters.length} 章` }
+    return { output, summary: `读取《${novel.displayTitle ?? novel.title}》上下文 · ${chapters.length} 章`,
+      ...(ctx.transaction ? { observedState: { kind: 'novel' as const, id: ctx.novelId, hash: novelMetadataHash(novel) } } : {}) }
   },
 })
 
@@ -136,23 +146,31 @@ export const chapterReadTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx, args) {
+  async execute(ctx, args): Promise<ToolResult> {
     // 缺省兜底：模型漏传 chapterId 时默认读作者当前打开的章节，避免白白打回一轮
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      const effective = Object.fromEntries(Object.entries({ ...args }).filter(([, value]) => value !== undefined))
+      return executeDurableRead(captured, 'chapter_read', effective,
+        raw => Object.fromEntries(Object.entries(chapterReadTool.parameters.parse(raw)).filter(([, value]) => value !== undefined)),
+        tx => chapterReadTool.execute({ ...captured, durableRead: undefined, transaction: tx }, effective))
+    }
+    const db = ctx.transaction ?? prisma
     const chapterId = args.chapterId?.trim() || ctx.chapterId
     if (!chapterId) {
-      return { output: '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId。' }
+      return { outcome: 'failed', output: '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId。' }
     }
-    const chapter = await prisma.chapter.findFirst({
+    const chapter = await db.chapter.findFirst({
       where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
       select: { id: true, title: true, content: true, wordCount: true, summary: true, revision: true },
     })
 
     if (!chapter) {
-      return { output: `章节 ${chapterId} 不存在或不属于当前作品。` }
+      return { outcome: 'failed', output: `章节 ${chapterId} 不存在或不属于当前作品。` }
     }
 
     // 读取即记录写入基线：后续写入前校验 revision，防止同毫秒写入或时钟精度导致漏判冲突
-    recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
+    if (!ctx.transaction) recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)
 
     const offset = args.offset ?? 0
     const limit = args.limit ?? 6000
@@ -171,6 +189,7 @@ export const chapterReadTool = defineTool({
     return {
       output,
       summary: `读取《${chapter.title}》 ${offset}-${offset + slice.length} 字`,
+      observedState: { kind: 'chapter', id: chapter.id, revision: chapter.revision },
     }
   },
 })
@@ -186,8 +205,16 @@ export const chapterListSummariesTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx, args) {
-    const chapters = await prisma.chapter.findMany({
+  async execute(ctx, args): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      const normalize = (raw: unknown) => Object.fromEntries(Object.entries(chapterListSummariesTool.parameters.parse(raw)).filter(([, value]) => value !== undefined))
+      const effective = chapterListSummariesTool.parameters.parse(normalize(args))
+      return executeDurableRead(captured, 'chapter_list_summaries', normalize(effective), normalize,
+        tx => chapterListSummariesTool.execute({ ...captured, durableRead: undefined, transaction: tx }, effective))
+    }
+    const db = ctx.transaction ?? prisma
+    const chapters = await db.chapter.findMany({
       where: { novelId: ctx.novelId, authorId: ctx.userId },
       orderBy: { orderIndex: 'asc' },
       select: { id: true, title: true, orderIndex: true, summary: true, content: true },
@@ -247,23 +274,35 @@ export const memorySearchTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx, args) {
+  async execute(ctx, args): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      const normalize = (raw: unknown) => Object.fromEntries(Object.entries(memorySearchTool.parameters.parse(raw)).filter(([, value]) => value !== undefined))
+      const effective = memorySearchTool.parameters.parse(normalize(args))
+      return executeDurableRead(captured, 'memory_search', normalize(effective), normalize,
+        tx => memorySearchTool.execute({ ...captured, durableRead: undefined, transaction: tx }, effective))
+    }
     const entries = await searchStoryMemory({
       userId: ctx.userId, novelId: ctx.novelId, query: args.query,
       memoryType: args.memoryType, limit: args.limit ?? 8,
-    })
+    }, ctx.transaction)
 
     if (entries.length === 0) {
       return { output: `没有找到与"${args.query}"相关的记忆条目。` }
     }
 
     const lines = entries.map(
-      (entry) => `[${entry.memoryType}/${entry.layer}/${entry.status}] ${entry.title}（融合分 ${entry.score.toFixed(4)}）：${clip(entry.content, 400)}\n  依据：${entry.evidence.map((item) => `${item.sourceType}:${item.sourceId}${item.revision ? `@r${item.revision}` : ''}`).join('、') || '无来源（仅作低可信参考）'}`,
+      (entry) => `[${entry.memoryType}/${entry.layer}/${entry.status}] ${entry.title}（ID：${entry.id}；融合分 ${entry.score.toFixed(4)}）：${ctx.transaction ? entry.content : clip(entry.content, 400)}\n  依据：${entry.evidence.map((item) => `${item.sourceType}:${item.sourceId}${item.revision ? `@r${item.revision}` : ''}`).join('、') || '无来源（仅作低可信参考）'}`,
     )
 
     return {
       output: lines.join('\n'),
       summary: `检索"${args.query}" · 命中 ${entries.length} 条`,
+      ...(ctx.transaction ? { observedMemories: await Promise.all(entries.map(async entry => {
+        const memory = await ctx.transaction!.projectMemoryEntry.findUniqueOrThrow({ where: { id: entry.id } })
+        const { memoryTargetHash } = await import('../runtime-memory.js')
+        return { kind: 'memory' as const, id: memory.id, hash: memoryTargetHash(memory) }
+      })) } : {}),
     }
   },
 })
@@ -279,8 +318,16 @@ export const planReadTool = defineTool({
   }),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx, args) {
-    const plan = await prisma.agentArtifact.findFirst({
+  async execute(ctx, args): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      const effective = { ...args }
+      return executeDurableRead(captured, 'plan_read', Object.fromEntries(Object.entries(effective).filter(([, value]) => value !== undefined)),
+        raw => Object.fromEntries(Object.entries(planReadTool.parameters.parse(raw)).filter(([, value]) => value !== undefined)),
+        tx => planReadTool.execute({ ...captured, durableRead: undefined, transaction: tx }, effective))
+    }
+    const db = ctx.transaction ?? prisma
+    const plan = await db.agentArtifact.findFirst({
       where: {
         artifactType: 'chapterPlan',
         metadata: { path: ['savedAsPlan'], equals: true },
@@ -288,11 +335,12 @@ export const planReadTool = defineTool({
         ...(args.planId ? { id: args.planId } : {}),
       },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, content: true, updatedAt: true },
+      select: { id: true, title: true, content: true, updatedAt: true, metadata: true },
     })
 
     if (!plan) {
       return {
+        outcome: 'failed',
         output: args.planId
           ? `未找到 planId=${args.planId} 对应的计划，请核对上下文里的计划清单。`
           : '计划文件夹目前是空的，还没有任何计划。',
@@ -300,8 +348,9 @@ export const planReadTool = defineTool({
     }
 
     return {
-      output: `《${plan.title}》（planId=${plan.id}，${plan.content.length} 字）：\n${clip(plan.content, 8000)}`,
+      output: `《${plan.title}》（planId=${plan.id}，${plan.content.length} 字）：\n${ctx.transaction ? plan.content : clip(plan.content, 8000)}`,
       summary: `读取计划《${plan.title}》`,
+      observedState: { kind: 'plan', id: plan.id, hash: planTargetHash(plan) },
     }
   },
 })

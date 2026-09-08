@@ -113,6 +113,7 @@ enum AgentActionKind {
 }
 
 enum AgentArtifactType {
+  researchReport
   chapterPlan
   chapterDraft
   chapterContinuation
@@ -393,6 +394,8 @@ model User {
   aiModelConfigs             AiModelConfig[]
   agentSessions              AgentSession[]
   agentRuns                  AgentRun[]
+  durableTaskRoots           AgentTaskRoot[]
+  legacyAgentAttachmentGrants LegacyAgentAttachmentGrant[]
   smsVerificationCodes       SmsVerificationCode[]
   postLikes                  PostLike[]
   postBookmarks              PostBookmark[]
@@ -990,6 +993,11 @@ model AiUsageLog {
   modelTier         String?        @map("model_tier") @db.VarChar(24)
   multiplierBps     Int            @default(10000) @map("multiplier_bps")
   creditChargeMilli Int            @default(0) @map("credit_charge_milli")
+  /// Frozen before a legacy/default text dispatch; null retains historical V1 replay.
+  billingSnapshot  Json?          @map("billing_snapshot")
+  usageSource      String?        @map("usage_source") @db.VarChar(24)
+  billingStatus    String?        @map("billing_status") @db.VarChar(24)
+  billingRetryAt   DateTime?      @map("billing_retry_at")
   durationMs        Int            @map("duration_ms")
   createdAt         DateTime       @default(now()) @map("created_at")
   user              User           @relation(fields: [userId], references: [id])
@@ -1001,6 +1009,7 @@ model AiUsageLog {
   @@index([targetType, targetId])
   @@index([agentRunId, createdAt])
   @@index([providerName, modelName, createdAt])
+  @@index([billingStatus, billingRetryAt])
   @@map("ai_usage_logs")
 }
 
@@ -1040,10 +1049,26 @@ model CreditLedgerEntry {
   metadata        Json?
   createdAt       DateTime @default(now()) @map("created_at")
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refundIntent    CreditRefundIntent?
 
   @@index([userId, createdAt])
   @@index([sourceType, createdAt])
   @@map("credit_ledger_entries")
+}
+
+/// Durable obligation, separate from provider cost and from the credited ledger.
+model CreditRefundIntent {
+  originalEntryId String @id @map("original_entry_id") @db.VarChar(64)
+  reason          String @db.VarChar(64)
+  evidence        Json
+  attempts        Int @default(0)
+  nextAttemptAt   DateTime @default(now()) @map("next_attempt_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  settledAt       DateTime? @map("settled_at")
+  originalEntry   CreditLedgerEntry @relation(fields: [originalEntryId], references: [id], onDelete: Cascade)
+
+  @@index([settledAt, nextAttemptAt])
+  @@map("credit_refund_intents")
 }
 
 model ReferralCode {
@@ -1082,6 +1107,36 @@ model CreditSystemSetting {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@map("credit_system_settings")
+}
+
+/// 不可变产品费率快照；状态变化另记审计事件。
+model CreditRateCard {
+  id          String @id @db.VarChar(64)
+  modelTier   String @map("model_tier") @db.VarChar(24)
+  status      String @default("draft") @db.VarChar(24)
+  price       Json
+  priceHash   String @map("price_hash") @db.VarChar(64)
+  createdBy   String @map("created_by") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+  revision    Int @default(0)
+  events      CreditRateCardEvent[]
+
+  @@index([modelTier, status])
+  @@map("credit_rate_cards")
+}
+
+model CreditRateCardEvent {
+  id          String @id @db.VarChar(64)
+  rateCardId  String @map("rate_card_id") @db.VarChar(64)
+  revision    Int
+  status      String @db.VarChar(24)
+  actorId     String @map("actor_id") @db.VarChar(64)
+  evidence    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  card        CreditRateCard @relation(fields: [rateCardId], references: [id], onDelete: Restrict)
+
+  @@unique([rateCardId, revision])
+  @@map("credit_rate_card_events")
 }
 
 /// 平台内置模型与用户 BYOK 模型共用配置表。真实 modelName/API Key 永不进入用户侧契约。
@@ -1299,12 +1354,15 @@ model AgentRun {
   agentType          AgentType              @map("agent_type")
   status             AgentRunStatus         @default(queued)
   inputSummary       String?                @map("input_summary")
+  startRequest       Json?                  @map("start_request")
   outputSummary      String?                @map("output_summary")
   errorMessage       String?                @map("error_message")
   engine             String                 @default("legacy") @db.VarChar(16)
   currentTurn        Int                    @default(0) @map("current_turn")
   usage              Json?
   taskSpec           Json?                  @map("task_spec")
+  taskRootId         String?                @map("task_root_id") @db.VarChar(64)
+  runtimeProtocolVersion Int                @default(0) @map("runtime_protocol_version")
   modelTier          String                 @default("speed") @map("model_tier") @db.VarChar(24)
   customModelId      String?                @map("custom_model_id") @db.VarChar(64)
   reasoningEffort    String                 @default("high") @map("reasoning_effort") @db.VarChar(16)
@@ -1317,6 +1375,7 @@ model AgentRun {
   novel              Novel                  @relation(fields: [novelId], references: [id])
   chapter            Chapter?               @relation(fields: [chapterId], references: [id])
   artifacts          AgentArtifact[]
+  researchSources    AgentResearchSource[]
   memoryEntries      ProjectMemoryEntry[]
   messages           AgentMessage[]
   events             AgentRunEvent[]
@@ -1330,11 +1389,213 @@ model AgentRun {
   childSubtasks      AgentSubtask[]
   subtaskRuns        AgentSubtaskRun[]
   scheduleRuns       AgentSchedule[]
+  taskRoot           AgentTaskRoot?         @relation(fields: [taskRootId], references: [id], onDelete: NoAction)
+  executionLease     AgentRunLease?
+  eventProjections   AgentEventProjection[]
 
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
   @@index([novelId, createdAt])
+  @@index([taskRootId, createdAt])
   @@map("agent_runs")
+}
+
+/// B0 expansion: original scope is immutable; session/novel IDs survive history pruning.
+model AgentTaskRoot {
+  id                 String   @id @db.VarChar(64)
+  userId             String   @map("user_id") @db.VarChar(64)
+  sessionId          String   @map("session_id") @db.VarChar(64)
+  novelId            String   @map("novel_id") @db.VarChar(64)
+  protocolVersion    Int      @default(1) @map("protocol_version")
+  authorizationMode  String   @default("legacy") @map("authorization_mode") @db.VarChar(24)
+  sourceMessageId    String   @map("source_message_id") @db.VarChar(64)
+  inputHash          String   @map("input_hash") @db.VarChar(64)
+  specSnapshot       Json     @map("spec_snapshot")
+  requestSnapshot    Json     @map("request_snapshot")
+  status             String   @default("active") @db.VarChar(24)
+  createdAt          DateTime @default(now()) @map("created_at")
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs               AgentRun[]
+  operations         AgentOperation[]
+  events             AgentExecutionOutbox[]
+  budget             AgentTaskBudget?
+  checkpoints        AgentRuntimeCheckpoint[]
+  executionState     AgentExecutionState?
+  executionFrames    AgentExecutionFrame[]
+
+  @@index([userId, sessionId, createdAt])
+  @@map("agent_task_roots")
+}
+
+model AgentTaskBudget {
+  taskRootId         String   @id @map("task_root_id") @db.VarChar(64)
+  policy             Json
+  policyHash         String   @map("policy_hash") @db.VarChar(64)
+  tokenLimit         Int      @map("token_limit")
+  checkpointCount    Int      @default(0) @map("checkpoint_count")
+  compactionCount    Int      @default(0) @map("compaction_count")
+  createdAt          DateTime @default(now()) @map("created_at")
+  taskRoot           AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade)
+
+  @@map("agent_task_budgets")
+}
+
+model AgentExecutionState {
+  taskRootId String @id @map("task_root_id") @db.VarChar(64)
+  configuration Json
+  configurationHash String @map("configuration_hash") @db.VarChar(64)
+  revision Int @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  taskRoot AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade, map: "agent_execution_states_root_fkey")
+
+  @@map("agent_execution_states")
+}
+
+model AgentExecutionFrame {
+  taskRootId String @map("task_root_id") @db.VarChar(64)
+  revision Int
+  originRunId String @map("origin_run_id") @db.VarChar(64)
+  previousHash String? @map("previous_hash") @db.VarChar(64)
+  snapshot Json
+  snapshotHash String @map("snapshot_hash") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+  taskRoot AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade, map: "agent_execution_frames_root_fkey")
+
+  @@id([taskRootId, revision])
+  @@map("agent_execution_frames")
+}
+
+model AgentRuntimeCheckpoint {
+  taskRootId         String @map("task_root_id") @db.VarChar(64)
+  checkpointIndex    Int @map("checkpoint_index")
+  originRunId        String @map("origin_run_id") @db.VarChar(64)
+  progressOperationId String @unique @map("progress_operation_id") @db.VarChar(64)
+  requestHash        String @map("request_hash") @db.VarChar(64)
+  snapshot           Json
+  snapshotHash       String @map("snapshot_hash") @db.VarChar(64)
+  createdAt          DateTime @default(now()) @map("created_at")
+  taskRoot           AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade)
+  progressOperation  AgentOperation @relation(fields: [progressOperationId, taskRootId], references: [id, taskRootId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([taskRootId, checkpointIndex])
+  @@map("agent_runtime_checkpoints")
+}
+
+model AgentRunLease {
+  runId              String   @id @map("run_id") @db.VarChar(64)
+  ownerId            String?  @map("owner_id") @db.VarChar(96)
+  claimId            String?  @map("claim_id") @db.VarChar(64)
+  epoch              BigInt   @default(0)
+  expiresAt          DateTime? @map("expires_at")
+  enabled            Boolean  @default(true)
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  run                AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, expiresAt])
+  @@map("agent_run_leases")
+}
+
+model AgentOperation {
+  id                 String   @id @db.VarChar(64)
+  taskRootId         String   @map("task_root_id") @db.VarChar(64)
+  operationKey       String   @map("operation_key") @db.VarChar(160)
+  parentOperationId  String?  @map("parent_operation_id") @db.VarChar(64)
+  originRunId        String   @map("origin_run_id") @db.VarChar(64)
+  kind               String   @db.VarChar(24)
+  action             String   @db.VarChar(96)
+  inputHash          String   @map("input_hash") @db.VarChar(64)
+  inputSnapshot      Json?    @map("input_snapshot")
+  checkpoints        AgentRuntimeCheckpoint[]
+  status             String   @default("prepared") @db.VarChar(24)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  taskRoot           AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade)
+  parent             AgentOperation? @relation("OperationParent", fields: [parentOperationId, taskRootId], references: [id, taskRootId], onDelete: NoAction, onUpdate: NoAction)
+  children           AgentOperation[] @relation("OperationParent")
+  attempts           AgentProviderAttempt[]
+  effectReceipt      AgentEffectReceipt?
+  events             AgentExecutionOutbox[]
+
+  @@unique([taskRootId, operationKey])
+  @@unique([id, taskRootId])
+  @@index([taskRootId, status, createdAt])
+  @@map("agent_operations")
+}
+
+model AgentProviderAttempt {
+  id                 String   @id @db.VarChar(64)
+  operationId        String   @map("operation_id") @db.VarChar(64)
+  attemptKey         String   @map("attempt_key") @db.VarChar(64)
+  runId              String   @map("run_id") @db.VarChar(64)
+  ownerEpoch         BigInt   @map("owner_epoch")
+  provider           String   @db.VarChar(96)
+  model              String   @db.VarChar(160)
+  requestHash        String   @map("request_hash") @db.VarChar(64)
+  requestSnapshot    Json?    @map("request_snapshot")
+  status             String   @default("prepared") @db.VarChar(24)
+  dispatchedAt       DateTime? @map("dispatched_at")
+  completedAt        DateTime? @map("completed_at")
+  result             Json?
+  resultHash         String?  @map("result_hash") @db.VarChar(64)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  operation          AgentOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  usageReceipt       AgentProviderUsageReceipt?
+
+  @@unique([operationId, attemptKey])
+  @@index([status, updatedAt])
+  @@map("agent_provider_attempts")
+}
+
+/// Latest cumulative observation, not an additive charge per SSE frame.
+model AgentProviderUsageReceipt {
+  attemptId          String   @id @map("attempt_id") @db.VarChar(64)
+  revision           Int      @default(1)
+  source             String   @db.VarChar(24)
+  promptTokens       Int?     @map("prompt_tokens")
+  completionTokens   Int?     @map("completion_tokens")
+  cacheHitTokens     Int?     @map("cache_hit_tokens")
+  cacheMissTokens    Int?     @map("cache_miss_tokens")
+  observationHash    String   @map("observation_hash") @db.VarChar(64)
+  settlementStatus   String   @default("pending") @map("settlement_status") @db.VarChar(24)
+  observedAt         DateTime @default(now()) @map("observed_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  attempt            AgentProviderAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([settlementStatus, updatedAt])
+  @@map("agent_provider_usage_receipts")
+}
+
+model AgentEffectReceipt {
+  operationId        String   @id @map("operation_id") @db.VarChar(64)
+  runId              String   @map("run_id") @db.VarChar(64)
+  ownerEpoch         BigInt   @map("owner_epoch")
+  result             Json
+  resultHash         String   @map("result_hash") @db.VarChar(64)
+  createdAt          DateTime @default(now()) @map("created_at")
+  operation          AgentOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+
+  @@map("agent_effect_receipts")
+}
+
+model AgentExecutionOutbox {
+  id                 String   @id @db.VarChar(64)
+  sequence           BigInt   @unique @default(autoincrement())
+  taskRootId         String   @map("task_root_id") @db.VarChar(64)
+  operationId        String?  @map("operation_id") @db.VarChar(64)
+  runId              String   @map("run_id") @db.VarChar(64)
+  eventKey           String   @unique @map("event_key") @db.VarChar(160)
+  type               String   @db.VarChar(48)
+  payload            Json
+  createdAt          DateTime @default(now()) @map("created_at")
+  publishedAt        DateTime? @map("published_at")
+  taskRoot           AgentTaskRoot @relation(fields: [taskRootId], references: [id], onDelete: Cascade)
+  operation          AgentOperation? @relation(fields: [operationId, taskRootId], references: [id, taskRootId], onDelete: NoAction, onUpdate: NoAction)
+  projections        AgentEventProjection[]
+
+  @@index([publishedAt, sequence])
+  @@index([runId, sequence])
+  @@map("agent_execution_outbox")
 }
 
 model AgentSkillRun {
@@ -1451,6 +1712,42 @@ model AgentSkillEval {
   @@map("agent_skill_evals")
 }
 
+// Private task evidence, never indexed as shared craft material or shown as a chapter.
+model AgentResearchSource {
+  id           String @id @db.VarChar(64)
+  ownerRunId   String @map("owner_run_id") @db.VarChar(64)
+  taskKey      String @map("task_key") @db.VarChar(200)
+  urlHash      String @map("url_hash") @db.VarChar(64)
+  canonicalUrl String @map("canonical_url") @db.VarChar(8192)
+  title        String @db.VarChar(300)
+  readFailure  Json? @map("read_failure")
+  createdAt    DateTime @default(now()) @map("created_at")
+  ownerRun     AgentRun @relation(fields: [ownerRunId], references: [id], onDelete: Cascade)
+  versions     AgentResearchContent[]
+
+  @@unique([ownerRunId, taskKey, urlHash])
+  @@index([taskKey, createdAt])
+  @@map("agent_research_sources")
+}
+
+model AgentResearchContent {
+  id          String @id @db.VarChar(64)
+  sourceId    String @map("source_id") @db.VarChar(64)
+  revision    String @db.VarChar(64)
+  contentHash String @map("content_hash") @db.VarChar(64)
+  finalUrl    String @map("final_url") @db.VarChar(8192)
+  provider    String @db.VarChar(32)
+  contentKind String @map("content_kind") @db.VarChar(24)
+  text        String
+  quality     Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  source      AgentResearchSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, revision])
+  @@index([sourceId, createdAt])
+  @@map("agent_research_contents")
+}
+
 model AgentArtifact {
   id           String            @id @default(cuid()) @db.VarChar(64)
   runId        String            @map("run_id") @db.VarChar(64)
@@ -1465,6 +1762,21 @@ model AgentArtifact {
 
   @@index([runId, createdAt])
   @@map("agent_artifacts")
+}
+
+// Explicitly reviewed historical ownership; message references alone cannot grant access.
+model LegacyAgentAttachmentGrant {
+  url           String    @id @db.VarChar(512)
+  ownerUserId   String    @map("owner_user_id") @db.VarChar(64)
+  contentSha256 String    @map("content_sha256") @db.VarChar(64)
+  evidenceRef   String    @map("evidence_ref") @db.VarChar(512)
+  approvedBy    String    @map("approved_by") @db.VarChar(128)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  revokedAt     DateTime? @map("revoked_at")
+  owner         User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade, map: "legacy_agent_attachment_grants_owner_fkey")
+
+  @@index([ownerUserId])
+  @@map("legacy_agent_attachment_grants")
 }
 
 model AgentMessage {
@@ -1539,9 +1851,27 @@ model AgentRunEvent {
   payload   Json
   createdAt DateTime @default(now()) @map("created_at")
   run       AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  projection AgentEventProjection?
 
   @@unique([runId, seq])
   @@map("agent_run_events")
+}
+
+/// One durable source may project into multiple UI events, once per destination run.
+model AgentEventProjection {
+  runId       String @map("run_id") @db.VarChar(64)
+  sourceId    String @map("source_id") @db.VarChar(64)
+  partIndex   Int @default(0) @map("part_index")
+  eventId     String @unique @map("event_id") @db.VarChar(64)
+  sourceHash  String @map("source_hash") @db.VarChar(64)
+  eventHash   String @map("event_hash") @db.VarChar(64)
+  version     Int @default(1)
+  run         AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  source      AgentExecutionOutbox @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  event       AgentRunEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([runId, sourceId, partIndex])
+  @@map("agent_event_projections")
 }
 
 model ProjectMemoryEntry {

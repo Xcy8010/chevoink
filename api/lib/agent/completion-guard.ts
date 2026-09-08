@@ -11,6 +11,18 @@ export function promisesFurtherAction(text: string): boolean {
   return /(?:接下来|下一步|现在|马上|先|继续|直接)(?:我会|我将|会|将|去)?[^。\n]{0,24}(?:写入|写正文|修订|修复|检查|校验|整改|重建|补齐|读取|读回)/u.test(lastSentence)
 }
 
+const checkpointReadTools = new Set([
+  'chapter_read', 'plan_read', 'novel_get_context', 'chapter_list_summaries', 'memory_search',
+  'volume_list', 'structure_outline', 'web_read', 'platform_novel_read', 'research_report_read',
+])
+
+/** Only content observations, not workflow/status/audit tools, can extend a
+ * read-only task. The caller deduplicates by tool name and returned observation,
+ * not by model-supplied arguments (rephrasing a query is not new evidence). */
+export function hasReadProgress(part: Extract<AgentMessagePart, { type: 'tool-call' }>): boolean {
+  return part.status === 'success' && checkpointReadTools.has(part.toolName)
+}
+
 /** No-op diffs and repeated todo snapshots must not buy another budget slice. */
 export function hasDurableProgress(part: Extract<AgentMessagePart, { type: 'tool-call' }>, previousTodos: AgentTodoItem[]): boolean {
   if (part.status !== 'success') return false

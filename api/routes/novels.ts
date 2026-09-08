@@ -19,7 +19,7 @@ import {
   updateNovelSchema,
   uploadNovelCoverSchema,
 } from '../../shared/contracts/index.js'
-import { getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
+import { getPublicSessionUserId, getSessionUserId, requireSessionUserId } from '../lib/auth-session.js'
 import {
   createChapterData,
   createUploadedCoverAssetData,
@@ -72,7 +72,7 @@ async function handleNovelDetailRequest(req: Request, res: Response, novelId: st
   const requestId = createRequestId()
 
   try {
-    const payload = await getNovelDetailData(novelId, getSessionUserId(req))
+    const payload = await getNovelDetailData(novelId, getPublicSessionUserId(req))
     if (!payload) {
       res.status(404).json(buildError(requestId, 'NOVEL_NOT_FOUND', '未找到作品。'))
       return
@@ -341,7 +341,7 @@ router.get('/:novelId/reader/:chapterId', async (req: Request, res: Response): P
   const requestId = createRequestId()
 
   try {
-    const payload = await getReaderPayloadData(req.params.novelId, req.params.chapterId, getSessionUserId(req))
+    const payload = await getReaderPayloadData(req.params.novelId, req.params.chapterId, getPublicSessionUserId(req))
     if (!payload) {
       res.status(404).json(buildError(requestId, 'CHAPTER_NOT_FOUND', '未找到章节内容。'))
       return

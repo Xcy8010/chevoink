@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { SseDataDecoder } from './ai-sse.js'
+import { beginDurableChat, type DurableChatExecution } from './agent/runtime-provider.js'
+import { validateModelCursor } from './agent/runtime-model-cursor.js'
+import type { settleProviderOperation } from './agent/runtime-settlement.js'
+import { withLeaseHeartbeat } from './agent/runtime-heartbeat.js'
+import { resolveDurableTokenPrice, resolveTokenPrice } from './billing/resolve-token-price.js'
 
 import { fetch as undiciFetch, Agent as UndiciAgent } from 'undici'
 
@@ -12,8 +17,8 @@ import type {
   GenerateCoverPromptRequest,
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
-import { createCoverAssetsData } from './data-access.js'
-import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, IMAGE_CALL_MILLI, refundCreditCharge } from './credits.js'
+import { createCoverAssetsData, ensureNovelOwner } from './data-access.js'
+import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, IMAGE_CALL_MILLI, recordImageRefundIntent, reconcileCreditRefunds } from './credits.js'
 import type { CreditModelTier } from '../../shared/contracts/index.js'
 import {
   FANQIE_ALL_CATEGORIES,
@@ -76,6 +81,8 @@ function estimateTokenCount(value: string): number {
 }
 
 async function recordUsage(input: {
+  preparedUsageId?: string
+  usageSource?: 'reported' | 'estimated' | 'unknown'
   userId: string
   providerType: 'text' | 'image'
   action: string
@@ -95,8 +102,7 @@ async function recordUsage(input: {
   modelTier?: CreditModelTier | null
   multiplierBps?: number
 }) {
-  const usageLog = await prisma.aiUsageLog.create({
-    data: {
+  const data = {
       userId: input.userId,
       novelId: input.novelId ?? null,
       chapterId: input.chapterId ?? null,
@@ -117,26 +123,59 @@ async function recordUsage(input: {
       modelTier: input.modelTier ?? null,
       multiplierBps: input.multiplierBps ?? 10000,
       durationMs: input.durationMs,
-    },
-  })
+      usageSource: input.usageSource ?? null,
+      billingStatus: input.preparedUsageId ? input.modelTier === 'custom' ? 'exempt' : 'observed' : null,
+  }
+  const usageLog = input.preparedUsageId
+    ? await prisma.aiUsageLog.update({ where: { id: input.preparedUsageId, userId: input.userId,
+      providerType: input.providerType, modelName: input.modelName, action: input.action }, data })
+    : await prisma.aiUsageLog.create({ data })
   if (input.providerType === 'text' && input.modelTier !== 'custom') {
-    const charged = await consumeTokenCredits({
-      userId: input.userId,
-      usageLogId: usageLog.id,
-      requestTokens: input.requestTokens ?? 0,
-      responseTokens: input.responseTokens ?? 0,
-      modelTier: input.modelTier ?? 'speed',
-      multiplierBps: input.multiplierBps ?? 10000,
-      referenceId: input.targetId ?? usageLog.id,
-    })
-    if (charged.chargedMilli > 0) {
-      await prisma.aiUsageLog.update({ where: { id: usageLog.id }, data: { creditChargeMilli: charged.chargedMilli } })
+    try {
+      const charged = await consumeTokenCredits({
+        userId: input.userId,
+        usageLogId: usageLog.id,
+        requestTokens: input.requestTokens ?? 0,
+        responseTokens: input.responseTokens ?? 0,
+        modelTier: input.modelTier ?? 'speed',
+        multiplierBps: input.multiplierBps ?? 10000,
+        referenceId: input.targetId ?? usageLog.id,
+      })
+      usageLog.creditChargeMilli = charged.chargedMilli
+    } catch (error) {
+      // The observation is already durable. Do not throw away paid output or
+      // generate it again merely because settlement needs to retry.
+      if (!input.preparedUsageId) throw error
+      await prisma.aiUsageLog.updateMany({ where: { id: usageLog.id, billingStatus: { in: ['observed', 'pending_settlement'] } },
+        data: { billingStatus: 'pending_settlement', billingRetryAt: new Date(Date.now() + 30_000) } }).catch(() => undefined)
+      console.error('[credits] 已保存模型结果的用量等待结算重试', { usageLogId: usageLog.id })
     }
-    if (charged.exhausted) {
-      throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
-    }
+    // 30 CR01: zero remaining balance governs the NEXT paid request. This
+    // response is already generated and its usage saved; discarding it loses tool args
+    // and makes continuation repeat paid work. All public generation entrypoints
+    // retain assertCreditAccess before contacting the provider.
   }
   return usageLog
+}
+
+/** Save the rate before contacting a provider. A later configuration change
+ * cannot reprice this call. No charge or guessed usage is recorded here. */
+async function prepareTextUsage(input: {
+  userId: string; action: string; modelName: string; modelTier: CreditModelTier; multiplierBps: number;
+  novelId?: string | null; chapterId?: string | null; targetType?: string; targetId?: string | null;
+  agentRunId?: string | null; turn?: number | null; providerName?: string | null;
+}) {
+  const price = input.modelTier === 'custom' ? { version: 'byok-exempt' }
+    : await resolveTokenPrice(input.modelTier, input.multiplierBps)
+  return prisma.aiUsageLog.create({ data: { ...input, targetType: input.targetType ?? 'text',
+    providerType: 'text', providerMode: env.aiProviderMode, durationMs: 0,
+    billingSnapshot: price, usageSource: 'prepared', billingStatus: 'prepared' } })
+}
+
+async function markUnobservedUsage(id: string | undefined, dispatched = true) {
+  if (!id) return
+  await prisma.aiUsageLog.updateMany({ where: { id, billingStatus: 'prepared' },
+    data: { usageSource: 'unknown', billingStatus: dispatched ? 'pending_usage' : 'not_dispatched' } }).catch(() => undefined)
 }
 
 type JsonProviderPayload = {
@@ -261,6 +300,8 @@ export type ChatCompletionResult = {
   toolCalls: ToolCallRequest[]
   finishReason: 'stop' | 'tool_calls' | 'length'
   usage: ChatTokenUsage
+  /** Durable path only. Pending/exhausted never authorizes the next paid operation or tool. */
+  billing?: Awaited<ReturnType<typeof settleProviderOperation>>
 }
 
 type ProviderReasoningInput = {
@@ -321,6 +362,10 @@ export function buildProviderReasoningPayload(input: ProviderReasoningInput): Re
 }
 
 type ChatWithToolsParams = {
+  /** Internal callers freeze this value with their durable request. */
+  maxOutputTokens?: number
+  /** Internal server capability. Never populated from model/user JSON. */
+  durableExecution?: DurableChatExecution
   messages: ChatMessage[]
   tools: OpenAIToolDefinition[]
   model?: string
@@ -330,6 +375,8 @@ type ChatWithToolsParams = {
   reasoningEffort?: import('../../shared/contracts/index.js').ModelReasoningEffort
   temperature?: number
   onChunk?: (chunk: ChatStreamChunk) => void
+  /** Internal budget observation, not a success event or executable result. */
+  onUsage?: (usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null }) => void
   signal?: AbortSignal
   usageLog: {
     userId: string
@@ -378,8 +425,21 @@ function toProviderMessages(messages: ChatMessage[]) {
  * 支持 AbortSignal 真实中断上游请求，每次调用都落 AiUsageLog。
  */
 export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCompletionResult> {
-  ensureTextProviderConfigured(params.providerApiKey)
-  await assertCreditAccess(params.usageLog.userId, params.usageLog.modelTier ?? 'speed', false)
+  params = { ...params, usageLog: { ...params.usageLog },
+    ...(params.durableExecution ? { messages: JSON.parse(JSON.stringify(params.messages)), tools: JSON.parse(JSON.stringify(params.tools)),
+      durableExecution: { ...params.durableExecution, lease: { ...params.durableExecution.lease },
+        ...(params.durableExecution.price ? { price: structuredClone(params.durableExecution.price) } : {}),
+        ...(params.durableExecution.cursor ? { cursor: { ...params.durableExecution.cursor } } : {}) } } : {}),
+  }
+  if (!params.durableExecution) return chatWithToolsImpl(params)
+  return withLeaseHeartbeat(params.durableExecution.lease, params.signal, signal => chatWithToolsImpl({ ...params, signal }))
+}
+
+async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompletionResult> {
+  if (!params.durableExecution) {
+    ensureTextProviderConfigured(params.providerApiKey)
+    await assertCreditAccess(params.usageLog.userId, params.usageLog.modelTier ?? 'speed', false)
+  }
 
   const startedAt = Date.now()
   const model = params.model ?? env.aiTextModel
@@ -391,7 +451,7 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     temperature: params.temperature ?? 0.6,
     // 显式拉满单轮输出上限：不传时 DeepSeek 默认仅 4096，
     // Agent 写 3000+ 字长章时工具参数 JSON 会被 length 截断导致写入失败
-    max_tokens: env.aiTextMaxOutputTokens,
+    max_tokens: params.maxOutputTokens ?? env.aiTextMaxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
     messages: toProviderMessages(params.messages),
@@ -407,18 +467,71 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   if (params.tools.length > 0) {
     body.tools = params.tools
   }
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${params.providerApiKey ?? env.aiTextApiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: params.signal,
+  const encodedBody = JSON.stringify(body)
+  const tier = params.usageLog.modelTier ?? 'speed'
+  if (params.durableExecution?.cursor) await validateModelCursor(params.durableExecution.lease, params.durableExecution.cursor, {
+    operationKey: params.durableExecution.operationKey, parentOperationId: params.durableExecution.parentOperationId,
+    messages: params.messages, tools: params.tools, tier,
+    route: { provider: params.provider ?? env.aiTextProvider, model, endpoint, reasoningEffort },
   })
+  if (params.durableExecution && tier === 'custom') throw new DataAccessError(409, 'RUNTIME_PRICE_INVALID', '自定义模型的持久计量豁免路径尚未接入。')
+  if (params.durableExecution?.price && params.durableExecution.price.modelTier !== tier) throw new DataAccessError(409, 'RUNTIME_PRICE_INVALID', '冻结价目与模型档位不一致。')
+  const durable = params.durableExecution ? await beginDurableChat({
+    execution: params.durableExecution, userId: params.usageLog.userId, agentRunId: params.usageLog.agentRunId,
+    action: params.usageLog.action, provider: params.provider ?? env.aiTextProvider, model,
+    request: { endpoint, body: JSON.parse(encodedBody) },
+    price: params.durableExecution.price ?? await resolveDurableTokenPrice(params.durableExecution.lease, params.durableExecution.operationKey,
+      tier as Exclude<CreditModelTier, 'custom'>, params.usageLog.multiplierBps ?? 10000),
+    admit: async () => {
+      params.signal?.throwIfAborted()
+      ensureTextProviderConfigured(params.providerApiKey)
+      await assertCreditAccess(params.usageLog.userId, tier, false)
+    },
+  }) : undefined
+  if (durable?.replay) return durable.replay
+  params.signal?.throwIfAborted()
+  const prepared = durable ? undefined : await prepareTextUsage({ ...params.usageLog, modelName: model,
+    modelTier: tier, multiplierBps: params.usageLog.multiplierBps ?? 10000,
+    providerName: params.provider ?? env.aiTextProvider })
+  if (params.signal?.aborted) {
+    await markUnobservedUsage(prepared?.id, false)
+    params.signal.throwIfAborted()
+  }
+  let response: Response
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.providerApiKey ?? env.aiTextApiKey}`,
+      },
+      body: encodedBody,
+      signal: params.signal,
+    })
+  } catch (error) {
+    await durable?.interrupted(params.signal?.aborted ? 'aborted' : 'transport_error')
+    await markUnobservedUsage(prepared?.id)
+    throw error
+  }
 
   if (!response.ok || !response.body) {
+    await durable?.rejected(response.status)
+    await markUnobservedUsage(prepared?.id)
     const payload = await parseJsonResponse(response)
+    const reportedPrompt = payload.usage?.prompt_tokens
+    const reportedCompletion = payload.usage?.completion_tokens
+    if (prepared && (reportedPrompt != null || reportedCompletion != null)) {
+      for (const count of [reportedPrompt, reportedCompletion]) {
+        if (count != null && (!Number.isSafeInteger(count) || count < 0 || count > 2147483647)) {
+          throw new DataAccessError(502, 'AI_USAGE_INVALID', '供应商返回了无效用量，不能据此结算。')
+        }
+      }
+      const cache = extractCacheTokens(payload.usage ?? {})
+      await recordUsage({ ...params.usageLog, preparedUsageId: prepared.id, providerType: 'text', modelName: model,
+        providerName: params.provider ?? env.aiTextProvider, requestTokens: reportedPrompt ?? null, responseTokens: reportedCompletion ?? null,
+        promptCacheHitTokens: cache.hit, promptCacheMissTokens: cache.miss, durationMs: Date.now() - startedAt,
+        usageSource: reportedPrompt != null && reportedCompletion != null ? 'reported' : 'unknown' })
+    }
     throw new DataAccessError(
       502,
       'AI_PROVIDER_ERROR',
@@ -430,6 +543,30 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
   let reasoning = ''
   let finishReason: ChatCompletionResult['finishReason'] = 'stop'
   const usage: ChatTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, promptCacheHitTokens: null, promptCacheMissTokens: null }
+  let promptUsageObserved = false
+  let completionUsageObserved = false
+  const recordStreamUsage = (allowEstimates: boolean) => recordUsage({
+    preparedUsageId: prepared?.id,
+    usageSource: promptUsageObserved && completionUsageObserved ? 'reported' : allowEstimates ? 'estimated' : 'unknown',
+    userId: params.usageLog.userId, providerType: 'text', action: params.usageLog.action, modelName: model,
+    novelId: params.usageLog.novelId ?? null, chapterId: params.usageLog.chapterId ?? null,
+    targetType: params.usageLog.targetType ?? 'agentRun', targetId: params.usageLog.targetId ?? null,
+    agentRunId: params.usageLog.agentRunId ?? null, providerName: params.provider ?? env.aiTextProvider,
+    requestTokens: allowEstimates || promptUsageObserved ? usage.promptTokens : null,
+    responseTokens: allowEstimates || completionUsageObserved ? usage.completionTokens : null,
+    turn: params.usageLog.turn ?? null, promptCacheHitTokens: usage.promptCacheHitTokens,
+    promptCacheMissTokens: usage.promptCacheMissTokens, durationMs: Date.now() - startedAt,
+    modelTier: params.usageLog.modelTier ?? 'speed', multiplierBps: params.usageLog.multiplierBps ?? 10000,
+  })
+  const persistObservation = async () => {
+    if (!durable) return
+    await durable.observe({
+      source: promptUsageObserved && completionUsageObserved ? 'reported' : 'unknown',
+      promptTokens: promptUsageObserved ? usage.promptTokens : null,
+      completionTokens: completionUsageObserved ? usage.completionTokens : null,
+      cacheHitTokens: usage.promptCacheHitTokens, cacheMissTokens: usage.promptCacheMissTokens,
+    })
+  }
   const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>()
 
   const decoder = new TextDecoder()
@@ -455,17 +592,38 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       }
     }>
   }) => {
-    if (parsed.error) throw new Error('模型在流式生成中返回错误，未执行工具；请重试当前任务。')
     if (parsed.usage) {
+      {
+        const incoming = parsed.usage
+        const invalid = () => { throw new DataAccessError(502, 'RUNTIME_USAGE_INVALID', '供应商用量不合法或倒退，已保留此前可信观测并停止本次执行。') }
+        for (const value of [incoming.prompt_tokens, incoming.completion_tokens, incoming.total_tokens,
+          incoming.prompt_cache_hit_tokens, incoming.prompt_cache_miss_tokens, incoming.prompt_tokens_details?.cached_tokens]) {
+          if (value != null && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 2147483647)) invalid()
+        }
+        if ((promptUsageObserved && incoming.prompt_tokens != null && incoming.prompt_tokens < usage.promptTokens)
+          || (completionUsageObserved && incoming.completion_tokens != null && incoming.completion_tokens < usage.completionTokens)) invalid()
+        const prompt = incoming.prompt_tokens ?? (promptUsageObserved ? usage.promptTokens : null)
+        const hit = incoming.prompt_cache_hit_tokens ?? incoming.prompt_tokens_details?.cached_tokens
+        const miss = incoming.prompt_cache_miss_tokens
+        if (prompt !== null && ((typeof hit === 'number' && hit > prompt) || (miss != null && miss > prompt)
+          || (typeof hit === 'number' && miss != null && hit + miss !== prompt))) invalid()
+      }
+      if (parsed.usage.prompt_tokens != null) promptUsageObserved = true
+      if (parsed.usage.completion_tokens != null) completionUsageObserved = true
       usage.promptTokens = parsed.usage.prompt_tokens ?? usage.promptTokens
       usage.completionTokens = parsed.usage.completion_tokens ?? usage.completionTokens
       usage.totalTokens = parsed.usage.total_tokens ?? usage.totalTokens
-      const cache = extractCacheTokens(parsed.usage)
+      const cache = extractCacheTokens(durable && promptUsageObserved ? { ...parsed.usage, prompt_tokens: usage.promptTokens } : parsed.usage)
       if (cache.hit !== null && cache.miss !== null) {
+        if (durable && !promptUsageObserved) throw new DataAccessError(502, 'RUNTIME_USAGE_INVALID', '缓存观测缺少输入总量，不能补造计量。')
         usage.promptCacheHitTokens = cache.hit
         usage.promptCacheMissTokens = cache.miss
       }
+      params.onUsage?.({ promptTokens: promptUsageObserved ? usage.promptTokens : null,
+        completionTokens: completionUsageObserved ? usage.completionTokens : null,
+        totalTokens: parsed.usage.total_tokens ?? null })
     }
+    if (parsed.error) throw new Error('模型在流式生成中返回错误，未执行工具；请重试当前任务。')
 
     const choice = parsed.choices?.[0]
     if (!choice) {
@@ -543,10 +701,28 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
       }
 
       frames.push(decoder.decode(value, { stream: true }))
+      await persistObservation()
     }
     frames.push(decoder.decode(), true)
     if (!streamFinished) throw new Error('模型连接提前结束，未执行未确认完整的工具；请继续当前任务。')
+    await persistObservation()
+  } catch (error) {
+    // A bad later frame/read must not erase usage already parsed from this read.
+    await persistObservation()
+    await durable?.interrupted(params.signal?.aborted ? 'aborted' : 'stream_error', { content, reasoning })
+    if (!durable && (promptUsageObserved || completionUsageObserved)) {
+      // Keep only provider-observed amounts on interruption, including explicit
+      // zero. Missing fields remain null; never estimate from partial tool JSON.
+      // This records accounting, not a successful response or executable tool.
+      try { await recordStreamUsage(false) }
+      catch {
+        console.error('[ai-service] 中断调用的已知用量未完整结算', { agentRunId: params.usageLog.agentRunId ?? null, action: params.usageLog.action })
+      }
+    }
+    await markUnobservedUsage(prepared?.id)
+    throw error
   } finally {
+    await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 
@@ -564,34 +740,17 @@ export async function chatWithTools(params: ChatWithToolsParams): Promise<ChatCo
     finishReason = 'tool_calls'
   }
 
-  if (usage.promptTokens <= 0) {
+  if (!promptUsageObserved) {
     usage.promptTokens = estimateTokenCount(JSON.stringify({ messages: toProviderMessages(params.messages), tools: params.tools }))
   }
-  if (usage.completionTokens <= 0) {
+  if (!completionUsageObserved) {
     usage.completionTokens = estimateTokenCount(JSON.stringify({ content, reasoning, toolCalls }))
   }
   if (usage.totalTokens <= 0) usage.totalTokens = usage.promptTokens + usage.completionTokens
 
-  await recordUsage({
-    userId: params.usageLog.userId,
-    providerType: 'text',
-    action: params.usageLog.action,
-    modelName: model,
-    novelId: params.usageLog.novelId ?? null,
-    chapterId: params.usageLog.chapterId ?? null,
-    targetType: params.usageLog.targetType ?? 'agentRun',
-    targetId: params.usageLog.targetId ?? null,
-    agentRunId: params.usageLog.agentRunId ?? null,
-    providerName: params.provider ?? env.aiTextProvider,
-    requestTokens: usage.promptTokens || null,
-    responseTokens: usage.completionTokens || null,
-    turn: params.usageLog.turn ?? null,
-    promptCacheHitTokens: usage.promptCacheHitTokens,
-    promptCacheMissTokens: usage.promptCacheMissTokens,
-    durationMs: Date.now() - startedAt,
-    modelTier: params.usageLog.modelTier ?? 'speed',
-    multiplierBps: params.usageLog.multiplierBps ?? 10000,
-  })
+  if (durable) return durable.finish({ content, reasoning, toolCalls, finishReason, usage })
+
+  await recordStreamUsage(true)
 
   return { content, reasoning, toolCalls, finishReason, usage }
 }
@@ -601,6 +760,7 @@ export async function generateTextCompletion(
   userPrompt: string,
   options: TextCompletionOptions,
 ) {
+  options = { ...options }
   const modelRuntime = await getModelTierRuntime(options.modelTier ?? 'speed')
   const completionReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
   ensureTextProviderConfigured(modelRuntime.apiKey)
@@ -608,6 +768,12 @@ export async function generateTextCompletion(
 
   const startedAt = Date.now()
   const endpoint = `${(modelRuntime.baseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`
+  const prepared = await prepareTextUsage({ userId: options.userId, action: options.action,
+    modelName: modelRuntime.modelName ?? env.aiTextModel, modelTier: modelRuntime.tier,
+    multiplierBps: options.multiplierBps ?? modelRuntime.multiplierBps,
+    novelId: options.novelId, chapterId: options.chapterId, targetType: options.targetType, targetId: options.targetId,
+    providerName: modelRuntime.provider })
+  try {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -632,21 +798,21 @@ export async function generateTextCompletion(
 
   const payload = await parseJsonResponse(response)
 
-  if (!response.ok) {
-    throw new DataAccessError(
-      502,
-      'AI_PROVIDER_ERROR',
-      typeof payload.error?.message === 'string' ? payload.error.message : '模型服务暂时不可用。',
-    )
-  }
-
   const content = payload.choices?.[0]?.message?.content
-  if (typeof content !== 'string' || !content.trim()) {
-    throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '模型未返回有效内容。')
+  const validContent = response.ok && typeof content === 'string' && Boolean(content.trim())
+  const reportedPrompt = payload.usage?.prompt_tokens
+  const reportedCompletion = payload.usage?.completion_tokens
+  for (const count of [reportedPrompt, reportedCompletion]) {
+    if (count != null && (!Number.isSafeInteger(count) || count < 0 || count > 2147483647)) {
+      throw new DataAccessError(502, 'AI_USAGE_INVALID', '供应商返回了无效用量，不能据此结算。')
+    }
   }
-
   const completionCache = extractCacheTokens(payload.usage ?? {})
-  await recordUsage({
+  // CR02: a non-streaming empty/error response can still carry real usage.
+  // Keep that observation, but do not estimate missing usage from an error body.
+  if (validContent || reportedPrompt != null || reportedCompletion != null) await recordUsage({
+    preparedUsageId: prepared.id,
+    usageSource: reportedPrompt != null && reportedCompletion != null ? 'reported' : validContent ? 'estimated' : 'unknown',
     userId: options.userId,
     providerType: 'text',
     action: options.action,
@@ -656,8 +822,8 @@ export async function generateTextCompletion(
     targetType: options.targetType ?? 'text',
     targetId: options.targetId ?? null,
     providerName: modelRuntime.provider,
-    requestTokens: payload.usage?.prompt_tokens ?? estimateTokenCount(`${systemPrompt}\n${userPrompt}`),
-    responseTokens: payload.usage?.completion_tokens ?? estimateTokenCount(content),
+    requestTokens: reportedPrompt ?? (validContent ? estimateTokenCount(`${systemPrompt}\n${userPrompt}`) : null),
+    responseTokens: reportedCompletion ?? (validContent && typeof content === 'string' ? estimateTokenCount(content) : null),
     promptCacheHitTokens: completionCache.hit,
     promptCacheMissTokens: completionCache.miss,
     durationMs: Date.now() - startedAt,
@@ -665,15 +831,23 @@ export async function generateTextCompletion(
     multiplierBps: options.multiplierBps ?? modelRuntime.multiplierBps,
   })
 
+  if (!response.ok) {
+    throw new DataAccessError(502, 'AI_PROVIDER_ERROR', typeof payload.error?.message === 'string' ? payload.error.message : '模型服务暂时不可用。')
+  }
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '模型未返回有效内容。')
+  }
   return content.trim()
+  } catch (error) {
+    await markUnobservedUsage(prepared.id)
+    throw error
+  }
 }
 
 async function generateImageUrls(
   prompt: string,
   size: string,
   count: number,
-  userId: string,
-  action: string,
 ) {
   const configured = await getToolModelRuntime('tool:image-generation')
   const imageBaseUrl = configured?.baseUrl ?? env.aiImageBaseUrl
@@ -726,16 +900,7 @@ async function generateImageUrls(
     throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '图片模型未返回有效图片。')
   }
 
-  await recordUsage({
-    userId,
-    providerType: 'image',
-    action,
-    modelName: imageModel,
-    targetType: 'coverAsset',
-    durationMs: Date.now() - startedAt,
-  })
-
-  return imageUrls
+  return { imageUrls, modelName: imageModel, durationMs: Date.now() - startedAt }
 }
 
 export async function getAiConfigPayload() {
@@ -848,6 +1013,15 @@ export async function generateCoverImageData(
   userId: string,
   input: GenerateCoverImageRequest & { novelId?: string | null; negativePrompt?: string | null },
 ) {
+  // This service is shared by HTTP and Agent callers. Validate before charging,
+  // rather than relying on the HTTP route's count clamp or a tool's schema.
+  if (!Number.isInteger(input.count) || input.count < 1 || input.count > 4) {
+    throw new DataAccessError(400, 'IMAGE_COUNT_INVALID', '每批生成张数必须为 1–4 张。')
+  }
+  if (typeof input.prompt !== 'string' || !input.prompt.trim()) {
+    throw new DataAccessError(400, 'IMAGE_PROMPT_INVALID', '请提供封面提示词。')
+  }
+  if (input.novelId) await ensureNovelOwner(userId, input.novelId)
   const chargeKey = `image:${randomUUID()}`
   await consumeCredits({
     userId,
@@ -858,22 +1032,34 @@ export async function generateCoverImageData(
     referenceId: input.novelId ?? null,
     metadata: { count: input.count, size: input.size },
   })
-  let imageUrls: string[]
+  let generated: { imageUrls: string[]; modelName: string; durationMs: number }
   try {
-    imageUrls = await generateImageUrls(input.prompt, input.size, input.count, userId, 'generateCoverImage')
+    generated = await generateImageUrls(input.prompt, input.size, input.count)
   } catch (error) {
-    await refundCreditCharge(userId, chargeKey, 'provider_failed').catch(() => {})
+    const outcome = error instanceof DataAccessError && error.code === 'AI_PROVIDER_EMPTY_RESPONSE' ? 'empty'
+      : error instanceof DataAccessError && error.code === 'AI_PROVIDER_ERROR' ? 'rejected' : 'unknown'
+    await recordImageRefundIntent(userId, chargeKey, { outcome, deliveredImages: 0 })
+    // The obligation is durable before attempting the wallet update. The
+    // existing bounded server reconciler retries any failed immediate attempt.
+    await reconcileCreditRefunds({ userId, limit: 10 }).catch(() => {
+      console.warn('[credits] Image refund persisted; wallet reconciliation deferred')
+    })
     throw error
   }
   const images = await createCoverAssetsData({
     userId,
     prompt: input.prompt,
     count: input.count,
-    imageUrls,
-    modelName: env.aiImageModel,
+    imageUrls: generated.imageUrls,
+    modelName: generated.modelName,
     novelId: input.novelId ?? null,
     negativePrompt: input.negativePrompt ?? null,
   })
+
+  // Usage persistence is not a provider failure. In particular it must never
+  // enter the no-result refund branch after the image was generated.
+  await recordUsage({ userId, providerType: 'image', action: 'generateCoverImage', modelName: generated.modelName,
+    targetType: 'coverAsset', targetId: images[0]?.id, durationMs: generated.durationMs })
 
   return {
     images,

@@ -1,10 +1,11 @@
 import { expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ recover: vi.fn(), listen: vi.fn((_port: number, _host: string, ready: () => void) => { ready(); return { close: vi.fn() } }), schedules: vi.fn(), queue: vi.fn() }))
+const mocks = vi.hoisted(() => ({ recover: vi.fn(), durable: vi.fn().mockResolvedValue([]), listen: vi.fn((_port: number, _host: string, ready: () => void) => { ready(); return { close: vi.fn() } }), schedules: vi.fn(), queue: vi.fn() }))
 vi.mock('../../api/app.js', () => ({ default: { listen: mocks.listen } }))
 vi.mock('../../api/config/env.js', () => ({ env: { port: 3001, serverUrl: 'test' } }))
-vi.mock('../../api/lib/agent/run-service.js', () => ({ recoverOrphanLoopRuns: mocks.recover }))
+vi.mock('../../api/lib/agent/run-service.js', () => ({ recoverOrphanLoopRuns: mocks.recover, recoverDurableLoopRuns: mocks.durable }))
 vi.mock('../../api/lib/agent/productivity.js', () => ({ runDueAgentSchedules: mocks.schedules }))
 vi.mock('../../api/lib/agent/request-queue.js', () => ({ dispatchQueuedRequests: mocks.queue }))
+vi.mock('../../api/lib/credits.js', () => ({ reconcileCreditRefunds: vi.fn().mockResolvedValue({ examined: 0, settled: 0 }), reconcileTokenSettlements: vi.fn().mockResolvedValue(undefined) }))
 it('finishes orphan recovery before listening or launching scheduled/queued runs', async () => {
   let finish!: () => void
   mocks.recover.mockReturnValue(new Promise<void>(resolve => { finish = resolve }))
@@ -13,8 +14,10 @@ it('finishes orphan recovery before listening or launching scheduled/queued runs
   expect(mocks.listen).not.toHaveBeenCalled()
   expect(mocks.schedules).not.toHaveBeenCalled()
   expect(mocks.queue).not.toHaveBeenCalled()
+  expect(mocks.durable).not.toHaveBeenCalled()
   finish()
   await starting
   expect(mocks.listen).toHaveBeenCalledTimes(1)
   expect(mocks.schedules).toHaveBeenCalledTimes(1)
+  expect(mocks.durable).toHaveBeenCalledTimes(1)
 })

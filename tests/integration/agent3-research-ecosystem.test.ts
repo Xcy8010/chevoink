@@ -12,8 +12,9 @@ import {
 import { acceptSkillShareInvite, createSkillShareInvite } from '../../api/lib/agent/skills/sharing.js'
 import { resolveEnabledRuntimeSkills } from '../../api/lib/agent/skills/service.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})

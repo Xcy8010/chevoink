@@ -22,9 +22,9 @@ import topicsRoutes from './routes/topics.js'
 import usersRoutes from './routes/users.js'
 import creditsRoutes from './routes/credits.js'
 import { env } from './config/env.js'
-import { getSessionUserId, resolveSessionGate } from './lib/auth-session.js'
+import { getSessionUserId, markSessionUnavailable, resolveSessionGate } from './lib/auth-session.js'
 import { getUploadsStaticDirectory } from './lib/avatar-storage.js'
-import { getAgentAttachmentDirectory } from './lib/agent-attachment-storage.js'
+import { agentAttachmentGateway } from './lib/agent-attachment-http.js'
 import { prisma } from './lib/prisma.js'
 
 const app: express.Application = express()
@@ -41,38 +41,8 @@ app.set('trust proxy', 1)
 // 发帖最多 9 张 base64 配图，预留到 40mb
 app.use(express.json({ limit: '40mb' }))
 app.use(express.urlencoded({ extended: true, limit: '40mb' }))
-// Agent 附件可能包含未发布正文、合同或研究材料，不能像头像/封面一样匿名公开。
-// 独立静态挂载先校验登录态；随机文件名继续作为第二层不可枚举保护。
-app.use(
-  '/api/uploads/agent-attachments',
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await resolveSessionGate(req, res)
-      const userId = getSessionUserId(req)
-      if (!userId) {
-        res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请登录后查看附件。' } })
-        return
-      }
-      // 新上传附件按 userId 分目录并校验归属；旧版单层随机文件名仅保留
-      // “登录可读”兼容，避免升级后历史会话里的附件全部失效。
-      const segments = req.path.split('/').filter(Boolean)
-      if (segments.length >= 2 && segments[0] !== userId) {
-        res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: '无权查看该附件。' } })
-        return
-      }
-      next()
-    } catch {
-      res.status(503).json({ success: false, error: { code: 'SESSION_UNAVAILABLE', message: '暂时无法验证登录状态。' } })
-    }
-  },
-  express.static(getAgentAttachmentDirectory(), {
-    fallthrough: false,
-    setHeaders: (res) => {
-      res.setHeader('Cache-Control', 'private, no-store')
-      res.setHeader('X-Content-Type-Options', 'nosniff')
-    },
-  }),
-)
+// Inspect aliases before public static decoding; every private read uses the same ACL.
+app.use('/api/uploads', agentAttachmentGateway)
 // 上传图片文件名含随机 ID、内容不可变，30 天强缓存安全（nginx 直服未命中时的兜底）
 app.use(
   '/api/uploads',
@@ -87,7 +57,7 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 })
 
 // 登录态统一闸口：
-// 1. 会话识别（access 优先，refresh 兜底）+ 封禁检查（60s 缓存）+ v2 令牌吊销比对；
+// 1. 会话识别（access 优先，refresh 兜底）+ 实时封禁检查 + v2 令牌吊销比对；
 //    refresh 命中时静默重签双 cookie，前端无感知；
 // 2. 在线状态：每次请求刷新 lastActiveAt（内存节流 60s 写一次库），5 分钟内活跃视为在线
 const lastActiveWriteAt = new Map<string, number>()
@@ -107,7 +77,9 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
       }
     }
   } catch {
-    // 闸口自身异常放行：管理功能故障不能把全站请求打挂（下游退回本地验签）
+    // Public routes may explicitly serve anonymous data; protected routes get
+    // a recoverable 503. Never fall back to signature-only authentication.
+    markSessionUnavailable(req)
   }
   next()
 })

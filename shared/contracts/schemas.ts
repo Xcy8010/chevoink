@@ -152,12 +152,14 @@ export const startAgentLoopRunSchema = z.object({
 /** POST /api/agent/runs/:runId/approvals（原校验：callId 真值 + approved 为布尔） */
 export const resolveAgentApprovalSchema = z.object({
   callId: z.string().min(1),
+  approvalId: z.string().min(1).max(64).optional(),
   approved: z.boolean(),
   alwaysAllow: z.boolean().optional(),
 })
 
 /** POST /api/agent/runs/:runId/questions（原校验：callId 真值 + answer trim 后非空） */
 export const resolveAgentQuestionSchema = z.object({
+  requestId: z.string().min(1).max(64).optional(),
   callId: z.string().min(1),
   answer: nonEmptyText,
 })

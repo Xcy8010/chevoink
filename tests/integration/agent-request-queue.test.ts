@@ -5,9 +5,11 @@ vi.mock('../../api/lib/agent/loop.js', () => ({ executeAgentRun: execution }))
 vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: vi.fn(async () => {}), getModelTierRuntime: vi.fn(async () => ({ reasoningEffort: 'high' })) }))
 vi.mock('../../api/lib/agent/writing-experiments.js', () => ({ recordSevenDayContinuation: vi.fn(async () => {}) }))
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 import { actOnQueuedRequest, dispatchQueuedRequests, enqueueRequest, listQueuedRequests } from '../../api/lib/agent/request-queue.js'
 import { continueLoopRun, startLoopRun } from '../../api/lib/agent/run-service.js'
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+import { env } from '../../api/config/env.js'
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 afterAll(async () => { await prisma.$disconnect() })
 
 describe.skipIf(!dbAvailable)('queue database transactions (isolated test DB)', () => {
@@ -34,8 +36,66 @@ describe.skipIf(!dbAvailable)('queue database transactions (isolated test DB)', 
     expect(row.status).toBe('dispatched')
     expect(row.runId).toBeTruthy()
     expect(await prisma.agentRun.count({ where: { sessionId } })).toBe(1)
+    expect(await prisma.agentMessage.count({ where: { runId: row.runId!, role: 'user' } })).toBe(1)
     await dispatchQueuedRequests()
     expect(await prisma.agentRun.count({ where: { sessionId } })).toBe(1)
+  })
+  it('direct admission saves the full request before the asynchronous executor starts', async () => {
+    const prompt = '只处理第19章，不继承旧任务。'.repeat(100)
+    const result = await startLoopRun(userId, { sessionId, novelId, mode: 'build', prompt })
+    const original = await prisma.agentMessage.findFirstOrThrow({ where: { runId: result.runId, sessionId, role: 'user' } })
+    expect(original.parts).toEqual([{ type: 'text', text: prompt }])
+    expect(execution).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId, admittedMessageId: original.id, prompt }))
+    expect(await prisma.agentMessage.count({ where: { runId: result.runId, role: 'user' } })).toBe(1)
+  })
+  it('serializes direct starts even before a queued run has a local controller', async () => {
+    const input = { sessionId, novelId, mode: 'build' as const, prompt: '只执行一次' }
+    const results = await Promise.allSettled([startLoopRun(userId, input), startLoopRun(userId, input)])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({ reason: { code: 'RUN_IN_PROGRESS' } })
+    expect(await prisma.agentRun.count({ where: { sessionId } })).toBe(1)
+    expect(execution).toHaveBeenCalledTimes(1)
+  })
+  it.each(['queued', 'running', 'awaiting_approval'] as const)('counts stored %s work in new-start and continue limits', async status => {
+    const input = { sessionId, novelId, mode: 'build' as const, prompt: '保留当前任务' }
+    const original = await startLoopRun(userId, input)
+    await prisma.agentRun.update({ where: { id: original.runId }, data: { status: 'paused' } })
+    const other = await prisma.agentSession.create({ data: { userId, novelId, title: '其他会话' } })
+    for (let index = 0; index < env.agentUserMaxConcurrent; index++) {
+      await prisma.agentRun.create({ data: { sessionId: other.id, userId, novelId, engine: 'loop', mode: 'act',
+        action: 'workspaceAgent', agentType: 'writingOrchestrator', status } })
+    }
+    execution.mockClear()
+    await expect(startLoopRun(userId, input)).rejects.toMatchObject({ code: 'RUN_LIMIT' })
+    await expect(continueLoopRun(userId, original.runId)).rejects.toMatchObject({ code: 'RUN_LIMIT' })
+    expect(execution).not.toHaveBeenCalled()
+    expect(await prisma.agentRun.count({ where: { sessionId } })).toBe(1)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: original.runId } })).status).toBe('paused')
+  })
+  it('direct resume preserves selection, skills and internal profile/budget without a queue row', async () => {
+    const input = { sessionId, novelId, mode: 'build' as const, prompt: '只处理选中的原文',
+      selection: { text: '不能从摘要丢失的选区', start: 12, end: 24 }, creativeFreedom: 'stable' as const,
+      qualityMode: 'balanced' as const, pinnedSkillIds: ['skill-a'], agentProfile: 'continuity' as const, tokenBudget: 1200 }
+    const result = await startLoopRun(userId, input)
+    const stored = await prisma.agentRun.findUniqueOrThrow({ where: { id: result.runId } })
+    expect(stored.startRequest).toEqual(input)
+    expect(await prisma.agentQueuedRequest.count({ where: { runId: result.runId } })).toBe(0)
+    await prisma.agentRun.update({ where: { id: result.runId }, data: { status: 'paused' } })
+    await continueLoopRun(userId, result.runId)
+    expect(execution).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: input.prompt, selection: input.selection,
+      creativeFreedom: 'stable', qualityMode: 'balanced', pinnedSkillIds: ['skill-a'], agentType: 'continuity', tokenBudget: 1200, resume: true }))
+  })
+  it.each(['scope', 'message', 'malformed'] as const)('refuses %s corruption rather than falling back to a display summary', async kind => {
+    const input = { sessionId, novelId, mode: 'build' as const, prompt: '本次第19章要求' }
+    const result = await startLoopRun(userId, input)
+    await prisma.agentRun.update({ where: { id: result.runId }, data: { status: 'paused',
+      ...(kind === 'scope' ? { startRequest: { ...input, novelId: randomUUID() } } : {}),
+      ...(kind === 'malformed' ? { startRequest: { prompt: input.prompt } } : {}),
+    } })
+    if (kind === 'message') await prisma.agentMessage.updateMany({ where: { runId: result.runId, role: 'user' }, data: { parts: [{ type: 'text', text: '旧任务要求' }] } })
+    execution.mockClear()
+    await expect(continueLoopRun(userId, result.runId)).rejects.toMatchObject({ code: 'RUN_INPUT_MISMATCH' })
+    expect(execution).not.toHaveBeenCalled()
   })
   it('FIFO waits for terminal completion; paused work requires explicit steer', async () => {
     const first = await enqueue('先完成第20章')
@@ -65,6 +125,7 @@ describe.skipIf(!dbAvailable)('queue database transactions (isolated test DB)', 
     await actOnQueuedRequest(userId, sessionId, id, 'edit', 0, '修改后的要求')
     await expect(startLoopRun(userId, { sessionId, novelId, mode: 'build', prompt: '旧要求' }, { queuedRequest: { id, revision: 0 } })).rejects.toMatchObject({ code: 'QUEUE_CHANGED' })
     expect(await prisma.agentRun.count({ where: { sessionId } })).toBe(0)
+    expect(await prisma.agentMessage.count({ where: { sessionId } })).toBe(0)
     await prisma.agentSession.delete({ where: { id: sessionId } })
     expect(await prisma.agentQueuedRequest.count({ where: { id } })).toBe(0)
   })

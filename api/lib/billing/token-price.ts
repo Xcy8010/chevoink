@@ -1,0 +1,12 @@
+import { z } from 'zod'
+import { SERVER_MODEL_TIERS } from '../../../shared/contracts/credits.js'
+import { MAX_CREDIT_STORAGE_INT, V1_PRICING_VERSION, V2_PRICING_VERSION } from './pricing.js'
+
+const multiplier = z.number().int().min(0).max(MAX_CREDIT_STORAGE_INT)
+export const itemizedRatesSchema = z.object({ inputNano: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  cacheNano: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), outputNano: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict()
+  .refine(value => value.cacheNano <= value.inputNano)
+export const itemizedTokenPriceSchema = z.object({ version: z.literal(V2_PRICING_VERSION), modelTier: z.enum(SERVER_MODEL_TIERS),
+  multiplierBps: multiplier, rateCardId: z.string().min(1).max(64), rates: itemizedRatesSchema }).strict()
+export const tokenPriceSchema = z.union([z.object({ version: z.literal(V1_PRICING_VERSION), modelTier: z.enum(SERVER_MODEL_TIERS), multiplierBps: multiplier }).strict(), itemizedTokenPriceSchema])
+export type TokenPrice = z.infer<typeof tokenPriceSchema>

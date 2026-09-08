@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, open, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -12,7 +12,7 @@ import {
 } from '../../shared/contracts/agent-attachments.js'
 import { env } from '../config/env.js'
 import { transcodePostImage } from './image-transcode.js'
-import { DataAccessError } from './prisma.js'
+import { DataAccessError, prisma } from './prisma.js'
 
 /**
  * Agent 对话附件存储（图片/文件）：克隆 post-image-storage 范式。
@@ -45,10 +45,10 @@ export function resolveManagedAttachmentPath(url: string): string | null {
     return null
   }
   const relative = url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length)
-  const segments = relative.split('/').filter(Boolean)
+  const segments = relative.split('/')
   if (
     (segments.length !== 1 && segments.length !== 2) ||
-    segments.some((segment) => !segment || path.basename(segment) !== segment || !/^[A-Za-z0-9_.-]+$/.test(segment))
+    segments.some((segment) => !segment || segment === '.' || segment === '..' || path.basename(segment) !== segment || !/^[A-Za-z0-9_.-]+$/.test(segment))
   ) {
     return null
   }
@@ -57,26 +57,88 @@ export function resolveManagedAttachmentPath(url: string): string | null {
   return resolved.startsWith(`${path.resolve(root)}${path.sep}`) ? resolved : null
 }
 
-/** New attachments are user-scoped; legacy one-segment URLs stay usable after upgrade. */
+/** Pure path ownership only. Legacy ownership requires an independently reviewed grant. */
 export function isManagedAttachmentOwnedBy(url: string, userId: string): boolean {
   if (!resolveManagedAttachmentPath(url)) return false
   const relative = url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length)
   const segments = relative.split('/').filter(Boolean)
-  return segments.length === 1 || segments[0] === userId
+  return segments.length === 2 && segments[0] === userId
+}
+
+export async function assertManagedAttachmentAccess(url: string, userId: string): Promise<{ diskPath: string; contentSha256: string | null }> {
+  const diskPath = resolveManagedAttachmentPath(url)
+  if (!diskPath || !userId) throw new DataAccessError(403, 'FORBIDDEN', '附件不存在或不属于当前用户。')
+  if (isManagedAttachmentOwnedBy(url, userId)) return { diskPath, contentSha256: null }
+  if (url.slice(MANAGED_AGENT_ATTACHMENT_PREFIX.length).includes('/')) {
+    throw new DataAccessError(403, 'FORBIDDEN', '附件不存在或不属于当前用户。')
+  }
+  let grant
+  try {
+    grant = await prisma.legacyAgentAttachmentGrant.findUnique({ where: { url } })
+  } catch {
+    throw new DataAccessError(503, 'ATTACHMENT_ACCESS_UNAVAILABLE', '暂时无法核验附件归属，请稍后重试。')
+  }
+  if (!grant || grant.ownerUserId !== userId || grant.revokedAt) {
+    throw new DataAccessError(403, 'FORBIDDEN', '历史附件归属尚未核验或无权访问，原文件仍保留。')
+  }
+  return { diskPath, contentSha256: grant.contentSha256 }
+}
+
+export async function assertManagedAttachmentsAccess(attachments: readonly Pick<AgentAttachmentMeta, 'url'>[] | undefined, userId: string): Promise<void> {
+  for (const attachment of attachments ?? []) await assertManagedAttachmentAccess(attachment.url, userId)
+}
+
+/** Bounded local read shared by HTTP, tool calls and main-model vision inputs. */
+export async function readAuthorizedAgentAttachment(url: string, userId: string): Promise<Buffer> {
+  const access = await assertManagedAttachmentAccess(url, userId)
+  try {
+    const root = await realpath(getAgentAttachmentDirectory())
+    const actual = await realpath(access.diskPath)
+    // No symlink aliases, including links to another user's file within the root.
+    if (actual !== path.join(root, path.relative(getAgentAttachmentDirectory(), access.diskPath))) {
+      throw new DataAccessError(403, 'FORBIDDEN', '附件路径无效。')
+    }
+    const handle = await open(actual, 'r')
+    try {
+      const stat = await handle.stat()
+      const limit = MAX_AGENT_FILE_BYTES_PDF
+      if (!stat.isFile() || stat.size === 0 || stat.size > limit) throw new DataAccessError(413, 'ATTACHMENT_SIZE_INVALID', '附件体积无效。')
+      // Read at most limit+1 even if a file grows after stat; no unbounded readFile.
+      const buffer = Buffer.alloc(Math.min(stat.size + 1, limit + 1))
+      let size = 0
+      while (size < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, size, buffer.length - size, null)
+        if (!bytesRead) break
+        size += bytesRead
+      }
+      if (size !== stat.size) throw new DataAccessError(409, 'ATTACHMENT_CHANGED', '附件内容已变化，需重新核验。')
+      const result = buffer.subarray(0, size)
+      if (access.contentSha256 && createHash('sha256').update(result).digest('hex') !== access.contentSha256) {
+        throw new DataAccessError(409, 'ATTACHMENT_CHANGED', '历史附件内容与核验记录不一致。')
+      }
+      return result
+    } finally { await handle.close() }
+  } catch (error) {
+    if (error instanceof DataAccessError) throw error
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw new DataAccessError(404, 'ATTACHMENT_NOT_FOUND', '附件文件不存在或已失效。')
+    throw new DataAccessError(503, 'ATTACHMENT_READ_UNAVAILABLE', '附件暂时无法读取，请稍后重试。')
+  }
 }
 
 /** 仅供已声明视觉能力的主模型直传；仍复用本站托管前缀白名单，绝不接受任意路径或 URL。 */
-export async function readManagedImageDataUrl(url: string): Promise<string | null> {
+export async function readManagedImageDataUrl(url: string, userId: string): Promise<string | null> {
   const diskPath = resolveManagedAttachmentPath(url)
   if (!diskPath) return null
   const extension = path.extname(diskPath).slice(1).toLowerCase()
   const mime = extension === 'png' ? 'image/png' : extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : extension === 'webp' ? 'image/webp' : null
   if (!mime) return null
   try {
-    const buffer = await readFile(diskPath)
+    const buffer = await readAuthorizedAgentAttachment(url, userId)
     if (!buffer.length || buffer.byteLength > MAX_AGENT_IMAGE_BYTES) return null
     return `data:${mime};base64,${buffer.toString('base64')}`
-  } catch {
+  } catch (error) {
+    if (error instanceof DataAccessError && error.code !== 'ATTACHMENT_NOT_FOUND') throw error
     return null
   }
 }

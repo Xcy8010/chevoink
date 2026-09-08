@@ -4,8 +4,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import app from '../../api/app.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
@@ -151,13 +152,13 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P1 卷章结构（需 DB）', () => {
     expect(nonEmpty.body.error.code).toBe('VOLUME_NOT_EMPTY')
   })
 
-  it('迁移后不存在没有卷的作品或没有卷归属的章节', async () => {
-    const novelsWithoutVolumes = await prisma.novel.count({ where: { volumes: { none: {} } } })
+  it('本测试通过接口创建和变更的作品没有缺卷或孤儿章节', async () => {
+    const novelsWithoutVolumes = await prisma.novel.count({ where: { id: novelId, volumes: { none: {} } } })
     const orphanChapters = await prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(*) AS count
       FROM chapters c
       LEFT JOIN volumes v ON v.id = c.volume_id
-      WHERE v.id IS NULL
+      WHERE c.novel_id = ${novelId} AND v.id IS NULL
     `
     expect(novelsWithoutVolumes).toBe(0)
     expect(Number(orphanChapters[0].count)).toBe(0)

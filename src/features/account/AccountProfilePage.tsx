@@ -121,7 +121,8 @@ export default function AccountProfilePage() {
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
     } catch {
-      // 服务端退出失败也照清本地会话
+      toast.error('暂时无法确认退出登录，请稍后重试。')
+      return
     }
     setGuest()
     navigate('/login', { replace: true })

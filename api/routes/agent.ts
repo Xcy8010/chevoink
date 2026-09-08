@@ -10,7 +10,7 @@ import {
 import { storeAgentAttachment } from '../lib/agent-attachment-storage.js'
 import { requireSessionUserId } from '../lib/auth-session.js'
 import { getStoredExport } from '../lib/export-store.js'
-import { hasActiveRunInSession, stopActiveRunsInSession } from '../lib/agent/active-runs.js'
+import { hasActiveRunInSession } from '../lib/agent/active-runs.js'
 import {
   createNovelPlanArtifact,
   listNovelPlanArtifacts,
@@ -268,8 +268,7 @@ router.delete('/sessions/:sessionId', async (req: Request, res: Response): Promi
 
   try {
     const userId = requireSessionUserId(req)
-    // 删除前先停止会话内进行中的任务，避免孤儿 run 阻塞删除或继续写库
-    stopActiveRunsInSession(req.params.sessionId)
+    // The service validates ownership before stopping any session task.
     const payload = await deleteAgentSessionData(userId, req.params.sessionId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
@@ -884,6 +883,7 @@ router.post('/runs/:runId/approvals', async (req: Request, res: Response): Promi
       body.callId,
       body.approved,
       body.alwaysAllow ?? false,
+      body.approvalId,
     )
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
@@ -899,7 +899,7 @@ router.post('/runs/:runId/questions', async (req: Request, res: Response): Promi
     const userId = requireSessionUserId(req)
     const body = parseBody(resolveAgentQuestionSchema, req.body, '请提供 callId 与回答内容。')
 
-    const payload = await resolveLoopRunQuestion(userId, req.params.runId, body.callId, body.answer.trim())
+    const payload = await resolveLoopRunQuestion(userId, req.params.runId, body.callId, body.answer.trim(), body.requestId)
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)

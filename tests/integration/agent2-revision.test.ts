@@ -4,10 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import app from '../../api/app.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`
   .then(() => true)
-  .catch(() => false)
+  .catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})

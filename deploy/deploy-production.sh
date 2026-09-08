@@ -17,7 +17,20 @@ fi
 ln -sfn "$SHARED_ENV" "$CURRENT_RELEASE/.env"
 
 cd "$CURRENT_RELEASE"
+# Refuse an incompatible host before dependency replacement or DB migration.
+# Checking the lock's exact Node/npm contract here needs no installed packages.
+node --input-type=module -e '
+import {readFileSync} from "node:fs";
+import {execFileSync} from "node:child_process";
+const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+const pinned = readFileSync(".node-version", "utf8").trim();
+const npm = execFileSync("npm", ["--version"], {encoding:"utf8"}).trim();
+if (process.versions.node !== pinned || manifest.engines.node !== pinned || npm !== manifest.engines.npm) {
+  console.error("[chevoink] incompatible Node/npm runtime; no dependencies or migrations were applied");
+  process.exit(1);
+}'
 npm ci
+npm run runtime:verify
 npx prisma generate
 npx prisma migrate deploy
 npm run build:client

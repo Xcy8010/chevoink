@@ -16,6 +16,8 @@ export const AGENT_TOOL_GOVERNANCE = {
   plan_read: { category: 'read', risk: 'low', postconditions: ['novel_scope_verified'] },
   web_search: { category: 'read', risk: 'medium', postconditions: ['external_content_marked_untrusted'] },
   web_read: { category: 'read', risk: 'medium', postconditions: ['external_content_marked_untrusted'] },
+  research_report_save: { category: 'write', risk: 'low', postconditions: ['research_task_scope_verified', 'report_revision_verified', 'citations_verified', 'no_creative_content_written'] },
+  research_report_read: { category: 'read', risk: 'low', postconditions: ['research_task_scope_verified', 'report_integrity_verified'] },
   platform_novel_search: { category: 'read', risk: 'low', postconditions: ['visibility_scope_verified'] },
   platform_novel_read: { category: 'read', risk: 'low', postconditions: ['visibility_scope_verified'] },
   view_image: { category: 'read', risk: 'low', postconditions: ['attachment_scope_verified'] },

@@ -1,0 +1,57 @@
+import { randomUUID } from 'node:crypto'
+import { afterAll, describe, expect, it } from 'vitest'
+import request from 'supertest'
+import app from '../../api/app.js'
+import { buildSessionTokens } from '../../api/lib/auth-session.js'
+import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
+import { createRateCard, transitionRateCard, getActiveTokenPrice } from '../../api/lib/billing/rate-cards.js'
+
+const available = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
+afterAll(async () => { await prisma.$disconnect() })
+
+describe.runIf(available)('versioned V2 rate-card lifecycle', () => {
+  it('requires review, atomically replaces one active version, preserves old price, and rejects mutation', async () => {
+    const admin = await prisma.user.create({ data: { nickname: 'rate-card-fixture', passwordHash: 'test-only', role: 'admin', isSuperAdmin: true } })
+    const ids = [randomUUID(), randomUUID()]
+    // Test tier must not already have a configured active price; never retire someone else's fixture.
+    const prices = ids.map(rateCardId => ({ version: 'credits-v2-itemized' as const, modelTier: 'ultimate' as const, multiplierBps: 10000,
+      rateCardId, rates: { inputNano: 100000, cacheNano: 100000, outputNano: 1000000 } }))
+    try {
+      expect(await getActiveTokenPrice('ultimate')).toBeNull()
+      const cookie = `chevoink_session=${buildSessionTokens(admin.id, 0).accessToken}`
+      expect((await request(app).get('/api/admin/model-rate-cards')).status).toBe(401)
+      const created = await request(app).post('/api/admin/model-rate-cards').set('Cookie', cookie).send(prices[0])
+      expect(created.status).toBe(200)
+      expect(created.body.data.card.id).toBe(ids[0])
+      const invalid = await request(app).post(`/api/admin/model-rate-cards/${ids[0]}/transition`).set('Cookie', cookie)
+        .send({ expectedRevision: 0, status: 'shadow', evidence: { note: '' } })
+      expect(invalid.status).toBe(400)
+      for (const price of prices) {
+        const card = await createRateCard(admin.id, price)
+        expect(await createRateCard(admin.id, price)).toEqual(card)
+        await expect(transitionRateCard(admin.id, { id: card.id, expectedRevision: 0, status: 'active', evidence: { note: 'skip', publicNoticeRef: 'fixture' } })).rejects.toMatchObject({ code: 'CREDIT_RATE_CARD_CONFLICT' })
+        await expect(prisma.creditRateCard.update({ where: { id: card.id }, data: { price: { ...price, rates: { ...price.rates, inputNano: 999 } } } })).rejects.toBeDefined()
+        await transitionRateCard(admin.id, { id: card.id, expectedRevision: 0, status: 'shadow', evidence: { note: 'start fixture shadow' } })
+        await expect(transitionRateCard(admin.id, { id: card.id, expectedRevision: 1, status: 'approved', evidence: { note: 'missing report' } })).rejects.toMatchObject({ code: 'CREDIT_RATE_REVIEW_REQUIRED' })
+        await transitionRateCard(admin.id, { id: card.id, expectedRevision: 1, status: 'approved', evidence: { note: 'synthetic fixture attestation, not production evidence', reportHash: 'a'.repeat(64), shadowDays: 7,
+          totalFeeDeviationPercent: 0, userTaskP95AbsoluteDeviationPercent: 0, cashCostIncreasePercent: 0, allGroupsReviewed: true, qualityPassed: true } })
+        const activation = { id: card.id, expectedRevision: 2, status: 'active', evidence: { note: 'activate fixture', publicNoticeRef: 'fixture-public-notice' } }
+        const results = await Promise.all([transitionRateCard(admin.id, activation), transitionRateCard(admin.id, activation)])
+        expect(results[0]).toEqual(results[1])
+        expect(await getActiveTokenPrice('ultimate')).toEqual(price)
+      }
+      expect(await prisma.creditRateCard.count({ where: { id: { in: ids }, status: 'active' } })).toBe(1)
+      expect(await prisma.creditRateCard.findUnique({ where: { id: ids[0] } })).toMatchObject({ status: 'retired', price: prices[0] })
+      expect(await prisma.creditRateCardEvent.count({ where: { rateCardId: ids[0] } })).toBe(5)
+      await prisma.user.update({ where: { id: admin.id }, data: { isSuperAdmin: false } })
+      expect((await request(app).get('/api/admin/model-rate-cards').set('Cookie', cookie)).status).toBe(200)
+      expect((await request(app).post('/api/admin/model-rate-cards').set('Cookie', cookie).send({ ...prices[0], rateCardId: randomUUID() })).status).toBe(403)
+      await expect(createRateCard(admin.id, { ...prices[0], rateCardId: randomUUID() })).rejects.toMatchObject({ status: 403 })
+    } finally {
+      await prisma.creditRateCardEvent.deleteMany({ where: { rateCardId: { in: ids } } })
+      await prisma.creditRateCard.deleteMany({ where: { id: { in: ids }, createdBy: admin.id } })
+      await prisma.user.delete({ where: { id: admin.id } })
+    }
+  }, 30000)
+})

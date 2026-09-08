@@ -7,7 +7,8 @@ import type { RunEventBus } from './events.js'
 
 export type ActiveRun = {
   controller: AbortController
-  bus: RunEventBus
+  /** Protocol-zero runs use an in-memory journal; durable runs stream from DB. */
+  bus?: RunEventBus
   sessionId: string
   userId: string
 }

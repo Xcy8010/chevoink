@@ -1,4 +1,7 @@
 import type { Response } from 'express'
+import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
+import { startAgentLoopRunSchema } from '../../../shared/contracts/index.js'
 
 import type { AgentRun as AgentRunRecord, Prisma } from '@prisma/client'
 
@@ -26,18 +29,31 @@ import type {
   UpdateAgentSessionRequest,
 } from '../../../shared/contracts/index.js'
 import { env } from '../../config/env.js'
-import { isManagedAttachmentOwnedBy } from '../agent-attachment-storage.js'
+import { assertManagedAttachmentsAccess } from '../agent-attachment-storage.js'
+import { assertTaskAuthorizationRuntimeReady } from './task-authorization.js'
+import { assertLegacyRuntimeCompatible } from './runtime-identity.js'
+import { fenceLocallyStoppedLegacyRun, pauseDurableTask, pauseDurableTaskForAttention, pauseLegacyOrphanRun, recoverLegacyOrphanRun } from './runtime-lifecycle.js'
+import { resumeDurableTask } from './runtime-resume.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { assertCreditAccess, getModelTierRuntime } from '../credits.js'
-import { getRunEventBus, loadPersistedEvents } from './events.js'
+import { getRunEventBus, loadPersistedEvents, prepareRunEventResume } from './events.js'
 import {
   countActiveRunsByUser,
   getActiveRun,
   hasActiveRunInSession,
   stopAgentRun,
+  stopActiveRunsInSession,
+  registerActiveRun,
+  deregisterActiveRun,
 } from './active-runs.js'
+import { acquireRunLease, releaseRunLease, withRunLease, type RunLeaseToken } from './runtime-lease.js'
+import { readExecutionFrame, readExecutionStateInTransaction } from './runtime-state.js'
+import { databaseNow, runtimeTransaction } from './runtime-common.js'
 import { executeAgentRun } from './loop.js'
 import { resolveApproval, resolveQuestionAnswer } from './permissions.js'
+import { resolveDurableApproval } from './runtime-approval.js'
+import { resolveDurableQuestion } from './runtime-question.js'
+import { streamDurableRun } from './runtime-stream.js'
 import { isDefaultSessionTitle } from './session-title.js'
 import { withUserRunLock } from './run-lock.js'
 
@@ -58,6 +74,183 @@ export type StartLoopRunOptions = {
   queuedRequest?: { id: string; revision: number }
 }
 
+const durableProcessOwner = `api:${randomUUID()}`
+
+// Internal profiles/budgets are not added to the public HTTP schema.
+const persistedStartSchema = startAgentLoopRunSchema.extend({
+  agentProfile: z.enum(['orchestrator', 'research', 'continuity', 'quality', 'lore']).optional(),
+  tokenBudget: z.number().int().positive().optional(),
+})
+
+function readAdmittedStart(run: AgentRunRecord): StartAgentLoopRunRequest | undefined {
+  if (run.startRequest == null) return undefined
+  const parsed = persistedStartSchema.safeParse(run.startRequest)
+  if (!parsed.success || parsed.data.sessionId !== run.sessionId || parsed.data.novelId !== run.novelId
+    || (parsed.data.chapterId?.trim() || null) !== run.chapterId || parsed.data.mode !== (run.mode === 'act' ? 'build' : run.mode)) {
+    throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '已保存的启动请求损坏或与任务范围不一致，不能从摘要猜测恢复。')
+  }
+  return parsed.data
+}
+
+/** Internal bootstrap, kept separate from public activation. It reuses the
+ * existing context assembler and session policy; no reduced tool list or new
+ * model-selected task objective is manufactured for the durable executor. */
+export async function initializePersistedLoopRun(userId: string, runId: string, supplied?: StartAgentLoopRunRequest) {
+  const { runtimeJson, runtimeTransaction, lockOwnedRun } = await import('./runtime-common.js')
+  const { initializeDurableTask } = await import('./runtime-identity.js')
+  const { initializeExecutionState, loadExecutionState } = await import('./runtime-state.js')
+  const { buildTaskSpec } = await import('./task-spec.js')
+  const { taskSpecSchema } = await import('../../../shared/contracts/task-spec-contracts.js')
+  const { applySessionToolPolicy, getAgentDefinition, getToolsForAgent } = await import('./agents.js')
+  const { resolveAgent2FeatureFlags } = await import('../agent2-feature-flags.js')
+  const { assembleContext } = await import('./context.js')
+  const { snapshotToolAuthority } = await import('./tool-authority.js')
+  const { toOpenAITools } = await import('./tools/registry.js')
+  const { executionContextReadTool } = await import('./tools/task-context-tools.js')
+  const { ORCHESTRATION_TOOL_NAMES } = await import('./tools/task-orchestration-tools.js')
+  const { modelRouteRevision } = await import('./runtime-model-cursor.js')
+  const run = await findOwnedLoopRun(userId, runId)
+  const admitted = readAdmittedStart(run)
+  if (!admitted && !supplied) throw new DataAccessError(409, 'RUN_INPUT_REQUIRED', '旧任务缺少完整启动选项，不能自动补造。')
+  if (admitted && supplied && runtimeJson(JSON.parse(JSON.stringify(persistedStartSchema.parse(supplied)))).hash !== runtimeJson(admitted).hash) {
+    throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '不能用新的选区、附件或执行选项替换原请求。')
+  }
+  const input: StartAgentLoopRunRequest = admitted ?? JSON.parse(JSON.stringify(supplied))
+  if (run.sessionId !== input.sessionId || run.novelId !== input.novelId || run.chapterId !== (input.chapterId?.trim() || null)
+    || (run.mode === 'act' ? 'build' : run.mode) !== input.mode) throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '初始化范围与原任务不一致。')
+  const original = await prisma.agentMessage.findFirst({ where: { runId, sessionId: run.sessionId, role: 'user' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
+  const parts = [{ type: 'text', text: input.prompt }, ...(input.attachments ?? []).map(item => ({ type: 'attachment', kind: item.kind, name: item.name, url: item.url, size: item.size }))]
+  if (!original || runtimeJson(original.parts).hash !== runtimeJson(JSON.parse(JSON.stringify(parts))).hash) throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '初始化必须使用已保存的完整原始请求。')
+  if (run.runtimeProtocolVersion === 1 && run.taskRootId && await prisma.agentExecutionState.findUnique({ where: { taskRootId: run.taskRootId } })) return loadExecutionState(userId, runId)
+  if (run.status !== 'queued') throw new DataAccessError(409, 'RUN_IN_PROGRESS', '不能重新初始化已启动任务。')
+  await assertManagedAttachmentsAccess(input.attachments, userId)
+  const runtime = await getModelTierRuntime(run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier, userId, run.customModelId,
+    run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort)
+  if (runtime.tier !== run.modelTier || run.customModelId) throw new DataAccessError(409, 'RUNTIME_MODEL_ADAPTER_REQUIRED', '原模型模式尚未接入持久执行，不能替换模型。')
+  const agent = getAgentDefinition(input.agentProfile ?? 'orchestrator')
+  const session = await prisma.agentSession.findFirstOrThrow({ where: { id: run.sessionId, userId } })
+  const scoped = getToolsForAgent(agent, input.mode, resolveAgent2FeatureFlags(userId))
+    .filter(tool => !session.spawnedFromSessionId || !ORCHESTRATION_TOOL_NAMES.has(tool.name))
+  const contextRead: import('./tools/types.js').AgentTool = { ...executionContextReadTool,
+    execute: (ctx, args) => executionContextReadTool.execute(ctx, executionContextReadTool.parameters.parse(args)) }
+  const tools = applySessionToolPolicy([...scoped, contextRead], input.mode, session.toolPolicy,
+    session.sandboxMode === 'read_only' || session.sandboxMode === 'full_access' ? session.sandboxMode : 'workspace')
+  const spec = await runtimeTransaction(async tx => {
+    const current = await lockOwnedRun(tx, userId, runId)
+    if (current.status !== 'queued') throw new DataAccessError(409, 'RUN_IN_PROGRESS', '初始化期间任务状态已变化。')
+    if (current.taskSpec) return taskSpecSchema.parse(current.taskSpec)
+    let task = buildTaskSpec({ runId, novelId: run.novelId, chapterId: run.chapterId, prompt: input.prompt, selection: input.selection,
+      creativeFreedom: input.creativeFreedom, qualityMode: input.qualityMode })
+    if (task.postconditions.some(item => item.code === 'EARLIER_CONTENT_UNCHANGED')) {
+      const chapters = await tx.chapter.findMany({ where: { novelId: run.novelId, authorId: userId }, select: { id: true } })
+      task = { ...task, scope: { ...task.scope, chapterIds: chapters.map(chapter => chapter.id) } }
+    }
+    await tx.agentRun.update({ where: { id: runId }, data: { taskSpec: runtimeJson(JSON.parse(JSON.stringify(task))).value } })
+    return task
+  })
+  const assembled = await assembleContext({ agent, mode: input.mode, userId, sessionId: run.sessionId, runId, novelId: run.novelId, chapterId: run.chapterId,
+    prompt: input.prompt, selection: input.selection, attachments: input.attachments, visionEnabled: false, taskSpec: spec,
+    modelTier: runtime.tier, modelName: runtime.modelName, contextWindowTokens: runtime.contextWindowTokens, pinnedSkillIds: input.pinnedSkillIds })
+  await initializeDurableTask({ userId, runId, sourceMessageId: original.id, tokenBudget: input.tokenBudget })
+  const lease = await acquireRunLease({ userId, runId, ownerId: durableProcessOwner, claimId: randomUUID() })
+  try {
+    return await initializeExecutionState(lease, { configuration: { version: 1, mode: input.mode, agentType: agent.type,
+      creativeFreedom: input.creativeFreedom ?? 'balanced', qualityMode: input.qualityMode ?? 'premium',
+      model: { tier: runtime.tier, provider: runtime.provider, modelName: runtime.modelName ?? env.aiTextModel, customModelId: null,
+        maxOutputTokens: env.aiTextMaxOutputTokens, contextWindowTokens: runtime.contextWindowTokens ?? env.agentContextWindowTokens,
+        reasoningEffort: runtime.reasoningEffort, routeRevision: modelRouteRevision({ provider: runtime.provider, model: runtime.modelName ?? env.aiTextModel,
+          endpoint: `${(runtime.baseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`, reasoningEffort: runtime.reasoningEffort }) },
+      tools: toOpenAITools(tools), toolAuthority: [...snapshotToolAuthority(tools, input.mode)].map(([name, grant]) => ({ name, ...grant })),
+      protectedChapterIds: spec.postconditions.some(item => item.code === 'EARLIER_CONTENT_UNCHANGED') ? spec.scope.chapterIds ?? [] : [],
+      pinnedSkillVersions: (assembled.skillRoute?.selected ?? []).map(skill => ({ id: skill.id, version: skill.version })) },
+      snapshot: { version: 1, turn: 0, nextOperationSequence: 0, checkpointIndex: 0, phase: 'idle', pendingOperationId: null,
+        messages: assembled.messages, successfulToolSignatures: [] } })
+  } finally { await releaseRunLease(lease) }
+}
+
+/** Internal B0 dispatcher for an already initialized durable task. Does not
+ * create an objective, rebuild messages, change grants, or fall back to loop.ts.
+ * New task activation stays gated until bootstrap and all adapters land. */
+export async function executePersistedLoopRun(userId: string, runId: string) {
+  const run = await findOwnedLoopRun(userId, runId)
+  return executeOwnedPersistedLoopRun(run)
+}
+
+// Resume already owns this DB record. Reserve synchronously before releasing
+// the user admission lock, rather than leaving an extra asynchronous lookup gap.
+async function executeOwnedPersistedLoopRun(run: AgentRunRecord) {
+  const { userId, id: runId } = run
+  if (run.runtimeProtocolVersion !== 1 || !run.taskRootId) throw new DataAccessError(409, 'RUNTIME_VERSION_MISMATCH', '仅能调度已初始化的持久任务。')
+  if (getActiveRun(run.id) || hasActiveRunInSession(run.sessionId)) throw new DataAccessError(409, 'RUN_IN_PROGRESS', '该会话已有本地执行者。')
+  // Recovery shares the existing resume limit. A restart must not dispatch all
+  // discovered tasks at once and multiply the user's concurrent paid requests.
+  if (countActiveRunsByUser(userId) >= env.agentUserMaxConcurrent) {
+    throw new DataAccessError(409, 'RUN_LIMIT', `同时进行的任务数已达上限（${env.agentUserMaxConcurrent}），请稍后再试。`)
+  }
+  const controller = new AbortController()
+  // No await between reservation check and registration. This uses the same
+  // registry as legacy runs so stop and concurrency accounting remain shared.
+  registerActiveRun(run.id, { controller, userId, sessionId: run.sessionId })
+  let lease: RunLeaseToken | undefined
+  let executionFailed = false
+  let result: Awaited<ReturnType<typeof import('./runtime-executor.js').runReviewedDurableExecution>>
+  let cleanupFailure: { error: unknown } | undefined
+  try {
+    lease = await acquireRunLease({ userId, runId: run.id, ownerId: durableProcessOwner, claimId: randomUUID() })
+    controller.signal.throwIfAborted()
+    await withRunLease(lease, async tx => {
+      const state = await readExecutionStateInTransaction(tx, lease!.taskRootId)
+      const initial = await readExecutionFrame(tx, lease!.taskRootId, 0)
+      const originalPrompt = Array.isArray(state.originalRequest) ? state.originalRequest.flatMap(part =>
+        part && typeof part === 'object' && !Array.isArray(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n').trim() : ''
+      const authorMessage = initial.state.messages.filter(message => message.role === 'user').at(-1)
+      const initialPrompt = typeof authorMessage?.content === 'string' ? authorMessage.content
+        : authorMessage?.content.filter(part => part.type === 'text').map(part => part.text).join('\n') ?? ''
+      // assembleContext places the full request first, then optional selected
+      // text/attachment sections. Validate the initial frame on resume too,
+      // without treating newer model/tool messages as replacement instructions.
+      if (!originalPrompt || !(initialPrompt === originalPrompt || initialPrompt.startsWith(`${originalPrompt}\n\n`))) {
+        throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '初始上下文缺少本任务完整原始要求，不能用摘要或其他任务代替。')
+      }
+      const current = await tx.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+      await tx.agentRun.update({ where: { id: run.id }, data: { status: 'running', startedAt: current.startedAt ?? await databaseNow(tx), errorMessage: null } })
+    })
+    const { runReviewedDurableExecution } = await import('./runtime-executor.js')
+    controller.signal.throwIfAborted()
+    result = await runReviewedDurableExecution(lease, controller.signal)
+  } catch (error) {
+    executionFailed = true
+    // Preserve the failed operation/cursor. Only the still-current owner may
+    // close its run; an expired worker must never pause a replacement worker.
+    if (lease && !controller.signal.aborted) {
+      try {
+        const { frame } = await withRunLease(lease, tx => readExecutionStateInTransaction(tx, lease!.taskRootId))
+        await pauseDurableTaskForAttention(lease, { expectedRevision: frame.revision, expectedHash: frame.snapshotHash }, 'needs_input')
+      } catch (pauseError) {
+        // A database outage or lost lease cannot be repaired by an unfenced
+        // status update. Retain the original failure for the caller/recovery.
+        console.error('[agent-loop] 持久任务异常收尾未提交', { runId, code: pauseError instanceof DataAccessError ? pauseError.code : 'PAUSE_UNAVAILABLE' })
+      }
+    }
+    throw error
+  } finally {
+    try {
+      // The executor's own heartbeat has stopped before releasing ownership.
+      // Errors remain errors; unknown provider outcomes are never re-dispatched here.
+      if (lease) await releaseRunLease(lease)
+    } catch (releaseError) {
+      // A cleanup outage must not replace the actual provider/tool failure.
+      // On an otherwise successful return, however, surface the cleanup failure.
+      if (!executionFailed) cleanupFailure = { error: releaseError }
+      else console.error('[agent-loop] 持久任务租约释放失败', { runId, code: releaseError instanceof DataAccessError ? releaseError.code : 'RELEASE_UNAVAILABLE' })
+    } finally {
+      if (getActiveRun(run.id)?.controller === controller) deregisterActiveRun(run.id)
+    }
+  }
+  if (cleanupFailure) throw cleanupFailure.error
+  return result
+}
+
 export async function startLoopRun(
   userId: string,
   input: StartAgentLoopRunRequest,
@@ -72,6 +265,7 @@ export async function startLoopRunLocked(
   input: StartAgentLoopRunRequest,
   options: StartLoopRunOptions = {},
 ): Promise<StartAgentLoopRunResponse> {
+  input = persistedStartSchema.parse(JSON.parse(JSON.stringify(input)))
   const session = await prisma.agentSession.findFirst({
     where: { id: input.sessionId, userId },
   })
@@ -84,9 +278,7 @@ export async function startLoopRunLocked(
     throw new DataAccessError(400, 'VALIDATION_ERROR', '会话与作品不匹配。')
   }
 
-  if (input.attachments?.some((attachment) => !isManagedAttachmentOwnedBy(attachment.url, userId))) {
-    throw new DataAccessError(403, 'FORBIDDEN', '附件不存在或不属于当前用户。')
-  }
+  await assertManagedAttachmentsAccess(input.attachments, userId)
 
   const modelTier = input.modelTier ?? 'speed'
   await assertCreditAccess(userId, modelTier)
@@ -141,6 +333,7 @@ export async function startLoopRunLocked(
       status: 'queued',
       engine: 'loop',
       inputSummary: input.prompt.slice(0, 300),
+      startRequest: JSON.parse(JSON.stringify(input)) as Prisma.InputJsonValue,
       modelTier,
       customModelId: modelTier === 'custom' ? input.customModelId : null,
       reasoningEffort: modelRuntime.reasoningEffort,
@@ -149,22 +342,40 @@ export async function startLoopRunLocked(
   // A queue claim and run creation commit together. A crash can never re-send
   // a claimed prompt; orphan recovery leaves that run visible for manual resume.
   const queuedRequest = options.queuedRequest
-  const run = queuedRequest ? await prisma.$transaction(async tx => {
-    const claimed = await tx.agentQueuedRequest.updateMany({
-      where: { id: queuedRequest.id, userId, sessionId: session.id, status: 'pending', revision: queuedRequest.revision },
-      data: { status: 'dispatched', revision: { increment: 1 }, error: null },
-    })
-    if (claimed.count !== 1) throw new DataAccessError(409, 'QUEUE_CHANGED', '待发需求已变更，请刷新。')
+  const admittedMessageId = randomUUID()
+  const admittedParts = [{ type: 'text', text: input.prompt }, ...(input.attachments ?? []).map(attachment => ({
+    type: 'attachment', kind: attachment.kind, name: attachment.name, url: attachment.url, size: attachment.size,
+  }))]
+  const run = await prisma.$transaction(async tx => {
+    // Queued/recovering runs may not yet have a local controller. Share the
+    // durable resume admission lock and count saved work before creating more.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-admission:${userId}`}, 0))::text`
+    const live = ['queued', 'running', 'awaiting_approval'] as const
+    if (await tx.agentRun.count({ where: { sessionId: session.id, status: { in: [...live] } } })) {
+      throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行，请先停止或等待完成。')
+    }
+    if (await tx.agentRun.count({ where: { userId, status: { in: [...live] } } }) >= concurrencyLimit) {
+      throw new DataAccessError(409, 'RUN_LIMIT', `同时进行的任务数已达上限（${concurrencyLimit}），请稍后再试。`)
+    }
+    if (queuedRequest) {
+      const claimed = await tx.agentQueuedRequest.updateMany({
+        where: { id: queuedRequest.id, userId, sessionId: session.id, status: 'pending', revision: queuedRequest.revision },
+        data: { status: 'dispatched', revision: { increment: 1 }, error: null },
+      })
+      if (claimed.count !== 1) throw new DataAccessError(409, 'QUEUE_CHANGED', '待发需求已变更，请刷新。')
+    }
     const created = await tx.agentRun.create(runData)
-    await tx.agentQueuedRequest.update({ where: { id: queuedRequest.id }, data: { runId: created.id } })
+    await tx.agentMessage.create({ data: { id: admittedMessageId, runId: created.id, sessionId: session.id, role: 'user', parts: admittedParts } })
+    if (queuedRequest) await tx.agentQueuedRequest.update({ where: { id: queuedRequest.id }, data: { runId: created.id } })
     return created
-  }) : await prisma.agentRun.create(runData)
+  })
 
   void import('./writing-experiments.js').then(({ recordSevenDayContinuation }) => recordSevenDayContinuation(userId, session.novelId)).catch(() => {})
 
   // 异步执行循环，路由立即返回，前端连 stream 拿事件
   void executeAgentRun({
     runId: run.id,
+    admittedMessageId,
     sessionId: session.id,
     userId,
     novelId: session.novelId,
@@ -218,6 +429,8 @@ export async function streamLoopRun(
   if (run.engine !== 'loop') {
     throw new DataAccessError(400, 'VALIDATION_ERROR', '该任务不是循环引擎运行，请走旧版事件回放。')
   }
+
+  if ((run.runtimeProtocolVersion ?? 0) !== 0) return streamDurableRun(userId, runId, sinceSeq, res)
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -286,22 +499,26 @@ export async function streamLoopRun(
     (event) => event.type === 'run.finished' || event.type === 'run.paused' || (event.type === 'error' && !event.recoverable),
   )
   if (!hasTerminal) {
-    const latest = await prisma.agentRun.findUnique({ where: { id: runId }, select: { status: true, outputSummary: true } })
+    const latest = await prisma.agentRun.findUnique({ where: { id: runId }, select: { status: true, outputSummary: true, usage: true } })
     const nextSeq = (events.length > 0 ? events[events.length - 1].seq : sinceSeq) + 1
     const base = { seq: nextSeq, runId, ts: new Date().toISOString() }
     if (latest?.status === 'paused') {
       writeEvent({ ...base, type: 'run.paused', reason: 'user_stop' })
-    } else {
+    } else if (latest && ['completed', 'cancelled', 'failed'].includes(latest.status)) {
       const status = latest?.status === 'completed' ? 'succeeded' : latest?.status === 'cancelled' ? 'cancelled' : 'failed'
+      const savedUsage = z.object({ promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative() }).safeParse(latest.usage)
       writeEvent({
         ...base,
         type: 'run.finished',
         status,
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        usage: savedUsage.success ? savedUsage.data : { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         artifacts: [],
         outputSummary: latest?.outputSummary ?? '',
       })
     }
+    // No local bus is not an execution verdict. For queued/running/approval
+    // states leave the durable status intact; reconnect/startup recovery checks
+    // its owner. Never synthesize failure just because this process has no bus.
   }
   res.end()
 }
@@ -312,8 +529,13 @@ export async function resolveLoopRunApproval(
   callId: string,
   approved: boolean,
   alwaysAllow: boolean,
+  approvalId?: string,
 ): Promise<{ resolved: boolean }> {
-  await findOwnedLoopRun(userId, runId)
+  const run = await findOwnedLoopRun(userId, runId)
+  if ((run.runtimeProtocolVersion ?? 0) !== 0) {
+    if (!approvalId) throw new DataAccessError(409, 'APPROVAL_ID_REQUIRED', '请刷新审批卡片后确认原审批请求。')
+    return resolveDurableApproval({ userId, runId, requestId: approvalId, callId, approved, alwaysAllow })
+  }
 
   const resolved = resolveApproval(runId, callId, approved, alwaysAllow)
 
@@ -330,8 +552,13 @@ export async function resolveLoopRunQuestion(
   runId: string,
   callId: string,
   answer: string,
+  requestId?: string,
 ): Promise<{ resolved: boolean }> {
-  await findOwnedLoopRun(userId, runId)
+  const run = await findOwnedLoopRun(userId, runId)
+  if (run.runtimeProtocolVersion > 0) {
+    if (!requestId) throw new DataAccessError(409, 'QUESTION_REQUEST_REQUIRED', '请刷新原提问卡片后回答。')
+    return resolveDurableQuestion({ userId, runId, callId, answer, requestId })
+  }
 
   const resolved = resolveQuestionAnswer(runId, callId, answer)
 
@@ -345,31 +572,28 @@ export async function resolveLoopRunQuestion(
 export async function stopLoopRun(userId: string, runId: string): Promise<{ stopped: boolean }> {
   const run = await findOwnedLoopRun(userId, runId)
 
+  if (run.runtimeProtocolVersion !== 0 || run.taskRootId) {
+    const paused = await pauseDurableTask(userId, runId)
+    for (const id of paused.runIds) stopAgentRun(id)
+    return { stopped: paused.stopped }
+  }
+
   const stopped = stopAgentRun(runId)
+
+  if (stopped && !(await fenceLocallyStoppedLegacyRun(userId, runId))) {
+    const paused = await pauseDurableTask(userId, runId)
+    for (const id of paused.runIds) stopAgentRun(id)
+    return { stopped: true }
+  }
 
   if (!stopped) {
     // 内存里没有活跃 run 但 DB 还停在进行中：进程重启（部署 reload/崩溃）遗留的孤儿任务，
     // 就地收尾为 paused 并补一条中断说明消息，避免用户永远无法暂停/看不到终止原因
-    if (run.status === 'queued' || run.status === 'running' || run.status === 'awaiting_approval') {
-      await prisma.agentRun.update({
-        where: { id: run.id },
-        data: { status: 'paused', errorMessage: '任务因服务重启而中断，已就地停止。' },
-      })
-      await prisma.agentMessage
-        .create({
-          data: {
-            runId: run.id,
-            sessionId: run.sessionId,
-            role: 'assistant',
-            parts: [
-              { type: 'text', text: '任务已终止（服务重启导致执行中断）。直接发送“继续”，我会接着完成剩余待办。' },
-            ] as unknown as object,
-          },
-        })
-        .catch(() => {})
-      return { stopped: true }
+    if (!(await pauseLegacyOrphanRun(userId, run.id))) {
+      const paused = await pauseDurableTask(userId, run.id)
+      for (const id of paused.runIds) stopAgentRun(id)
     }
-    throw new DataAccessError(409, 'RUN_NOT_ACTIVE', '任务不在运行中，无需停止。')
+    return { stopped: true }
   }
 
   return { stopped: true }
@@ -383,35 +607,17 @@ export async function stopLoopRun(userId: string, runId: string): Promise<{ stop
 export async function recoverOrphanLoopRuns(): Promise<void> {
   try {
     const orphans = await prisma.agentRun.findMany({
-      where: { engine: 'loop', status: { in: ['queued', 'running', 'awaiting_approval'] } },
-      select: { id: true, sessionId: true },
+      where: { engine: 'loop', runtimeProtocolVersion: 0, taskRootId: null, status: { in: ['queued', 'running', 'awaiting_approval'] } },
+      select: { id: true, userId: true },
     })
 
     if (orphans.length === 0) {
       return
     }
 
-    await prisma.agentRun.updateMany({
-      where: { id: { in: orphans.map((run) => run.id) } },
-      data: {
-        status: 'failed',
-        errorMessage: '服务更新导致任务中断。点击「继续执行」或直接发送“继续”，我会接着完成剩余工作。',
-        finishedAt: new Date(),
-      },
-    })
-
-    await prisma.agentMessage.createMany({
-      data: orphans.map((run) => ({
-        runId: run.id,
-        sessionId: run.sessionId,
-        role: 'assistant' as const,
-        parts: [
-          { type: 'text', text: '任务已终止（服务更新导致执行中断）。直接发送“继续”，我会接着完成剩余待办。' },
-        ] as unknown as object,
-      })),
-    })
-
-    console.log(`[agent-loop] 启动清理：${orphans.length} 个遗留进行中任务已标记为中断`)
+    let recovered = 0
+    for (const run of orphans) if (await recoverLegacyOrphanRun(run.userId, run.id)) recovered += 1
+    console.log(`[agent-loop] 启动清理：${recovered} 个旧协议遗留任务已标记为中断`)
   } catch (error) {
     console.error('[agent-loop] 启动清理遗留任务失败', error)
   }
@@ -424,11 +630,64 @@ export async function continueLoopRun(
   return withUserRunLock(userId, () => continueLoopRunLocked(userId, runId))
 }
 
+/** B0 recovery batch for existing durable tasks, separate from legacy cleanup.
+ * Discovery is only a hint: the
+ * dispatcher must acquire the original lease and revalidate the saved frame.
+ * Unknown operations are reconciled/paused by that same executor, never reset. */
+export async function recoverDurableLoopRuns() {
+  const candidates = await runtimeTransaction(async tx => {
+    const now = await databaseNow(tx)
+    return tx.agentRunLease.findMany({
+      where: { enabled: true, OR: [{ expiresAt: null }, { expiresAt: { lte: now } }],
+        run: { engine: 'loop', runtimeProtocolVersion: 1, status: { in: ['queued', 'running'] },
+          taskRoot: { is: { status: 'active', authorizationMode: 'legacy', executionState: { isNot: null } } } } },
+      orderBy: [{ updatedAt: 'asc' }, { runId: 'asc' }], take: 32,
+      select: { run: { select: { id: true, userId: true, sessionId: true } } },
+    })
+  })
+  // In B0, waiting tasks remain registered with a heartbeat. A concurrent scan
+  // may observe an old row, but cannot steal an active owner or resume a stop.
+  return Promise.all(candidates.map(async ({ run }) => {
+    if (getActiveRun(run.id) || hasActiveRunInSession(run.sessionId)) return { runId: run.id, status: 'skipped' as const }
+    try {
+      await executePersistedLoopRun(run.userId, run.id)
+      return { runId: run.id, status: 'dispatched' as const }
+    } catch (error) {
+      const code = error instanceof DataAccessError ? error.code : 'RECOVERY_FAILED'
+      if (!['RUN_IN_PROGRESS', 'RUN_LIMIT', 'RUNTIME_LEASE_BUSY', 'RUNTIME_LEASE_REVOKED', 'RUNTIME_NOT_ACTIVE'].includes(code)) {
+        console.error('[agent-loop] 持久任务恢复未完成', { runId: run.id, code })
+      }
+      return { runId: run.id, status: 'not_dispatched' as const, code }
+    }
+  }))
+}
+
 async function continueLoopRunLocked(
   userId: string,
   runId: string,
 ): Promise<StartAgentLoopRunResponse> {
   const run = await findOwnedLoopRun(userId, runId)
+
+  assertTaskAuthorizationRuntimeReady(run.taskSpec, { userId, sessionId: run.sessionId, novelId: run.novelId })
+  if (run.runtimeProtocolVersion === 1 && run.taskRootId) {
+    const admitted = readAdmittedStart(run)
+    await assertManagedAttachmentsAccess(admitted?.attachments, userId)
+    // Resume may only need to deliver/settle an already-paid result. The
+    // provider adapter checks credits before any genuinely new paid request.
+    const pause = await prisma.agentExecutionOutbox.findFirst({ where: { taskRootId: run.taskRootId, type: 'run.paused',
+      payload: { path: ['runIds'], array_contains: [runId] } }, orderBy: { sequence: 'desc' }, select: { id: true } })
+    if (!pause) throw new DataAccessError(409, 'STALE_RESUME_TARGET', '缺少本次任务的原暂停记录。')
+    const resumed = await resumeDurableTask({ userId, runId, pauseEventId: pause.id })
+    // The original saved frame is the only input. No assembleContext, new user
+    // message, model/skill selection, or fresh budget is allowed on this path.
+    if (!getActiveRun(resumed.run.id) && ['queued', 'running'].includes(resumed.run.status)) {
+      void executeOwnedPersistedLoopRun(resumed.run).catch(error => {
+        console.error('[agent-loop] 原任务续跑未完成', { runId: resumed.run.id, code: error instanceof DataAccessError ? error.code : 'RESUME_FAILED' })
+      })
+    }
+    return { runId: resumed.run.id, sessionId: run.sessionId, status: resumed.run.status, streamUrl: `/api/agent/runs/${resumed.run.id}/stream` }
+  }
+  assertLegacyRuntimeCompatible(run)
 
   if (run.engine !== 'loop') {
     throw new DataAccessError(400, 'VALIDATION_ERROR', '仅循环引擎任务支持续跑。')
@@ -456,12 +715,36 @@ async function continueLoopRunLocked(
   if (latest?.id !== run.id) {
     throw new DataAccessError(409, 'STALE_RESUME_TARGET', '当前会话已开始新任务，不能从旧入口续跑。请刷新后继续最新任务。')
   }
-  const originalMessage = await prisma.agentMessage.findFirst({ where: { runId: run.id, role: 'user' }, orderBy: { createdAt: 'asc' }, select: { parts: true } })
+  const originalMessage = await prisma.agentMessage.findFirst({ where: { runId: run.id, sessionId: run.sessionId, role: 'user' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { parts: true } })
   const queued = await prisma.agentQueuedRequest.findFirst({ where: { runId: run.id, userId }, select: { payload: true } })
-  const queuedInput = queued?.payload as unknown as StartAgentLoopRunRequest | undefined
+  const savedInput = readAdmittedStart(run)
+  const queuedParsed = !savedInput && queued ? persistedStartSchema.safeParse(queued.payload) : null
+  if (queuedParsed && !queuedParsed.success) throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '原始排队请求已损坏，不能从摘要猜测恢复。')
+  const queuedInput = savedInput ?? (queuedParsed?.success ? queuedParsed.data : undefined)
   const originalPrompt = Array.isArray(originalMessage?.parts)
     ? originalMessage.parts.flatMap(part => part && typeof part === 'object' && !Array.isArray(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
     : ''
+  let eventStartSeq: number
+  if (queuedInput && originalPrompt && originalPrompt !== queuedInput.prompt) {
+    throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '原始消息与启动请求不一致，不能选择其一继续。')
+  }
+  if (queuedInput && (queuedInput.sessionId !== run.sessionId || queuedInput.novelId !== run.novelId
+    || (queuedInput.chapterId?.trim() || null) !== run.chapterId || queuedInput.mode !== (run.mode === 'act' ? 'build' : run.mode))) {
+    throw new DataAccessError(409, 'RUN_INPUT_MISMATCH', '原始请求不属于当前任务。')
+  }
+  const resumePrompt = originalPrompt || queuedInput?.prompt
+  if (!resumePrompt?.trim()) throw new DataAccessError(409, 'RUN_INPUT_REQUIRED', '该历史任务缺少完整原始需求，无法安全继续。请在输入框重新说明本次任务；已保存内容不会改变。')
+  await assertManagedAttachmentsAccess(queuedInput?.attachments, userId)
+  try {
+    eventStartSeq = await prepareRunEventResume(run.id)
+  } catch {
+    throw new DataAccessError(503, 'RUN_EVENTS_PENDING', '任务记录尚未完成同步，请稍后继续；不会重复启动任务。')
+  }
+  // B0 still serializes service admissions with withUserRunLock. Include saved
+  // queued/recovering work in the limit, not just controllers in this process.
+  if (await prisma.agentRun.count({ where: { userId, status: { in: ['queued', 'running', 'awaiting_approval'] } } }) >= env.agentUserMaxConcurrent) {
+    throw new DataAccessError(409, 'RUN_LIMIT', '同时进行的任务数已达上限，请稍后再试。')
+  }
   // No awaits between this second concurrency check and executeAgentRun's synchronous registration.
   if (getActiveRun(runId) || hasActiveRunInSession(run.sessionId)) {
     throw new DataAccessError(409, 'RUN_IN_PROGRESS', '当前会话已有任务在执行。')
@@ -477,13 +760,16 @@ async function continueLoopRunLocked(
     novelId: run.novelId,
     chapterId: run.chapterId,
     mode: run.mode === 'act' ? 'build' : run.mode,
-    prompt: originalPrompt || queuedInput?.prompt || run.inputSummary || '请继续完成之前的任务。',
+    prompt: resumePrompt,
     attachments: queuedInput?.attachments,
     selection: queuedInput?.selection,
     creativeFreedom: queuedInput?.creativeFreedom,
     qualityMode: queuedInput?.qualityMode,
     pinnedSkillIds: queuedInput?.pinnedSkillIds,
+    agentType: queuedInput?.agentProfile ?? 'orchestrator',
+    tokenBudget: queuedInput?.tokenBudget,
     resume: true,
+    eventStartSeq,
     modelTier: run.modelTier as import('../../../shared/contracts/index.js').CreditModelTier,
     customModelId: run.customModelId,
     reasoningEffort: run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort,
@@ -1101,7 +1387,18 @@ export async function updateAgentSessionData(
 }
 
 export async function deleteAgentSessionData(userId: string, sessionId: string) {
+  return withUserRunLock(userId, () => deleteAgentSessionLocked(userId, sessionId))
+}
+
+async function deleteAgentSessionLocked(userId: string, sessionId: string) {
   const session = await ensureOwnedSession(userId, sessionId)
+
+  // Authorization precedes cancellation. Revoke durable ownership before
+  // deleting records, including tasks whose owner is not in this process.
+  const durableRuns = await prisma.agentRun.findMany({ where: { sessionId: session.id, userId, runtimeProtocolVersion: 1,
+    status: { in: ['queued', 'running', 'awaiting_approval'] } }, select: { id: true } })
+  for (const run of durableRuns) await pauseDurableTask(userId, run.id)
+  stopActiveRunsInSession(session.id)
 
   await prisma.$transaction(async (tx) => {
     const runs = await tx.agentRun.findMany({

@@ -4,6 +4,16 @@ import { createVisibleTextStreamer, humanizeAgentVisibleText } from '../../api/l
 import { getToolByName } from '../../api/lib/agent/tools/registry.js'
 
 describe('正文信道可见性清洗', () => {
+  it('keeps source URLs and code examples byte-for-byte while humanizing operational prose', () => {
+    const source = 'https://example.com/chapter_read?chapterId=cmttleebg03h9wqox9lieracs'
+    const code = '```json\n{"chapterId":"cmttleebg03h9wqox9lieracs","tool":"chapter_read"}\n```'
+    const raw = `调用 chapter_read。\n\n[chapter_read](${source})\n\n${source}\n\n${code}\n\n参数示例：\`chapterId\`。`
+    const cleaned = humanizeAgentVisibleText(raw)
+    expect(cleaned).toContain(`调用 ${getToolByName('chapter_read')!.title}。`)
+    expect(cleaned).toContain(`[chapter_read](${source})`)
+    expect(cleaned).toContain(code)
+    expect(cleaned).toContain('`chapterId`')
+  })
   it('工具英文名替换为注册表中文工具名', () => {
     const out = humanizeAgentVisibleText('scene_task_build 参数需平铺传递，重新发起。用了 chapter_write 写前半，chapter_append 追加后半。')
     expect(out).not.toContain('scene_task_build')
@@ -37,6 +47,21 @@ describe('正文信道可见性清洗', () => {
 })
 
 describe('可见信道流式清洗器', () => {
+  it('preserves incomplete inline code and late reference labels without reverting streamed text', () => {
+    for (const chunks of [
+      ['参数示例：`chapter', 'Id=cmttleebg03h9wqox9lieracs', '`，完成。'],
+      ['来源：[chapter', '_read][book', '_source]。\n\n', '[book_source]: https://example.com/book?id=19\n'],
+      ['来源：[chapter', '_read](https://example.com/read?chapterId=', 'cmttleebg03h9wqox9lieracs', ')。'],
+    ]) {
+      const streamer = createVisibleTextStreamer()
+      expect(chunks.map(chunk => streamer.push(chunk)).join('')).toBe(chunks.join(''))
+    }
+  })
+  it('does not rewrite a streamed fenced code block or a split source URL', () => {
+    const streamer = createVisibleTextStreamer()
+    const chunks = ['示例：\n\n```json\n', '{"chapterId":"cmtt', 'leebg03h9wqox9lieracs"}\n', '```\n\nhttps://example.com/chapter_read?chapterId=', 'cmttleebg03h9wqox9lieracs', '\n完成。']
+    expect(chunks.map(chunk => streamer.push(chunk)).join('')).toBe(chunks.join(''))
+  })
   it('流式增量逐段清洗：英文名在流式期间就不播出，而非轮末二次修正', () => {
     const streamer = createVisibleTextStreamer()
     const chunks = ['进入校验：scene', '_task_bu', 'ild，准备', '补场景。']

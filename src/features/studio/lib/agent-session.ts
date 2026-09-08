@@ -222,6 +222,12 @@ function hasAgentTaskRecord(taskWindow: AgentTaskWindowState) {
   )
 }
 
+/** A local task can own a composer draft before it has a server session or legacy prompt. */
+export function shouldRetainAgentTaskWindow(task: AgentTaskWindowState, activeTaskId: string | null, hasDraft: boolean) {
+  return task.id === activeTaskId || !task.temporary || task.customNamed || hasDraft
+    || hasAgentTaskRecord(task) || Boolean(task.activeArtifactId)
+}
+
 
 
 /**

@@ -1,14 +1,25 @@
 import { z } from 'zod'
 
 import { listMemoryReviewInbox, saveEntityRelation, saveStoryEvent } from '../story-memory.js'
-import { defineTool } from './types.js'
+import { defineTool, type ToolContext } from './types.js'
+import { DataAccessError, prisma } from '../../prisma.js'
+
+async function memorySource(ctx: ToolContext, args: { sourceChapterId?: string; revision?: number }) {
+  if (!args.sourceChapterId) {
+    if (args.revision !== undefined) throw new DataAccessError(400, 'MEMORY_SOURCE_REQUIRED', '章节版本必须同时指定来源章节，未写入记忆。')
+    return { sourceId: ctx.runId }
+  }
+  const chapter = await (ctx.transaction ?? prisma).chapter.findFirst({ where: { id: args.sourceChapterId, novelId: ctx.novelId, authorId: ctx.userId }, select: { id: true, revision: true } })
+  if (!chapter || (args.revision !== undefined && args.revision !== chapter.revision)) throw new DataAccessError(409, 'MEMORY_SOURCE_REQUIRED', '来源章节不存在或版本已变化，请重新读取。')
+  return { sourceId: chapter.id, revision: chapter.revision }
+}
 
 export const memoryReviewListTool = defineTool({
   name: 'memory_review_list', title: '查看记忆冲突',
   description: '查看等待作者处理的推断或冲突记忆。只能汇报证据和差异，不能替作者选择哪个事实为真。',
   parameters: z.object({}), permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
   async execute(ctx) {
-    const items = await listMemoryReviewInbox(ctx.userId, ctx.novelId)
+    const items = await listMemoryReviewInbox(ctx.userId, ctx.novelId, ctx.transaction)
     return {
       output: items.length ? items.map((item) => `- memoryId=${item.id} [${item.status}] ${item.title}：${item.content}`).join('\n') : '记忆审核箱为空。',
       summary: `记忆审核箱 · ${items.length} 项`,
@@ -26,10 +37,11 @@ export const memoryRelationSaveTool = defineTool({
   }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
   async execute(ctx, args) {
+    const source = await memorySource(ctx, args)
     const relation = await saveEntityRelation({
-      userId: ctx.userId, novelId: ctx.novelId, ...args, sourceId: args.sourceChapterId ?? ctx.runId,
-    })
-    return { output: `已保存人物关系 relationId=${relation.id}：${args.fromName} → ${args.toName}（${args.relationType}）。`, summary: `关系 ${args.fromName}→${args.toName}` }
+      userId: ctx.userId, novelId: ctx.novelId, ...args, ...source,
+    }, ctx.transaction)
+    return { savedMemoryId: relation.savedMemoryId, output: `已保存人物关系 relationId=${relation.id}：${args.fromName} → ${args.toName}（${args.relationType}）。`, summary: `关系 ${args.fromName}→${args.toName}` }
   },
 })
 
@@ -43,7 +55,8 @@ export const memoryEventSaveTool = defineTool({
   }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
   async execute(ctx, args) {
-    const event = await saveStoryEvent({ userId: ctx.userId, novelId: ctx.novelId, ...args, sourceId: args.sourceChapterId ?? ctx.runId })
-    return { output: `已保存故事事件 eventId=${event.id}：${args.title}。`, summary: `时间线事件「${args.title}」` }
+    const source = await memorySource(ctx, args)
+    const event = await saveStoryEvent({ userId: ctx.userId, novelId: ctx.novelId, ...args, ...source }, ctx.transaction)
+    return { savedMemoryId: event.savedMemoryId, output: `已保存故事事件 eventId=${event.id}：${args.title}。`, summary: `时间线事件「${args.title}」` }
   },
 })

@@ -4,7 +4,7 @@ import { DataAccessError } from '../../prisma.js'
 import {
   createVolumeData,
   deleteVolumeData,
-  getStructureReportData,
+  getStructureReportObservation,
   listVolumesData,
   mergeChaptersData,
   moveChapterData,
@@ -12,7 +12,10 @@ import {
   splitChapterData,
   updateVolumeData,
 } from '../../data-access.js'
-import { defineTool } from './types.js'
+import { defineTool, type ToolResult } from './types.js'
+import { executeDurableRead } from './durable-read.js'
+import { executeDurableCreate } from './durable-create.js'
+import { getStructureRevisionHash } from '../../data/volume.js'
 
 const STRUCTURE_PERMISSION = { plan: 'deny', build: 'allow', review: 'deny' } as const
 const READ_PERMISSION = { plan: 'allow', build: 'allow', review: 'allow' } as const
@@ -35,9 +38,15 @@ export const volumeListTool = defineTool({
   parameters: z.object({}),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx) {
-    const volumes = await listVolumesData(ctx.userId, ctx.novelId)
+  async execute(ctx): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      return executeDurableRead(captured, 'volume_list', {}, raw => volumeListTool.parameters.parse(raw),
+        tx => volumeListTool.execute({ ...captured, durableRead: undefined, transaction: tx }, {}))
+    }
+    const volumes = await listVolumesData(ctx.userId, ctx.novelId, ctx.transaction)
     return {
+      ...(ctx.transaction ? { observedStructure: { kind: 'structure' as const, id: ctx.novelId, hash: await getStructureRevisionHash(ctx.transaction, ctx.novelId) } } : {}),
       output: volumes.length
         ? volumes.map((item) => `${item.orderIndex}. ${item.title}（${item.chapterCount} 章，${item.wordCount} 字，volumeId=${item.id}）`).join('\n')
         : '当前作品暂无卷。',
@@ -57,11 +66,21 @@ export const volumeCreateTool = defineTool({
   }),
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
-  async execute(ctx, args) {
-    const volume = await createVolumeData(ctx.userId, ctx.novelId, args)
+  async execute(ctx, args): Promise<ToolResult> {
+    if (ctx.durableCreate) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableCreate: { ...ctx.durableCreate, lease: { ...ctx.durableCreate.lease }, cursor: { ...ctx.durableCreate.cursor } } }
+      const normalize = (raw: unknown) => {
+        const parsed = volumeCreateTool.parameters.parse(raw)
+        return Object.fromEntries(Object.entries({ ...parsed, title: parsed.title.trim() }).filter(([, value]) => value !== undefined))
+      }
+      const effective = volumeCreateTool.parameters.parse(normalize(args))
+      return executeDurableCreate(captured, effective, normalize, tx => volumeCreateTool.execute({ ...captured, durableCreate: undefined, transaction: tx }, effective), 'volume_create')
+    }
+    const volume = await createVolumeData(ctx.userId, ctx.novelId, args, ctx.transaction)
     return {
       output: `已创建第 ${volume.orderIndex} 卷《${volume.title}》，volumeId=${volume.id}。`,
       summary: `新建卷《${volume.title}》`,
+      observedState: { kind: 'volume', id: volume.id, revision: volume.revision },
     }
   },
 })
@@ -79,10 +98,10 @@ export const volumeUpdateTool = defineTool({
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
   async execute(ctx, { volumeId, ...input }) {
-    const volume = await updateVolumeData(ctx.userId, ctx.novelId, volumeId, input)
+    const volume = await updateVolumeData(ctx.userId, ctx.novelId, volumeId, input, ctx.transaction)
     return volume
       ? { output: `已更新卷《${volume.title}》。`, summary: `更新卷《${volume.title}》` }
-      : { output: '目标卷不存在或不属于当前作品。' }
+      : { output: '目标卷不存在或不属于当前作品。', outcome: 'failed' as const }
   },
 })
 
@@ -98,10 +117,10 @@ export const volumeMoveTool = defineTool({
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
   async execute(ctx, { volumeId, ...input }) {
-    const volume = await moveVolumeData(ctx.userId, ctx.novelId, volumeId, input)
+    const volume = await moveVolumeData(ctx.userId, ctx.novelId, volumeId, input, ctx.transaction)
     return volume
       ? { output: `已把《${volume.title}》移动到第 ${volume.orderIndex} 卷，全书章序已同步。`, summary: `移动卷《${volume.title}》` }
-      : { output: '目标卷不存在或不属于当前作品。' }
+      : { output: '目标卷不存在或不属于当前作品。', outcome: 'failed' as const }
   },
 })
 
@@ -113,8 +132,8 @@ export const volumeDeleteTool = defineTool({
   permission: STRUCTURE_PERMISSION,
   readOnly: false,
   async execute(ctx, args) {
-    const deleted = await deleteVolumeData(ctx.userId, ctx.novelId, args.volumeId)
-    return deleted ? { output: '空卷已删除，卷序已自动压缩。', summary: '删除空卷' } : { output: '目标卷不存在。' }
+    const deleted = await deleteVolumeData(ctx.userId, ctx.novelId, args.volumeId, ctx.transaction)
+    return deleted ? { output: '空卷已删除，卷序已自动压缩。', summary: '删除空卷' } : { output: '目标卷不存在。', outcome: 'failed' as const }
   },
 })
 
@@ -135,14 +154,15 @@ function defineChapterMoveTool(name: 'chapter_move' | 'chapter_move_to_volume', 
     readOnly: false,
     async execute(ctx, { chapterId, ...input }) {
       assertProtectedChapterUntouched(ctx, chapterId)
-      const chapter = await moveChapterData(ctx.userId, ctx.novelId, chapterId, input)
+      const chapter = await moveChapterData(ctx.userId, ctx.novelId, chapterId, input, ctx.transaction)
       return chapter
         ? {
             output: `已移动《${chapter.title}》：全书第 ${chapter.orderIndex} 章，卷内第 ${chapter.orderInVolume} 章。`,
             summary: `移动章节《${chapter.title}》`,
+            observedState: { kind: 'chapter' as const, id: chapter.id, revision: chapter.revision },
             display: { kind: 'chapterRef' as const, chapterId: chapter.id, title: chapter.title, wordCount: chapter.wordCount },
           }
-        : { output: '目标章节不存在或不属于当前作品。' }
+        : { output: '目标章节不存在或不属于当前作品。', outcome: 'failed' as const }
     },
   })
 }
@@ -164,10 +184,10 @@ export const chapterSplitTool = defineTool({
   readOnly: false,
   async execute(ctx, { chapterId, ...input }) {
     assertProtectedChapterUntouched(ctx, chapterId)
-    const result = await splitChapterData(ctx.userId, ctx.novelId, chapterId, input)
+    const result = await splitChapterData(ctx.userId, ctx.novelId, chapterId, input, ctx.transaction)
     return result
-      ? { output: `已将《${result.first.title}》拆分，并创建相邻章节《${result.second.title}》（chapterId=${result.second.id}）。`, summary: `拆分《${result.first.title}》` }
-      : { output: '目标章节不存在或不属于当前作品。' }
+      ? { output: `已将《${result.first.title}》拆分，并创建相邻章节《${result.second.title}》（chapterId=${result.second.id}）。`, summary: `拆分《${result.first.title}》`, affectedChapterIds: [result.first.id, result.second.id] }
+      : { output: '目标章节不存在或不属于当前作品。', outcome: 'failed' as const }
   },
 })
 
@@ -186,14 +206,16 @@ export const chapterMergeTool = defineTool({
   readOnly: false,
   async execute(ctx, { targetChapterId, ...input }) {
     assertProtectedChapterUntouched(ctx, targetChapterId, input.sourceChapterId)
-    const chapter = await mergeChaptersData(ctx.userId, ctx.novelId, targetChapterId, input)
+    const chapter = await mergeChaptersData(ctx.userId, ctx.novelId, targetChapterId, input, ctx.transaction)
     return chapter
       ? {
           output: `章节已合并到《${chapter.title}》，来源章节已删除，当前正文 ${chapter.wordCount} 字。`,
           summary: `合并到《${chapter.title}》`,
+          affectedChapterIds: [chapter.id],
+          observedState: { kind: 'chapter' as const, id: chapter.id, revision: chapter.revision },
           display: { kind: 'chapterRef' as const, chapterId: chapter.id, title: chapter.title, wordCount: chapter.wordCount },
         }
-      : { output: '目标或来源章节不存在。' }
+      : { output: '目标或来源章节不存在。', outcome: 'failed' as const }
   },
 })
 
@@ -204,9 +226,16 @@ export const structureOutlineTool = defineTool({
   parameters: z.object({}),
   permission: READ_PERMISSION,
   readOnly: true,
-  async execute(ctx) {
-    const report = await getStructureReportData(ctx.userId, ctx.novelId)
+  async execute(ctx): Promise<ToolResult> {
+    if (ctx.durableRead) {
+      const captured = { ...ctx, toolAuthority: new Map(ctx.toolAuthority), durableRead: { ...ctx.durableRead, lease: { ...ctx.durableRead.lease }, cursor: { ...ctx.durableRead.cursor } } }
+      return executeDurableRead(captured, 'structure_outline', {}, raw => structureOutlineTool.parameters.parse(raw),
+        tx => structureOutlineTool.execute({ ...captured, durableRead: undefined, transaction: tx }, {}))
+    }
+    const { report, stateHash } = await getStructureReportObservation(ctx.userId, ctx.novelId, ctx.transaction)
     return {
+      ...(ctx.transaction ? { observedStructure: { kind: 'structure' as const, id: ctx.novelId, hash: await getStructureRevisionHash(ctx.transaction, ctx.novelId) } } : {}),
+      validationEvidence: { code: 'STRUCTURE_VALIDATED', passed: report.valid, novelId: ctx.novelId, stateHash, issues: report.issues.map(issue => issue.code) },
       output: report.valid
         ? `结构校验通过：${report.volumeCount} 卷、${report.chapterCount} 章，卷序与章序连续。`
         : `结构校验未通过：\n${report.issues.map((issue) => `- ${issue.message}`).join('\n')}`,

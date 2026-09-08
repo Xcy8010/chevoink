@@ -102,7 +102,7 @@ describe('v1 存量令牌双读兼容', () => {
   })
 })
 
-describe('P2 会话状态 stale fallback 与缓存上限', () => {
+describe('R03 会话状态缓存与故障拒绝', () => {
   const findUnique = vi.mocked(prisma.user.findUnique)
 
   beforeEach(() => {
@@ -120,23 +120,22 @@ describe('P2 会话状态 stale fallback 与缓存上限', () => {
     evictUserBanCache('p2-normal')
   })
 
-  it('DB 故障 + 新鲜缓存（60s~10 分钟）→ stale fallback 按旧状态判定', async () => {
+  it('DB 故障 + 过期缓存（60s~10 分钟）→ 拒绝使用历史状态', async () => {
     vi.useFakeTimers()
     const base = Date.now()
     findUnique.mockResolvedValueOnce({ bannedAt: new Date(), tokenVersion: 5 } as never)
     const warm = await getUserAuthState('p2-stale')
     expect(warm?.banned).toBe(true)
 
-    // 5 分钟后 DB 故障：超过 60s TTL（会尝试查库）但在 stale 窗口内 → 复用旧状态
+    // 超过TTL的历史状态不能充当当前授权依据。
     vi.setSystemTime(base + 5 * 60_000)
     findUnique.mockRejectedValueOnce(new Error('db down'))
-    const fallback = await getUserAuthState('p2-stale')
-    expect(fallback).toEqual(expect.objectContaining({ banned: true, tokenVersion: 5 }))
+    await expect(getUserAuthState('p2-stale')).rejects.toMatchObject({ status: 503, code: 'AUTH_SESSION_UNAVAILABLE' })
     vi.useRealTimers()
     evictUserBanCache('p2-stale')
   })
 
-  it('DB 故障 + 缓存年龄超 stale 窗口（>10 分钟）→ 降级放行（null）', async () => {
+  it('DB 故障 + 缓存年龄超过10分钟仍拒绝，不变成匿名或已认证', async () => {
     vi.useFakeTimers()
     const base = Date.now()
     findUnique.mockResolvedValueOnce({ bannedAt: null, tokenVersion: 2 } as never)
@@ -144,28 +143,27 @@ describe('P2 会话状态 stale fallback 与缓存上限', () => {
 
     vi.setSystemTime(base + 11 * 60_000)
     findUnique.mockRejectedValueOnce(new Error('db down'))
-    expect(await getUserAuthState('p2-expired')).toBeNull()
+    await expect(getUserAuthState('p2-expired')).rejects.toMatchObject({ status: 503 })
     vi.useRealTimers()
     evictUserBanCache('p2-expired')
   })
 
-  it('DB 故障 + 无历史缓存 → 降级放行（null）', async () => {
+  it('DB 故障 + 无历史缓存 → 明确不可核实', async () => {
     findUnique.mockRejectedValueOnce(new Error('db down'))
-    expect(await getUserAuthState('p2-cold')).toBeNull()
+    await expect(getUserAuthState('p2-cold')).rejects.toMatchObject({ status: 503 })
   })
 
-  it('缓存超 5000 条淘汰最旧项：最旧用户失去 stale fallback，最新用户保留', async () => {
+  it('缓存超5000条淘汰最旧项；诊断缓存不改变新请求实时核实策略', async () => {
     findUnique.mockImplementation(async () => ({ bannedAt: null, tokenVersion: 1 }) as never)
     for (let index = 0; index < 5001; index += 1) {
       await getUserAuthState(`p2-cap-${index}`)
     }
 
-    // 最旧的 p2-cap-0 已被淘汰：DB 故障时无历史状态可复用
+    // 最旧项已淘汰，无法查库就返回不可核实。
     findUnique.mockRejectedValueOnce(new Error('db down'))
-    expect(await getUserAuthState('p2-cap-0')).toBeNull()
+    await expect(getUserAuthState('p2-cap-0')).rejects.toMatchObject({ status: 503 })
 
-    // 最新的 p2-cap-5000 仍在缓存：DB 故障时 stale fallback 生效
-    findUnique.mockRejectedValueOnce(new Error('db down'))
+    // 最新项的只读诊断缓存仍在TTL内；授权入口另测fresh:true不使用此缓存。
     const last = await getUserAuthState('p2-cap-5000')
     expect(last?.tokenVersion).toBe(1)
 

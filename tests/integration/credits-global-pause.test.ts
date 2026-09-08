@@ -5,8 +5,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { initializeNewUserCredits } from '../../api/lib/credits.js'
 import { createUnsetPasswordHash } from '../../api/lib/password.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})

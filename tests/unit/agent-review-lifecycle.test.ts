@@ -8,6 +8,20 @@ describe('Agent 写入审查生命周期', () => {
     useAgentStore.getState().resumeRun('run-review', 'session-review')
   })
 
+  it('旧审批决定不能关闭同callId的新审批卡片', () => {
+    const apply = useAgentStore.getState().applyEvent
+    const base = { runId: 'run-review', ts: new Date().toISOString() }
+    apply({ ...base, seq: 1, type: 'permission.ask', approvalId: 'new-approval', callId: 'call', toolName: 'chapter_write', title: '写入', args: {}, allowAlways: false, expiresAt: new Date(Date.now() + 60000).toISOString() })
+    apply({ ...base, seq: 2, type: 'permission.resolved', approvalId: 'old-approval', callId: 'call', approved: true })
+    expect(useAgentStore.getState().pendingApproval?.approvalId).toBe('new-approval')
+    expect(useAgentStore.getState().phase).toBe('awaiting_approval')
+    apply({ ...base, seq: 3, type: 'permission.resolved', approvalId: 'new-approval', callId: 'call', approved: true })
+    expect(useAgentStore.getState().pendingApproval).toBeNull()
+    apply({ ...base, seq: 4, type: 'run.paused', reason: 'user_stop' })
+    apply({ ...base, seq: 5, type: 'permission.resolved', approvalId: 'new-approval', callId: 'call', approved: true })
+    expect(useAgentStore.getState().phase).toBe('paused')
+  })
+
   it('执行成功先保持已完成，作者采纳后才标记已接受', () => {
     const apply = useAgentStore.getState().applyEvent
     apply({ seq: 1, runId: 'run-review', ts: new Date().toISOString(), type: 'message.start', messageId: 'message-review', role: 'assistant' })

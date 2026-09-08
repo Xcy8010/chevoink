@@ -80,7 +80,7 @@ export async function getReaderPayloadData(
   chapterId: string,
   userId: string | null,
 ): Promise<ReaderPayload | null> {
-  const [novel, currentChapter, chapterRecords, volumeRecords] = await prisma.$transaction([
+  const [novel, currentChapter] = await prisma.$transaction([
     prisma.novel.findUnique({
       where: { id: novelId },
       include: { coverAsset: true },
@@ -88,8 +88,25 @@ export async function getReaderPayloadData(
     prisma.chapter.findUnique({
       where: { id: chapterId },
     }),
+  ])
+
+  if (!novel || !currentChapter || currentChapter.novelId !== novelId) return null
+  const isOwner = userId !== null && novel.authorId === userId
+  const now = new Date()
+  if (!isOwner && (
+    novel.visibility !== 'public' || (novel.status !== 'published' && novel.status !== 'completed')
+    || currentChapter.visibility !== 'public' || currentChapter.status !== 'published'
+    || (currentChapter.publishedAt !== null && currentChapter.publishedAt > now)
+  )) return null
+
+  // Public fallback may expose only published material, including navigation and
+  // volume counts; never use non-draft alone as a substitute for visibility.
+  const chapterWhere: Prisma.ChapterWhereInput = isOwner
+    ? { novelId, status: { not: 'draft' } }
+    : { novelId, status: 'published', visibility: 'public', OR: [{ publishedAt: null }, { publishedAt: { lte: now } }] }
+  const [chapterRecords, volumeRecords] = await prisma.$transaction([
     prisma.chapter.findMany({
-      where: { novelId },
+      where: chapterWhere,
       select: chapterListItemSelect,
       orderBy: { orderIndex: 'asc' },
     }),
@@ -97,17 +114,13 @@ export async function getReaderPayloadData(
       where: { novelId },
       include: {
         chapters: {
-          where: { status: { not: 'draft' } },
+          where: chapterWhere,
           select: { wordCount: true, publishedWordCount: true, publishedRevision: true },
         },
       },
       orderBy: { orderIndex: 'asc' },
     }),
   ])
-
-  if (!novel || !currentChapter || currentChapter.novelId !== novelId) {
-    return null
-  }
 
   // 阅读数 UV 口径：登录用户首次阅读该作品写入 novel_reads 去重表并 +1，重读不累加；
   // 匿名阅读不计入读者数（与微信读书登录态口径一致），草稿章不计。
@@ -138,7 +151,7 @@ export async function getReaderPayloadData(
       coverUrl: novel.coverAsset?.imageUrl ?? null,
     },
     currentChapter: toPublishedChapter(currentChapter),
-    volumes: volumeRecords.map(toPublishedVolumeListItem),
+    volumes: volumeRecords.filter(volume => isOwner || volume.chapters.length > 0).map(toPublishedVolumeListItem),
     chapterList: visibleChapters.map(toPublishedChapterListItem),
     previousChapterId: currentIndex > 0 ? visibleChapters[currentIndex - 1].id : null,
     nextChapterId:

@@ -2,7 +2,7 @@ import type { AgentQueuedRequest, Prisma } from '@prisma/client'
 import { startAgentLoopRunSchema, type StartAgentLoopRunRequest } from '../../../shared/contracts/index.js'
 import type { AgentQueueAction, AgentQueueSnapshot } from '../../../shared/contracts/agent-queue.js'
 import { DataAccessError, prisma } from '../prisma.js'
-import { isManagedAttachmentOwnedBy } from '../agent-attachment-storage.js'
+import { assertManagedAttachmentsAccess } from '../agent-attachment-storage.js'
 import { getActiveRunIdBySession, hasActiveRunInSession, stopAgentRun } from './active-runs.js'
 import { forkAgentSessionData, startLoopRunLocked, toAgentSession } from './run-service.js'
 import { withUserRunLock } from './run-lock.js'
@@ -41,7 +41,7 @@ export async function enqueueRequest(userId: string, id: string, raw: StartAgent
     const input = startAgentLoopRunSchema.parse(raw)
     const session = await ownedSession(userId, input.sessionId)
     if (session.novelId !== input.novelId) throw new DataAccessError(400, 'VALIDATION_ERROR', '会话与作品不匹配。')
-    if (input.attachments?.some(a => !isManagedAttachmentOwnedBy(a.url, userId))) throw new DataAccessError(403, 'FORBIDDEN', '附件不属于当前用户。')
+    await assertManagedAttachmentsAccess(input.attachments, userId)
     const prior = await prisma.agentQueuedRequest.findUnique({ where: { id } })
     if (prior) {
       if (prior.userId !== userId) throw conflict()

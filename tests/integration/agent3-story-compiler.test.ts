@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import app from '../../api/app.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 import {
   commitChapterBridge,
   prepareStoryCompilation,
@@ -15,7 +16,7 @@ import {
   validateStoryContinuity,
 } from '../../api/lib/agent/story-compiler.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
@@ -106,7 +107,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 Story Compiler 与 Chapter Bridge（需
     await recordStoryCompilerWrite({ userId, novelId, runId, chapterId: chapter2.id, chapterOrderIndex: 2, chapterRevision: chapter2.revision })
     expect((await prisma.storyCompilation.findUniqueOrThrow({ where: { id: compilation.id } })).stage).toBe('write')
 
-    const checked = await validateStoryContinuity({ userId, novelId, compilationId: compilation.id, findings: [] })
+    const checked = await validateStoryContinuity({ userId, novelId, compilationId: compilation.id, findings: [], independentCheck: 'complete', expectedChapterRevision: chapter2.revision })
     expect(checked.errorCount).toBe(0)
     await commitChapterBridge({
       userId, novelId, compilationId: compilation.id,
@@ -144,7 +145,7 @@ describe.skipIf(!dbAvailable)('Agent 3.0 Story Compiler 与 Chapter Bridge（需
     await prisma.chapter.update({ where: { id: chapter2Id }, data: { content: { set: '用户在第三章写作期间修改了第二章结尾。' }, revision: { increment: 1 } } })
     const chapter3 = await prisma.chapter.update({ where: { id: chapter3Id }, data: { content: '两人沿楼梯下行，头顶却多出一声脚步。', wordCount: 19, revision: { increment: 1 } } })
     await recordStoryCompilerWrite({ userId, novelId, runId, chapterId: chapter3.id, chapterOrderIndex: 3, chapterRevision: chapter3.revision })
-    const stale = await validateStoryContinuity({ userId, novelId, compilationId: compilation.id, findings: [] })
+    const stale = await validateStoryContinuity({ userId, novelId, compilationId: compilation.id, findings: [], independentCheck: 'complete', expectedChapterRevision: chapter3.revision })
     expect(stale.errorCount).toBeGreaterThan(0)
     expect(stale.findings.some((item) => item.evidence.includes('已从 r'))).toBe(true)
     await expect(commitChapterBridge({

@@ -65,7 +65,7 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
 
       const name = item.slice(0, separatorIndex)
       const value = item.slice(separatorIndex + 1)
-      result[name] = decodeURIComponent(value)
+      try { result[name] = decodeURIComponent(value) } catch { /* Ignore a malformed cookie, not the entire authentication gate. */ }
       return result
     }, {})
 }
@@ -135,10 +135,10 @@ function writeSessionCookies(userId: string, tokenVersion: number, res: Response
 
 /** 登录/重签会话：实时读库取最新 tokenVersion（不能走 60s 缓存，否则可能签出即刻失效的令牌） */
 export async function createSession(userId: string, res: Response) {
-  const user = await prisma.user
-    .findUnique({ where: { id: userId }, select: { tokenVersion: true } })
-    .catch((): null => null)
-  return writeSessionCookies(userId, user?.tokenVersion ?? 0, res)
+  const state = await getUserAuthState(userId, { fresh: true })
+  if (!state) throw new DataAccessError(401, 'AUTH_REQUIRED', '账号已不存在，请重新登录。')
+  if (state.banned) throw new DataAccessError(403, 'AUTH_ACCOUNT_BANNED', '当前账号已被封禁。')
+  return writeSessionCookies(userId, state.tokenVersion, res)
 }
 
 export function clearSession(res: Response) {
@@ -214,8 +214,6 @@ interface UserAuthState {
 }
 
 const AUTH_STATE_CACHE_TTL_MS = 60_000
-/** DB 故障时允许复用历史成功状态的最大年龄：吊销/封禁失效窗口有界（10 分钟） */
-const AUTH_STATE_STALE_MAX_MS = 10 * 60_000
 /** 缓存容量上限：超出时淘汰最旧 checkedAt 项，防长尾用户导致无界增长 */
 const AUTH_STATE_CACHE_MAX_ENTRIES = 5000
 const userAuthStateCache = new Map<string, UserAuthState>()
@@ -238,14 +236,14 @@ function evictOldestAuthStateIfOverLimit(): void {
 }
 const BANNED_FLAG_KEY = Symbol('chevoinkBannedSession')
 const RESOLVED_USER_ID_KEY = Symbol('chevoinkResolvedUserId')
+const SESSION_UNAVAILABLE_KEY = Symbol('chevoinkSessionUnavailable')
 
 export function evictUserBanCache(userId: string): void {
   userAuthStateCache.delete(userId)
 }
 
 /**
- * 认证降级告警（60s 进程内节流）：DB 故障期间放行会话不中断站点，
- * 但必须在服务端日志留下可检索痕迹（含被抑制次数），供事后审计降级窗口的规模。
+ * 认证不可核实告警（60s进程内节流）；不记录令牌、Cookie、SQL或原始错误。
  */
 const AUTH_DEGRADE_WARN_WINDOW_MS = 60_000
 let lastAuthDegradeWarnAt = 0
@@ -257,54 +255,56 @@ function warnAuthDegrade(scope: string, detail: Record<string, unknown>): void {
     const suppressed = suppressedAuthDegradeCount
     suppressedAuthDegradeCount = 0
     lastAuthDegradeWarnAt = now
-    console.warn(`[auth] 会话状态降级放行（${scope}）`, { ...detail, suppressedSinceLastWarn: suppressed })
+    console.warn(`[auth] 会话状态不可核实（${scope}）`, { ...detail, suppressedSinceLastWarn: suppressed })
   } else {
     suppressedAuthDegradeCount += 1
   }
 }
 
-/**
- * 读取用户会话状态：
- * - 60s 内的缓存直接复用（DB 正常路径语义不变）；
- * - 查询失败时，若存在年龄 ≤ stale 窗口（10 分钟）的历史成功状态则复用
- *   （封禁与 tokenVersion 照常比对），吊销失效窗口有界且打点留痕；
- * - 无可用历史状态才返回 null，由调用方按「未封禁 + 跳过令牌版本比对」降级放行。
- * 导出仅供单元测试使用。
- */
-export async function getUserAuthState(userId: string): Promise<UserAuthState | null> {
+export type UserAuthLookup =
+  | { status: 'verified'; state: UserAuthState }
+  | { status: 'notFound' }
+  | { status: 'unavailable' }
+
+/** Cached observations are diagnostic only; every authorization/issuance uses fresh:true. */
+export async function readUserAuthState(userId: string, options: { fresh?: boolean } = {}): Promise<UserAuthLookup> {
   const cached = userAuthStateCache.get(userId)
-  if (cached && Date.now() - cached.checkedAt < AUTH_STATE_CACHE_TTL_MS) {
-    return cached
+  if (!options.fresh && cached && Date.now() - cached.checkedAt < AUTH_STATE_CACHE_TTL_MS) {
+    return { status: 'verified', state: cached }
   }
 
-  const user = await prisma.user
-    .findUnique({ where: { id: userId }, select: { bannedAt: true, tokenVersion: true } })
-    .catch((): null => null)
-
-  if (!user) {
-    // 查询失败：优先复用新鲜的历史成功状态（封禁/吊销照常生效），避免故障期完全失明
-    if (cached && Date.now() - cached.checkedAt <= AUTH_STATE_STALE_MAX_MS) {
-      warnAuthDegrade('stale-fallback', { userId, ageMs: Date.now() - cached.checkedAt })
-      return cached
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { bannedAt: true, tokenVersion: true } })
+    if (!user) {
+      evictUserBanCache(userId)
+      return { status: 'notFound' }
     }
-    // 无历史状态：不缓存故障结果，交由调用方降级（告警节流防故障期刷屏）
-    warnAuthDegrade('db-unreachable', { userId })
-    return null
+    const state: UserAuthState = { banned: user.bannedAt !== null, tokenVersion: user.tokenVersion, checkedAt: Date.now() }
+    userAuthStateCache.set(userId, state)
+    evictOldestAuthStateIfOverLimit()
+    return { status: 'verified', state }
+  } catch {
+    evictUserBanCache(userId)
+    warnAuthDegrade('db-unavailable', { userId })
+    return { status: 'unavailable' }
   }
+}
 
-  const state: UserAuthState = {
-    banned: user.bannedAt !== null,
-    tokenVersion: user.tokenVersion,
-    checkedAt: Date.now(),
-  }
-  userAuthStateCache.set(userId, state)
-  evictOldestAuthStateIfOverLimit()
-  return state
+function sessionUnavailable(): DataAccessError {
+  return new DataAccessError(503, 'AUTH_SESSION_UNAVAILABLE', '暂时无法验证登录状态，请稍后重试，无需重新登录。')
+}
+
+/** Compatibility facade: missing user is null; unavailable is never interpreted as missing. */
+export async function getUserAuthState(userId: string, options: { fresh?: boolean } = {}): Promise<UserAuthState | null> {
+  const result = await readUserAuthState(userId, options)
+  if (result.status === 'unavailable') throw sessionUnavailable()
+  return result.status === 'verified' ? result.state : null
 }
 
 export async function isUserBanned(userId: string): Promise<boolean> {
-  const state = await getUserAuthState(userId)
-  return state?.banned ?? false
+  const state = await getUserAuthState(userId, { fresh: true })
+  if (!state) throw new DataAccessError(401, 'AUTH_REQUIRED', '账号已不存在。')
+  return state.banned
 }
 
 /** 全局中间件判定封禁后打标：后续 getSessionUserId / requireSessionUserId 一律视为未登录 */
@@ -318,6 +318,12 @@ function isSessionMarkedBanned(req: Request): boolean {
 
 function setResolvedUserId(req: Request, userId: string | null): void {
   ;(req as Request & { [key: symbol]: unknown })[RESOLVED_USER_ID_KEY] = userId
+  ;(req as Request & { [key: symbol]: unknown })[SESSION_UNAVAILABLE_KEY] = false
+}
+
+export function markSessionUnavailable(req: Request): void {
+  ;(req as Request & { [key: symbol]: unknown })[RESOLVED_USER_ID_KEY] = null
+  ;(req as Request & { [key: symbol]: unknown })[SESSION_UNAVAILABLE_KEY] = true
 }
 
 function getResolvedUserId(req: Request): string | null | undefined {
@@ -328,12 +334,14 @@ function getResolvedUserId(req: Request): string | null | undefined {
 /**
  * 登录闸口（app.ts 全局中间件调用）：
  * 1. 按 access cookie → Bearer access → refresh cookie → Bearer refresh 顺序识别会话；
- * 2. 封禁检查（60s 缓存）：命中打标 + 清 cookie，后续一律视为未登录；
+ * 2. 实时封禁检查：命中打标 + 清 cookie；状态不可核实则标记503，不清cookie；
  * 3. v2 令牌与库中 tokenVersion 比对，不一致（改密/登出/封禁后）视为已吊销；
  * 4. refresh 命中时静默重签双 cookie（滑动续期 30 天），前端无感知。
  * 判定结果写入 req 标记，getSessionUserId 直接读取，避免下游重复验签。
  */
 export async function resolveSessionGate(req: Request, res: Response): Promise<void> {
+  // Keep a failed/uncompleted gate distinguishable from a verified anonymous request.
+  markSessionUnavailable(req)
   const cookies = parseCookies(req.headers.cookie)
   const authHeader = req.headers.authorization
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : null
@@ -350,7 +358,14 @@ export async function resolveSessionGate(req: Request, res: Response): Promise<v
     return
   }
 
-  const state = await getUserAuthState(candidate.userId)
+  const lookup = await readUserAuthState(candidate.userId, { fresh: true })
+  if (lookup.status === 'unavailable') return
+  if (lookup.status === 'notFound') {
+    clearSession(res)
+    setResolvedUserId(req, null)
+    return
+  }
+  const state = lookup.state
 
   if (state?.banned) {
     markSessionBanned(req)
@@ -359,27 +374,23 @@ export async function resolveSessionGate(req: Request, res: Response): Promise<v
     return
   }
 
-  if (candidate.tokenVersion !== null && state && candidate.tokenVersion !== state.tokenVersion) {
+  if (candidate.tokenVersion !== null && candidate.tokenVersion !== state.tokenVersion) {
     // 已被吊销的 v2 令牌：清 cookie 并按未登录处理
     clearSession(res)
     setResolvedUserId(req, null)
     return
   }
 
-  if (!state) {
-    // DB 故障降级放行：跳过封禁与吊销比对（吊销失效窗口 = 故障持续时长），打点留痕供审计
-    warnAuthDegrade('session-gate-fallback', { userId: candidate.userId, path: req.path })
-  }
-
   if (!accessCandidate && candidate) {
     // refresh 命中（access 过期/丢失）：滚动续签
-    writeSessionCookies(candidate.userId, state?.tokenVersion ?? candidate.tokenVersion ?? 0, res)
+    writeSessionCookies(candidate.userId, state.tokenVersion, res)
   }
 
   setResolvedUserId(req, candidate.userId)
 }
 
 export function getSessionUserId(req: Request): string | null {
+  if ((req as Request & { [key: symbol]: unknown })[SESSION_UNAVAILABLE_KEY]) throw sessionUnavailable()
   // 全局中间件已判定本请求属于被封禁会话：直接视为未登录
   if (isSessionMarkedBanned(req)) {
     return null
@@ -391,26 +402,26 @@ export function getSessionUserId(req: Request): string | null {
     return resolved
   }
 
-  // 闸口未覆盖（自身异常放行）时退回本地验签，保持鉴权可用
-  const cookies = parseCookies(req.headers.cookie)
-  const authHeader = req.headers.authorization
-  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : null
+  // No local-signature bypass when the global gate did not complete.
+  if (req.headers.cookie || req.headers.authorization) throw sessionUnavailable()
+  return null
+}
 
-  const candidate =
-    verifySessionToken(cookies[SESSION_COOKIE_NAME], 'access') ??
-    verifySessionToken(bearerToken, 'access') ??
-    verifySessionToken(cookies[REFRESH_COOKIE_NAME], 'refresh') ??
-    verifySessionToken(bearerToken, 'refresh')
-
-  return candidate?.userId ?? null
+/** Only explicit public data routes may drop personalization; never use for private reads/writes. */
+export function getPublicSessionUserId(req: Request): string | null {
+  try { return getSessionUserId(req) } catch (error) {
+    if (error instanceof DataAccessError && error.code === 'AUTH_SESSION_UNAVAILABLE') return null
+    throw error
+  }
 }
 
 /** 吊销用户全部 v2 会话令牌（改密/登出/封禁时调用）：tokenVersion+1 并清缓存即刻生效 */
 export async function revokeUserSessions(userId: string): Promise<void> {
-  await prisma.user
-    .update({ where: { id: userId }, data: { tokenVersion: { increment: 1 } } })
-    .catch(() => {})
-  evictUserBanCache(userId)
+  try {
+    await prisma.user.update({ where: { id: userId }, data: { tokenVersion: { increment: 1 } } })
+  } catch {
+    throw new DataAccessError(503, 'AUTH_REVOCATION_UNAVAILABLE', '暂时无法确认会话撤销，请稍后重试。')
+  } finally { evictUserBanCache(userId) }
 }
 
 export function requireSessionUserId(req: Request): string {

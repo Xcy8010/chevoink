@@ -1,4 +1,6 @@
 import { Router, type Request, type Response } from 'express'
+import { createRateCard, transitionRateCard, listRateCards, rateCardEvidenceSchema } from '../lib/billing/rate-cards.js'
+import { itemizedTokenPriceSchema } from '../lib/billing/token-price.js'
 import { z } from 'zod'
 
 import { createAuthCaptchaChallenge, verifyAuthCaptchaChallenge } from '../lib/auth-captcha.js'
@@ -166,6 +168,7 @@ const agentEvalReviewSchema = z.object({
 })
 const corpusSourceRevokeSchema = z.object({ reason: z.string().trim().min(1).max(500) })
 const adminDangerActionSchema = z.object({
+  requestKey: z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/).optional(),
   captchaId: nonEmptyText,
   captchaAnswer: nonEmptyText,
   confirmation: nonEmptyText,
@@ -346,12 +349,16 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
 
   try {
     // 登出即吊销该管理员全部 v2 会话令牌
-    const admin = await requireAdmin(req).catch((): null => null)
+    const admin = await requireAdmin(req).catch((error: unknown) => {
+      if (error instanceof DataAccessError && error.status === 401) return null
+      throw error
+    })
     if (admin) {
       await revokeUserSessions(admin.id)
     }
-  } catch {
-    // 吊销失败不阻断登出
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+    return
   }
   clearSession(res)
   res.status(200).json(buildSuccess(requestId, { ok: true }))
@@ -1021,7 +1028,7 @@ router.post('/credits/users/:userId/reset', async (req: Request, res: Response):
     const body = parseBody(adminDangerActionSchema, req.body, '请完成人机验证并输入确认词。')
     verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
     if (body.confirmation.trim() !== 'RESET_USER') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
-    const result = await resetAdminUserCredits(req.params.userId, admin.id)
+    const result = await resetAdminUserCredits(req.params.userId, admin.id, body.requestKey)
     await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_user', targetType: 'user', targetId: req.params.userId, detail: result, ip: getRequestIp(req) })
     res.status(200).json(buildSuccess(requestId, result))
   } catch (error) {
@@ -1037,7 +1044,7 @@ router.post('/credits/reset-all', async (req: Request, res: Response): Promise<v
     const body = parseBody(adminDangerActionSchema, req.body, '请完成人机验证并输入确认词。')
     verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
     if (body.confirmation.trim() !== 'RESET_ALL') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
-    const result = await resetAllAdminCredits(admin.id)
+    const result = await resetAllAdminCredits(admin.id, body.requestKey)
     await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_all', targetType: 'creditSystem', targetId: 'global', detail: result, ip: getRequestIp(req) })
     res.status(200).json(buildSuccess(requestId, result))
   } catch (error) {
@@ -1053,7 +1060,7 @@ router.post('/credits/users/reset-selected', async (req: Request, res: Response)
     const body = parseBody(adminBatchCreditsSchema, req.body, '请选择用户并完成人机验证。')
     verifyAuthCaptchaChallenge(body.captchaId.trim(), body.captchaAnswer.trim())
     if (body.confirmation.trim() !== 'RESET_SELECTED') throw new DataAccessError(400, 'CONFIRMATION_MISMATCH', '确认词不正确。')
-    const result = await resetAdminUsersCredits(body.userIds, admin.id)
+    const result = await resetAdminUsersCredits(body.userIds, admin.id, body.requestKey)
     await recordAdminAuditLog({ adminId: admin.id, action: 'credits.reset_selected', targetType: 'users', targetId: `${result.users}`, detail: { ...result, userIds: body.userIds }, ip: getRequestIp(req) })
     res.status(200).json(buildSuccess(requestId, result))
   } catch (error) {
@@ -1110,6 +1117,34 @@ router.post('/credits/pause', async (req: Request, res: Response): Promise<void>
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
+})
+
+router.get('/model-rate-cards', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    res.json(buildSuccess(requestId, { cards: await listRateCards(admin.id) }))
+  } catch (error) { sendRouteError(res, requestId, error) }
+})
+
+router.post('/model-rate-cards', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(itemizedTokenPriceSchema, req.body, '费率卡格式不正确。')
+    res.json(buildSuccess(requestId, { card: await createRateCard(admin.id, body) }))
+  } catch (error) { sendRouteError(res, requestId, error) }
+})
+
+router.post('/model-rate-cards/:cardId/transition', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const admin = await requireAdmin(req)
+    requireSuperAdmin(admin)
+    const body = parseBody(z.object({ expectedRevision: z.number().int().nonnegative(), status: z.enum(['shadow', 'approved', 'active', 'retired']), evidence: rateCardEvidenceSchema }).strict(), req.body, '费率状态变更格式不正确。')
+    res.json(buildSuccess(requestId, { card: await transitionRateCard(admin.id, { ...body, id: req.params.cardId }) }))
+  } catch (error) { sendRouteError(res, requestId, error) }
 })
 
 router.get('/models', async (req: Request, res: Response): Promise<void> => {

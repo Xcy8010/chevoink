@@ -1,8 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
-import { Prisma } from '@prisma/client'
+import { Prisma, type CreditLedgerEntry } from '@prisma/client'
+import { z } from 'zod'
 
-import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
+import { BUILT_IN_MODEL_TIERS, SERVER_MODEL_TIERS, taskSpecSchema } from '../../shared/contracts/index.js'
 import type {
   CreditAccountSummary,
   CreditActivityPayload,
@@ -10,11 +11,17 @@ import type {
   CreditModelOption,
   CreditModelTier,
   CreditUsagePayload,
+  TaskCreditUsagePayload,
   ModelReasoningEffort,
   ReferralPayload,
 } from '../../shared/contracts/index.js'
 import { DataAccessError, prisma } from './prisma.js'
 import { decryptSecret } from './secret-box.js'
+import { assertCreditInteger, BillingInputError, calculateV1ChargeMilli, calculateV2ChargeMilli } from './billing/pricing.js'
+import { equalLegacyMetadata, prepareCreditRequest, readCreditFingerprint } from './billing/credit-request.js'
+import { getActiveTokenPrice, getActiveTokenPrices } from './billing/rate-cards.js'
+import { tokenPriceSchema, type TokenPrice } from './billing/token-price.js'
+import { presentLedgerPrice, readLedgerPriceMetadata } from './billing/ledger-presentation.js'
 
 export const CREDIT_MILLI = 1000
 export const PUBLIC_BETA_DAILY_MILLI = 450 * CREDIT_MILLI
@@ -183,11 +190,17 @@ async function listPublicModelOptions(): Promise<CreditModelOption[]> {
     where: { ownerUserId: null, tier: { not: null } },
     select: { tier: true, provider: true, displayName: true, modelName: true, baseUrl: true, apiKeyCiphertext: true, multiplierBps: true, enabled: true, selectable: true, isDefault: true, metadata: true },
   })
-  if (configs.length === 0) return MODEL_FALLBACKS
+  const activePrices = await getActiveTokenPrices([...BUILT_IN_MODEL_TIERS])
+  if (configs.length === 0) return MODEL_FALLBACKS.map(item => {
+    const price = activePrices.get(item.tier)
+    return { ...item, pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null }
+  })
   return configs.flatMap((item) => {
     if (!item.tier || !['lite', 'speed', 'standard', 'performance', 'ultimate'].includes(item.tier)) return []
     const capabilities = parseModelCapabilities(item.metadata, item.provider)
+    const price = activePrices.get(item.tier)
     return [{
+      pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null,
       tier: item.tier as CreditModelOption['tier'],
       label: item.displayName,
       multiplier: item.multiplierBps / 10000,
@@ -284,35 +297,129 @@ export async function getCreditUsage(userId: string, take = 100): Promise<Credit
       take: Math.min(Math.max(take, 1), 300),
     }),
   ])
-  // 账本幂等键为 usage:{usageLogId}，据此精确关联用量日志补齐缓存命中字段（旧记录/非 token 条目为 null）
+  return { account, ledger: await presentCreditLedgerEntries(prisma, entries) }
+}
+
+async function presentCreditLedgerEntries(db: Prisma.TransactionClient, entries: CreditLedgerEntry[]): Promise<CreditLedgerItem[]> {
+  // Exact usage linkage, shared by account and task views; never expose metadata.
+  const originalKey = (entry: CreditLedgerEntry) => entry.kind === 'refund' ? entry.idempotencyKey.replace(/^refund:/, '') : entry.idempotencyKey
   const usageLogIds = entries
-    .filter((entry) => entry.kind === 'usage' && entry.sourceType === 'model_tokens' && entry.idempotencyKey.startsWith('usage:'))
-    .map((entry) => entry.idempotencyKey.slice('usage:'.length))
+    .filter((entry) => originalKey(entry).startsWith('usage:'))
+    .map((entry) => originalKey(entry).slice('usage:'.length))
   const cacheByLogId = new Map<string, { hit: number; miss: number }>()
+  const taskByLogId = new Map<string, string>()
   if (usageLogIds.length > 0) {
-    const usageLogs = await prisma.aiUsageLog.findMany({
-      where: { id: { in: usageLogIds }, promptCacheHitTokens: { not: null } },
-      select: { id: true, promptCacheHitTokens: true, promptCacheMissTokens: true },
+    const usageLogs = await db.aiUsageLog.findMany({
+      where: { id: { in: usageLogIds }, userId: { in: [...new Set(entries.map(entry => entry.userId))] } },
+      select: { id: true, agentRunId: true, promptCacheHitTokens: true, promptCacheMissTokens: true },
     })
     for (const log of usageLogs) {
-      cacheByLogId.set(log.id, { hit: log.promptCacheHitTokens ?? 0, miss: log.promptCacheMissTokens ?? 0 })
+      if (log.promptCacheHitTokens != null) cacheByLogId.set(log.id, { hit: log.promptCacheHitTokens, miss: log.promptCacheMissTokens ?? 0 })
+      if (log.agentRunId) taskByLogId.set(log.id, log.agentRunId)
     }
   }
-  const ledger: CreditLedgerItem[] = entries.map((entry) => ({
+  const candidateRunIds = [...new Set([...taskByLogId.values(), ...entries.flatMap(entry => entry.referenceId ? [entry.referenceId] : [])])]
+  const runs = candidateRunIds.length ? await db.agentRun.findMany({ where: { id: { in: candidateRunIds },
+    userId: { in: [...new Set(entries.map(entry => entry.userId))] } }, select: { id: true, userId: true } }) : []
+  const runOwners = new Map(runs.map(run => [run.id, run.userId]))
+  const ledger: CreditLedgerItem[] = entries.map((entry) => {
+    const originalPrice = presentLedgerPrice(entry.metadata)
+    const logId = originalKey(entry).slice('usage:'.length)
+    const candidateRun = taskByLogId.get(logId) ?? entry.referenceId
+    return {
     id: entry.id,
     delta: milliToCredits(entry.deltaMilli),
     kind: entry.kind,
     sourceType: entry.sourceType,
     referenceId: entry.referenceId,
+    taskRunId: candidateRun && runOwners.get(candidateRun) === entry.userId ? candidateRun : null,
     modelTier: entry.modelTier as CreditModelTier | null,
     multiplier: entry.multiplierBps / 10000,
     requestTokens: entry.requestTokens,
     responseTokens: entry.responseTokens,
-    promptCacheHitTokens: cacheByLogId.get(entry.idempotencyKey.slice('usage:'.length))?.hit ?? null,
-    promptCacheMissTokens: cacheByLogId.get(entry.idempotencyKey.slice('usage:'.length))?.miss ?? null,
+    pricing: originalPrice.pricing,
+    promptCacheHitTokens: originalPrice.hit ?? cacheByLogId.get(logId)?.hit ?? null,
+    promptCacheMissTokens: originalPrice.miss ?? cacheByLogId.get(logId)?.miss ?? null,
     createdAt: entry.createdAt.toISOString(),
-  }))
-  return { account, ledger }
+  } })
+  return ledger
+}
+
+const taskCreditCursorSchema = z.object({ runId: z.string().min(1).max(64), asOf: z.string().datetime(),
+  createdAt: z.string().datetime(), id: z.string().min(1).max(64) }).strict()
+
+/** Scope by task lineage, not by all tasks in the same novel/session. Each page
+ * and its totals use one read snapshot; the cursor retains the original cutoff. */
+export async function getTaskCreditUsage(userId: string, runId: string, input: { cursor?: string; take?: number } = {}): Promise<TaskCreditUsagePayload> {
+  const take = input.take ?? 30
+  if (!Number.isSafeInteger(take) || take < 1 || take > 100) throw new DataAccessError(400, 'CREDIT_PAGE_INVALID', '费用分页大小无效。')
+  let cursor: z.infer<typeof taskCreditCursorSchema> | null = null
+  if (input.cursor) {
+    try {
+      if (input.cursor.length > 1024) throw new Error('cursor too long')
+      cursor = taskCreditCursorSchema.parse(JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')))
+      if (cursor.runId !== runId || Date.parse(cursor.asOf) > Date.now() || Date.parse(cursor.createdAt) > Date.parse(cursor.asOf)) throw new Error('cursor scope invalid')
+    } catch { throw new DataAccessError(400, 'CREDIT_CURSOR_INVALID', '费用游标无效或属于其他任务。') }
+  }
+  const page = cursor
+  return prisma.$transaction(async tx => {
+    const run = await tx.agentRun.findFirst({ where: { id: runId, userId, novel: { authorId: userId } } })
+    if (!run) throw new DataAccessError(404, 'AGENT_RUN_NOT_FOUND', '任务不存在或无权查看。')
+    const spec = run.taskSpec == null ? null : taskSpecSchema.safeParse(run.taskSpec)
+    if (spec && (!spec.success || spec.data.scope.novelId !== run.novelId)) throw new DataAccessError(409, 'CREDIT_TASK_SCOPE_INVALID', '原任务身份异常，未合并历史账单。')
+    const taskKey = run.taskRootId ?? (spec?.success ? spec.data.id : null)
+    const asOf = page ? new Date(page.asOf) : new Date()
+    // Prisma DateTime columns are UTC timestamp-without-time-zone. Bind their
+    // ISO wall time explicitly; timestamptz comparison shifts the cutoff under
+    // a non-UTC database session and can include refunds from later pages.
+    const cutoff = asOf.toISOString()
+    const scope = Prisma.sql`l.user_id = ${userId} AND l.created_at <= ${cutoff}::timestamp
+      AND l.kind IN ('usage', 'refund') AND (
+        EXISTS (SELECT 1 FROM agent_runs r WHERE r.user_id = ${userId} AND r.session_id = ${run.sessionId}
+          AND r.novel_id = ${run.novelId} AND r.id = l.reference_id AND
+          (r.id = ${runId} OR (${taskKey}::text IS NOT NULL AND COALESCE(r.task_root_id, r.task_spec->>'id') = ${taskKey})))
+        OR (${run.taskRootId}::text IS NOT NULL AND EXISTS (SELECT 1 FROM agent_operations o
+          WHERE o.task_root_id = ${run.taskRootId} AND o.id = l.reference_id))
+        OR EXISTS (SELECT 1 FROM ai_usage_logs u JOIN agent_runs r ON r.id = u.agent_run_id
+          WHERE u.user_id = ${userId} AND r.user_id = ${userId} AND r.session_id = ${run.sessionId}
+          AND r.novel_id = ${run.novelId}
+          AND l.idempotency_key IN ('usage:' || u.id, 'refund:usage:' || u.id)
+          AND (r.id = ${runId} OR (${taskKey}::text IS NOT NULL AND COALESCE(r.task_root_id, r.task_spec->>'id') = ${taskKey})))
+      )`
+    const after = page ? Prisma.sql`AND (l.created_at < ${page.createdAt}::timestamp OR (l.created_at = ${page.createdAt}::timestamp AND l.id < ${page.id}))` : Prisma.empty
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT l.id FROM credit_ledger_entries l WHERE ${scope} ${after}
+      ORDER BY l.created_at DESC, l.id DESC LIMIT ${take + 1}`)
+    const totals = await tx.$queryRaw<Array<{ charged: bigint; refunded: bigint; pending: bigint }>>(Prisma.sql`
+      SELECT COALESCE(SUM(CASE WHEN l.delta_milli < 0 THEN -l.delta_milli::bigint ELSE 0 END),0)::bigint AS charged,
+        COALESCE(SUM(CASE WHEN l.kind = 'refund' AND l.delta_milli > 0 THEN l.delta_milli::bigint ELSE 0 END),0)::bigint AS refunded,
+        COALESCE(SUM(CASE WHEN l.delta_milli < 0 AND EXISTS (SELECT 1 FROM credit_refund_intents f
+          WHERE f.original_entry_id = l.id AND f.created_at <= ${cutoff}::timestamp AND (f.settled_at IS NULL OR f.settled_at > ${cutoff}::timestamp)) THEN -l.delta_milli::bigint ELSE 0 END),0)::bigint AS pending
+      FROM credit_ledger_entries l WHERE ${scope}`)
+    const entries = await tx.creditLedgerEntry.findMany({ where: { userId, id: { in: rows.slice(0, take).map(row => row.id) } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    const credits = (value: bigint) => {
+      if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) throw new DataAccessError(409, 'CREDIT_TOTAL_TOO_LARGE', '费用汇总超出安全数值范围。')
+      return milliToCredits(Number(value))
+    }
+    const total = totals[0], last = entries.at(-1)
+    const unresolvedProviderAttempts = run.taskRootId ? await tx.agentProviderAttempt.count({ where: {
+      operation: { taskRootId: run.taskRootId }, createdAt: { lte: asOf }, dispatchedAt: { not: null },
+      OR: [{ status: { in: ['dispatched', 'unknown'] } }, { usageReceipt: null }, { usageReceipt: { settlementStatus: 'pending' } }],
+    } }) : null
+    const [unsettled] = await tx.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+      SELECT count(*)::bigint AS count FROM ai_usage_logs u JOIN agent_runs r ON r.id = u.agent_run_id
+      WHERE u.user_id = ${userId} AND r.user_id = ${userId} AND r.session_id = ${run.sessionId} AND r.novel_id = ${run.novelId}
+        AND u.created_at <= ${cutoff}::timestamp AND u.billing_snapshot IS NOT NULL
+        AND u.billing_status IS DISTINCT FROM 'not_dispatched'
+        AND u.billing_snapshot->>'version' <> 'byok-exempt'
+        AND (r.id = ${runId} OR (${taskKey}::text IS NOT NULL AND COALESCE(r.task_root_id, r.task_spec->>'id') = ${taskKey}))
+        AND NOT EXISTS (SELECT 1 FROM credit_ledger_entries paid WHERE paid.user_id = ${userId}
+          AND paid.idempotency_key = 'usage:' || u.id AND paid.created_at <= ${cutoff}::timestamp)`)
+    return { runId, asOf: asOf.toISOString(), charged: credits(total.charged), refunded: credits(total.refunded),
+      netCharged: credits(total.charged - total.refunded), pendingRefund: credits(total.pending), unresolvedProviderAttempts,
+      pendingModelSettlements: Number(unsettled.count),
+      ledger: await presentCreditLedgerEntries(tx, entries),
+      nextCursor: rows.length > take && last ? Buffer.from(JSON.stringify({ runId, asOf: asOf.toISOString(), createdAt: last.createdAt.toISOString(), id: last.id })).toString('base64url') : null }
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
 }
 
 type CreditActivityDbRow = {
@@ -420,6 +527,11 @@ export async function assertCreditAccess(userId: string, tier: CreditModelTier =
     throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
   }
   if (tier === 'custom') return
+  const pending = await prisma.aiUsageLog.findFirst({ where: { userId, OR: [
+    { billingStatus: 'pending_settlement' },
+    { billingStatus: 'pending_usage', billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
+  ] }, select: { id: true } })
+  if (pending) throw new DataAccessError(409, 'CREDITS_SETTLEMENT_PENDING', '前次模型调用的结果已保留，费用正在核实或结算；暂不发起新的付费调用，请稍后继续。')
   const remaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli
   if (remaining <= 0) {
     throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
@@ -438,6 +550,7 @@ export async function assertCreditAccess(userId: string, tier: CreditModelTier =
 
 export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userId?: string, customModelId?: string | null, requestedReasoningEffort?: ModelReasoningEffort): Promise<{
   tier: CreditModelTier
+  tokenPrice?: TokenPrice
   multiplierBps: number
   provider: string
   modelName: string | null
@@ -482,6 +595,7 @@ export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userI
   return {
     tier,
     multiplierBps: config.multiplierBps,
+    tokenPrice: await getActiveTokenPrice(tier) ?? undefined,
     provider: config.provider,
     modelName: config.modelName === 'unconfigured' ? null : config.modelName,
     baseUrl: config.baseUrl,
@@ -507,77 +621,105 @@ export type ConsumeCreditInput = {
   allowPartialOnExhaustion?: boolean
 }
 
-export type CreditChargeResult = { chargedMilli: number; remainingMilli: number; exhausted: boolean }
+export type CreditChargeResult = { chargedMilli: number; remainingMilli: number; exhausted: boolean; pendingUsage?: boolean }
 
-export async function consumeCredits(input: ConsumeCreditInput): Promise<CreditChargeResult> {
-  const amountMilli = Math.max(0, Math.ceil(input.amountMilli))
-  if (amountMilli === 0) {
-    const summary = await getCreditSummary(input.userId)
+function validateBillingInput<T>(validate: () => T): T {
+  try { return validate() } catch (error) {
+    if (error instanceof BillingInputError) throw new DataAccessError(400, 'CREDIT_INPUT_INVALID', error.message)
+    throw error
+  }
+}
+
+function assertChargeReplay(existing: Prisma.CreditLedgerEntryGetPayload<Record<string, never>>, input: ConsumeCreditInput, fingerprint: string): void {
+  const conflict = () => { throw new DataAccessError(409, 'CREDIT_IDEMPOTENCY_CONFLICT', '收费请求身份不一致，需要核对原记录。') }
+  if (existing.userId !== input.userId || existing.kind !== input.kind || existing.sourceType !== input.sourceType
+    || existing.referenceId !== (input.referenceId ?? null) || existing.modelTier !== (input.modelTier ?? null)
+    || existing.multiplierBps !== (input.multiplierBps ?? 10000) || existing.requestTokens !== (input.requestTokens ?? null)
+    || existing.responseTokens !== (input.responseTokens ?? null) || existing.deltaMilli > 0) conflict()
+  const stored = readCreditFingerprint(existing.metadata)
+  if (stored !== null) {
+    if (stored !== fingerprint) conflict()
+    return
+  }
+  // Old rows are immutable. Reconstruct only the three known historical charge policies.
+  if (!equalLegacyMetadata(existing.metadata, input.metadata) || existing.kind !== 'usage') conflict()
+  if (existing.sourceType === 'model_tokens') {
+    if (input.allowPartialOnExhaustion !== true || existing.requestTokens === null || existing.responseTokens === null) conflict()
+    const expected = calculateTokenChargeMilli(existing.requestTokens!, existing.responseTokens!, existing.multiplierBps)
+    if (expected !== input.amountMilli || -existing.deltaMilli > expected) conflict()
+  } else if ((existing.sourceType === 'web_search' || existing.sourceType === 'image_generation') && !input.allowPartialOnExhaustion) {
+    if (-existing.deltaMilli !== input.amountMilli) conflict()
+  } else conflict()
+}
+
+/** Caller owns the Serializable transaction and retries the whole unit, never just this debit. */
+export async function consumeCreditsInTransaction(tx: Prisma.TransactionClient, input: ConsumeCreditInput): Promise<CreditChargeResult> {
+  const request = validateBillingInput(() => prepareCreditRequest(input))
+  // Async transactions and retries must use exactly the input that was fingerprinted.
+  input = request.snapshot
+  const amountMilli = input.amountMilli
+
+  const existing = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: input.idempotencyKey } })
+  if (existing) {
+    assertChargeReplay(existing, input, request.fingerprint)
+    const { account } = await ensureAccountWithDb(tx, input.userId)
     return {
-      chargedMilli: 0,
-      remainingMilli: Math.round(summary.totalRemaining * CREDIT_MILLI),
-      // 0 倍率免费档不消耗额度：额度为空也不报 exhausted，否则免费档在 quota 用尽后会被误拦
-      exhausted: false,
+      chargedMilli: Math.max(0, -existing.deltaMilli),
+      remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
+      exhausted: amountMilli > 0 && (Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli <= 0 || -existing.deltaMilli < amountMilli),
     }
   }
 
+  const { account, setting } = await ensureAccountWithDb(tx, input.userId)
+  if (account.suspendedAt) throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
+
+  const dailyRemaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli)
+  const totalRemaining = dailyRemaining + account.bonusBalanceMilli
+  if (totalRemaining < amountMilli && !input.allowPartialOnExhaustion) {
+    throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
+  }
+  const actualCharge = Math.min(totalRemaining, amountMilli)
+  const dailyCharge = Math.min(dailyRemaining, actualCharge)
+  const bonusCharge = actualCharge - dailyCharge
+  const updated = await tx.creditAccount.update({
+    where: { userId: input.userId },
+    data: {
+      dailyUsedMilli: { increment: dailyCharge },
+      bonusBalanceMilli: { decrement: bonusCharge },
+    },
+  })
+  await tx.creditLedgerEntry.create({
+    data: {
+      id: randomUUID(),
+      userId: input.userId,
+      deltaMilli: -actualCharge,
+      dailyDeltaMilli: -dailyCharge,
+      bonusDeltaMilli: -bonusCharge,
+      kind: input.kind,
+      sourceType: input.sourceType,
+      referenceId: input.referenceId ?? null,
+      idempotencyKey: input.idempotencyKey,
+      modelTier: input.modelTier ?? null,
+      multiplierBps: input.multiplierBps ?? 10000,
+      requestTokens: input.requestTokens ?? null,
+      responseTokens: input.responseTokens ?? null,
+      metadata: request.metadata,
+    },
+  })
+  return {
+    chargedMilli: actualCharge,
+    remainingMilli: Math.max(0, updated.dailyAllowanceMilli - updated.dailyUsedMilli) + updated.bonusBalanceMilli,
+    exhausted: amountMilli > 0 && (actualCharge < amountMilli || (
+      Math.max(0, updated.dailyAllowanceMilli - updated.dailyUsedMilli) + updated.bonusBalanceMilli <= 0
+    )),
+  }
+}
+
+export async function consumeCredits(input: ConsumeCreditInput): Promise<CreditChargeResult> {
+  const captured = validateBillingInput(() => prepareCreditRequest(input)).snapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        const existing = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: input.idempotencyKey } })
-        if (existing) {
-          const { account } = await ensureAccountWithDb(tx, input.userId)
-          return {
-            chargedMilli: Math.max(0, -existing.deltaMilli),
-            remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
-            exhausted: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli <= 0,
-          }
-        }
-
-        const { account, setting } = await ensureAccountWithDb(tx, input.userId)
-        if (account.suspendedAt) throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
-
-        const dailyRemaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli)
-        const totalRemaining = dailyRemaining + account.bonusBalanceMilli
-        if (totalRemaining < amountMilli && !input.allowPartialOnExhaustion) {
-          throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
-        }
-        const actualCharge = Math.min(totalRemaining, amountMilli)
-        const dailyCharge = Math.min(dailyRemaining, actualCharge)
-        const bonusCharge = actualCharge - dailyCharge
-        const updated = await tx.creditAccount.update({
-          where: { userId: input.userId },
-          data: {
-            dailyUsedMilli: { increment: dailyCharge },
-            bonusBalanceMilli: { decrement: bonusCharge },
-          },
-        })
-        await tx.creditLedgerEntry.create({
-          data: {
-            id: randomUUID(),
-            userId: input.userId,
-            deltaMilli: -actualCharge,
-            dailyDeltaMilli: -dailyCharge,
-            bonusDeltaMilli: -bonusCharge,
-            kind: input.kind,
-            sourceType: input.sourceType,
-            referenceId: input.referenceId ?? null,
-            idempotencyKey: input.idempotencyKey,
-            modelTier: input.modelTier ?? null,
-            multiplierBps: input.multiplierBps ?? 10000,
-            requestTokens: input.requestTokens ?? null,
-            responseTokens: input.responseTokens ?? null,
-            metadata: input.metadata ?? Prisma.JsonNull,
-          },
-        })
-        return {
-          chargedMilli: actualCharge,
-          remainingMilli: Math.max(0, updated.dailyAllowanceMilli - updated.dailyUsedMilli) + updated.bonusBalanceMilli,
-          exhausted: actualCharge < amountMilli || (
-            Math.max(0, updated.dailyAllowanceMilli - updated.dailyUsedMilli) + updated.bonusBalanceMilli <= 0
-          ),
-        }
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      return await prisma.$transaction(tx => consumeCreditsInTransaction(tx, captured), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2034' || error.code === 'P2002') && attempt < 2) continue
       throw error
@@ -586,53 +728,172 @@ export async function consumeCredits(input: ConsumeCreditInput): Promise<CreditC
   throw new DataAccessError(409, 'CREDIT_CONCURRENCY_CONFLICT', '额度更新冲突，请重试。')
 }
 
+/** Only a proven search-service failure creates this obligation; provider cost
+ * remains separate. This is deliberately not an arbitrary public refund API. */
+const searchRefundEvidenceSchema = z.object({ attempts: z.array(z.object({
+  provider: z.enum(['bocha', 'sogou', 'bing']), outcome: z.enum(['failed', 'aborted']), durationMs: z.number().int().nonnegative(),
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  providerRequestId: z.string().regex(/^[a-zA-Z0-9_.:-]{1,128}$/).optional(),
+  providerCode: z.string().regex(/^[a-zA-Z0-9_-]{1,32}$/).optional(),
+}).strict()).min(1).max(3) }).strict()
+
+export async function recordSearchRefundIntent(userId: string, originalIdempotencyKey: string, evidence: {
+  attempts: Array<{ provider: string; outcome: string; durationMs: number; httpStatus?: number; providerRequestId?: string; providerCode?: string }>
+}) {
+  const parsed = searchRefundEvidenceSchema.safeParse(evidence)
+  if (!parsed.success) {
+    throw new DataAccessError(409, 'CREDIT_REFUND_EVIDENCE_INVALID', '搜索退款缺少有效失败记录。')
+  }
+  const { attempts } = parsed.data
+  return prisma.$transaction(async tx => {
+    const original = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: originalIdempotencyKey } })
+    if (!original || original.userId !== userId || original.kind !== 'usage' || original.sourceType !== 'web_search' || original.deltaMilli >= 0) {
+      throw new DataAccessError(409, 'CREDIT_REFUND_IDENTITY_INVALID', '未找到匹配的原搜索收费，不能创建退款。')
+    }
+    return tx.creditRefundIntent.upsert({ where: { originalEntryId: original.id }, update: {}, create: {
+      originalEntryId: original.id, reason: 'search_service_unavailable', evidence: { attempts },
+    } })
+  })
+}
+
+export async function getSearchRefundState(userId: string, originalIdempotencyKey: string) {
+  const intent = await prisma.creditRefundIntent.findFirst({ where: { originalEntry: { userId, idempotencyKey: originalIdempotencyKey, sourceType: 'web_search' } } })
+  return intent ? intent.settledAt ? 'settled' as const : 'pending' as const : null
+}
+
+const imageRefundEvidenceSchema = z.object({
+  outcome: z.enum(['rejected', 'empty', 'unknown']),
+  deliveredImages: z.literal(0),
+}).strict()
+
+/** No delivered result: refund the user without claiming that an upstream
+ * timeout incurred zero provider cost. Generated assets use delivery recovery. */
+export async function recordImageRefundIntent(userId: string, originalIdempotencyKey: string,
+  evidence: z.infer<typeof imageRefundEvidenceSchema>) {
+  const parsed = imageRefundEvidenceSchema.safeParse(evidence)
+  if (!parsed.success) throw new DataAccessError(409, 'CREDIT_REFUND_EVIDENCE_INVALID', '图片退款缺少有效失败记录。')
+  return prisma.$transaction(async tx => {
+    const original = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: originalIdempotencyKey } })
+    if (!original || original.userId !== userId || original.kind !== 'usage' || original.sourceType !== 'image_generation' || original.deltaMilli >= 0) {
+      throw new DataAccessError(409, 'CREDIT_REFUND_IDENTITY_INVALID', '未找到匹配的原图片收费，不能创建退款。')
+    }
+    return tx.creditRefundIntent.upsert({ where: { originalEntryId: original.id }, update: {}, create: {
+      originalEntryId: original.id, reason: 'image_generation_unavailable', evidence: parsed.data,
+    } })
+  })
+}
+
+/** Bounded retry over durable obligations; wallet, refund row and completion
+ * marker commit together in refundCreditCharge. Replaying never pays twice. */
+export async function reconcileCreditRefunds(input: { limit?: number; userId?: string } = {}) {
+  const limit = input.limit ?? 50
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DataAccessError(400, 'CREDIT_REFUND_BATCH_INVALID', '退款批次大小无效。')
+  const pending = await prisma.creditRefundIntent.findMany({ where: { settledAt: null, nextAttemptAt: { lte: new Date() },
+    ...(input.userId ? { originalEntry: { userId: input.userId } } : {}) }, orderBy: [{ nextAttemptAt: 'asc' }, { originalEntryId: 'asc' }], take: limit, include: { originalEntry: true } })
+  let settled = 0
+  for (const intent of pending) {
+    try {
+      const validSearch = intent.reason === 'search_service_unavailable' && intent.originalEntry.sourceType === 'web_search'
+        && searchRefundEvidenceSchema.safeParse(intent.evidence).success
+      const validImage = intent.reason === 'image_generation_unavailable' && intent.originalEntry.sourceType === 'image_generation'
+        && imageRefundEvidenceSchema.safeParse(intent.evidence).success
+      if (!validSearch && !validImage) throw new Error('Unsupported refund intent')
+      await refundCreditCharge(intent.originalEntry.userId, intent.originalEntry.idempotencyKey, intent.reason)
+      settled++
+    } catch {
+      await prisma.creditRefundIntent.updateMany({ where: { originalEntryId: intent.originalEntryId, settledAt: null }, data: {
+        attempts: { increment: 1 }, nextAttemptAt: new Date(Date.now() + Math.min(3600_000, 30_000 * 2 ** Math.min(intent.attempts, 7))),
+      } })
+    }
+  }
+  return { examined: pending.length, settled }
+}
+
+/** Retry only saved observations, never redispatch a model to recover its fee. */
+export async function reconcileTokenSettlements(limit = 25) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DataAccessError(400, 'CREDIT_SETTLEMENT_BATCH_INVALID', '结算批次大小无效。')
+  const pending = await prisma.aiUsageLog.findMany({ where: { providerType: 'text',
+    billingStatus: { in: ['observed', 'pending_settlement'] },
+    OR: [{ billingRetryAt: null }, { billingRetryAt: { lte: new Date() } }] },
+    orderBy: [{ billingRetryAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }], take: limit })
+  for (const usage of pending) {
+    try {
+      const tier = usage.modelTier ?? 'speed'
+      if (!(SERVER_MODEL_TIERS as readonly string[]).includes(tier)) throw new Error('Unsupported model tier')
+      await consumeTokenCredits({ userId: usage.userId, usageLogId: usage.id,
+        requestTokens: usage.requestTokens ?? 0, responseTokens: usage.responseTokens ?? 0,
+        modelTier: tier as CreditModelTier, multiplierBps: usage.multiplierBps, referenceId: usage.targetId ?? usage.id })
+    } catch {
+      await prisma.aiUsageLog.updateMany({ where: { id: usage.id, billingStatus: { in: ['observed', 'pending_settlement'] } },
+        data: { billingStatus: 'pending_settlement', billingRetryAt: new Date(Date.now() + 60_000) } })
+    }
+  }
+}
+
 export async function refundCreditCharge(userId: string, originalIdempotencyKey: string, reason: string): Promise<void> {
   const refundKey = `refund:${originalIdempotencyKey}`
-  await prisma.$transaction(async (tx) => {
-    const existingRefund = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: refundKey } })
-    if (existingRefund) return
-    const original = await tx.creditLedgerEntry.findFirst({ where: { userId, idempotencyKey: originalIdempotencyKey } })
-    if (!original || original.deltaMilli >= 0) return
-    const { account } = await ensureAccountWithDb(tx, userId)
-    const dailyRefund = Math.max(0, -original.dailyDeltaMilli)
-    const originalBelongsToCurrentWindow = original.createdAt >= account.periodStartedAt
-      && original.createdAt < account.periodEndsAt
-    // 跨过每日重置点后，旧周期的 dailyUsed 已经归零，不能再直接 decrement 成负数。
-    // 这部分退款转入不随每日重置清空的 bonus，保证用户得到完整返还。
-    const currentWindowDailyRefund = originalBelongsToCurrentWindow
-      ? Math.min(account.dailyUsedMilli, dailyRefund)
-      : 0
-    const bonusRefund = Math.max(0, -original.bonusDeltaMilli) + (dailyRefund - currentWindowDailyRefund)
-    await tx.creditAccount.update({
-      where: { userId },
-      data: {
-        dailyUsedMilli: { decrement: currentWindowDailyRefund },
-        bonusBalanceMilli: { increment: bonusRefund },
-      },
-    })
-    await tx.creditLedgerEntry.create({
-      data: {
-        id: randomUUID(),
-        userId,
-        deltaMilli: -original.deltaMilli,
-        dailyDeltaMilli: currentWindowDailyRefund,
-        bonusDeltaMilli: bonusRefund,
-        kind: 'refund',
-        sourceType: original.sourceType,
-        referenceId: original.referenceId,
-        idempotencyKey: refundKey,
-        modelTier: original.modelTier,
-        multiplierBps: original.multiplierBps,
-        metadata: { reason, originalEntryId: original.id },
-      },
-    })
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const original = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: originalIdempotencyKey } })
+        const existingRefund = await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: refundKey } })
+        if (original && original.userId !== userId) {
+          throw new DataAccessError(409, 'CREDIT_IDEMPOTENCY_CONFLICT', '退款请求身份不一致，需要核对原记录。')
+        }
+        if (existingRefund) {
+          const metadata = existingRefund.metadata
+          if (existingRefund.userId !== userId || existingRefund.kind !== 'refund' || !original
+            || !metadata || typeof metadata !== 'object' || Array.isArray(metadata) || metadata.originalEntryId !== original.id
+            || existingRefund.deltaMilli !== -original.deltaMilli) {
+            throw new DataAccessError(409, 'CREDIT_IDEMPOTENCY_CONFLICT', '退款请求身份不一致，需要核对原记录。')
+          }
+          await tx.creditRefundIntent.updateMany({ where: { originalEntryId: original.id, settledAt: null }, data: { settledAt: new Date() } })
+          return
+        }
+        if (!original || original.deltaMilli >= 0) return
+        const { account } = await ensureAccountWithDb(tx, userId)
+        const dailyRefund = Math.max(0, -original.dailyDeltaMilli)
+        const originalBelongsToCurrentWindow = original.createdAt >= account.periodStartedAt
+          && original.createdAt < account.periodEndsAt
+        // Old-window refunds go to bonus; never decrement an already-reset daily counter.
+        const currentWindowDailyRefund = originalBelongsToCurrentWindow
+          ? Math.min(account.dailyUsedMilli, dailyRefund)
+          : 0
+        const bonusRefund = Math.max(0, -original.bonusDeltaMilli) + (dailyRefund - currentWindowDailyRefund)
+        validateBillingInput(() => assertCreditInteger(account.bonusBalanceMilli + bonusRefund))
+        await tx.creditAccount.update({
+          where: { userId },
+          data: {
+            dailyUsedMilli: { decrement: currentWindowDailyRefund },
+            bonusBalanceMilli: { increment: bonusRefund },
+          },
+        })
+        await tx.creditLedgerEntry.create({
+          data: {
+            id: randomUUID(), userId,
+            deltaMilli: -original.deltaMilli,
+            dailyDeltaMilli: currentWindowDailyRefund,
+            bonusDeltaMilli: bonusRefund,
+            kind: 'refund', sourceType: original.sourceType,
+            referenceId: original.referenceId, idempotencyKey: refundKey,
+            modelTier: original.modelTier, multiplierBps: original.multiplierBps,
+            requestTokens: original.requestTokens, responseTokens: original.responseTokens,
+            metadata: { ...(readLedgerPriceMetadata(original.metadata) ?? {}), reason, originalEntryId: original.id },
+          },
+        })
+        await tx.creditRefundIntent.updateMany({ where: { originalEntryId: original.id, settledAt: null }, data: { settledAt: new Date() } })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      return
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2034' || error.code === 'P2002') && attempt < 2) continue
+      throw error
+    }
+  }
 }
 
 /** 1 Credit 同时包含 10,000 输入 Token 与 1,000 输出 Token；按两池占用率较高者扣减。 */
 export function calculateTokenChargeMilli(requestTokens: number, responseTokens: number, multiplierBps = 10000): number {
-  const weightedTenths = Math.max(Math.max(0, requestTokens), Math.max(0, responseTokens) * 10)
-  return Math.ceil((weightedTenths * Math.max(0, multiplierBps)) / 100000)
+  return validateBillingInput(() => calculateV1ChargeMilli(requestTokens, responseTokens, multiplierBps))
 }
 
 export async function consumeTokenCredits(input: {
@@ -643,11 +904,12 @@ export async function consumeTokenCredits(input: {
   modelTier?: CreditModelTier
   multiplierBps?: number
   referenceId?: string | null
-}): Promise<CreditChargeResult> {
+}, transaction?: Prisma.TransactionClient): Promise<CreditChargeResult> {
+  input = { ...input }
   const multiplierBps = input.multiplierBps ?? 10000
-  return consumeCredits({
+  const request: ConsumeCreditInput = {
     userId: input.userId,
-    amountMilli: calculateTokenChargeMilli(input.requestTokens, input.responseTokens, multiplierBps),
+    amountMilli: 0, // Resolved from the operation's saved price inside the settlement transaction.
     kind: 'usage',
     sourceType: 'model_tokens',
     idempotencyKey: `usage:${input.usageLogId}`,
@@ -657,7 +919,53 @@ export async function consumeTokenCredits(input: {
     requestTokens: input.requestTokens,
     responseTokens: input.responseTokens,
     allowPartialOnExhaustion: true,
-  })
+  }
+  const settle = async (tx: Prisma.TransactionClient) => {
+    const usage = await tx.aiUsageLog.findFirst({ where: { id: input.usageLogId, userId: input.userId, providerType: 'text' } })
+    if (!usage || (usage.requestTokens ?? 0) !== input.requestTokens || (usage.responseTokens ?? 0) !== input.responseTokens
+      || (usage.modelTier ?? 'speed') !== (input.modelTier ?? 'speed') || usage.multiplierBps !== multiplierBps) {
+      throw new DataAccessError(409, 'CREDIT_USAGE_MISMATCH', '用量记录与结算请求不一致，未扣款。')
+    }
+    const price = usage.billingSnapshot == null ? null : tokenPriceSchema.safeParse(usage.billingSnapshot)
+    if (price && (!price.success || price.data.modelTier !== (input.modelTier ?? 'speed'))) {
+      throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用的费率快照无效，未采用当前价格替代。')
+    }
+    const frozen = price?.success ? price.data : null
+    let amountMilli: number
+    let metadata: Prisma.InputJsonValue | undefined
+    if (frozen?.version === 'credits-v2-itemized') {
+      // Estimated/missing usage is not an invoice, nor is unknown cache a miss.
+      // Keep the generated result and original observation for reconciliation.
+      if (usage.usageSource !== 'reported' || usage.requestTokens === null || usage.responseTokens === null
+        || (usage.requestTokens > 0 && usage.promptCacheHitTokens === null && frozen.rates.inputNano !== frozen.rates.cacheNano)) {
+        const { account } = await ensureAccountWithDb(tx, input.userId)
+        await tx.aiUsageLog.update({ where: { id: usage.id }, data: { billingStatus: 'pending_usage', billingRetryAt: null } })
+        return { chargedMilli: 0, remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
+          exhausted: false, pendingUsage: true }
+      }
+      amountMilli = validateBillingInput(() => calculateV2ChargeMilli(usage.requestTokens!, usage.responseTokens!, usage.promptCacheHitTokens, frozen.rates))
+      metadata = { pricingVersion: frozen.version, rateCardId: frozen.rateCardId, rates: frozen.rates,
+        cacheHitTokens: usage.promptCacheHitTokens, cacheMissTokens: usage.promptCacheMissTokens }
+    } else {
+      if (frozen && frozen.multiplierBps !== multiplierBps) throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用倍率与用量记录不一致。')
+      amountMilli = calculateTokenChargeMilli(input.requestTokens, input.responseTokens, multiplierBps)
+    }
+    const charged = await consumeCreditsInTransaction(tx, { ...request, amountMilli,
+      multiplierBps: frozen?.multiplierBps ?? multiplierBps, metadata })
+    // CR03: ledger, wallet and displayed charge commit together. The previously
+    // saved usage observation survives rollback and keeps its stable retry key.
+    await tx.aiUsageLog.update({ where: { id: usage.id }, data: { creditChargeMilli: charged.chargedMilli, billingStatus: 'settled', billingRetryAt: null } })
+    return charged
+  }
+  if (transaction) return settle(transaction)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try { return await prisma.$transaction(settle, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }) }
+    catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2034' || error.code === 'P2002') && attempt < 2) continue
+      throw error
+    }
+  }
+  throw new DataAccessError(409, 'CREDIT_CONCURRENCY_CONFLICT', '额度更新冲突，请重试。')
 }
 
 export async function initializeNewUserCredits(

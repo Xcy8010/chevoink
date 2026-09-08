@@ -29,7 +29,7 @@ import type {
   AgentMessagePart,
   AgentToolDisplayPayload,
 } from '../../../../../shared/contracts/index.js'
-import { stripAgentProtocolArtifacts } from '../../../../../shared/agent-output.js'
+import { AgentMarkdownText } from './AgentMarkdownText'
 import { useAgentStore } from '../agentStore'
 import { describeToolArguments, getToolTargetTitle } from '../tool-argument-view'
 
@@ -1173,34 +1173,6 @@ const ReasoningPart = memo(function ReasoningPart({
   )
 })
 
-/** 兼容历史消息里残留的 Markdown 记号与模型误输出的工具轨迹标记，保持纯文本阅读体验 */
-function sanitizePlainText(text: string): string {
-  return stripAgentProtocolArtifacts(text)
-    .replace(/^\s*\[调用\s*(?:工具|tool)[^\n]*$/gim, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/^#{1,4}\s+/gm, '')
-    .replace(/^\s*[-*]\s+/gm, '· ')
-    .replace(/\n{3,}/g, '\n\n')
-}
-
-/** 文本段：清洗结果按 part.text 缓存，避免流式期间历史段落反复正则清洗 */
-const TextPart = memo(function TextPart({
-  text,
-}: {
-  text: string
-}) {
-  const cleanText = useMemo(() => sanitizePlainText(text), [text])
-  // Empty protocol-only text never renders a paragraph or a standalone activity cursor.
-  if (!cleanText.trim()) {
-    return null
-  }
-  return (
-    <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text-primary)]">
-      {cleanText}
-    </p>
-  )
-})
-
 export const AgentMessageParts = memo(function AgentMessageParts({
   parts,
   streaming,
@@ -1267,7 +1239,7 @@ export const AgentMessageParts = memo(function AgentMessageParts({
           // 折叠态且可收起：过程进展正文折进「已处理 n 个操作」，只留结尾总结的正文可见
           if (collapsed && textCollapsible) return null
           // Activity belongs to run status, never an indefinitely blinking prose suffix.
-          return <TextPart key={index} text={part.text} />
+          return <AgentMarkdownText key={index} text={part.text} streaming={streaming && isLast} identity={`${blockId ?? ''}:${index}`} />
         }
 
         // 折叠态：隐藏思考/动作，仅保留 text 结论

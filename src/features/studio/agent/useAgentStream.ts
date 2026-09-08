@@ -15,6 +15,7 @@ import { isRunActive, useAgentStore } from './agentStore'
 const EVENT_TYPES = [
   'run.started',
   'message.start',
+  'execution.progress',
   'text.delta',
   'text.final',
   'reasoning.delta',

@@ -1,7 +1,8 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLayoutEffect } from 'react'
-import { promoteComposerDraft } from './agent/composer-drafts'
+import { hasComposerDraft, promoteComposerDraft } from './agent/composer-drafts'
+import { shouldRetainAgentTaskWindow } from './lib/agent-session'
 import { useShellStore } from '@/store/useShellStore'
 import { BookOpen, BookOpenText, Brain, Bug, ChevronLeft, FileText, Flag, FolderDown, ImagePlus, Lightbulb, LogOut, MessageSquareText, MoreHorizontal, Network, PanelRightOpen, PenLine, RefreshCcw, Settings2, SlidersHorizontal, Trash2, Upload, Wrench } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -270,8 +271,9 @@ export default function StudioWorkspace() {
   // 当前任务窗口状态归属的作品：切换作品后状态水合落地前，快照写入效应
   // 不得用旧作品窗口写入/删除（会污染目标作品快照），仅状态归属当前作品时才允许写
   const [agentStateNovelId, setAgentStateNovelId] = useState(activeNovelId)
+  const taskScopeOwner = taskUiUserId ?? queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'
   const taskUiScope = activeAgentTaskWindowId && agentStateNovelId === activeNovelId
-    ? `${taskUiUserId ?? queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined
+    ? `${taskScopeOwner}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined
   const panelOwner = useRef<string>()
   const taskLocationRef = useRef({ novelId: activeNovelId, taskId: activeAgentTaskWindowId })
   taskLocationRef.current = { novelId: activeNovelId, taskId: activeAgentTaskWindowId }
@@ -583,13 +585,10 @@ export default function StudioWorkspace() {
 
   function pruneTemporaryTaskWindows(nextActiveTaskId: string) {
     setAgentTaskWindows((current) =>
-      current.filter((taskWindow) => {
-        if (!taskWindow.temporary || taskWindow.id === nextActiveTaskId) {
-          return true
-        }
-
-        return Boolean(taskWindow.prompt.trim()) || taskWindow.artifacts.length > 0
-      }),
+      current.filter((taskWindow) => shouldRetainAgentTaskWindow(
+        taskWindow, nextActiveTaskId,
+        hasComposerDraft(`${taskScopeOwner}:${activeNovelId}:${taskWindow.id}`),
+      )),
     )
   }
 
@@ -906,11 +905,10 @@ export default function StudioWorkspace() {
 
     const storageKey = getAgentWorkspaceStorageKey(activeNovelId)
     const meaningfulTasks = agentTaskWindows.filter(
-      (taskWindow) =>
-        Boolean(taskWindow.sessionId) ||
-        Boolean(taskWindow.prompt.trim()) ||
-        taskWindow.artifacts.length > 0 ||
-        Boolean(taskWindow.activeArtifactId),
+      (taskWindow) => shouldRetainAgentTaskWindow(
+        taskWindow, activeAgentTaskWindowId,
+        hasComposerDraft(`${taskScopeOwner}:${activeNovelId}:${taskWindow.id}`),
+      ),
     )
 
     const hasAgentState = meaningfulTasks.length > 0
@@ -939,7 +937,7 @@ export default function StudioWorkspace() {
       catalogDocument,
     }
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot))
-  }, [activeAgentTaskWindowId, activeNovelId, agentStateNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId])
+  }, [activeAgentTaskWindowId, activeNovelId, agentStateNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId, taskScopeOwner])
 
   async function handleWorkspaceDialogConfirm() {
     if (!workspaceDialog) {

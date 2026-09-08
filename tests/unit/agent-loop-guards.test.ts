@@ -109,6 +109,19 @@ describe('plan/18 P4：检查点评估', () => {
     expect(evaluateCheckpoint({ ...baseInput, todoLeft: 0 }).ok).toBe(false)
   })
 
+  it('29 R08: pending execution can continue without todos, but a completed task cannot', () => {
+    expect(evaluateCheckpoint({ ...baseInput, todoLeft: 0, taskPending: true }).ok).toBe(true)
+    expect(evaluateCheckpoint({ ...baseInput, taskPending: false }).ok).toBe(false)
+  })
+
+  it('29 R08: new read evidence counts, repeated observations do not', () => {
+    const readOnly = { ...baseInput, taskPending: true, todoLeft: 0, writeProgress: 0, writeBaseline: 0, readProgress: 2, readBaseline: 1 }
+    expect(evaluateCheckpoint(readOnly).ok).toBe(true)
+    expect(evaluateCheckpoint({ ...readOnly, readBaseline: 2 }).ok).toBe(false)
+    expect(evaluateCheckpoint({ ...readOnly, usedTokens: 500, tokenCeiling: 500 }).ok).toBe(false)
+    expect(evaluateCheckpoint({ ...readOnly, resumeCount: CHECKPOINT_MAX_RESUMES }).ok).toBe(false)
+  })
+
   it('条件 b（compaction 防 loop）：区间无新写类进展不续跑', () => {
     expect(evaluateCheckpoint({ ...baseInput, writeProgress: 2, writeBaseline: 2 }).ok).toBe(false)
   })

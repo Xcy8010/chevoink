@@ -243,8 +243,9 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
     if (userId) {
       await revokeUserSessions(userId)
     }
-  } catch {
-    // 吊销失败不阻断登出：cookie 仍会被清除
+  } catch (error) {
+    sendRouteError(res, requestId, error)
+    return
   }
   clearSession(res)
   res.status(200).json(buildSuccess(requestId, { ok: true }))

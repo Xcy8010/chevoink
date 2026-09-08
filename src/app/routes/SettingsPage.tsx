@@ -198,16 +198,15 @@ export default function SettingsPage() {
 
     try {
       await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
-    } catch (error) {
-      if (!(error instanceof ApiClientError)) {
-        return
-      }
+    } catch {
+      toast.error('暂时无法确认退出登录，请稍后重试。')
+      return
     } finally {
       setLogoutSubmitting(false)
-      setLogoutConfirmOpen(false)
-      setGuest()
-      navigate('/login', { replace: true })
     }
+    setLogoutConfirmOpen(false)
+    setGuest()
+    navigate('/login', { replace: true })
   }
 
   async function handleUpdateProfile(event: FormEvent<HTMLFormElement>) {

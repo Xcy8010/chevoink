@@ -63,6 +63,7 @@ export type AgentWorkspaceToolName =
   | 'workspace.open_meta'
   | 'workspace.open_cover'
 export type AgentArtifactType =
+  | 'researchReport'
   | 'chapterPlan'
   | 'chapterDraft'
   | 'chapterContinuation'

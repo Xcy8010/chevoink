@@ -250,6 +250,7 @@ export type AgentStreamEventBody =
       skippedReason?: string
     }
   | { type: 'message.start'; messageId: string; role: 'assistant' }
+  | { type: 'execution.progress'; revision: number; stage: 'model' | 'tool' | 'checkpoint' | 'finalizing' }
   | { type: 'text.delta'; messageId: string; delta: string }
   | { type: 'text.final'; messageId: string; text: string; asReasoning: boolean }
   | { type: 'reasoning.delta'; messageId: string; delta: string }
@@ -313,6 +314,7 @@ export type AgentStreamEventBody =
     }
   | {
       type: 'permission.ask'
+      approvalId?: string
       callId: string
       toolName: string
       title: string
@@ -321,9 +323,9 @@ export type AgentStreamEventBody =
       allowAlways: boolean
       expiresAt: string
     }
-  | { type: 'permission.resolved'; callId: string; approved: boolean }
+  | { type: 'permission.resolved'; callId: string; approved: boolean; approvalId?: string }
   | { type: 'step.finish'; turn: number; usage: AgentTokenUsage }
-  | { type: 'run.paused'; reason: 'user_stop' | 'approval_timeout' }
+  | { type: 'run.paused'; reason: 'user_stop' | 'approval_timeout' | 'model_stalled' | 'needs_input' }
   | {
       type: 'run.finished'
       status: 'succeeded' | 'failed' | 'cancelled'
@@ -421,6 +423,8 @@ export interface StartAgentLoopRunResponse {
 }
 
 export interface ResolveAgentApprovalRequest {
+  /** Durable requests bind an immutable approval card, not just a reused call ID. */
+  approvalId?: string
   callId: string
   approved: boolean
   alwaysAllow?: boolean
@@ -428,6 +432,7 @@ export interface ResolveAgentApprovalRequest {
 
 /** POST /api/agent/runs/:runId/questions：回答 ask_user 工具的挂起提问 */
 export interface ResolveAgentQuestionRequest {
+  requestId?: string
   callId: string
   answer: string
 }

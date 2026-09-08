@@ -9,6 +9,15 @@ let active: string | undefined
 const empty = (): Draft => ({ composerDraft: '', composerAttachments: [], composerReferences: [], composerSkillIds: [], composerUploading: 0 })
 const pick = (state: State): Draft => ({ composerDraft: state.composerDraft, composerAttachments: state.composerAttachments, composerReferences: state.composerReferences, composerSkillIds: state.composerSkillIds, composerUploading: state.composerUploading })
 const resolve = (scope: string): string => aliases.get(scope) ?? scope
+
+/** Read the owning window, never the visible window's draft when scopes differ. */
+export function hasComposerDraft(scope: string): boolean {
+  const key = resolve(scope)
+  const draft = active === key ? pick(useAgentStore.getState()) : read(key)
+  return Boolean(draft.composerDraft.trim()) || draft.composerAttachments.length > 0
+    || draft.composerReferences.length > 0 || draft.composerSkillIds.length > 0 || draft.composerUploading > 0
+}
+
 function read(scope: string): Draft {
   if (cache.has(scope)) return cache.get(scope)!
   try {

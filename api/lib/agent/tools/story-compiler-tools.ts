@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import type { Prisma } from '@prisma/client'
 
 import {
   continuityFindingInputSchema,
@@ -13,7 +12,7 @@ import { DataAccessError, prisma } from '../../prisma.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
 import { getLatestQualityReport } from '../humanity-quality.js'
 import { recordChapterBaseline } from '../baseline.js'
-import { enqueueChapterMemoryExtraction } from '../story-memory.js'
+import { enqueueChapterMemoryExtraction, processMemoryExtractionJob } from '../story-memory.js'
 import {
   commitChapterBridge,
   getStoryCharterBundle,
@@ -27,6 +26,7 @@ import {
 import { defineTool, type ToolContext } from './types.js'
 import { recalcNovelStats } from './novel-tools.js'
 import { coerceToolArgumentEnvelope, firstDefined } from './argument-coercion.js'
+import { storyCharterHash } from './durable-metadata.js'
 
 const ALL_READ = { plan: 'allow', build: 'allow', review: 'allow' } as const
 const PLAN_BUILD_WRITE = { plan: 'allow', build: 'allow', review: 'deny' } as const
@@ -36,7 +36,7 @@ const asStrings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 
 const independentContinuityResultSchema = z.object({
-  findings: z.array(continuityFindingInputSchema).max(30).default([]),
+  findings: z.array(continuityFindingInputSchema).max(30),
 })
 
 export function parseIndependentContinuityResult(content: string): { findings: z.infer<typeof continuityFindingInputSchema>[]; structured: boolean } {
@@ -46,7 +46,7 @@ export function parseIndependentContinuityResult(content: string): { findings: z
   try {
     const raw = JSON.parse(content.slice(start, end + 1))
     const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
-    const candidate = { findings: firstDefined(record, ['findings', 'issues', 'problems']) ?? [] }
+    const candidate = { findings: firstDefined(record, ['findings', 'issues', 'problems']) }
     const parsed = independentContinuityResultSchema.safeParse(candidate)
     return parsed.success ? { findings: parsed.data.findings, structured: true } : { findings: [], structured: false }
   } catch {
@@ -62,6 +62,7 @@ async function applyRigorousContinuityRepairs(
   ctx: ToolContext,
   chapter: { id: string; title: string; revision: number; content: string; orderIndex: number },
   findings: Array<{ signal: string; severity: string; evidence: string; suggestion: string }>,
+  compilationId: string,
 ) {
   let parsed: z.infer<typeof continuityRepairEnvelopeSchema> | null = null
   for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
@@ -91,15 +92,23 @@ async function applyRigorousContinuityRepairs(
     applied += 1
   }
   if (applied === 0 || after === chapter.content) return null
-  const updated = await prisma.chapter.update({
-    where: { id: chapter.id }, data: { content: after, wordCount: after.length, revision: { increment: 1 } },
-    select: { id: true, title: true, revision: true, orderIndex: true },
+  ctx.signal.throwIfAborted()
+  const { updated, memoryJobId } = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM story_compilations WHERE id = ${compilationId} AND user_id = ${ctx.userId} AND novel_id = ${ctx.novelId} FOR UPDATE`
+    const changed = await tx.chapter.updateMany({ where: { id: chapter.id, novelId: ctx.novelId, authorId: ctx.userId, revision: chapter.revision, content: chapter.content },
+      data: { content: after, wordCount: after.length, revision: { increment: 1 } } })
+    if (changed.count !== 1) throw new DataAccessError(409, 'CONTINUITY_INPUT_STALE', '修订期间正文已变化，未覆盖新内容。请读取当前正文后重新检查。')
+    const compilation = await tx.storyCompilation.updateMany({ where: { id: compilationId, userId: ctx.userId, novelId: ctx.novelId, status: 'active' }, data: { stage: 'repair' } })
+    if (compilation.count !== 1) throw new DataAccessError(409, 'COMPILATION_STAGE_CONFLICT', '章节编译状态已变化，本次修订已回滚。')
+    const updated = await tx.chapter.findUniqueOrThrow({ where: { id: chapter.id }, select: { id: true, title: true, revision: true, orderIndex: true } })
+    await recalcNovelStats(ctx.novelId, tx)
+    const memoryJobId = isAgent2FeatureEnabled('memory2', ctx.userId)
+      ? await enqueueChapterMemoryExtraction({ novelId: ctx.novelId, chapterId: updated.id, chapterRevision: updated.revision, before: chapter.content, after }, tx) : null
+    ctx.signal.throwIfAborted()
+    return { updated, memoryJobId }
   })
-  await recalcNovelStats(ctx.novelId)
   recordChapterBaseline(ctx.runId, updated.id, updated.revision)
-  if (isAgent2FeatureEnabled('memory2', ctx.userId)) {
-    await enqueueChapterMemoryExtraction({ novelId: ctx.novelId, chapterId: updated.id, chapterRevision: updated.revision, before: chapter.content, after })
-  }
+  if (memoryJobId) queueMicrotask(() => void processMemoryExtractionJob(memoryJobId).catch(() => {}))
   return { updated, before: chapter.content, after, applied }
 }
 
@@ -112,7 +121,9 @@ export const storyCharterGetTool = defineTool({
   permission: ALL_READ,
   readOnly: true,
   async execute(ctx) {
-    const bundle = await getStoryCharterBundle(ctx.userId, ctx.novelId)
+    const bundle = await getStoryCharterBundle(ctx.userId, ctx.novelId, ctx.transaction, Boolean(ctx.transaction))
+    if (ctx.transaction) return { output: JSON.stringify(bundle), summary: bundle.charter ? `读取创作宪章 r${bundle.charter.revision}` : '当前尚未建立创作宪章',
+      observedState: { kind: 'charter' as const, id: ctx.novelId, hash: storyCharterHash(bundle) } }
     if (!bundle.charter) {
       return { output: '当前作品尚未建立 Story Charter。新书长纲或前三章试制前，应先调用 story_charter_save；旧作可在不阻塞局部编辑的情况下渐进补建。' }
     }
@@ -194,7 +205,7 @@ export const storyCharterSaveTool = defineTool({
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const charter = await upsertStoryCharter(ctx.userId, ctx.novelId, args)
+    const charter = await upsertStoryCharter(ctx.userId, ctx.novelId, args, ctx.transaction)
     return {
       output: `已保存 Story Charter r${charter.revision}。后续大纲、Scene Task 与章节桥应以此版本为作品级约束；不要在回复正文重复整份宪章。`,
       summary: `保存创作宪章 r${charter.revision}`,
@@ -216,7 +227,7 @@ export const readerPromiseSaveTool = defineTool({
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const promise = await saveReaderPromise(ctx.userId, ctx.novelId, args)
+    const promise = await saveReaderPromise(ctx.userId, ctx.novelId, args, ctx.transaction)
     return {
       output: `已记录读者承诺「${promise.title}」，预计兑现窗口：${promise.payoffHorizon}。`,
       summary: `记录读者承诺「${promise.title}」`,
@@ -238,7 +249,7 @@ export const readerPromiseUpdateTool = defineTool({
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const promise = await updateReaderPromise({ userId: ctx.userId, novelId: ctx.novelId, ...args })
+    const promise = await updateReaderPromise({ userId: ctx.userId, novelId: ctx.novelId, ...args }, ctx.transaction)
     const label = { open: '重新开启', paid: '已兑现', deferred: '已延期', abandoned: '已放弃' }[promise.status]
     return {
       output: `读者承诺「${promise.title}」已标记为${label}${promise.paidAtChapter ? `（第 ${promise.paidAtChapter} 章兑现）` : ''}。`,
@@ -267,7 +278,7 @@ export const storyCompilerPrepareTool = defineTool({
       targetOrderIndex: args.targetOrderIndex,
       mode: ctx.qualityMode,
       intentSummary: args.intentSummary,
-    })
+    }, ctx.transaction)
     const bridge = prepared.bridge
     const items = [
       bridge.lastUnfinishedAction ? `未完成动作：${bridge.lastUnfinishedAction}` : '前章无明确未完成动作',
@@ -341,13 +352,13 @@ export const sceneTaskBuildTool = defineTool({
         const state = value && typeof value === 'object' && !Array.isArray(value)
           ? value as Record<string, unknown>
           : {}
-        return {
+        return Object.fromEntries(Object.entries({
           action: typeof state.action === 'string' ? state.action.slice(0, 500) : undefined,
           location: typeof state.location === 'string' ? state.location.slice(0, 160) : undefined,
           storyTime: typeof (state.storyTime ?? state.story_time) === 'string' ? String(state.storyTime ?? state.story_time).slice(0, 160) : undefined,
           knowledge: asList(state.knowledge), emotion: asList(state.emotion), body: asList(state.body),
           objects: asList(state.objects), relationships: asList(state.relationships), openLoops: asList(state.openLoops ?? state.open_loops),
-        }
+        }).filter(([, item]) => item !== undefined))
       }
       const normalized = next.tasks.map((value, index) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -371,8 +382,11 @@ export const sceneTaskBuildTool = defineTool({
           exitState: asState(item.exitState ?? item.exit_state),
           styleBudget: normalizeBudget(item.styleBudget ?? item.style_budget),
         }
-      }).filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)))
-      next.tasks = normalized.slice(0, 4)
+      })
+      // Repair representation, not the requested scene chain. Let the schema
+      // reject invalid entries/overflow instead of silently dropping scenes
+      // and reporting a successful but incomplete build.
+      next.tasks = normalized
     }
     if (next.compilationId === null || next.compilationId === '') delete next.compilationId
     if (!Array.isArray(next.alternatives)) delete next.alternatives
@@ -392,26 +406,27 @@ export const sceneTaskBuildTool = defineTool({
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const candidates = await prisma.storyCompilation.findMany({
+    const db = ctx.transaction ?? prisma
+    const candidates = await db.storyCompilation.findMany({
       where: {
         userId: ctx.userId,
         novelId: ctx.novelId,
         status: 'active',
-        OR: [
+        ...(ctx.durableCompiler ? { id: ctx.durableCompiler.baseline?.id ?? '__missing__', run: { taskRootId: ctx.durableCompiler.lease.taskRootId } } : { OR: [
           ...(args.compilationId ? [{ id: args.compilationId }] : []),
           { runId: ctx.runId },
           ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : []),
-        ],
+        ] }),
       },
       include: { sceneTasks: { orderBy: { ordinal: 'asc' } } },
       orderBy: { updatedAt: 'desc' },
       take: 6,
     })
-    const compilation = candidates.find((item) => item.runId === ctx.runId)
+    const compilation = ctx.durableCompiler ? candidates[0] : candidates.find((item) => item.runId === ctx.runId)
       ?? (ctx.chapterId ? candidates.find((item) => item.chapterId === ctx.chapterId) : undefined)
       ?? (args.compilationId ? candidates.find((item) => item.id === args.compilationId) : undefined)
       ?? candidates[0]
-    if (!compilation) return { output: '没有找到当前任务的活跃章节编译状态；请只重新执行一次 story_compiler_prepare。', summary: '未找到场景编译状态' }
+    if (!compilation) return { outcome: 'failed' as const, output: '没有找到当前任务的活跃章节编译状态；请只重新执行一次 story_compiler_prepare。', summary: '未找到场景编译状态' }
     if (!['prepare', 'beat'].includes(compilation.stage) && compilation.sceneTasks.length > 0) {
       return {
         output: `compilationId=${compilation.id} 已建立 ${compilation.sceneTasks.length} 个 Scene Task 并进入 ${compilation.stage} 阶段，无需重复构建。`,
@@ -419,7 +434,7 @@ export const sceneTaskBuildTool = defineTool({
         display: { kind: 'storyCompiler', compilationId: compilation.id, phase: compilation.stage, title: '场景任务已建立', detail: `${compilation.sceneTasks.length} 个场景`, items: compilation.sceneTasks.map((task) => `${task.ordinal}. ${task.purpose}｜转折：${task.turn}`) },
       }
     }
-    const tasks = await saveSceneTasks({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, tasks: args.tasks, alternatives: args.alternatives })
+    const tasks = await saveSceneTasks({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, tasks: args.tasks, alternatives: args.alternatives }, ctx.transaction)
     return {
       output: `BEAT 完成，已为 compilationId=${compilation.id} 建立 ${tasks.length} 个 Scene Task；精品候选取舍已由服务端记录。现在按顺序写正文；每个场景必须让状态发生变化，写完后调用 continuity_validate。`,
       summary: `建立 ${tasks.length} 个场景任务`,
@@ -440,12 +455,13 @@ export const chapterBridgeGetTool = defineTool({
   permission: ALL_READ,
   readOnly: true,
   async execute(ctx, args) {
-    const compilation = await prisma.storyCompilation.findFirst({
-      where: { userId: ctx.userId, novelId: ctx.novelId, ...(args.compilationId ? { id: args.compilationId } : {}) },
+    const compilation = await (ctx.transaction ?? prisma).storyCompilation.findFirst({
+      where: { userId: ctx.userId, novelId: ctx.novelId, ...(args.compilationId ? { id: args.compilationId } : {}),
+        ...(ctx.durableCompiler ? { run: { taskRootId: ctx.durableCompiler.lease.taskRootId } } : {}) },
       orderBy: { updatedAt: 'desc' },
       include: { bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } }, chapter: { select: { title: true, revision: true } } },
     })
-    if (!compilation?.bridge) return { output: '当前作品没有可读取的 Chapter Bridge。完整章节写作请先调用 story_compiler_prepare。' }
+    if (!compilation?.bridge) return { outcome: 'failed' as const, output: '当前任务没有可读取的 Chapter Bridge。完整章节写作请先调用 story_compiler_prepare。' }
     const bridge = compilation.bridge
     const items = [
       bridge.lastUnfinishedAction ? `未完成动作：${bridge.lastUnfinishedAction}` : '未完成动作：无',
@@ -500,15 +516,16 @@ export const continuityValidateTool = defineTool({
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
     const bridge = compilation.bridge
-    const cachedValidation = compilation.validation as { checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string; suggestion: string }>; errorCount?: number; warningCount?: number } | null
-    if (!args.focus && cachedValidation?.checkedRevision === chapter.revision) {
+    const sourceChapter = bridge.fromChapterId ? await prisma.chapter.findFirst({ where: { id: bridge.fromChapterId, novelId: ctx.novelId }, select: { revision: true } }) : null
+    const sourceUnchanged = !bridge.fromChapterId || sourceChapter?.revision === bridge.sourceRevision
+    const cachedValidation = compilation.validation as { independentCheck?: string; checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string; suggestion: string }>; errorCount?: number; warningCount?: number } | null
+    if (!args.focus && sourceUnchanged && cachedValidation?.independentCheck === 'complete' && cachedValidation.checkedRevision === chapter.revision) {
       const findings = cachedValidation.findings ?? []
       const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
       const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
       if (ctx.creativeFreedom === 'balanced' && findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
-        const repaired = await applyRigorousContinuityRepairs(ctx, chapter, findings)
+        const repaired = await applyRigorousContinuityRepairs(ctx, chapter, findings, compilation.id)
         if (repaired) {
-          await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { stage: 'repair' } })
           return {
             output: `严谨创作模式复用连续性报告并落实修订：已原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
             summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
@@ -518,7 +535,7 @@ export const continuityValidateTool = defineTool({
         }
       }
       return {
-        output: `当前 r${chapter.revision} 已通过连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；无需再次消耗 Critic。`,
+        output: `当前 r${chapter.revision} 已完成连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；${errorCount ? '仍有错误，不能提交，修订后重新检查。' : '无需再次消耗 Critic。'}`,
         summary: `复用连续性检查 · ${errorCount} 错误 ${warningCount} 警告`,
         display: { kind: 'storyCompiler', compilationId: compilation.id, phase: errorCount > 0 ? 'repair' : 'check', title: '连续性检查', detail: `${errorCount} 错误 · ${warningCount} 警告 · 已复用`, items: findings.map((item) => `${item.severity === 'error' ? '错误' : '警告'}：${item.evidence}`), errorCount, warningCount },
       }
@@ -546,16 +563,21 @@ export const continuityValidateTool = defineTool({
       { userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
     ).catch(() => '')))
     const parsedCriticResponses = criticResponses.map(parseIndependentContinuityResult)
-    const criticFallback = parsedCriticResponses.every((response) => !response.structured)
+    const criticFallback = parsedCriticResponses.some((response) => !response.structured)
     const independentFindings = parsedCriticResponses
       .flatMap((response) => response.findings)
       .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.evidence === finding.evidence) === index)
-    const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, findings: independentFindings })
+    const result = await validateStoryContinuity({ userId: ctx.userId, novelId: ctx.novelId, compilationId: compilation.id, findings: independentFindings,
+      expectedChapterRevision: chapter.revision, independentCheck: criticFallback ? 'unavailable' : 'complete' })
+    if (criticFallback) return {
+      outcome: 'failed' as const,
+      output: `独立连续性复核未完成，本次不能判定通过。确定性检查发现 ${result.errorCount} 个错误、${result.warningCount} 个警告，但不能替代独立复核；保留当前正文，恢复复核后再提交章节桥。`,
+      summary: '独立连续性复核未完成',
+    }
     const phase = result.errorCount > 0 ? 'repair' : 'check'
     if (ctx.creativeFreedom === 'balanced' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
-      const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings)
+      const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings, compilation.id)
       if (repaired) {
-        await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { stage: 'repair' } })
         return {
           output: `严谨创作模式已把本轮 ${result.errorCount} 个错误、${result.warningCount} 个警告交给独立修订器，并原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
           summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
@@ -604,63 +626,44 @@ export const chapterBridgeCommitTool = defineTool({
   permission: BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const compilationScopes = [
-      ...(args.compilationId ? [{ id: args.compilationId }] : []),
-      { runId: ctx.runId },
-      ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : []),
-    ]
-    const candidates = await prisma.storyCompilation.findMany({
+    const db = ctx.transaction ?? prisma
+    const run = await db.agentRun.findFirst({ where: { id: ctx.runId, userId: ctx.userId, novelId: ctx.novelId }, select: { taskRootId: true } })
+    const targetId = ctx.durableCompiler?.baseline?.id ?? args.compilationId
+    const candidates = await db.storyCompilation.findMany({
       where: {
         userId: ctx.userId,
         novelId: ctx.novelId,
         status: { in: ['active', 'completed'] },
-        OR: compilationScopes,
+        ...(run?.taskRootId ? { run: { taskRootId: run.taskRootId } } : { runId: ctx.runId }),
+        ...(targetId ? { id: targetId } : {}),
       },
       include: { chapter: true, bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } } },
       orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
       take: 2,
     })
-    let compilation: (typeof candidates)[number] | undefined = candidates.find((item) => item.status === 'active') ?? candidates[0]
-    if (!compilation && args.compilationId) {
-      compilation = await prisma.storyCompilation.findFirst({
-        where: { userId: ctx.userId, novelId: ctx.novelId, status: 'active', OR: [{ runId: ctx.runId }, ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : [])] },
-        include: { chapter: true, bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } } },
-        orderBy: { updatedAt: 'desc' },
-      }) ?? undefined
-    }
-    if (!compilation?.chapter || !compilation.bridge) return { output: '没有找到当前任务可提交的章节编译状态；请重新执行 story_compiler_prepare，而不是反复提交。', summary: '未找到章节编译状态' }
+    const compilation: (typeof candidates)[number] | undefined = candidates.find((item) => item.status === 'active') ?? candidates[0]
+    if (!compilation?.chapter || !compilation.bridge) return { outcome: 'failed' as const, output: '没有找到当前任务指定的章节编译状态；请核对章节桥，不会替换为同作品其他任务或章节的编译。', summary: '未找到章节编译状态' }
     if (compilation.status === 'completed') {
+      if (compilation.bridge.targetRevision !== compilation.chapter.revision) return { outcome: 'failed' as const,
+        output: '已提交的章节桥对应旧正文版本，当前正文已变化；请为当前任务重新准备并检查，不能把旧提交当作当前版本完成。', summary: '章节桥版本已过期' }
       return { output: `章节 ${compilation.chapter.id}@r${compilation.chapter.revision} 的终态已经提交，无需重复执行。`, summary: '章节终态已提交', display: { kind: 'storyCompiler', compilationId: compilation.id, phase: 'commit', title: '章节终态已提交', detail: `r${compilation.chapter.revision}`, items: [] } }
     }
-    if (isAgent2FeatureEnabled('humanityQuality', ctx.userId)) {
+    const requireQuality = !!ctx.durableCompiler || isAgent2FeatureEnabled('humanityQuality', ctx.userId)
+    let qualityReportId: string | undefined
+    if (requireQuality) {
       if (compilation.chapterId) {
-        const report = await getLatestQualityReport(ctx.userId, ctx.novelId, compilation.chapterId)
+        const report = await getLatestQualityReport(ctx.userId, ctx.novelId, compilation.chapterId, db)
         if (!report || report.chapterRevision !== compilation.chapter.revision || ['analyzing', 'stale', 'failed'].includes(report.status)) {
-          return { output: '当前章节最新 revision 尚未完成单次人类感质量检查。只调用一次 quality_analyze；该工具会自动完成有证据的局部修订，禁止手动选择或反复检查。', summary: '等待单次质量检查' }
+          return { outcome: 'failed' as const, output: '当前章节最新 revision 尚未完成单次人类感质量检查。只调用一次 quality_analyze；该工具会自动完成有证据的局部修订，禁止手动选择或反复检查。', summary: '等待单次质量检查' }
         }
+        qualityReportId = report.id
         if (report.findings.some((finding) => finding.severity === 'error' && finding.disposition !== 'repaired')) {
-          return { output: '质量报告仍有明确错误未修复，禁止提交章节桥。请先处理 error finding 并重新检查。', summary: '质量错误阻止提交' }
+          return { outcome: 'failed' as const, output: '质量报告仍有明确错误未修复，禁止提交章节桥。请先处理 error finding 并重新检查。', summary: '质量错误阻止提交' }
         }
         const validation = compilation.validation as { checkedRevision?: number; errorCount?: number; [key: string]: unknown } | null
-        // 有界质量修订自身会把 revision 推前一格：连续性校验记录落后时在此对账推进，
-        // 避免「检查都通过了却因 checkedRevision 落后一格」把 COMMIT 挡成执行失败
-        if (
-          report.status === 'repaired'
-          && report.chapterRevision === compilation.chapter.revision
-          && (validation?.errorCount ?? 0) === 0
-          && (validation?.checkedRevision ?? -1) < compilation.chapter.revision
-        ) {
-          await prisma.storyCompilation.update({
-            where: { id: compilation.id },
-            data: {
-              validation: {
-                ...(validation ?? {}),
-                checkedRevision: compilation.chapter.revision,
-                checkedAt: new Date().toISOString(),
-                advancedBy: 'bounded_quality_repair_commit_reconcile',
-              } as Prisma.InputJsonValue,
-            },
-          })
+        // A quality repair changes the text; it cannot certify continuity of the new revision.
+        if (validation?.checkedRevision !== compilation.chapter.revision) {
+          return { outcome: 'failed' as const, output: '质量修订后正文版本已变化，请对当前 revision 重新执行 continuity_validate，不能沿用旧版连续性报告。', summary: '修订后需要重新复核连续性' }
         }
       }
     }
@@ -686,7 +689,7 @@ export const chapterBridgeCommitTool = defineTool({
       endingStructure: args.endingStructure?.trim() || `以${lastTask?.turn || lastExit.action || '当前状态变化'}收束`,
     }
     try {
-      const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...terminal })
+      const result = await commitChapterBridge({ userId: ctx.userId, novelId: ctx.novelId, ...terminal, requireQuality, qualityReportId }, ctx.transaction)
       return {
         output: `COMMIT 完成，章节 ${result.chapterId}@r${result.chapterRevision} 的 Chapter Bridge、Scene Task 终态与故事记忆已原子对齐。下一章将直接召回本次终态。`,
         summary: '提交章节桥与故事终态',
@@ -699,10 +702,11 @@ export const chapterBridgeCommitTool = defineTool({
       // 流程顺序类门槛（连续性未重检/仍有错）转成可执行引导：作者侧看到下一步该做什么，而不是「执行失败」
       if (
         error instanceof DataAccessError
-        && (error.code === 'CONTINUITY_CHECK_REQUIRED' || error.code === 'CONTINUITY_ERRORS_REMAIN' || error.code === 'COMPILATION_NOT_FOUND')
+        && (error.code === 'CONTINUITY_CHECK_REQUIRED' || error.code === 'CONTINUITY_ERRORS_REMAIN' || error.code === 'COMPILATION_NOT_FOUND' || error.code === 'QUALITY_CHECK_REQUIRED')
       ) {
         return {
-          output: `${error.message}这是流程顺序提示而非执行失败：请先对当前 revision 调用 continuity_validate（有错误先修错再重检），通过后立即调用 chapter_bridge_commit 完成提交。`,
+          outcome: 'failed' as const,
+          output: `${error.message}本次未提交：${error.code === 'QUALITY_CHECK_REQUIRED' ? '请对当前正文执行 quality_analyze；若修订改变正文，还需重新复核连续性。' : error.code === 'COMPILATION_NOT_FOUND' ? '请读取当前任务章节桥并核对编译身份。' : '请先对当前 revision 调用 continuity_validate（有错误先修错再重检）。'}满足前置后再调用 chapter_bridge_commit。`,
           summary: '提交前置未满足 · 按引导继续',
         }
       }

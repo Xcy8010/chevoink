@@ -53,3 +53,4 @@ coverage/
 /public/voice/sensevoice-*/
 /.playwright-cli/
 /output/playwright/
+/output/engineering-baseline/

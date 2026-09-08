@@ -385,7 +385,7 @@ export async function getNovelDetailData(
   const isOwner = Boolean(viewerUserId && novel.authorId === viewerUserId)
 
   // 非作者只能看公开的已发布/已完结作品，与首页榜单候选池口径保持一致
-  if (!isOwner && (novel.visibility !== 'public' || novel.status === 'draft')) {
+  if (!isOwner && (novel.visibility !== 'public' || (novel.status !== 'published' && novel.status !== 'completed'))) {
     return null
   }
 

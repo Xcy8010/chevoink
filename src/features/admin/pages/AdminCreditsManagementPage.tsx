@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pause, Play, RefreshCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -37,15 +37,18 @@ export default function AdminCreditsManagementPage() {
   const toast = useToast()
   const query = useQuery({ queryKey: ['admin', 'credits'], queryFn: getAdminCreditsManagement })
   const [pending, setPending] = useState<PendingAction>(null)
+  const resetRequest = useRef<{ action: PendingAction; key: string } | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const mutation = useMutation({
     mutationFn: async (payload: AdminDangerPayload) => {
       if (!pending) return
-      if (pending.kind === 'reset-user') return resetAdminUserCredits(pending.userId, payload)
+      if (resetRequest.current?.action !== pending) resetRequest.current = { action: pending, key: crypto.randomUUID() }
+      const resetPayload = { ...payload, requestKey: resetRequest.current.key }
+      if (pending.kind === 'reset-user') return resetAdminUserCredits(pending.userId, resetPayload)
       if (pending.kind === 'pause-user') return setAdminUserCreditsPaused(pending.userId, { ...payload, paused: pending.paused })
-      if (pending.kind === 'reset-selected') return resetSelectedAdminCredits({ ...payload, userIds: pending.userIds })
+      if (pending.kind === 'reset-selected') return resetSelectedAdminCredits({ ...resetPayload, userIds: pending.userIds })
       if (pending.kind === 'pause-selected') return setSelectedAdminCreditsPaused({ ...payload, userIds: pending.userIds, paused: pending.paused })
-      if (pending.kind === 'reset-all') return resetAllAdminCredits(payload)
+      if (pending.kind === 'reset-all') return resetAllAdminCredits(resetPayload)
       return setAdminCreditsPaused({ ...payload, paused: pending.paused })
     },
     onSuccess: async () => {

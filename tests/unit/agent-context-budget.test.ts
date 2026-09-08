@@ -3,12 +3,26 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage, OpenAIToolDefinition } from '../../api/lib/ai-service.js'
 import {
   collapseEarlyToolRounds,
+  archiveEarlyToolRounds,
   compactEarlyToolPayloads,
   estimateChatMessagesTokens,
   estimateTextTokens,
   estimateToolDefinitionTokens,
   resolveAgentContextBudget,
+  resolveDurableInputLimit,
 } from '../../api/lib/agent/context-budget.js'
+
+describe('durable input admission', () => {
+  it('reserves the actual output when larger than a quarter of the window', () => {
+    expect(resolveDurableInputLimit(16000, 8192)).toBe(5760)
+    expect(resolveDurableInputLimit(16000, 16000)).toBe(0)
+    expect(resolveDurableInputLimit(128000, 8192)).toBe(113408)
+  })
+  it.each([NaN, Infinity, -1, 0, 1.5])('rejects invalid window/output values: %s', value => {
+    expect(resolveDurableInputLimit(value, 8192)).toBe(0)
+    expect(resolveDurableInputLimit(16000, value)).toBe(0)
+  })
+})
 
 function buildToolRound(id: string, argumentText: string, outputText: string): ChatMessage[] {
   return [
@@ -18,6 +32,21 @@ function buildToolRound(id: string, argumentText: string, outputText: string): C
 }
 
 describe('Agent 运行中上下文预算与压缩', () => {
+  it('持久归档保留原数组和作者要求，并指向准确原文索引', () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: '只处理第19章，不能继承旧任务。' },
+      ...buildToolRound('old', JSON.stringify({ content: '正文'.repeat(800) }), '失败'.repeat(800)),
+      ...buildToolRound('new', '{}', '最新原文')]
+    const before = structuredClone(messages)
+    const result = archiveEarlyToolRounds(messages, { revision: 12, hash: 'a'.repeat(64) }, 1)
+    expect(messages).toEqual(before)
+    expect(result.archivedRounds).toBe(1)
+    expect(result.messages[0]).toEqual(messages[0])
+    expect(result.messages.slice(-2)).toEqual(messages.slice(-2))
+    expect(result.messages[1].content).toContain('execution_context_read')
+    expect(result.messages[1].content).toContain('"messageIndex":1')
+    expect(result.messages[1].content).toContain('"messageIndex":2')
+    expect(result.messages[1].content).not.toContain('"messageIndex":3')
+  })
   it('中文按保守口径估算，并统计工具 schema、参数、推理与输出', () => {
     expect(estimateTextTokens('中文测试')).toBe(4)
     expect(estimateTextTokens('abcdefgh')).toBe(2)
@@ -81,5 +110,54 @@ describe('Agent 运行中上下文预算与压缩', () => {
     expect(budget.compactAtTokens).toBe(92_160)
     expect(budget.hardRequestTokens).toBeLessThan(128_000)
     expect(budget.hardRequestTokens).toBeGreaterThan(budget.compactAtTokens)
+  })
+
+  it('折叠工具轮保留Agent已经说明的决策和后续工作，不把片段说成成功', () => {
+    const messages = buildToolRound('old', '{}', '写入失败，需要重新读取版本。')
+    messages[0].content = '作者已选择审俘为主；只修改第19章，不重写13章。'
+    expect(collapseEarlyToolRounds(messages, 0).collapsedToolRounds).toBe(1)
+    expect(messages).toHaveLength(1)
+    expect(messages[0].content).toContain('只修改第19章，不重写13章。')
+    expect(messages[0].content).toContain('写入失败')
+    expect(messages[0].content).not.toContain('操作结果已落库')
+  })
+
+  it.each([compactEarlyToolPayloads, collapseEarlyToolRounds])('%s不压缩未完成、孤立或跨轮配对的工具消息', compact => {
+    const long = '必须保留的原始参数'.repeat(200)
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '正在准备', toolCalls: [{ id: 'missing', name: 'chapter_write', arguments: JSON.stringify({ content: long }) }] },
+      { role: 'user', content: '先等一下' },
+      { role: 'tool', toolCallId: 'missing', content: long },
+      { role: 'assistant', content: null, toolCalls: [{ id: 'partial', name: 'chapter_write', arguments: long, incomplete: true }] },
+      { role: 'tool', toolCallId: 'partial', content: long },
+      { role: 'assistant', content: null, toolCalls: [{ id: 'pending', name: 'chapter_write', arguments: long }] },
+    ]
+    const before = structuredClone(messages)
+    compact(messages, 0)
+    expect(messages).toEqual(before)
+  })
+
+  it.each([compactEarlyToolPayloads, collapseEarlyToolRounds])('%s以轮次配对重复callId并保留最近一轮', compact => {
+    const messages = [
+      ...buildToolRound('reused', JSON.stringify({ content: '旧内容'.repeat(500) }), '旧结果'.repeat(500)),
+      ...buildToolRound('reused', JSON.stringify({ content: '新内容'.repeat(500) }), '新结果'.repeat(500)),
+    ]
+    const recent = structuredClone(messages.slice(-2))
+    const result = compact(messages, 1)
+    expect(result.compactedToolOutputs + result.collapsedToolRounds).toBe(1)
+    expect(messages.slice(-2)).toEqual(recent)
+  })
+
+  it.each([compactEarlyToolPayloads, collapseEarlyToolRounds])('%s保留只收到部分回复的并行调用轮次', compact => {
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: null, toolCalls: [
+        { id: 'one', name: 'chapter_read', arguments: JSON.stringify({ text: '参数'.repeat(500) }) },
+        { id: 'two', name: 'chapter_read', arguments: '{}' },
+      ] },
+      { role: 'tool', toolCallId: 'one', content: '观察'.repeat(500) },
+    ]
+    const before = structuredClone(messages)
+    compact(messages, 0)
+    expect(messages).toEqual(before)
   })
 })

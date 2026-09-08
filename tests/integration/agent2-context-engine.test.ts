@@ -15,8 +15,9 @@ import {
 } from '../../api/lib/agent/context-engine.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 afterAll(async () => {
   await prisma.$disconnect().catch(() => {})
@@ -91,6 +92,17 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P3 上下文引擎（需 DB）', () => 
     const digest = renderCheckpointDigest(second!)
     expect(digest).toContain('第三人称限知视角')
     expect(digest).not.toContain('第一人称')
+    const historical = { ...second!, runId: 'prior-run', summary: { ...second!.summary,
+      goals: ['旧任务写13章'], pending: ['旧任务打开三个窗口'], completed: ['之前已保存正文'], constraints: ['旧任务临时约束'] } }
+    const nextDigest = renderCheckpointDigest(historical, { runId: 'new-run', directives: [] })
+    expect(nextDigest).not.toContain('旧任务写13章')
+    expect(nextDigest).not.toContain('旧任务打开三个窗口')
+    expect(nextDigest).not.toContain('旧任务临时约束')
+    expect(nextDigest).toContain('之前已保存正文')
+    const sameDigest = renderCheckpointDigest(historical, { runId: 'prior-run', directives: [] })
+    expect(sameDigest).toContain('旧任务写13章')
+    expect(sameDigest).toContain('旧任务打开三个窗口')
+    expect(historical.summary.constraints).toEqual(['旧任务临时约束'])
 
     // 没有新的可压缩来源时不得把旧检查点冒充新版本返回。
     expect(await compactSessionContext(userId, sessionId, true)).toBeNull()

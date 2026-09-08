@@ -1,6 +1,8 @@
 import { env } from '../config/env.js'
-import { DataAccessError } from './prisma.js'
+import { DataAccessError, prisma } from './prisma.js'
+import { setTimeout as delay } from 'node:timers/promises'
 import { getToolModelRuntime, type ToolModelRuntime } from './tool-model-config.js'
+import { readBoundedPublicBody } from './public-http.js'
 
 /**
  * GLM-4.1V 视觉推理旁路（ds-vision-skill 模式）：
@@ -9,6 +11,7 @@ import { getToolModelRuntime, type ToolModelRuntime } from './tool-model-config.
  */
 
 class VisionRetryableError extends Error {}
+type VisionScope = { userId: string; runId: string; signal: AbortSignal }
 
 let inflight = 0
 const waiters: Array<() => void> = []
@@ -22,7 +25,8 @@ function releaseSlot() {
 }
 
 /** 获取并发槽位：排队超过 30s 视为视觉服务繁忙 */
-function acquireSlot(): Promise<() => void> {
+function acquireSlot(signal: AbortSignal): Promise<() => void> {
+  signal.throwIfAborted()
   if (inflight < env.aiVisionMaxConcurrent) {
     inflight += 1
     return Promise.resolve(releaseSlot)
@@ -35,14 +39,23 @@ function acquireSlot(): Promise<() => void> {
         waiters.splice(index, 1)
       }
       reject(new DataAccessError(503, 'VISION_BUSY', '视觉服务繁忙（并发已满），请稍后再试。'))
+      signal.removeEventListener('abort', abort)
     }, 30000)
 
     const tryAcquire = () => {
       clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
       inflight += 1
       resolve(releaseSlot)
     }
-
+    const abort = () => {
+      clearTimeout(timer)
+      const index = waiters.indexOf(tryAcquire)
+      if (index >= 0) waiters.splice(index, 1)
+      signal.removeEventListener('abort', abort)
+      reject(signal.reason)
+    }
+    signal.addEventListener('abort', abort, { once: true })
     waiters.push(tryAcquire)
   })
 }
@@ -51,15 +64,26 @@ function isRetryable(error: unknown): boolean {
   return error instanceof VisionRetryableError
 }
 
-async function requestOnce(image: { buffer: Buffer; mime: string }, question: string, configured: ToolModelRuntime | null): Promise<string> {
+async function requestOnce(image: { buffer: Buffer; mime: string }, question: string, configured: ToolModelRuntime | null, scope: VisionScope): Promise<string> {
   // 一律 base64 内联：规避 localhost/内网图片对智谱不可达的问题
   const dataUrl = `data:${image.mime};base64,${image.buffer.toString('base64')}`
 
   const baseUrl = configured?.baseUrl ?? env.aiVisionBaseUrl
   const apiKey = configured?.apiKey ?? env.aiVisionApiKey
   const modelName = configured?.modelName ?? env.aiVisionModel
+  scope.signal.throwIfAborted()
+  const startedAt = Date.now()
+  // Separate vision calls are internal image usage, not another user token
+  // charge. Null means unreported; never estimate tokens from the image bytes.
+  const observation = await prisma.aiUsageLog.create({ data: { userId: scope.userId, agentRunId: scope.runId,
+    targetType: 'agentRun', targetId: scope.runId, providerType: 'image', providerMode: env.aiProviderMode,
+    modelName, action: 'view_image', durationMs: 0, requestTokens: null, responseTokens: null } })
+  let promptTokens: number | null = null, completionTokens: number | null = null
+  try {
+  scope.signal.throwIfAborted()
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
+    redirect: 'error',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${apiKey}`,
@@ -76,26 +100,35 @@ async function requestOnce(image: { buffer: Buffer; mime: string }, question: st
         },
       ],
     }),
-    signal: AbortSignal.timeout(env.aiVisionTimeoutMs),
+    signal: AbortSignal.any([scope.signal, AbortSignal.timeout(env.aiVisionTimeoutMs)]),
   })
+
+  const body = (await readBoundedPublicBody(response, 2 * 1024 * 1024)).toString('utf8')
+  let decoded: unknown
+  try { decoded = JSON.parse(body) } catch {
+    if (response.ok) throw new DataAccessError(502, 'VISION_ERROR', '视觉服务返回了无效响应。')
+    decoded = {}
+  }
+  const payload = decoded && typeof decoded === 'object' && !Array.isArray(decoded) ? decoded as Record<string, unknown> : {}
+  const usage = payload.usage && typeof payload.usage === 'object' && !Array.isArray(payload.usage) ? payload.usage as Record<string, unknown> : {}
+  const tokenCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 2147483647 ? value : null
+  promptTokens = tokenCount(usage.prompt_tokens)
+  completionTokens = tokenCount(usage.completion_tokens)
 
   if (response.status === 429 || response.status >= 500) {
     throw new VisionRetryableError(`视觉服务返回 ${response.status}`)
   }
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => '')
     throw new DataAccessError(
       502,
       'VISION_ERROR',
-      `视觉服务请求失败（${response.status}）${detail ? `：${detail.slice(0, 200)}` : ''}`,
+      `视觉服务请求失败（${response.status}）。`,
     )
   }
 
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: unknown } }>
-  }
-  const content = payload.choices?.[0]?.message?.content
+  const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: { content?: unknown } } | null> : []
+  const content = choices[0]?.message?.content
   const description = typeof content === 'string' ? content.trim() : ''
 
   if (!description) {
@@ -103,32 +136,43 @@ async function requestOnce(image: { buffer: Buffer; mime: string }, question: st
   }
 
   return description
+  } finally {
+    try {
+      await prisma.aiUsageLog.update({ where: { id: observation.id }, data: { requestTokens: promptTokens,
+        responseTokens: completionTokens, durationMs: Math.min(2147483647, Date.now() - startedAt) } })
+    } catch {
+      // The pre-dispatch observation remains unknown, not zero. A telemetry
+      // outage must not discard paid output or replace the provider's error.
+      console.warn('[vision] Usage finalization failed; observation remains unknown', { observationId: observation.id })
+    }
+  }
 }
 
 /**
  * 把一张图片发给 GLM 视觉模型换回文字描述。
- * 未配置 key 时抛 503；429/5xx/超时退避 2s 重试 1 次；最终失败抛错由工具层转观察文本。
+ * 未配置 key 时抛 503；429/5xx 退避 2s 重试 1 次；未知网络失败不盲目重试。
  */
 export async function describeImageWithVision(
   image: { buffer: Buffer; mime: string },
   question: string,
+  scope: VisionScope,
 ): Promise<string> {
   const configured = await getToolModelRuntime('tool:image-vision')
   if (!configured && !env.aiVisionApiKeyConfigured) {
     throw new DataAccessError(503, 'VISION_NOT_CONFIGURED', '视觉服务未配置（缺少 AI_VISION_API_KEY）。')
   }
 
-  const release = await acquireSlot()
+  const release = await acquireSlot(scope.signal)
 
   try {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await requestOnce(image, question, configured)
+        return await requestOnce(image, question, configured, scope)
       } catch (error) {
         if (!isRetryable(error) || attempt >= 1) {
           throw error
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+        await delay(2000, undefined, { signal: scope.signal })
       }
     }
   } finally {

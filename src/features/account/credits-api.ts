@@ -3,6 +3,7 @@ import type {
   CreditAccountSummary,
   CreditActivityPayload,
   CreditUsagePayload,
+  TaskCreditUsagePayload,
   CustomModelsPayload,
   ReferralPayload,
   SaveCustomModelRequest,
@@ -18,6 +19,12 @@ export function fetchCreditUsage(): Promise<CreditUsagePayload> {
 
 export function fetchCreditActivity(): Promise<CreditActivityPayload> {
   return requestJson<CreditActivityPayload>('/api/credits/activity')
+}
+
+export function fetchTaskCreditUsage(runId: string, cursor?: string): Promise<TaskCreditUsagePayload> {
+  const query = new URLSearchParams({ take: '30' })
+  if (cursor) query.set('cursor', cursor)
+  return requestJson<TaskCreditUsagePayload>(`/api/credits/tasks/${encodeURIComponent(runId)}?${query}`)
 }
 
 export function fetchReferral(): Promise<ReferralPayload> {

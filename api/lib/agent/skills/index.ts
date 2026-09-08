@@ -272,7 +272,7 @@ function freedomGuidance(freedom: CreativeFreedom): string {
 
 export function inferSkillPhase(intent: TaskIntent): SkillPhase {
   if (intent === 'plan') return 'plan'
-  if (intent === 'review') return 'critique'
+  if (intent === 'review' || intent === 'research_analysis') return 'critique'
   if (intent === 'revise') return 'revision'
   return 'draft'
 }

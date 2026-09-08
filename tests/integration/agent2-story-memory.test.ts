@@ -14,8 +14,9 @@ import {
   syncNovelMemoryProjection,
 } from '../../api/lib/agent/story-memory.js'
 import { prisma } from '../../api/lib/prisma.js'
+import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 
-const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
 async function waitForMemoryExtractionJob(jobId: string, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs

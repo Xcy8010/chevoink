@@ -15,6 +15,7 @@ export const SERVER_MODEL_TIERS = [...BUILT_IN_MODEL_TIERS, 'basic'] as const
 export type ModelReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type CreditModelOption = {
+  pricing?: CreditLedgerItem['pricing']
   tier: Exclude<CreditModelTier, 'custom'>
   label: string
   multiplier: number
@@ -43,11 +44,15 @@ export type CreditAccountSummary = {
 }
 
 export type CreditLedgerItem = {
+  /** Original settled price; never today's model configuration. */
+  pricing?: { version: 'credits-v2-itemized'; rateCardId: string; inputPerMillion: number; cachePerMillion: number; outputPerMillion: number } | null
   id: string
   delta: number
   kind: string
   sourceType: string
   referenceId: string | null
+  /** Verified task linkage; null/absent for non-task or unlinked legacy charges. */
+  taskRunId?: string | null
   modelTier: CreditModelTier | null
   multiplier: number
   requestTokens: number | null
@@ -61,6 +66,21 @@ export type CreditLedgerItem = {
 export type CreditUsagePayload = {
   account: CreditAccountSummary
   ledger: CreditLedgerItem[]
+}
+
+export type TaskCreditUsagePayload = {
+  runId: string
+  asOf: string
+  /** Recorded wallet movements only; not a claim that unknown provider cost is zero. */
+  charged: number
+  refunded: number
+  netCharged: number
+  pendingRefund: number
+  /** New default-path calls with a frozen price but no completed wallet settlement. */
+  pendingModelSettlements?: number
+  unresolvedProviderAttempts: number | null
+  ledger: CreditLedgerItem[]
+  nextCursor: string | null
 }
 
 export type CreditActivityDay = {

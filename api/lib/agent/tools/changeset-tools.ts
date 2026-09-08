@@ -54,9 +54,9 @@ export const projectSearchTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx, args) {
-    const result = await searchProjectData(ctx.userId, ctx.novelId, args)
+    const result = await searchProjectData(ctx.userId, ctx.novelId, args, ctx.transaction)
     const artifact = result.matches.length > 20
-      ? await prisma.agentArtifact.create({
+      ? await (ctx.transaction ?? prisma).agentArtifact.create({
           data: {
             runId: ctx.runId,
             artifactType: 'searchResult',
@@ -67,12 +67,12 @@ export const projectSearchTool = defineTool({
           },
         })
       : null
-    const visibleMatches = artifact ? result.matches.slice(0, 20) : result.matches
+    const visibleMatches = artifact && !ctx.transaction ? result.matches.slice(0, 20) : result.matches
     const lines = visibleMatches.map((match) =>
       `- ${match.volumeTitle} / ${match.chapterTitle} [${match.field}@${match.offset}, chapterId=${match.chapterId}, revision=${match.revision}] …${match.contextBefore}【${match.match}】${match.contextAfter}…`,
     )
     return {
-      output: `全书检索命中 ${result.total} 处${result.truncated ? `（查询仅返回前 ${result.matches.length} 处）` : ''}，索引状态 ${result.indexState}。${artifact ? `完整结果已保存为 artifactId=${artifact.id}，上下文仅保留前 ${visibleMatches.length} 处。` : ''}\n${lines.join('\n') || '无匹配。'}`,
+      output: `全书检索命中 ${result.total} 处${result.truncated ? `（查询仅返回前 ${result.matches.length} 处）` : ''}，索引状态 ${result.indexState}。${artifact ? `本次返回结果已保存为 artifactId=${artifact.id}，${ctx.transaction ? '以下包含本次全部返回结果' : `上下文仅保留前 ${visibleMatches.length} 处`}。` : ''}\n${lines.join('\n') || '无匹配。'}`,
       summary: `全书检索“${args.query}” · ${result.total} 处`,
     }
   },
@@ -92,7 +92,7 @@ export const entityResolveTool = defineTool({
       fields: ['title', 'summary', 'content'],
       caseSensitive: true,
       limit: 500,
-    })
+    }, ctx.transaction)
     const grouped = new Map<string, number>()
     for (const match of result.matches) grouped.set(match.chapterTitle, (grouped.get(match.chapterTitle) ?? 0) + 1)
     return {
@@ -116,7 +116,7 @@ export const impactAnalyzeTool = defineTool({
       fields: ['title', 'summary', 'content'],
       caseSensitive: true,
       limit: 1000,
-    })
+    }, ctx.transaction)
     const chapters = new Set(result.matches.map((match) => match.chapterId))
     const volumes = new Set(result.matches.map((match) => match.volumeId))
     const fields = new Set(result.matches.map((match) => match.field))
@@ -210,7 +210,7 @@ export const structureValidateTool = defineTool({
   permission: READ_PERMISSION,
   readOnly: true,
   async execute(ctx) {
-    const report = await getStructureReportData(ctx.userId, ctx.novelId)
+    const report = await getStructureReportData(ctx.userId, ctx.novelId, ctx.transaction)
     return {
       output: report.valid ? `结构验证通过：${report.volumeCount} 卷 ${report.chapterCount} 章。` : report.issues.map((issue) => issue.message).join('\n'),
       summary: report.valid ? '结构验证通过' : `结构验证发现 ${report.issues.length} 项异常`,

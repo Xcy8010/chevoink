@@ -9,13 +9,13 @@ import { parseHTML } from 'linkedom'
 
 /**
  * 三级 charset 探测解码：Content-Type charset → 头部 2KB 内 <meta charset>/http-equiv 扫描 → 默认 UTF-8。
- * 仅当 charset 明确为 gb 系（gbk/gb2312/gb18030/hz）才走 iconv-lite 转码，避免误判把 UTF-8 页转乱。
- * 注意：undici 的 res.text() 只按 UTF-8 解码，GBK 中文站会乱码，必须先拿 ArrayBuffer 再自行解码。
+ * 仅当 charset 明确为 gb 系（gbk/gb2312/gb18030）才按对应编码转码；不能把GB18030四字节字符误当GBK。
+ * 注意：undici 的 res.text() 只按 UTF-8 解码；调用方须先受限读取字节再解码，不使用无界ArrayBuffer。
  */
 export function decodeWebPageBuffer(buffer: Buffer, contentType: string): string {
   let charset = ''
 
-  const ctMatch = contentType.match(/charset=([\w-]+)/i)
+  const ctMatch = contentType.match(/charset\s*=\s*["']?([\w.-]+)/i)
   if (ctMatch) {
     charset = ctMatch[1]
   }
@@ -28,8 +28,8 @@ export function decodeWebPageBuffer(buffer: Buffer, contentType: string): string
     }
   }
 
-  if (/^(gbk|gb2312|gb18030|hz)$/i.test(charset)) {
-    return iconv.decode(buffer, 'gbk')
+  if (/^(gbk|gb2312|gb18030)$/i.test(charset)) {
+    return iconv.decode(buffer, charset.toLowerCase())
   }
   return new TextDecoder('utf-8').decode(buffer)
 }

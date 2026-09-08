@@ -1,17 +1,89 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { Prisma } from '@prisma/client'
+import { z } from 'zod'
 
 import type { AdminCreditsManagementPayload, AdminModelManagementPayload } from '../../shared/contracts/index.js'
 import type { ModelReasoningEffort } from '../../shared/contracts/index.js'
 import { BUILT_IN_MODEL_TIERS } from '../../shared/contracts/index.js'
 import { buildNewCreditAccountData, ensureCreditAccount, getCreditWindow, parseModelCapabilities } from './credits.js'
-import { stopActiveRunsByUser, stopAllActiveRuns } from './agent/active-runs.js'
+import { getActiveRun, stopAgentRun, stopActiveRunsByUser, stopAllActiveRuns } from './agent/active-runs.js'
 import { env } from '../config/env.js'
 import { DataAccessError, prisma } from './prisma.js'
 import { encryptSecret } from './secret-box.js'
+import { getActiveTokenPrices } from './billing/rate-cards.js'
+import { presentLedgerPrice } from './billing/ledger-presentation.js'
 
 const MILLI = 1000
+
+async function stopCreditRuns(userIds?: string[], capturedIds?: string[]): Promise<number> {
+  const runs = await prisma.agentRun.findMany({ where: { engine: 'loop', status: { in: ['queued', 'running', 'awaiting_approval'] },
+    ...(capturedIds ? { id: { in: capturedIds } } : {}),
+    ...(userIds ? { userId: { in: userIds } } : {}) }, select: { id: true, userId: true } })
+  const localIds = new Set(runs.filter(run => getActiveRun(run.id)).map(run => run.id))
+  const { stopLoopRun } = await import('./agent/run-service.js')
+  let stoppedRemote = 0
+  let stoppedLocal = 0
+  try {
+    for (const run of runs) {
+      try {
+        const result = await stopLoopRun(run.userId, run.id)
+        if (result.stopped && !localIds.has(run.id)) stoppedRemote++
+      } catch (error) {
+        // A task can finish between the snapshot and its stop transaction.
+        // Database/ownership failures must not be reported as a successful stop.
+        if (!(error instanceof DataAccessError) || error.code !== 'RUN_NOT_ACTIVE') throw error
+      }
+    }
+  } finally {
+    // Preserve the existing local abort behavior, including non-loop engines.
+    if (capturedIds) for (const runId of capturedIds) stoppedLocal += Number(stopAgentRun(runId))
+    else if (userIds) for (const userId of userIds) stoppedLocal += stopActiveRunsByUser(userId)
+    else stoppedLocal = stopAllActiveRuns()
+  }
+  return Math.max(localIds.size, stoppedLocal) + stoppedRemote
+}
+
+async function executeCreditReset(adminId: string, requestKey: string, scope: string[] | 'all',
+  work: (tx: Prisma.TransactionClient) => Promise<number>): Promise<{ users: number; stoppedRuns: number }> {
+  if (!/^[a-zA-Z0-9_-]{8,100}$/.test(requestKey)) throw new DataAccessError(400, 'CREDIT_RESET_KEY_INVALID', '重置请求编号无效。')
+  const id = createHash('sha256').update(JSON.stringify(['credit-reset', adminId, requestKey])).digest('hex')
+  const requestHash = createHash('sha256').update(JSON.stringify(scope)).digest('hex')
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const receipt = await tx.adminAuditLog.findUnique({ where: { id } })
+        if (receipt) {
+          const detail = receipt.detail as Prisma.JsonObject
+          if (receipt.adminId !== adminId || receipt.action !== 'credits.reset_receipt' || detail.requestHash !== requestHash
+            || typeof detail.users !== 'number' || !Number.isSafeInteger(detail.users) || detail.users < 0) {
+            throw new DataAccessError(409, 'CREDIT_RESET_IDENTITY_CONFLICT', '同一重置请求的目标已改变。')
+          }
+          const runIds = z.array(z.string().min(1).max(64)).safeParse(detail.runIds)
+          if (!runIds.success) throw new DataAccessError(409, 'CREDIT_RESET_RECEIPT_INVALID', '原重置的任务快照无效，未重新推测停止范围。')
+          return { users: detail.users, runIds: runIds.data }
+        }
+        const runs = await tx.agentRun.findMany({ where: { status: { in: ['queued', 'running', 'awaiting_approval'] },
+          ...(scope === 'all' ? {} : { userId: { in: scope } }) }, select: { id: true } })
+        const runIds = runs.map(run => run.id)
+        const users = await work(tx)
+        await tx.adminAuditLog.create({ data: { id, adminId, action: 'credits.reset_receipt', targetType: 'creditSystem',
+          detail: { requestHash, users, runIds } } })
+        return { users, runIds }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      const stopId = createHash('sha256').update(`${id}:stop`).digest('hex')
+      if (await prisma.adminAuditLog.findUnique({ where: { id: stopId } })) return { users: result.users, stoppedRuns: 0 }
+      const stoppedRuns = await stopCreditRuns(undefined, result.runIds)
+      await prisma.adminAuditLog.upsert({ where: { id: stopId }, update: {}, create: { id: stopId, adminId,
+        action: 'credits.reset_stop_receipt', targetType: 'creditSystem', detail: { resetReceiptId: id } } })
+      return { users: result.users, stoppedRuns }
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2034', 'P2002'].includes(error.code) && attempt < 2) continue
+      throw error
+    }
+  }
+  throw new DataAccessError(409, 'CREDIT_CONCURRENCY_CONFLICT', '额度更新冲突，请重试。')
+}
 
 async function ensureAllPublicBetaAccounts(setting: { dailyAllowanceMilli: number; resetHourUtc8: number; globallyPaused: boolean }) {
   const now = new Date()
@@ -76,16 +148,17 @@ export async function getAdminCreditsManagement(): Promise<AdminCreditsManagemen
   }
 }
 
-export async function resetAdminUserCredits(userId: string, adminId: string): Promise<{ stoppedRuns: number }> {
-  const result = await resetAdminUsersCredits([userId], adminId)
+export async function resetAdminUserCredits(userId: string, adminId: string, requestKey: string = randomUUID()): Promise<{ stoppedRuns: number }> {
+  const result = await resetAdminUsersCredits([userId], adminId, requestKey)
   return { stoppedRuns: result.stoppedRuns }
 }
 
-export async function resetAdminUsersCredits(userIds: string[], adminId: string): Promise<{ users: number; stoppedRuns: number }> {
-  const normalized = [...new Set(userIds.map((id) => id.trim()).filter(Boolean))].slice(0, 200)
+export async function resetAdminUsersCredits(userIds: string[], adminId: string, requestKey: string = randomUUID()): Promise<{ users: number; stoppedRuns: number }> {
+  const normalized = [...new Set(userIds.map((id) => id.trim()).filter(Boolean))].sort()
+  if (normalized.length > 200) throw new DataAccessError(400, 'VALIDATION_ERROR', '一次最多重置200位用户。')
   if (normalized.length === 0) throw new DataAccessError(400, 'VALIDATION_ERROR', '请选择至少一个用户。')
   await Promise.all(normalized.map((userId) => ensureCreditAccount(userId)))
-  await prisma.$transaction(async (tx) => {
+  const result = await executeCreditReset(adminId, requestKey, normalized, async (tx) => {
     const setting = await tx.creditSystemSetting.findUnique({ where: { id: 'global' } })
     const window = getCreditWindow(new Date(), setting?.resetHourUtc8 ?? 15)
     const accounts = await tx.creditAccount.findMany({ where: { userId: { in: normalized } }, select: { userId: true, dailyUsedMilli: true } })
@@ -101,8 +174,9 @@ export async function resetAdminUsersCredits(userIds: string[], adminId: string)
         idempotencyKey: `admin-reset:${account.userId}:${randomUUID()}`,
       })) })
     }
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
-  return { users: normalized.length, stoppedRuns: normalized.reduce((count, userId) => count + stopActiveRunsByUser(userId), 0) }
+    return accounts.length
+  })
+  return result
 }
 
 export async function setAdminUsersSuspended(userIds: string[], paused: boolean): Promise<{ users: number; paused: boolean; stoppedRuns: number }> {
@@ -116,17 +190,21 @@ export async function setAdminUsersSuspended(userIds: string[], paused: boolean)
   return {
     users: updated.count,
     paused,
-    stoppedRuns: paused ? normalized.reduce((count, userId) => count + stopActiveRunsByUser(userId), 0) : 0,
+    stoppedRuns: paused ? await stopCreditRuns(normalized) : 0,
   }
 }
 
-export async function resetAllAdminCredits(adminId: string): Promise<{ users: number; stoppedRuns: number }> {
+export async function resetAllAdminCredits(adminId: string, requestKey: string = randomUUID()): Promise<{ users: number; stoppedRuns: number }> {
   const setting = await prisma.creditSystemSetting.upsert({ where: { id: 'global' }, create: { id: 'global', dailyAllowanceMilli: 450_000, resetHourUtc8: 15 }, update: {} })
   await ensureAllPublicBetaAccounts(setting)
-  const accounts = await prisma.creditAccount.findMany({ select: { userId: true, dailyUsedMilli: true } })
-  const window = getCreditWindow(new Date(), setting.resetHourUtc8)
-  await prisma.$transaction(async (tx) => {
-    await tx.creditAccount.updateMany({ data: { dailyUsedMilli: 0, dailyAllowanceMilli: setting.dailyAllowanceMilli, periodStartedAt: window.startedAt, periodEndsAt: window.endsAt } })
+  const result = await executeCreditReset(adminId, requestKey, 'all', async (tx) => {
+    // Capture the amounts in the same serializable snapshot as the reset and
+    // ledger. A pre-transaction read can miss a concurrent paid call and leave
+    // the credited ledger amount different from the amount actually cleared.
+    const currentSetting = await tx.creditSystemSetting.findUniqueOrThrow({ where: { id: 'global' } })
+    const accounts = await tx.creditAccount.findMany({ select: { userId: true, dailyUsedMilli: true } })
+    const window = getCreditWindow(new Date(), currentSetting.resetHourUtc8)
+    await tx.creditAccount.updateMany({ data: { dailyUsedMilli: 0, dailyAllowanceMilli: currentSetting.dailyAllowanceMilli, periodStartedAt: window.startedAt, periodEndsAt: window.endsAt } })
     const chargedAccounts = accounts.filter((account) => account.dailyUsedMilli > 0)
     if (chargedAccounts.length > 0) {
       await tx.creditLedgerEntry.createMany({
@@ -137,8 +215,9 @@ export async function resetAllAdminCredits(adminId: string): Promise<{ users: nu
         })),
       })
     }
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
-  return { users: accounts.length, stoppedRuns: stopAllActiveRuns() }
+    return accounts.length
+  })
+  return result
 }
 
 export async function setCreditsGloballyPaused(paused: boolean): Promise<{ paused: boolean; stoppedRuns: number }> {
@@ -152,7 +231,7 @@ export async function setCreditsGloballyPaused(paused: boolean): Promise<{ pause
     })
     await tx.creditAccount.updateMany({ data: { suspendedAt: paused ? new Date() : null } })
   })
-  return { paused, stoppedRuns: paused ? stopAllActiveRuns() : 0 }
+  return { paused, stoppedRuns: paused ? await stopCreditRuns() : 0 }
 }
 
 type ToolEnvironment = Pick<typeof env,
@@ -182,10 +261,14 @@ export function toolEnvironmentFallback(modelKind: 'text' | 'image_generation' |
 }
 
 export async function getAdminModelManagement(): Promise<AdminModelManagementPayload> {
-  const [models, usage, recent] = await Promise.all([
+  const usageWhere: Prisma.AiUsageLogWhereInput = {
+    OR: [{ billingStatus: null }, { billingStatus: { notIn: ['prepared', 'not_dispatched'] } }],
+  }
+  const [models, usage, recent, prices] = await Promise.all([
     prisma.aiModelConfig.findMany({ where: { ownerUserId: null } }),
-    prisma.aiUsageLog.groupBy({ by: ['modelTier'], where: { modelTier: { not: null } }, _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
-    prisma.aiUsageLog.findMany({ where: { createdAt: { gte: new Date(Date.now() - 13 * 86_400_000) } }, select: { createdAt: true, requestTokens: true, responseTokens: true } }),
+    prisma.aiUsageLog.groupBy({ by: ['modelTier'], where: { ...usageWhere, modelTier: { not: null } }, _sum: { requestTokens: true, responseTokens: true }, _count: { _all: true } }),
+    prisma.aiUsageLog.findMany({ where: { ...usageWhere, createdAt: { gte: new Date(Date.now() - 13 * 86_400_000) } }, select: { createdAt: true, requestTokens: true, responseTokens: true } }),
+    getActiveTokenPrices([...BUILT_IN_MODEL_TIERS]),
   ])
   const usageMap = new Map(usage.map((item) => [item.modelTier, item]))
   const trendMap = new Map<string, { requests: number; totalTokens: number }>()
@@ -212,7 +295,9 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
       const databaseReady = model.modelName !== 'unconfigured' && Boolean(model.baseUrl && model.apiKeyCiphertext)
       const fallback = databaseReady ? null : toolEnvironmentFallback(modelKind)
       const configurationReady = databaseReady || Boolean(fallback) || (model.tier === 'speed' && model.modelName !== 'unconfigured')
+      const price = modelKind === 'text' && model.tier ? prices.get(model.tier) : null
       return {
+        pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null,
         id: model.id, tier: model.tier, modelKind, provider: fallback?.provider ?? model.provider, displayName: model.displayName,
         modelName: fallback?.modelName ?? model.modelName, baseUrl: fallback?.baseUrl ?? model.baseUrl, multiplier: model.multiplierBps / 10_000,
         enabled: model.enabled || Boolean(fallback), selectable: model.selectable, isDefault: model.isDefault,

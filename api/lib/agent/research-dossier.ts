@@ -36,8 +36,8 @@ const normalize = (value: string): string => value.trim().toLowerCase().replace(
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 const objects = <T>(value: unknown): T[] => Array.isArray(value) ? value.filter((item): item is T => Boolean(item) && typeof item === 'object') : []
 
-async function assertOwnedNovel(userId: string, novelId: string) {
-  const novel = await prisma.novel.findFirst({
+async function assertOwnedNovel(userId: string, novelId: string, db: Prisma.TransactionClient = prisma) {
+  const novel = await db.novel.findFirst({
     where: { id: novelId, authorId: userId },
     select: { id: true, title: true, summary: true, categoryName: true, tagNames: true, chapterCount: true },
   })
@@ -193,16 +193,16 @@ function toPrototypeView(row: {
   }
 }
 
-export async function getLatestResearchDossier(userId: string, novelId: string, countReuse = false): Promise<ResearchDossierView | null> {
-  await assertOwnedNovel(userId, novelId)
-  const row = await prisma.researchDossier.findFirst({ where: { userId, novelId }, orderBy: { version: 'desc' } })
+export async function getLatestResearchDossier(userId: string, novelId: string, countReuse = false, db: Prisma.TransactionClient = prisma): Promise<ResearchDossierView | null> {
+  await assertOwnedNovel(userId, novelId, db)
+  const row = await db.researchDossier.findFirst({ where: { userId, novelId }, orderBy: { version: 'desc' } })
   if (!row) return null
   if (row.status === 'ready' && row.expiresAt <= new Date()) {
-    const stale = await prisma.researchDossier.update({ where: { id: row.id }, data: { status: 'stale' } })
+    const stale = await db.researchDossier.update({ where: { id: row.id }, data: { status: 'stale' } })
     return toDossierView(stale)
   }
   if (countReuse && row.status === 'ready') {
-    const reused = await prisma.researchDossier.update({ where: { id: row.id }, data: { reusedCount: { increment: 1 } } })
+    const reused = await db.researchDossier.update({ where: { id: row.id }, data: { reusedCount: { increment: 1 } } })
     return toDossierView(reused, true)
   }
   return toDossierView(row)
@@ -351,9 +351,9 @@ export async function buildFirstThreePrototype(userId: string, novelId: string, 
   return toPrototypeView(row)
 }
 
-export async function getLatestFirstThreePrototype(userId: string, novelId: string): Promise<FirstThreePrototypeView | null> {
-  await assertOwnedNovel(userId, novelId)
-  const row = await prisma.firstThreePrototype.findFirst({ where: { userId, novelId }, orderBy: { version: 'desc' } })
+export async function getLatestFirstThreePrototype(userId: string, novelId: string, db: Prisma.TransactionClient = prisma): Promise<FirstThreePrototypeView | null> {
+  await assertOwnedNovel(userId, novelId, db)
+  const row = await db.firstThreePrototype.findFirst({ where: { userId, novelId }, orderBy: { version: 'desc' } })
   return row ? toPrototypeView(row) : null
 }
 

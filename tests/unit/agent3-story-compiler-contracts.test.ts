@@ -4,8 +4,38 @@ import { sceneTaskInputSchema, storyStateSchema } from '../../shared/contracts/i
 import { allTools } from '../../api/lib/agent/tools/registry.js'
 import { buildTaskSpec, renderTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { normalizeBeatCandidates } from '../../api/lib/agent/story-compiler.js'
+import { runtimeJson } from '../../api/lib/agent/runtime-common.js'
 
 describe('Agent 3.0 Story Compiler 契约', () => {
+  it.each([null, '遗漏的场景', 7, []])('场景列表保留无效项供校验拒绝，不静默丢弃：%j', invalid => {
+    const tool = allTools.find(item => item.name === 'scene_task_build')!
+    const normalized = tool.coerceArgs!({ tasks: [{ goal: '守住城门' }, invalid] }) as { tasks: unknown[] }
+    expect(normalized.tasks).toHaveLength(2)
+    expect(normalized.tasks[1]).toEqual(invalid)
+    expect(tool.parameters.safeParse(normalized).success).toBe(false)
+  })
+
+  it('超过四个场景明确校验失败，不截掉后续场景后报成功', () => {
+    const tool = allTools.find(item => item.name === 'scene_task_build')!
+    const tasks = Array.from({ length: 5 }, (_, index) => ({ goal: `保留场景${index + 1}` }))
+    const normalized = tool.coerceArgs!({ arguments: { tasks } }) as { tasks: Array<{ goal: string }> }
+    expect(normalized.tasks.map(task => task.goal)).toEqual(tasks.map(task => task.goal))
+    expect(tool.parameters.safeParse(normalized).success).toBe(false)
+    expect(tool.parameters.safeParse(tool.coerceArgs!({ tasks: tasks.slice(0, 4) })).success).toBe(true)
+  })
+
+  it('场景缺省状态省略可选字段，严格JSON回执不因服务端注入undefined失败', () => {
+    const tool = allTools.find(item => item.name === 'scene_task_build')!
+    const parsed = tool.parameters.parse(tool.coerceArgs!({ arguments: { tasks: [{ goal: '守住城门' }] } })) as Record<string, unknown>
+    const args = Object.fromEntries(Object.entries(parsed).filter(([, value]) => value !== undefined))
+    expect(runtimeJson(args).value).toEqual(args)
+    const task = (args.tasks as Array<{ entryState: unknown; exitState: unknown }>)[0]
+    for (const state of [task.entryState, task.exitState]) {
+      expect(state).not.toHaveProperty('action')
+      expect(state).not.toHaveProperty('location')
+      expect(state).not.toHaveProperty('storyTime')
+    }
+  })
   it('空的可选状态列表会被标准化，避免桥接出现 undefined 分支', () => {
     expect(storyStateSchema.parse({})).toEqual({ knowledge: [], emotion: [], body: [], objects: [], relationships: [], openLoops: [] })
   })

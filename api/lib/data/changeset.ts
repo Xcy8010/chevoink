@@ -152,8 +152,9 @@ export async function searchProjectData(
   userId: string,
   novelId: string,
   input: ProjectSearchRequest,
+  transaction: Prisma.TransactionClient = prisma,
 ): Promise<ProjectSearchResult> {
-  await ensureNovelOwner(userId, novelId)
+  await ensureNovelOwner(userId, novelId, transaction)
   const lexicalOr: Prisma.ChapterWhereInput[] = input.mode === 'exact'
     ? input.fields.map((field) => ({
         [field]: {
@@ -162,7 +163,7 @@ export async function searchProjectData(
         },
       }))
     : []
-  const chapters = await prisma.chapter.findMany({
+  const chapters = await transaction.chapter.findMany({
     where: {
       novelId,
       volumeId: input.volumeIds?.length ? { in: input.volumeIds } : undefined,

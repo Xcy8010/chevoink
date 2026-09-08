@@ -22,8 +22,10 @@ export const researchDossierGetTool = defineTool({
   permission: ALL_READ,
   readOnly: true,
   async execute(ctx) {
-    const dossier = await getLatestResearchDossier(ctx.userId, ctx.novelId, true)
+    const dossier = await getLatestResearchDossier(ctx.userId, ctx.novelId, true, ctx.transaction)
     if (!dossier) return { output: '当前作品尚无研究档案。只有符合 research_dossier_build 明示触发条件时才可建立；普通续写不需要联网研究。' }
+    if (ctx.transaction) return { output: JSON.stringify(Object.fromEntries(Object.entries(dossier).filter(([key]) => !['reusedCount', 'updatedAt', 'reused'].includes(key)))),
+      summary: dossier.status === 'ready' ? `读取研究档案 v${dossier.version}` : `读取历史研究档案 v${dossier.version}（${dossier.status}）` }
     const items = [
       `读者承诺：${dossier.readerPromise}`,
       `常见弃书点：${dossier.abandonmentRisks.slice(0, 4).join('；') || '未记录'}`,
@@ -95,8 +97,9 @@ export const firstThreePrototypeGetTool = defineTool({
   permission: ALL_READ,
   readOnly: true,
   async execute(ctx) {
-    const prototype = await getLatestFirstThreePrototype(ctx.userId, ctx.novelId)
+    const prototype = await getLatestFirstThreePrototype(ctx.userId, ctx.novelId, ctx.transaction)
     if (!prototype) return { output: '当前作品尚无前三章试制。新书需先完成有效 Research Dossier 和 Story Charter，再调用 first_three_prototype_build。' }
+    if (ctx.transaction) return { output: JSON.stringify(prototype), summary: `读取前三章试制 v${prototype.version}` }
     const items = prototype.chapterBlueprints.map((chapter) => `第 ${chapter.orderIndex} 章「${chapter.title}」：${chapter.chapterJob}；退出钩子：${chapter.exitHook}`)
     return {
       output: `前三章试制 v${prototype.version}（${prototype.status}），prototypeId=${prototype.id}。\n候选方向：${prototype.directions.map((item) => `${item.title}｜${item.readerPromise}`).join('；')}\n题材风险：${prototype.genreRisks.join('；')}\n${items.join('\n')}`,
