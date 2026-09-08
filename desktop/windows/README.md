@@ -1,6 +1,8 @@
 # Chevoink Windows 客户端
 
-当前为 **1.0.0 开发候选版**，不是已完成正式签名与真机验收的稳定版。内部 CI 安装包不能替代公开 Release。发布状态与验收边界见 [Windows 工程说明](../../docs/WINDOWS_DESKTOP.md)。
+当前为 **1.0.1 开发候选版**，不是已完成正式签名与真机验收的稳定版。内部 CI 安装包不能替代公开 Release。发布状态与验收边界见 [Windows 工程说明](../../docs/WINDOWS_DESKTOP.md)。
+
+1.0.0 在本机发现 updater 配置缺失导致启动退出，已撤回公开测试包。1.0.1 补充配置反序列化回归、实际 EXE 启动检查和启动失败提示。没有签名公钥时仍禁止检查/安装更新，空配置不是占位签名。安装器遇到 Codex 包缓存内的旧安装位置时改用当前用户的 `AppData/Local/Programs/Chevoink`，不删除旧数据。
 
 ## 架构
 

@@ -99,5 +99,29 @@ pub fn run() {
             _ => {}
         })
         .run(tauri::generate_context!())
-        .expect("Chevoink desktop host could not start");
+        .unwrap_or_else(|error| {
+            eprintln!("Chevoink startup failed: {error}");
+            rfd::MessageDialog::new()
+                .set_title("Chevoink 启动失败")
+                .set_description(format!(
+                    "客户端初始化未完成，未启动创作任务。\n请保留以下错误用于排查：\n{error}"
+                ))
+                .show();
+        });
+}
+
+#[cfg(test)]
+mod startup_tests {
+    #[test]
+    fn packaged_updater_configuration_can_initialize_without_a_signing_key() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater: tauri_plugin_updater::Config =
+            serde_json::from_value(config["plugins"]["updater"].clone()).unwrap();
+        assert!(updater.pubkey.is_empty());
+        assert!(updater.endpoints.is_empty());
+        assert!(!updater.dangerous_insecure_transport_protocol);
+        assert!(!updater.dangerous_accept_invalid_certs);
+        assert!(!updater.dangerous_accept_invalid_hostnames);
+    }
 }

@@ -77,6 +77,8 @@ jobs:
           $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
           New-Item -ItemType Directory -Path test-results/installers/standard -Force | Out-Null
           Copy-Item -LiteralPath $installer -Destination "test-results/installers/standard/Chevoink_${version}_x64-setup.exe" -ErrorAction Stop
+      - name: Launch packaged desktop and reject startup crashes
+        run: ./smoke-startup.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-internal-${{ github.sha }}

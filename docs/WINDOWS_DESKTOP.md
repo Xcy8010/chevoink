@@ -4,6 +4,9 @@
 
 ## 当前证据
 
+- 1.0.0 本机启动复现 `PluginInitialization("updater", ... invalid type: null ...)`，Windows 记录 `0xc0000409`。原构建通过不能证明可启动；该公开预发布已转回草稿。1.0.1 修复与实际 EXE 启动门禁正在验证，完整真机验收仍未完成。
+- 已安装 EXE 的嵌入图标已确认是新 Logo；旧快捷图标来自缓存，而非新 EXE 使用旧品牌。Codex 启动安装器导致旧路径落入其包缓存，1.0.1 仅迁移这一异常默认安装位置，不覆盖用户指定的其他目录、不删除旧 WebView 数据。
+
 - `c56f0f6` 的 [网页四闸](https://github.com/Xcy8010/chevoink/actions/runs/34272648450) 与 [Windows 双安装包构建](https://github.com/Xcy8010/chevoink/actions/runs/34272648418) 均通过：普通包、内嵌 WebView2 离线安装器的增强包分别作为内部 artifact 保存。二者尚未通过签名或缺内核真机安装验收，不是公开发行版。
 - `f040381` 的 [Windows 构建](https://github.com/Xcy8010/chevoink/actions/runs/34268535896) 通过 Rust fmt、clippy、test 和 NSIS 打包，生成内部 `Chevoink_1.0.0_x64-setup.exe`，2,625,246 字节。
 - 同提交 [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34268535994) 已通过四闸与依赖审计。
