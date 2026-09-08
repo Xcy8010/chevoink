@@ -263,7 +263,7 @@ export async function prepareStoryCompilation(input: {
       targetOrderIndex: target.targetOrderIndex,
       mode: input.mode,
       sourcePromptHash: promptHash(input.intentSummary),
-      validation: { autoRepairRounds },
+      ...(autoRepairRounds > 0 ? { validation: { autoRepairRounds } } : {}),
       preparedContext: preparedContext as Prisma.InputJsonValue,
       bridge: {
         create: {
