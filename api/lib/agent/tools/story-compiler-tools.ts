@@ -24,6 +24,7 @@ import {
   validateStoryContinuity,
   reserveContinuityRepair,
   continuityRepairRounds,
+  MAX_CONTINUITY_AUTO_REPAIRS,
 } from '../story-compiler.js'
 import { defineTool, type ToolContext } from './types.js'
 import { recalcNovelStats } from './novel-tools.js'
@@ -66,13 +67,15 @@ async function applyRigorousContinuityRepairs(
   findings: Array<{ signal: string; severity: string; evidence: string; suggestion: string }>,
   compilationId: string,
 ) {
+  findings = findings.filter(item => item.severity === 'error')
+  if (!findings.length) return null
   if (!await reserveContinuityRepair(ctx.userId, ctx.novelId, compilationId)) return null
   let parsed: z.infer<typeof continuityRepairEnvelopeSchema> | null = null
   for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
     let response = ''
     try {
       response = await generateTextCompletion(
-        '你是中文网文连续性修订编辑。严谨创作模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
+        '你是中文网文连续性修订编辑。只修复清单内可证实的事实错误，警告和审美建议不改写。保留作者原有词汇、句式、节奏、叙述视角和人物声口；禁止同义替换、扩写、润色或重写相邻段落。集中输出最小必要补丁，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
         `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
         { signal: ctx.signal, userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
       )
@@ -487,7 +490,7 @@ export const continuityValidateTool = defineTool({
   name: 'continuity_validate',
   title: '检查章节连续性',
   description:
-    'Story Compiler 的 CHECK 步骤。在整章/长场景写入后，由服务端启动与 Draft 上下文隔离的连续性编辑，只依据 Chapter Bridge、Scene Task 和当前正文检查人物知识、时空、身体、物品、关系、情绪余波、钩子与首尾结构；同时执行 revision/章序/空正文/Scene Task 数量等确定性硬检查。严谨创作会自动落实有证据的错误和警告，其余模式只报告。不得由主写 Agent 自报 findings。',
+    'Story Compiler 的 CHECK 步骤。依据 Chapter Bridge、Scene Task 与完整正文检查人物知识、时空、身体、物品、关系、情绪余波、钩子与首尾结构，并执行版本、章序、空正文、场景数量硬检查。严谨创作仅对可证实的事实错误做一次集中最小修订；警告只报告，不润色。修订后只读复核，不反复改写。质量修订完成后本工具仅复核，不能再使质量报告失效。不得由主写 Agent 自报 findings。',
   parameters: z.object({
     compilationId: z.string().min(1).optional(),
     focus: z.string().max(500).optional().describe('作者明确要求额外关注的连续性范围；未指定时不传'),
@@ -528,7 +531,7 @@ export const continuityValidateTool = defineTool({
     const sourceChapter = bridge.fromChapterId ? await prisma.chapter.findFirst({ where: { id: bridge.fromChapterId, novelId: ctx.novelId }, select: { revision: true } }) : null
     const sourceUnchanged = !bridge.fromChapterId || sourceChapter?.revision === bridge.sourceRevision
     const cachedValidation = compilation.validation as { independentCheck?: string; checkedRevision?: number; findings?: Array<{ signal: string; severity: 'warning' | 'error'; evidence: string; suggestion: string }>; errorCount?: number; warningCount?: number } | null
-    if ((!args.focus || continuityRepairRounds(compilation.validation) >= 2) && sourceUnchanged && cachedValidation?.independentCheck === 'complete' && cachedValidation.checkedRevision === chapter.revision) {
+    if ((!args.focus || continuityRepairRounds(compilation.validation) >= MAX_CONTINUITY_AUTO_REPAIRS) && sourceUnchanged && cachedValidation?.independentCheck === 'complete' && cachedValidation.checkedRevision === chapter.revision) {
       const findings = cachedValidation.findings ?? []
       const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
       const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
@@ -549,6 +552,10 @@ export const continuityValidateTool = defineTool({
         display: { kind: 'storyCompiler', compilationId: compilation.id, phase: errorCount > 0 ? 'repair' : 'check', title: '连续性检查', detail: `${errorCount} 错误 · ${warningCount} 警告 · 已复用`, items: findings.map((item) => `${item.severity === 'error' ? '错误' : '警告'}：${item.evidence}`), errorCount, warningCount },
       }
     }
+    if (!sourceUnchanged || !chapter.content.trim() || compilation.sceneTasks.length < 1 || compilation.sceneTasks.length > 4) {
+      return { outcome: 'failed' as const, summary: '连续性检查前置未满足',
+        output: '本次未调用检查模型：前章版本已变化、正文为空或场景任务数量不合法。请读取章节桥并修复该前置状态，不要反复请求连续性检查；未判定通过。' }
+    }
     const criticInput = [
         `章节：${chapter.title}@r${chapter.revision}`,
         args.focus ? `额外关注：${args.focus}` : '',
@@ -562,7 +569,7 @@ export const continuityValidateTool = defineTool({
         `开放钩子：${asStrings(bridge.openLoops).join('；') || '无'}`,
         `近期首尾：${asStrings(bridge.recentOpenings).join(' / ')}；${asStrings(bridge.recentEndings).join(' / ')}`,
         `Scene Task：\n${compilation.sceneTasks.map((task) => `${task.ordinal}. 目标=${task.goal}；阻力=${task.obstacle}；选择=${task.choice}；代价=${task.cost}；转折=${task.turn}`).join('\n')}`,
-        `当前正文：\n${chapter.content.slice(-16000)}`,
+        `当前正文：\n${chapter.content}`,
       ].filter(Boolean).join('\n')
     const baseCriticPrompt = '你是与正文写作者上下文隔离的中文网文连续性编辑。只依据提供的桥接事实、场景任务和正文找可证实的问题，不续写、不润色、不评价审美。没有问题就返回空数组。严格只输出 JSON：{"findings":[{"signal":"knowledge|location_time|body|object|relationship|emotion|hook|structure","severity":"warning|error","evidence":"正文证据与冲突事实","suggestion":"不改变剧情目标的最小修法"}]}。error 只用于明确事实冲突，审美偏好不得标 error。'
     const criticPrompts = [`${baseCriticPrompt}\n一次融合复核人物知识、关系、情绪余波、时空、身体、物品、钩子和近期首尾结构；不要为了覆盖类别而凑 finding。`]
@@ -589,7 +596,7 @@ export const continuityValidateTool = defineTool({
       const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings, compilation.id)
       if (repaired) {
         return {
-          output: `严谨创作模式已把本轮 ${result.errorCount} 个错误、${result.warningCount} 个警告交给独立修订器，并原子应用 ${repaired.applied} 处可逐字定位的修改。正文已进入 r${repaired.updated.revision}，请只重新调用一次 continuity_validate 验证新 revision。`,
+          output: `已针对本轮 ${result.errorCount} 个事实错误集中应用 ${repaired.applied} 处最小修订；${result.warningCount} 个警告仅保留提示，不改写作者文风。正文进入 r${repaired.updated.revision}，下一次 continuity_validate 仅复核，不再自动改写。`,
           summary: `连续性检查 · 自动修订 ${repaired.applied} 处`,
           display: { kind: 'chapterDiff', chapterId: repaired.updated.id, chapterTitle: repaired.updated.title, before: repaired.before, after: repaired.after, appliedDirectly: true, revision: repaired.updated.revision },
           snapshot: { target: 'chapter', targetId: repaired.updated.id, field: 'content', previousValue: repaired.before },
@@ -597,7 +604,7 @@ export const continuityValidateTool = defineTool({
       }
     }
     return {
-      output: (continuityRepairRounds(compilation.validation) >= 2 ? '自动修订已达到两轮上限，本次仅复核，不再自动改写。不要重复调用检查来追求零警告；有错误时保留正文并明确报告未解决证据，禁止带错提交。\n' : '') + (result.errorCount > 0
+      output: (continuityRepairRounds(compilation.validation) >= MAX_CONTINUITY_AUTO_REPAIRS ? '自动修订已完成一次，本次仅复核，不再自动改写。不要重复调用检查来追求零警告；有错误时保留正文并明确报告未解决证据，禁止带错提交。\n' : '') + (result.errorCount > 0
         ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。${verificationOnly ? '质量修订后的最终复核仍有错误，保留证据并报告阻塞，不再循环自动改写或带错提交。' : '只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。'}\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
         : `CHECK 通过：0 个错误、${result.warningCount} 个警告。可以调用 chapter_bridge_commit 提交本章终态。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`),
       summary: `连续性检查${criticFallback ? '（确定性兜底）' : ''} · ${result.errorCount} 错误 ${result.warningCount} 警告`,

@@ -62,16 +62,16 @@ describe.skipIf(!dbAvailable)('Agent 3.0 Story Compiler 与 Chapter Bridge（需
     runId = run.id
   })
 
-  it('自动修订额度原子限两次，复核和重新准备不重置', async () => {
+  it('自动修订额度原子限一次，复核和重新准备不重置', async () => {
     const input = { userId, novelId, runId, chapterId: chapter3Id, mode: 'balanced' as const, intentSummary: '检查修订上限' }
     const prepared = await prepareStoryCompilation(input)
     const attempts = await Promise.all(Array.from({ length: 4 }, () => reserveContinuityRepair(userId, novelId, prepared.compilation.id)))
-    expect(attempts.filter(Boolean)).toHaveLength(2)
+    expect(attempts.filter(Boolean)).toHaveLength(1)
     await validateStoryContinuity({ userId, novelId, compilationId: prepared.compilation.id, findings: [], independentCheck: 'complete' })
     const saved = await prisma.storyCompilation.findUniqueOrThrow({ where: { id: prepared.compilation.id } })
-    expect(continuityRepairRounds(saved.validation)).toBe(2)
+    expect(continuityRepairRounds(saved.validation)).toBe(1)
     const rePrepared = await prepareStoryCompilation(input)
-    expect(continuityRepairRounds(rePrepared.compilation.validation)).toBe(2)
+    expect(continuityRepairRounds(rePrepared.compilation.validation)).toBe(1)
     expect(await reserveContinuityRepair(userId, novelId, rePrepared.compilation.id)).toBe(false)
   })
 

@@ -36,6 +36,8 @@ const asStringArray = (value: unknown): string[] =>
 const clip = (value: string, max: number): string =>
   value.length <= max ? value : `${value.slice(0, max)}…`
 
+export const MAX_CONTINUITY_AUTO_REPAIRS = 1
+
 export function continuityRepairRounds(validation: unknown): number {
   if (!validation || typeof validation !== 'object' || Array.isArray(validation)) return 0
   const value = (validation as Record<string, unknown>).autoRepairRounds
@@ -47,7 +49,7 @@ export async function reserveContinuityRepair(userId: string, novelId: string, c
   return prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM story_compilations WHERE id = ${compilationId} AND user_id = ${userId} AND novel_id = ${novelId} FOR UPDATE`
     const compilation = await tx.storyCompilation.findFirst({ where: { id: compilationId, userId, novelId, status: 'active' } })
-    if (!compilation || continuityRepairRounds(compilation.validation) >= 2) return false
+    if (!compilation || continuityRepairRounds(compilation.validation) >= MAX_CONTINUITY_AUTO_REPAIRS) return false
     const previous = compilation.validation && typeof compilation.validation === 'object' && !Array.isArray(compilation.validation) ? compilation.validation : {}
     await tx.storyCompilation.update({ where: { id: compilationId }, data: {
       validation: { ...previous, autoRepairRounds: continuityRepairRounds(previous) + 1 } as Prisma.InputJsonValue,
