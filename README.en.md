@@ -53,13 +53,13 @@ flowchart TD
   F --> G{Task type}
   G -->|New book / genre shift / factual dependency| H[Research Dossier<br/>search·deep-read·provenance·cached TTL]
   G -->|Plan / draft / revise / continue| I[Story Compiler<br/>Charter → Promise → Scene Task → Chapter Bridge]
-  G -->|Search / manage / export| J[Agent Tool Loop<br/>98 governed tools·attachments·covers·exports]
+  G -->|Search / manage / export| J[Agent Tool Loop<br/>105 governed tools·attachments·covers·exports]
   G -->|Complex collaboration / scheduled check| K[Subagent / Schedule<br/>isolated session·budget·allowlist·cancellable]
   H --> I
   I --> L[Model execution<br/>streaming reasoning·text·tool arguments]
   J --> L
   K --> L
-  L --> M[Continuity + human-quality + copyright gate<br/>evidence findings·up to two local repairs]
+  L --> M[Continuity + human-quality + copyright gate<br/>evidence findings·bounded factual repair·revision verification]
   M --> N{Write required?}
   N -->|No| O[Assemble response and tool results]
   N -->|Yes| P[revision lock + ChangeSet<br/>atomic write·rollback snapshot]
@@ -85,13 +85,13 @@ flowchart LR
   end
   subgraph Service[Chevoink services]
     API[Express API<br/>auth·works·community·Credits]
-    LOOP[Agent 3.0 Runtime<br/>Loop·98 Tools·sandbox]
+    LOOP[Agent 3.0 Runtime<br/>Loop·105 Tools·sandbox]
     SKILL[Skill OS 3.0<br/>Router·Loader·version/test/rollback]
     STORY[Story Compiler<br/>Memory·Quality Gate·Craft Retrieval]
     SSE[SSE Event Stream<br/>persistence·resume·replay]
   end
   subgraph Data[Data]
-    PG[(PostgreSQL<br/>86 Models·54 Migrations)]
+    PG[(PostgreSQL<br/>106 Models·72 Migrations)]
     FILES[(Managed uploads and exports)]
   end
   subgraph Providers[Providers]
@@ -122,7 +122,13 @@ The deterministic evaluation suite freezes 24 Chinese web-fiction scenarios acro
 
 ### Long-running tasks
 
-The Agent keeps working on long tasks such as "write the whole book": as long as the task is unfinished and real progress is being made, it resumes automatically. Built-in multi-layer runaway protection prevents repeated work and wasted Credits.
+Long tasks can resume within budget and progress checks, retaining the original request and target. Hard limits, unverifiable results and failed quality gates stop execution explicitly; automatic completion of an entire book is not guaranteed.
+
+## Current engineering status
+
+Revision `71f7adc` was deployed on 2026-09-08: [CI passed](https://github.com/Xcy8010/chevoink/actions/runs/34240086273), 1,885 tests passed; global line coverage is **33.62%**, with 40% still a target. Resume, repeated continuity repairs, research caching and cross-novel review persistence were addressed. Creating a novel no longer requires resolving the previous novel's reviews first.
+
+Still in beta: whole-book per-chapter analysis, V2 shadow pricing, independent security/recovery exercises and full end-to-end performance acceptance remain incomplete. No 95–100 score or measured Token-saving percentage is claimed. See [engineering evidence](./docs/ENGINEERING.en.md).
 
 ## Quick Navigation
 
@@ -176,10 +182,11 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ### Public-beta Credits
 
 - Public-beta accounts receive **450 Credits per day**, resetting at **15:00 UTC+8**. Referral rewards live in a separate balance and survive daily resets.
-- Text uses a bundled allowance: **1 Credit includes both 10,000 input tokens and 1,000 output tokens**. Charging uses the larger utilization ratio instead of adding input and output charges. Image generation costs 6 Credits per invocation and web search costs 2 Credits per invocation.
+- Text uses a bundled allowance: **at base multiplier m=1, 1 Credit includes both 10,000 input tokens and 1,000 output tokens**. Charging uses the larger utilization ratio instead of adding input and output charges. Image generation costs 6 Credits per invocation and web search costs 2 Credits per invocation.
 - Every user gets a unique referral URL. Only a brand-new account can redeem it on first registration: the inviter receives 300 Credits and the invitee receives 120 Credits; each invitee can redeem exactly once.
 - Studio warns at 20%, 10%, and 5% remaining. Exhaustion safely stops the task; [`/account/usage`](/account/usage) shows the plan, balances, and itemized ledger.
-- The Agent defaults to the Speed tier (1.0x) with high reasoning. Each built-in or custom model exposes only its supported effort levels. Standard 1.1x, Performance 1.8x, and Ultimate 4.8x remain unavailable until an administrator fully configures their URL, API key, and model. Authors may also use an OpenAI-compatible BYOK model; its key is encrypted and never revealed again.
+- Current text pricing: `ceil(1000 × m × max(P/10000, O/1000)) / 1000` Credits, using confirmed prompt/completion tokens and the frozen multiplier. Production snapshot on 2026-09-08: Speed 1.1, Standard 1.0, Performance 3.0, Ultimate 3.5. Published settings and the operation snapshot govern; source defaults are not live prices. V2 itemized pricing is implemented but not activated; see [engineering](./docs/ENGINEERING.en.md).
+- Models expose supported reasoning efforts only; default high. BYOK text has no platform text charge; keys are encrypted and never returned. Other platform tool fees remain separate.
 
 ## Feature Overview
 
@@ -197,8 +204,8 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 | Frontend | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | Backend | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek text generation · Zhipu GLM-4.1V image understanding · OpenAI-compatible image generation · Edge TTS speech synthesis · Bocha web search (multi-engine fallback) |
-| Agent | Agent 3.0 Runtime (`api/lib/agent`): unified Loop, 98 governed tools, Skill OS 3.0, Story Compiler, layered memory, quality gate, embedded subagents, long-task auto-resume with runaway protection, and durable SSE events |
-| Testing | Vitest + Supertest + Testing Library (unit, PostgreSQL integration, real DOM interaction, and frozen Agent evals; CI runs 70 files / 402 tests with coverage gates) |
+| Agent | Agent 3.0 Runtime (`api/lib/agent`): unified Loop, 105 governed tools, Skill OS 3.0, Story Compiler, layered memory, quality gate, embedded subagents, long-task auto-resume with runaway protection, and durable SSE events |
+| Testing | Vitest + Supertest + Testing Library (unit, PostgreSQL integration, real DOM interaction, and frozen Agent evals; 2026-09-08: 161 files / 1,885 tests passed, with coverage gates) |
 | Deployment | PM2 + nginx (production) · GitHub Actions CI (type check / lint / unit / integration tests on push) · Android Capacitor shell project (separate directory) |
 
 ## Directory Structure
@@ -210,7 +217,7 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ├── prisma/            # Data model schema, migrations, seed data
 ├── tests/             # Unit, PostgreSQL integration, UI interaction, Chevoink-CN-Fiction-Eval
 ├── docs/              # Engineering docs (ENGINEERING & DEVELOPMENT-STANDARDS, both bilingual)
-├── plan/              # 28 phase proposals (incl. Agent budget & loop protection) + 8 parallel execution checklists
+├── plan/              # Published phase proposals/checklists; not proof of complete acceptance
 ├── deploy/            # nginx config & server deployment scripts
 ├── scripts/           # Deployment / push / data cleanup scripts
 └── public/            # Static assets
@@ -219,8 +226,8 @@ No manual upgrades needed afterwards: the app checks for new versions on launch,
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-npm install
+# 1. Use pinned Node 22.23.2 / npm 10.9.8, then install locked dependencies
+npm ci
 
 # 2. Configure environment variables (see .env.example; fill in DB connection, AI keys, etc.)
 copy .env.example .env   # or: cp .env.example .env on Unix
@@ -249,7 +256,7 @@ Common scripts:
 
 ## Deployment & Releases
 
-- **Production deploy**: `npm run deploy:prod` (local gates: type check → tests → production-dependency security audit → build; then package & upload → remote migrate/build → PM2 reload → health check)
+- **Production deploy**: full gates, Agent eval and both dependency audits → concise Chinese commit/push → same-SHA CI success → authorized `npm run deploy:prod`. Archive git HEAD; verify pinned Node, migrate/build, reload PM2 and check health. Current deployment is in-place, not atomic rollback. SkipLocalChecks requires authorization and equivalent controlled remote gates for that SHA.
 - **Push to GitHub**: `powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`, supports `-Tag v1.50 -ReleaseAsset <apk path>` to tag and publish a Release (with the Android APK attached)
 - **Android APK**: built by the separate Capacitor shell project, distributed via the in-app update banner / settings-page update check
 

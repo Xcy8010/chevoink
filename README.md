@@ -53,13 +53,13 @@ flowchart TD
   F --> G{任务类型}
   G -->|新书 / 换题材 / 事实依赖| H[Research Dossier<br/>搜索·深读·来源记录·缓存 TTL]
   G -->|规划 / 写作 / 改稿 / 续写| I[Story Compiler<br/>Charter → Promise → Scene Task → Chapter Bridge]
-  G -->|检索 / 管理 / 导出| J[Agent Tool Loop<br/>98 个受治理工具·附件·封面·导出]
+  G -->|检索 / 管理 / 导出| J[Agent Tool Loop<br/>105 个受治理工具·附件·封面·导出]
   G -->|复杂协作 / 定时巡检| K[子 Agent / Schedule<br/>独立会话·预算·工具白名单·可取消]
   H --> I
   I --> L[模型执行<br/>流式思考·正文·工具参数]
   J --> L
   K --> L
-  L --> M[连续性 + 人类感 + 版权质量门<br/>证据化 finding·最多两轮局部修订]
+  L --> M[连续性 + 人类感 + 版权质量门<br/>证据化 finding·有界事实修订·版本复核]
   M --> N{是否需要写入?}
   N -->|否| O[整理答复与工具结果]
   N -->|是| P[revision 乐观锁 + ChangeSet<br/>原子写入·回滚快照]
@@ -85,13 +85,13 @@ flowchart LR
   end
   subgraph Service[Chevoink 服务]
     API[Express API<br/>认证·作品·社区·Credits]
-    LOOP[Agent 3.0 Runtime<br/>Loop·98 Tools·权限沙箱]
+    LOOP[Agent 3.0 Runtime<br/>Loop·105 Tools·权限沙箱]
     SKILL[Skill OS 3.0<br/>Router·Loader·版本/测试/回滚]
     STORY[Story Compiler<br/>Memory·Quality Gate·Craft Retrieval]
     SSE[SSE Event Stream<br/>持久化·续传·回放]
   end
   subgraph Data[数据层]
-    PG[(PostgreSQL<br/>86 Models·54 Migrations)]
+    PG[(PostgreSQL<br/>106 Models·72 Migrations)]
     FILES[(受管上传与导出)]
   end
   subgraph Providers[外部能力]
@@ -122,7 +122,13 @@ flowchart LR
 
 ### 长任务连续执行
 
-Agent 可以持续执行「写完整本书」这类长任务：任务没做完、还在产出真实进展时会自动续跑；同时内置多层防失控保护，避免重复劳动和 Credits 浪费。
+Agent 支持有预算和进展校验的长任务续跑；暂停后恢复原任务请求与目标。达到硬上限、缺少可核对结果或质量检查未通过时会明确停止，不保证一次自动完成整本书。
+
+## 当前工程状态
+
+2026-09-08，`71f7adc` 已部署：[CI 通过](https://github.com/Xcy8010/chevoink/actions/runs/34240086273)，1,885 项测试通过；全仓行覆盖率 **33.62%**，40% 仍是目标。已修复继续运行、重复连续性修订、研究读取缓存和待审状态串作品；新建作品不再要求先处理旧作品审查。
+
+目前仍为公测：全书逐章分析验收、V2 费率影子验证、独立安全/恢复演练及完整端到端性能验收尚未完成。不宣称已达 95–100 分，也不声称已测得 Token 节省百分比。范围与证据见[工程文档](./docs/ENGINEERING.md)。
 
 ## 快速导航
 
@@ -176,10 +182,11 @@ Agent 可以持续执行「写完整本书」这类长任务：任务没做完�
 ### 公测 Credits
 
 - 公测账户每天获得 **450 Credits**，在 **UTC+8 15:00** 重置；邀请奖励为独立余额，不随每日重置清零。
-- 文本采用同时包含两类额度的套餐口径：**1 Credit 同时包含 10,000 输入 Token 与 1,000 输出 Token**，按两者使用比例的较大值扣费，而不是输入、输出分别相加；生图每次 6 Credits，联网搜索每次 2 Credits。
+- 文本采用同时包含两类额度的套餐口径：**基础倍率 m=1 时，1 Credit 同时包含 10,000 输入 Token 与 1,000 输出 Token**，按两者使用比例的较大值扣费，而不是输入、输出分别相加；生图每次 6 Credits，联网搜索每次 2 Credits。
 - 每位用户都有唯一邀请链接。仅新用户首次注册可领取：邀请人获得 300 Credits，被邀请人获得 120 Credits；同一新用户只能兑现一次。
 - 余额低于 20% / 10% / 5% 时创作区提醒；用尽后安全停止任务，并可在 [`/account/usage`](/account/usage) 查看套餐、余额和逐笔记录。
-- Agent 默认使用“极速”档（1.0x）和 high 推理强度；每个内置或自定义模型只显示自身支持的推理档位。标准 1.1x、性能 1.8x、极致 4.8x 需管理员完整配置 URL、API Key 与模型后才可使用。用户也可配置自带密钥的 OpenAI 兼容模型，密钥只加密保存、不可回显。
+- 当前文本公式为 `ceil(1000 × m × max(P/10000, O/1000)) / 1000` Credits；P/O 为确认输入/输出，m 为本次冻结倍率。2026-09-08 线上可选倍率：极速 1.1、标准 1.0、性能 3.0、极致 3.5；以产品公示及实际价格快照为准，不将源码默认值当线上价格。V2 分项公式已实现但尚未启用，详见[工程文档](./docs/ENGINEERING.md)。
+- 模型只显示自身支持的推理档位；默认 high。BYOK 文本不收平台文本 Credits，密钥加密保存、不回显；其他平台工具费用独立。
 
 ## 功能一览
 
@@ -197,8 +204,8 @@ Agent 可以持续执行「写完整本书」这类长任务：任务没做完�
 | 前端 | React 18 · Vite 6 · TypeScript · TailwindCSS · React Query 5 · Zustand 5 · React Router 7 |
 | 后端 | Express 4 · Prisma 6 · PostgreSQL · Zod |
 | AI | DeepSeek 文本生成 · 智谱 GLM-4.1V 图像理解 · OpenAI 兼容图像生成 · Edge TTS 语音合成 · 博查联网搜索（多引擎降级） |
-| Agent | Agent 3.0 Runtime（`api/lib/agent`）：统一 Loop、98 个受治理工具、Skill OS 3.0、Story Compiler、分层记忆、质量门、内嵌子 Agent、长任务自动续跑与防失控保护、持久化 SSE 事件流 |
-| 测试 | Vitest + Supertest + Testing Library（单元、PostgreSQL 集成、真实 DOM 交互与冻结 Agent 评测；CI 70 个测试文件 / 402 项测试并执行覆盖率门禁） |
+| Agent | Agent 3.0 Runtime（`api/lib/agent`）：统一 Loop、105 个受治理工具、Skill OS 3.0、Story Compiler、分层记忆、质量门、内嵌子 Agent、长任务自动续跑与防失控保护、持久化 SSE 事件流 |
+| 测试 | Vitest + Supertest + Testing Library（单元、PostgreSQL 集成、真实 DOM 交互与冻结 Agent 评测；2026-09-08：161 个测试文件 / 1,885 项测试通过；覆盖率门禁） |
 | 部署 | PM2 + nginx（生产）· GitHub Actions CI（push 即跑类型检查/lint/单测/集成测试）· 安卓 Capacitor 壳工程（独立仓库目录） |
 
 ## 目录结构
@@ -210,7 +217,7 @@ Agent 可以持续执行「写完整本书」这类长任务：任务没做完�
 ├── prisma/            # 数据模型 schema 与迁移、种子数据
 ├── tests/             # 单元、PostgreSQL 集成、UI 交互与 Chevoink-CN-Fiction-Eval
 ├── docs/              # 工程文档（ENGINEERING 与 DEVELOPMENT-STANDARDS，均中英文双语）
-├── plan/              # 28 篇阶段方案快照（含 Agent 预算与防死循环方案）+ 8 份并行执行清单
+├── plan/              # 已公开的阶段方案与执行清单（不代表全部验收完成）
 ├── deploy/            # nginx 配置与服务器部署脚本
 ├── scripts/           # 部署 / 推送 / 数据清理脚本
 └── public/            # 静态资源
@@ -219,8 +226,8 @@ Agent 可以持续执行「写完整本书」这类长任务：任务没做完�
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
-npm install
+# 1. 使用 .node-version 指定的 Node 22.23.2 / npm 10.9.8，再安装锁定依赖
+npm ci
 
 # 2. 配置环境变量（参考 .env.example，填入数据库连接、AI Key 等）
 copy .env.example .env
@@ -249,7 +256,7 @@ npm run dev
 
 ## 部署与发布
 
-- **生产部署**：`npm run deploy:prod`（本地闸门：类型检查 → 测试 → 生产依赖安全审计 → 构建；然后打包上传 → 远端迁移/构建 → PM2 重载 → 健康检查）
+- **生产部署**：完整四闸、Agent 评测与双依赖审计 → 简短中文提交并推送 → 同 SHA CI 成功 → 授权后 `npm run deploy:prod`。发布包来自 `git archive HEAD`；远端固定 Node、迁移/构建、PM2 重载与健康核验。当前仍是原目录部署，不宣称原子回滚。受控远端已通过同 SHA 门禁时才可获准使用 `-SkipLocalChecks`。
 - **推送 GitHub**：`powershell -ExecutionPolicy Bypass -File scripts\push-to-github.ps1`，支持 `-Tag v1.50 -ReleaseAsset <apk路径>` 打 Tag 并发布 Release（附安卓 APK）
 - **安卓 APK**：由独立的 Capacitor 壳工程构建，通过应用内更新条幅 / 设置页检测更新分发
 
