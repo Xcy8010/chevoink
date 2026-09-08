@@ -55,6 +55,7 @@ import {
   resolveRunTokenBudget,
   savedRunUsageSchema,
   recoverLegacyRunUsage,
+  recoverRunElapsedMs,
   type RunCheckpointState,
 } from './checkpoint.js'
 import { autoNameSession } from './session-title.js'
@@ -558,6 +559,21 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   // P2 墙钟：总帽防无限烧 credits；空转帽防低速空转。审批/提问等待发生在工具执行内部，
   // 工具返回即刷新活动钟，天然排除挂起期误杀
   let runStartedAt = Date.now()
+  let executionStartedAt = Date.now()
+  let priorExecutionMs = 0
+  let inheritedExecutionMs = 0
+  const executionElapsedMs = () => priorExecutionMs + Math.max(0, Date.now() - executionStartedAt)
+  const recoverExecution = (record: { startedAt?: Date | null; currentTurn?: number;
+    events?: Array<{ type: string; createdAt: Date }> }, stoppedAt: number) => {
+    if (!record.startedAt) {
+      if (!record.currentTurn) return 0
+      throw new DataAccessError(409, 'RUN_TIME_UNCONFIRMED', '原任务执行时间记录缺失，未重置预算或启动付费请求。')
+    }
+    const elapsed = recoverRunElapsedMs(record.startedAt.getTime(), stoppedAt,
+      (record.events ?? []).map(event => ({ type: event.type, at: event.createdAt.getTime() })))
+    if (elapsed === null) throw new DataAccessError(409, 'RUN_TIME_UNCONFIRMED', '原任务执行时间记录不一致，未重置预算或启动付费请求。')
+    return elapsed
+  }
   let lastActivityAt = Date.now()
   // P0 重复签名滑窗：只记成功执行；失败后同签名正当重试不计次
   const admission = new ToolAdmissionGuard()
@@ -595,7 +611,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     writeProgress: writeProgressCount, writeBaseline: checkpointWriteBaseline,
     readProgress: readProgressCount, readBaseline: checkpointReadBaseline,
     progressSignatures: [...progressSignatures],
-    inheritedTokens, inheritedTurns,
+    inheritedTokens, inheritedTurns, inheritedExecutionMs,
   })
   const persistCheckpoint = () => prisma.agentRun.update({
     where: { id: runId, userId: params.userId, runtimeProtocolVersion: 0, taskRootId: null },
@@ -641,9 +657,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   try {
     const storedRun = await startLegacyRuntimeRun(params.userId, runId, Boolean(params.resume))
     assertLegacyRuntimeCompatible(storedRun)
+    executionStartedAt = Date.now()
     if (params.resume) {
       const saved = await restoreSavedUsage(storedRun, runId)
       if (!saved.success) throw new Error('运行预算记录无法核实，已停止续跑；原记录保留，不能重置预算后继续。')
+      priorExecutionMs = recoverExecution(storedRun, executionStartedAt)
       usage.promptTokens = saved.data.promptTokens
       usage.completionTokens = saved.data.completionTokens
       usage.totalTokens = saved.data.totalTokens
@@ -653,6 +671,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       if (checkpoint) {
         inheritedTokens = checkpoint.inheritedTokens
         inheritedTurns = checkpoint.inheritedTurns
+        inheritedExecutionMs = checkpoint.inheritedExecutionMs ?? 0
+        priorExecutionMs += inheritedExecutionMs
         restoreCheckpointLimits(checkpoint)
       }
       // Historical runs keep their known consumption, without inventing earned slices.
@@ -724,7 +744,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       const priorRuns = await prisma.agentRun.findMany({
         where: { sessionId: params.sessionId, userId: params.userId, novelId: params.novelId,
           id: { not: runId }, engine: 'loop', taskSpec: { path: ['id'], equals: parsedTaskSpec.data.id } },
-        select: { id: true, status: true, usage: true, currentTurn: true, startedAt: true },
+        select: { id: true, status: true, usage: true, currentTurn: true, startedAt: true, finishedAt: true,
+          events: { where: { type: { in: ['run.started', 'run.paused', 'run.finished'] } }, orderBy: { seq: 'asc' }, select: { type: true, createdAt: true } } },
       })
       if (!priorRuns.some(prior => prior.id === previousTask.id)) {
         throw new DataAccessError(409, 'TASK_AUTHORIZATION_BUDGET_UNCONFIRMED', '原任务预算链无法核实，不能创建新预算继续。')
@@ -736,11 +757,31 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         }
         inheritedTokens += saved.data.totalTokens
         inheritedTurns += prior.currentTurn
+        const priorElapsed = recoverExecution(prior, executionStartedAt)
+        priorExecutionMs += priorElapsed
+        inheritedExecutionMs += priorElapsed
         if (prior.startedAt) runStartedAt = Math.min(runStartedAt, prior.startedAt.getTime())
       }
       const restoredPrior = await restoreSavedUsage(previousTask, previousTask.id)
       const priorCheckpoint = restoredPrior.success ? restoredPrior.data.checkpoint : undefined
       if (priorCheckpoint) restoreCheckpointLimits(priorCheckpoint)
+    }
+    if (params.resume && inheritedTurns > 0 && parsedTaskSpec.success) {
+      // Older checkpoints did not store inherited time. Recompute from owned
+      // run intervals; never treat the missing field as a fresh time budget.
+      const preceding = await prisma.agentRun.findMany({ where: { userId: params.userId, sessionId: params.sessionId,
+        novelId: params.novelId, id: { not: runId }, taskSpec: { path: ['id'], equals: parsedTaskSpec.data.id } },
+        select: { startedAt: true, currentTurn: true, events: { where: { type: { in: ['run.started', 'run.paused', 'run.finished'] } },
+          orderBy: { seq: 'asc' }, select: { type: true, createdAt: true } } } })
+      const elapsed = preceding.reduce((total, previous) => total + recoverExecution(previous, executionStartedAt), 0)
+      priorExecutionMs += Math.max(0, elapsed - inheritedExecutionMs)
+      inheritedExecutionMs = Math.max(elapsed, inheritedExecutionMs)
+    }
+    const initialTimeLimitMs = (resumeCount > 0 ? env.agentRunWallClockLongMinutes : env.agentRunWallClockMinutes) * 60_000
+    if (executionElapsedMs() > initialTimeLimitMs) {
+      const reason = `任务累计执行时长已达上限（${Math.round(initialTimeLimitMs / 60_000)} 分钟，已排除有记录的暂停等待时间）。已保存内容保留；重复点击继续不会增加时间预算。`
+      await finalizeRun(runId, bus, 'failed', usage, turn, reason, reason, false)
+      return
     }
     let taskSpec: TaskSpec = parsedTaskSpec.success
       ? { ...parsedTaskSpec.data, runId }
@@ -1111,7 +1152,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         readBaseline: checkpointReadBaseline,
         resumeCount,
         compactionCount,
-        elapsedMs: Date.now() - runStartedAt,
+        elapsedMs: executionElapsedMs(),
         longWallClockLimitMs: env.agentRunWallClockLongMinutes * 60_000,
         usedTokens: taskTokens(),
         tokenCeiling: env.agentRunTokenBudgetCeiling,
@@ -1155,8 +1196,11 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       // P2 墙钟双条件：总帽（发生过自动续跑后切长任务帽，默认 60→180 分钟）+ 空转帽（默认 10 分钟）。
       // 空转判定只看轮边界：流式增量与工具完成都会刷新 lastActivityAt，模型/工具执行中不会误杀
       const wallClockLimitMs = (resumeCount > 0 ? env.agentRunWallClockLongMinutes : env.agentRunWallClockMinutes) * 60_000
-      if (Date.now() - runStartedAt > wallClockLimitMs) {
-        await wrapUpAndFinish(`任务运行时长已达上限（${Math.round(wallClockLimitMs / 60_000)} 分钟）。`)
+      if (executionElapsedMs() > wallClockLimitMs) {
+        // A hard limit cannot be fixed by asking the model to summarize again.
+        // Keep the original budget and terminate without another paid request.
+        const reason = `任务累计执行时长已达上限（${Math.round(wallClockLimitMs / 60_000)} 分钟，已排除有记录的暂停等待时间）。已保存内容保留；重复点击继续不会增加时间预算。`
+        await finalizeRun(runId, bus, 'failed', usage, turn, reason, reason, false)
         return
       }
       if (Date.now() - lastActivityAt > env.agentRunIdleMinutes * 60_000) {
@@ -1369,7 +1413,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           // a short model wrap-up cannot hide it or trigger paid regeneration.
           const evidence = report.evidence
           const evidenceNote = evidence && evidence.discoveredPages > 0
-            ? `> 联网资料范围：发现 ${evidence.discoveredPages} 个来源，保存可读文章的来源 ${evidence.readablePages} 个，保存目录/简介的来源 ${evidence.metadataPages} 个，仍有读取失败记录的来源 ${evidence.failedSources} 个；报告引用 ${evidence.citedVersions} 个已保存页面版本。各类来源可能重叠；这些数字不包含附件，不代表已读章节数或全书覆盖，未核实全书阅读完整性。\n\n` : ''
+            ? `> 联网资料范围：发现 ${evidence.discoveredPages} 个来源，保存可读文章的来源 ${evidence.readablePages} 个，保存目录/简介的来源 ${evidence.metadataPages} 个，仍有读取失败记录的来源 ${evidence.failedSources} 个；报告引用 ${evidence.citedVersions} 个已保存页面版本。正文窗口按版本去重后共 ${evidence.providedCharacters ?? 0} 个 UTF-16 字符位置，表示工具已准备的内容范围，不等于已分析范围。各类来源可能重叠；这些数字不包含附件，不代表已读章节数或全书覆盖，未核实全书阅读完整性。\n\n` : ''
           const delivered = evidenceNote + humanizeAgentVisibleText(stripAgentProtocolArtifacts(report.content))
           for (let index = parts.length - 1; index >= 0; index -= 1) {
             if (parts[index].type === 'text') parts.splice(index, 1)

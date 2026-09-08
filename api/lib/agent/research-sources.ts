@@ -7,6 +7,7 @@ import { parsePublicHttpUrl } from '../public-http.js'
 import { assessReaderText } from '../web-reader-quality.js'
 import type { WebReadResult } from '../web-reader-service.js'
 import { countReportChineseCharacters } from '../../../shared/agent-output.js'
+import { mergeResearchRanges } from './research-ranges.js'
 
 type Scope = { userId: string; sessionId: string; novelId: string; runId: string }
 
@@ -125,7 +126,10 @@ async function loadResearchReport(scope: Scope, input: ReportReadInput, complete
       tx.agentResearchSource.count({ where: { ...sourceScope, versions: { some: { contentKind: 'article' } } } }),
       tx.agentResearchSource.count({ where: { ...sourceScope, versions: { some: { contentKind: 'metadata' } } } }),
       tx.agentResearchSource.count({ where: { ...sourceScope, readFailure: { not: Prisma.DbNull } } }),
-    ]).then(([discoveredPages, readablePages, metadataPages, failedSources]) => ({ discoveredPages, readablePages, metadataPages, failedSources,
+      tx.agentResearchContent.findMany({ where: { source: sourceScope }, select: { providedRanges: true } }),
+    ]).then(([discoveredPages, readablePages, metadataPages, failedSources, windows]) => ({ discoveredPages, readablePages, metadataPages, failedSources,
+      providedCharacters: windows.reduce((sum, window) => sum + mergeResearchRanges(window.providedRanges, Number.MAX_SAFE_INTEGER)
+        .reduce((count, range) => count + range.end - range.start, 0), 0),
       citedVersions: new Set(state.sections.flatMap(section => section.citations.map(citation => `${citation.contentRef}:${citation.revision}`))).size })) : undefined
     return { reportId: parsed.reportId, artifactId: report.id, title: report.title, revision: state.revision,
       sections: state.sections.map(section => ({ id: section.id, order: section.order })),
@@ -163,6 +167,78 @@ async function ownedSource(tx: Prisma.TransactionClient, scope: Scope, sourceId:
     ownerRun: { userId: scope.userId, sessionId: scope.sessionId, novelId: scope.novelId } } })
   if (!source || hash(source.canonicalUrl) !== source.urlHash) return denied()
   return source
+}
+
+/** Durable task-scoped safety attempts. Saved content/cache hits never call this.
+ * Historical calls seed a conservative baseline; a restart cannot reset it. */
+export async function reserveResearchRequest(scope: Scope & { callId: string }, kind: 'search' | 'read', requestKey: string) {
+  return prisma.$transaction(async tx => {
+    const { taskKey, run } = await ownedTask(tx, scope)
+    if (run.status !== 'running') throw new DataAccessError(409, 'RESEARCH_RUN_NOT_ACTIVE', '任务已停止，未发起联网请求。')
+    const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scopeKey}, 0))::text`
+    const id = hash(JSON.stringify([scopeKey, scope.runId, scope.callId]))
+    const previous = await tx.agentResearchRequest.findUnique({ where: { id } })
+    if (previous) throw new DataAccessError(409, 'RESEARCH_REQUEST_ALREADY_RESERVED',
+      '此联网调用已有执行记录，未重复请求。请使用已保存的来源或核对原调用结果。')
+    const baselineId = hash(JSON.stringify([scopeKey, kind, 'baseline']))
+    let baseline = await tx.agentResearchRequest.findUnique({ where: { id: baselineId } })
+    if (!baseline) {
+      const counts = await tx.$queryRaw<Array<{ units: bigint }>>`
+        SELECT count(*) AS units FROM agent_run_events e JOIN agent_runs r ON r.id=e.run_id
+        WHERE r.user_id=${scope.userId} AND r.session_id=${scope.sessionId} AND r.novel_id=${scope.novelId}
+          AND (r.id=${scope.runId} OR r.task_root_id=${taskKey} OR (r.task_root_id IS NULL AND r.task_spec->>'id'=${taskKey}))
+          AND e.type='tool.call' AND e.payload->>'toolName'=${kind === 'search' ? 'web_search' : 'web_read'}
+          AND e.payload->'args' IS NOT NULL AND e.payload->'args'<>'null'::jsonb
+          AND (${kind}='search' OR e.payload->'args'->>'contentRef' IS NULL)
+          AND NOT (e.run_id=${scope.runId} AND e.payload->>'callId'=${scope.callId})`
+      const units = Number(counts[0].units)
+      baseline = await tx.agentResearchRequest.create({ data: { id: baselineId, ownerRunId: scope.runId, scopeKey, kind,
+        units, requestKey: hash('legacy-baseline'), requestLimit: kind === 'search' ? 5 : 8, status: 'baseline' } })
+    }
+    const used = await tx.agentResearchRequest.aggregate({ where: { scopeKey, kind, status: { not: 'released' } }, _sum: { units: true } })
+    if ((used._sum.units ?? 0) >= baseline.requestLimit) return false
+    await tx.agentResearchRequest.create({ data: { id, ownerRunId: scope.runId, scopeKey, kind, requestKey, requestLimit: baseline.requestLimit } })
+    return true
+  })
+}
+
+export async function settleResearchRequest(scope: Scope & { callId: string }, status: 'consumed' | 'released') {
+  return prisma.$transaction(async tx => {
+    const { taskKey } = await ownedTask(tx, scope)
+    const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
+    const id = hash(JSON.stringify([scopeKey, scope.runId, scope.callId]))
+    await tx.agentResearchRequest.updateMany({ where: { id, ownerRunId: scope.runId, scopeKey, status: 'reserved' }, data: { status } })
+  })
+}
+
+const searchOutcomeSchema = z.object({ provider: z.enum(['bocha', 'sogou', 'bing']),
+  results: z.array(z.object({ title: z.string(), url: z.string().max(8192), snippet: z.string(), source: z.string() })).max(8) })
+
+/** Persist only bounded public results, not provider credentials or trace IDs. */
+export async function saveResearchSearchOutcome(scope: Scope & { callId: string }, outcome: unknown) {
+  const parsed = searchOutcomeSchema.parse(outcome)
+  const savedOutcome = { provider: parsed.provider, results: parsed.results.map(result => ({
+    title: result.title.slice(0, 300), url: canonicalResearchUrl(result.url), snippet: result.snippet.slice(0, 300), source: result.source.slice(0, 300),
+  })) }
+  return prisma.$transaction(async tx => {
+    const { taskKey } = await ownedTask(tx, scope)
+    const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
+    const id = hash(JSON.stringify([scopeKey, scope.runId, scope.callId]))
+    await tx.agentResearchRequest.updateMany({ where: { id, scopeKey, kind: 'search', status: 'consumed', savedOutcome: { equals: Prisma.DbNull } },
+      data: { savedOutcome } })
+  })
+}
+
+export async function findResearchSearchOutcome(scope: Scope, requestKey: string) {
+  return prisma.$transaction(async tx => {
+    const { taskKey } = await ownedTask(tx, scope)
+    const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
+    const saved = await tx.agentResearchRequest.findFirst({ where: { scopeKey, kind: 'search', requestKey,
+      status: 'consumed', savedOutcome: { not: Prisma.DbNull }, createdAt: { gte: new Date(Date.now() - 15 * 60_000) } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { savedOutcome: true } })
+    return saved ? searchOutcomeSchema.parse(saved.savedOutcome) : null
+  })
 }
 
 /** Web reads may follow discovered links or a URL explicitly supplied by the
@@ -340,5 +416,25 @@ export async function readResearchContent(scope: Scope, input: { contentRef: str
       text: content.text.slice(start, end), returnedRange: { start, end, total: content.text.length },
       match: matchAt === null ? null : { start: matchAt, end: matchAt + input.find!.length },
       rangeUnit: 'utf16' as const, truncated: end < content.text.length, nextCursor: end < content.text.length ? String(end) : null }
+  })
+}
+
+/** Records a prepared body observation, not a claim that the model analysed it.
+ * Link-only calls must not call this. The source/version and owner remain fixed. */
+export async function recordResearchWindow(scope: Scope, input: { contentRef: string; revision: string; start: number; end: number }) {
+  return prisma.$transaction(async tx => {
+    const content = await tx.agentResearchContent.findUnique({ where: { id: input.contentRef } })
+    if (!content) return denied()
+    await ownedSource(tx, scope, content.sourceId)
+    await tx.$queryRaw`SELECT id FROM agent_research_contents WHERE id=${content.id} FOR UPDATE`
+    const current = await tx.agentResearchContent.findUniqueOrThrow({ where: { id: content.id } })
+    if (current.revision !== input.revision || hash(current.text) !== current.contentHash) {
+      throw new DataAccessError(409, 'RESEARCH_REVISION_MISMATCH', '正文版本不一致，未记录阅读范围。')
+    }
+    const prior = mergeResearchRanges(current.providedRanges, current.text.length)
+    const providedRanges = mergeResearchRanges([...prior, { start: input.start, end: input.end }], current.text.length)
+    if (JSON.stringify(prior) !== JSON.stringify(providedRanges)) {
+      await tx.agentResearchContent.update({ where: { id: content.id }, data: { providedRanges } })
+    }
   })
 }

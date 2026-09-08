@@ -196,8 +196,6 @@ export function resolveQuestionAnswer(runId: string, callId: string, answer: str
 export function cancelAllQuestions(runId: string) {
   const pending = pendingQuestionsByRun.get(runId)
   questionCountByRun.delete(runId)
-  webSearchCountByRun.delete(runId)
-  webReadCountByRun.delete(runId)
   webSearchCacheByRun.delete(runId)
   platformSearchCountByRun.delete(runId)
   platformReadCountByRun.delete(runId)
@@ -235,26 +233,6 @@ export function consumeQuestionBudget(runId: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 联网搜索预算：每个 run 最多搜索 5 次，防止循环滥用拖慢任务
-// ---------------------------------------------------------------------------
-
-export const WEB_SEARCH_BUDGET_PER_RUN = 5
-
-const webSearchCountByRun = new Map<string, number>()
-
-/** 尝试消耗一次联网搜索额度：返回是否允许本次搜索 */
-export function consumeWebSearchBudget(runId: string): boolean {
-  const used = webSearchCountByRun.get(runId) ?? 0
-
-  if (used >= WEB_SEARCH_BUDGET_PER_RUN) {
-    return false
-  }
-
-  webSearchCountByRun.set(runId, used + 1)
-  return true
-}
-
-// ---------------------------------------------------------------------------
 // 联网搜索去重缓存：同一 run 内归一化 query 命中缓存时直接返回，不扣搜索预算
 // ---------------------------------------------------------------------------
 
@@ -273,26 +251,6 @@ export function setCachedWebSearch(runId: string, normalizedQuery: string, outco
   }
 
   cache.set(normalizedQuery, outcome)
-}
-
-// ---------------------------------------------------------------------------
-// 网页深读预算：每个 run 最多读取 8 个网页，配合 web_search 使用
-// ---------------------------------------------------------------------------
-
-export const WEB_READ_BUDGET_PER_RUN = 8
-
-const webReadCountByRun = new Map<string, number>()
-
-/** 尝试消耗一次网页深读额度：返回是否允许本次读取 */
-export function consumeWebReadBudget(runId: string): boolean {
-  const used = webReadCountByRun.get(runId) ?? 0
-
-  if (used >= WEB_READ_BUDGET_PER_RUN) {
-    return false
-  }
-
-  webReadCountByRun.set(runId, used + 1)
-  return true
 }
 
 // ---------------------------------------------------------------------------

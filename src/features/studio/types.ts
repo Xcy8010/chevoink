@@ -20,6 +20,15 @@ export type EditableNovelStatus = 'draft' | 'published' | 'completed' | 'archive
 export type MobileView = 'editor' | 'chapters' | 'assistant' | 'memory' | 'context' | 'skills' | 'cover' | 'meta'
 export type ToolPanel = 'meta' | 'assistant' | 'cover'
 export type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+
+export type WorkspaceConfirmation = {
+  title: string
+  description: string
+  confirmLabel?: string
+  cancelLabel?: string
+  tone?: 'default' | 'danger'
+  onConfirm: () => void | Promise<void>
+}
 export type AgentTaskType =
   | 'workspace-agent'
   | 'generate-novel-title'

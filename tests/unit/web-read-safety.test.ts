@@ -14,6 +14,9 @@ const stored = vi.hoisted(() => ({ page: null as import('../../api/lib/web-reade
 // are exercised against real PostgreSQL in agent-research-sources.test.ts.
 vi.mock('../../api/lib/agent/research-sources.js', async original => ({
   ...await original<typeof import('../../api/lib/agent/research-sources.js')>(),
+  reserveResearchRequest: vi.fn(async () => true),
+  settleResearchRequest: vi.fn(async () => {}),
+  recordResearchWindow: vi.fn(async () => {}),
   assertResearchUrlProvenance: vi.fn(async () => {}),
   findSavedResearchContent: vi.fn(async () => null),
   registerResearchSources: async (_scope: unknown, links: Array<{ url: string; title: string }>) => links.map((link, index) => ({ id: `link-${index}`, canonicalUrl: link.url })),
@@ -57,6 +60,15 @@ beforeEach(() => {
 afterEach(() => { env.webReaderFallback = originalFallback; env.webReaderFirecrawlApiKey = originalFirecrawlKey; vi.restoreAllMocks(); vi.unstubAllGlobals(); transport.mockReset() })
 
 describe('web_read trustworthy outcomes', () => {
+  it('releases a fetch reservation cancelled before network dispatch', async () => {
+    const { reserveResearchRequest, settleResearchRequest } = await import('../../api/lib/agent/research-sources.js')
+    const controller = new AbortController()
+    const context = { ...ctx(), signal: controller.signal }
+    vi.mocked(reserveResearchRequest).mockImplementationOnce(async () => { controller.abort(new Error('cancel during reservation')); return true })
+    await expect(webReadTool.execute(context, { url: 'https://example.com/chapter' })).rejects.toThrow('cancel during reservation')
+    expect(settleResearchRequest).toHaveBeenCalledWith(context, 'released')
+    expect(transport).not.toHaveBeenCalled()
+  })
   it('reuses a saved page without fetching or spending quota, but permits explicit refresh', async () => {
     const { findSavedResearchContent } = await import('../../api/lib/agent/research-sources.js')
     const context = ctx()

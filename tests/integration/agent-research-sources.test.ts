@@ -4,6 +4,8 @@ import { prisma } from '../../api/lib/prisma.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { canonicalResearchUrl, registerResearchSource, resolveResearchSource, saveResearchContent, readResearchContent,
   findResearchSource, getResearchReadFailure, recordResearchReadFailure,
+  reserveResearchRequest, settleResearchRequest, recordResearchWindow,
+  findResearchSearchOutcome, saveResearchSearchOutcome,
   saveResearchReportSection, readResearchReport, readResearchReportForDelivery, assertResearchUrlProvenance, findSavedResearchContent } from '../../api/lib/agent/research-sources.js'
 import { assessReaderText } from '../../api/lib/web-reader-quality.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
@@ -23,6 +25,19 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
         action: 'workspaceAgent' as const, agentType: 'writingOrchestrator' as const, engine: 'loop', status: 'running' as const }
       await prisma.agentRun.create({ data: { ...base, id: runId, taskSpec: JSON.parse(JSON.stringify(spec)) } })
       const scope = { userId: user.id, novelId: novel.id, sessionId: session.id, runId }
+      const requests = Array.from({ length: 8 }, () => ({ ...scope, callId: randomUUID() }))
+      const admitted = await Promise.all(requests.map(request => reserveResearchRequest(request, 'search', 'a'.repeat(64))))
+      expect(admitted.filter(Boolean)).toHaveLength(5)
+      const accepted = requests[admitted.indexOf(true)]
+      await settleResearchRequest(accepted, 'released')
+      const replacement = { ...scope, callId: randomUUID() }
+      expect(await reserveResearchRequest(replacement, 'search', 'b'.repeat(64))).toBe(true)
+      await settleResearchRequest(replacement, 'consumed')
+      await saveResearchSearchOutcome(replacement, { provider: 'bocha', results: [], attempts: [{ providerRequestId: 'not-persisted' }] })
+      expect(await findResearchSearchOutcome(scope, 'b'.repeat(64))).toEqual({ provider: 'bocha', results: [] })
+      await settleResearchRequest(replacement, 'released')
+      expect(await reserveResearchRequest({ ...scope, callId: randomUUID() }, 'search', 'c'.repeat(64))).toBe(false)
+      await expect(reserveResearchRequest(replacement, 'search', 'b'.repeat(64))).rejects.toMatchObject({ code: 'RESEARCH_REQUEST_ALREADY_RESERVED' })
       await expect(assertResearchUrlProvenance(scope, 'https://www.xs599.com/novel/12345.html'))
         .rejects.toMatchObject({ code: 'WEB_READ_UNDISCOVERED_URL' })
       await prisma.agentMessage.create({ data: { runId, sessionId: session.id, role: 'user',
@@ -42,11 +57,34 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
       await prisma.agentRun.update({ where: { id: runId }, data: { status: 'paused' } })
       await prisma.agentRun.create({ data: { ...base, id: resumedId, taskSpec: JSON.parse(JSON.stringify({ ...spec, runId: resumedId })) } })
       const resumed = { ...scope, runId: resumedId }
+      expect(await findResearchSearchOutcome(resumed, 'b'.repeat(64))).toEqual({ provider: 'bocha', results: [] })
+      expect(await findResearchSearchOutcome(resumed, 'different-key')).toBeNull()
+      expect(await reserveResearchRequest({ ...resumed, callId: randomUUID() }, 'search', 'd'.repeat(64))).toBe(false)
+      await expect(reserveResearchRequest({ ...scope, callId: randomUUID() }, 'read', 'e'.repeat(64))).rejects.toMatchObject({ code: 'RESEARCH_RUN_NOT_ACTIVE' })
+      // A legacy task may have read many stored windows. Only genuine fetch
+      // calls seed the network limit, including across a resumed run.
+      await prisma.agentRunEvent.createMany({ data: Array.from({ length: 12 }, (_, index) => ({
+        runId, seq: index + 1, type: 'tool.call', payload: { type: 'tool.call', callId: randomUUID(),
+          toolName: 'web_read', args: index < 2 ? { url: `https://example.com/old-${index}` }
+            : { contentRef: 'saved-version', revision: 'a'.repeat(64), offset: index * 6000 } },
+      })) })
+      for (let index = 0; index < 6; index += 1) {
+        expect(await reserveResearchRequest({ ...resumed, callId: randomUUID() }, 'read', 'e'.repeat(64))).toBe(true)
+      }
+      expect(await reserveResearchRequest({ ...resumed, callId: randomUUID() }, 'read', 'e'.repeat(64))).toBe(false)
       const source = await registerResearchSource(resumed, 'https://example.com/evidence')
       const text = '人物在村庄修建水渠，合作解决了道路与水流冲突。'.repeat(100)
       const evidence = await saveResearchContent(resumed, source.id, { ...assessReaderText(text, '材料'), finalUrl: source.canonicalUrl,
         provider: 'direct', retryable: false, contentKind: 'article' })
       expect(await findSavedResearchContent(resumed, source.id)).toEqual({ id: evidence.id, revision: evidence.revision })
+      expect(evidence.providedRanges).toEqual([])
+      await Promise.all([
+        recordResearchWindow(resumed, { contentRef: evidence.id, revision: evidence.revision, start: 0, end: 100 }),
+        recordResearchWindow(resumed, { contentRef: evidence.id, revision: evidence.revision, start: 50, end: 150 }),
+      ])
+      expect((await prisma.agentResearchContent.findUniqueOrThrow({ where: { id: evidence.id } })).providedRanges).toEqual([{ start: 0, end: 150 }])
+      await expect(recordResearchWindow({ ...resumed, userId: randomUUID() }, { contentRef: evidence.id,
+        revision: evidence.revision, start: 150, end: 200 })).rejects.toMatchObject({ code: 'RESEARCH_SOURCE_NOT_FOUND' })
       const citation = { contentRef: evidence.id, revision: evidence.revision, start: 0, end: 20,
         excerptHash: createHash('sha256').update(text.slice(0, 20)).digest('hex') }
       const second = { ...input, expectedRevision: 1, section: { id: 'characters', order: 1, content: '人物关系随冲突逐步变化。', citations: [citation] } }
@@ -59,7 +97,7 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
       expect(report.sections).toHaveLength(2)
       expect(await readResearchReportForDelivery(resumed)).toMatchObject({
         revision: 2, content: input.section.content + '\n\n' + second.section.content, nextOffset: null,
-        evidence: { discoveredPages: 2, readablePages: 1, metadataPages: 0, failedSources: 0, citedVersions: 1 },
+        evidence: { discoveredPages: 2, readablePages: 1, metadataPages: 0, failedSources: 0, citedVersions: 1, providedCharacters: 150 },
       })
       expect((await readResearchReport(resumed, { offset: 5, expectedRevision: report.revision })).content).toBe((input.section.content + '\n\n' + second.section.content).slice(5))
       await saveResearchReportSection(resumed, { ...second, expectedRevision: 2,

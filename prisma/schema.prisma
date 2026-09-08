@@ -1376,6 +1376,7 @@ model AgentRun {
   chapter            Chapter?               @relation(fields: [chapterId], references: [id])
   artifacts          AgentArtifact[]
   researchSources    AgentResearchSource[]
+  researchRequests   AgentResearchRequest[]
   memoryEntries      ProjectMemoryEntry[]
   messages           AgentMessage[]
   events             AgentRunEvent[]
@@ -1730,6 +1731,23 @@ model AgentResearchSource {
   @@map("agent_research_sources")
 }
 
+model AgentResearchRequest {
+  id          String @id @db.VarChar(64)
+  ownerRunId  String @map("owner_run_id") @db.VarChar(64)
+  scopeKey    String @map("scope_key") @db.VarChar(64)
+  kind        String @db.VarChar(16)
+  units       Int @default(1)
+  requestKey  String @map("request_key") @db.VarChar(64)
+  requestLimit Int @map("request_limit")
+  status      String @default("reserved") @db.VarChar(24)
+  savedOutcome Json? @map("saved_outcome")
+  createdAt   DateTime @default(now()) @map("created_at")
+  ownerRun    AgentRun @relation(fields: [ownerRunId], references: [id], onDelete: Cascade)
+
+  @@index([scopeKey, kind])
+  @@map("agent_research_requests")
+}
+
 model AgentResearchContent {
   id          String @id @db.VarChar(64)
   sourceId    String @map("source_id") @db.VarChar(64)
@@ -1740,6 +1758,7 @@ model AgentResearchContent {
   contentKind String @map("content_kind") @db.VarChar(24)
   text        String
   quality     Json
+  providedRanges Json @default("[]") @map("provided_ranges")
   createdAt   DateTime @default(now()) @map("created_at")
   source      AgentResearchSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 

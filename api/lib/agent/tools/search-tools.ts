@@ -8,12 +8,14 @@ import { searchWeb, WebSearchError } from '../../web-search-service.js'
 import { consumeCredits, WEB_SEARCH_CALL_MILLI, recordSearchRefundIntent, getSearchRefundState, reconcileCreditRefunds } from '../../credits.js'
 import { DataAccessError } from '../../prisma.js'
 import type { WebSearchOutcome } from '../../web-search-service.js'
-import { consumeWebReadBudget, consumeWebSearchBudget, getCachedWebSearch, setCachedWebSearch } from '../permissions.js'
+import { getCachedWebSearch, setCachedWebSearch } from '../permissions.js'
 import { defineTool } from './types.js'
 import type { ToolContext } from './types.js'
 import { registerResearchSource, registerResearchSources, resolveResearchSource, saveResearchContent, readResearchContent,
   findResearchSource, getResearchReadFailure, recordResearchReadFailure,
   assertResearchUrlProvenance, findSavedResearchContent,
+  reserveResearchRequest, settleResearchRequest, recordResearchWindow,
+  findResearchSearchOutcome, saveResearchSearchOutcome,
   researchReportSaveParameters, saveResearchReportSection, readResearchReport } from '../research-sources.js'
 
 export const researchReportSaveTool = defineTool({
@@ -89,7 +91,8 @@ export const webSearchTool = defineTool({
     const cacheKey = createHash('sha256').update(JSON.stringify({ version: 1, userId: ctx.userId,
       query: normalizedQuery, count: args.maxResults, provider: env.webSearchProvider,
       bochaConfigured: env.webSearchBochaApiKeyConfigured, bochaKey: env.webSearchBochaApiKey, configured })).digest('hex')
-    const cached = getCachedWebSearch(ctx.runId, cacheKey) as WebSearchOutcome | undefined
+    const cached = (getCachedWebSearch(ctx.runId, cacheKey) as WebSearchOutcome | undefined)
+      ?? await findResearchSearchOutcome(ctx, cacheKey)
     const chargeKey = `web-search:${ctx.runId}:${ctx.callId}`
     if (env.webSearchProvider === 'disabled') return { outcome: 'failed', output: '联网搜索已禁用，本次未请求、未收费。', summary: '联网搜索已禁用' }
     if (!cached && await getSearchRefundState(ctx.userId, chargeKey)) {
@@ -98,7 +101,7 @@ export const webSearchTool = defineTool({
     ctx.signal.throwIfAborted()
 
     // 搜索预算：超出额度直接回填，防止循环滥用
-    if (!cached && !consumeWebSearchBudget(ctx.runId)) {
+    if (!cached && !await reserveResearchRequest(ctx, 'search', cacheKey)) {
       return {
         output:
           '本次任务的联网搜索次数已用完（每次任务最多 5 次）。保留已有来源，说明未获得的证据及剩余工作；可以解释分析方法，但不能凭既有知识补造目标书的情节、人物或引用。',
@@ -107,6 +110,10 @@ export const webSearchTool = defineTool({
       }
     }
 
+    if (ctx.signal.aborted) {
+      if (!cached) await settleResearchRequest(ctx, 'released')
+      ctx.signal.throwIfAborted()
+    }
     try {
       if (!cached) {
         await consumeCredits({
@@ -119,8 +126,10 @@ export const webSearchTool = defineTool({
           modelTier: 'speed',
           metadata: { query: normalizedQuery },
         })
+        await settleResearchRequest(ctx, 'consumed')
       }
       const outcome = cached ?? (await searchWeb(args.query, args.maxResults, ctx.signal, configured))
+      if (!cached) await saveResearchSearchOutcome(ctx, outcome)
       ctx.signal.throwIfAborted()
 
       if (!cached) {
@@ -152,7 +161,10 @@ export const webSearchTool = defineTool({
     } catch (error) {
       // Wallet integrity/idempotency errors use CREDIT_, quota errors use
       // CREDITS_. Neither is a supplier outage or grounds for an automatic refund.
-      if (error instanceof DataAccessError && /^CREDITS?_/.test(error.code)) throw error
+      if (error instanceof DataAccessError && /^CREDITS?_/.test(error.code)) {
+        if (!cached) await settleResearchRequest(ctx, 'released')
+        throw error
+      }
       if (!cached && error instanceof WebSearchError && error.attempts.length && error.attempts.every(attempt => ['failed', 'aborted'].includes(attempt.outcome))) {
         await recordSearchRefundIntent(ctx.userId, chargeKey, { attempts: error.attempts })
         // Intent survives any settlement failure; the bounded server sweep retries it.
@@ -225,6 +237,9 @@ async function presentSavedResearchWindow(ctx: ToolContext, page: Awaited<Return
     ? `继续列出链接请调用web_read，contentRef=${page.contentRef}、revision=${page.revision}、linksOffset=${page.linksNextOffset}；无需重新联网。`
     : '已到保存链接列表末尾，不代表已读或已分析全书。'}`
   ctx.signal.throwIfAborted()
+  if (!linksOnly && page.returnedRange.end > page.returnedRange.start) await recordResearchWindow(ctx, { contentRef: page.contentRef, revision: page.revision,
+    start: page.returnedRange.start, end: page.returnedRange.end })
+  ctx.signal.throwIfAborted()
   return visible
 }
 
@@ -260,10 +275,15 @@ export const webReadTool = defineTool({
       throw new DataAccessError(429, cachedFailure.code,
         `此来源上次读取失败（${cachedFailure.code}），${cachedFailure.retryAt}前不重复访问。本次未发起网络请求、不计为新读取；保留已取得证据，可核对其他真实来源，不要换Reader或出口绕过访问限制。`)
     }
-    if (!consumeWebReadBudget(ctx.runId)) {
+    const source = registered ?? await registerResearchSource(ctx, args.url!)
+    if (!await reserveResearchRequest(ctx, 'read', createHash('sha256').update(source.canonicalUrl).digest('hex'))) {
       throw new DataAccessError(429, 'WEB_READ_BUDGET', '网页读取预算已用尽，本次未读取。保留已获得的证据，说明剩余工作；不要继续重试或把缺失内容当作已读。')
     }
-    const source = registered ?? await registerResearchSource(ctx, args.url!)
+    if (ctx.signal.aborted) {
+      await settleResearchRequest(ctx, 'released')
+      ctx.signal.throwIfAborted()
+    }
+    await settleResearchRequest(ctx, 'consumed')
     const result = await readPublicWebPage(source.canonicalUrl, ctx.signal)
     ctx.signal.throwIfAborted()
     if (result.status !== 'ok') {

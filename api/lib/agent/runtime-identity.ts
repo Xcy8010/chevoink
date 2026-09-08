@@ -79,7 +79,8 @@ export async function startLegacyRuntimeRun(userId: string, runId: string, resum
       where: { id: runId, userId, runtimeProtocolVersion: 0, taskRootId: null,
         status: resume ? { in: ['paused', 'failed'] } : 'queued' },
       data: { status: 'running', ...(!resume ? { startedAt: new Date() } : {}), errorMessage: null },
-      select: { taskSpec: true, taskRootId: true, runtimeProtocolVersion: true, usage: true, currentTurn: true, startedAt: true },
+      select: { taskSpec: true, taskRootId: true, runtimeProtocolVersion: true, usage: true, currentTurn: true, startedAt: true,
+        events: { where: { type: { in: ['run.started', 'run.paused', 'run.finished'] } }, orderBy: { seq: 'asc' }, select: { type: true, createdAt: true } } },
     })
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {

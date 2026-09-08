@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useLayoutEffect } from 'react'
+import type { ComponentProps } from 'react'
 import { hasComposerDraft, promoteComposerDraft } from './agent/composer-drafts'
 import { shouldRetainAgentTaskWindow } from './lib/agent-session'
 import { useShellStore } from '@/store/useShellStore'
@@ -15,10 +15,10 @@ import { useAutoHideScrollbars } from '@/hooks/useAutoHideScrollbars'
 import { updateShelfCover } from '@/features/home/local-shelf'
 import FeedbackDialog from '@/features/feedback/components/FeedbackDialog'
 import { cn } from '@/lib/utils'
-import { DEFAULT_AGENT2_FEATURE_FLAGS, FIXED_NOVEL_COVER_SIZE } from '../../../shared/contracts/index.js'
+import { DEFAULT_AGENT2_FEATURE_FLAGS } from '../../../shared/contracts/index.js'
 import type { AgentSession, AgentStreamEvent, Chapter, CoverAsset, FeedbackKind, Novel, StudioPayload, UserMePayload, Visibility } from '../../../shared/contracts/index.js'
-import { createWritingAgentSession, createNovelWorkspace, createNovelPlanFile, createChapterDraft, createVolume, deleteNovelWorkspace, deleteChapterDraft, generateCoverImages, generateCoverPrompt, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, moveChapter, publishNovelWorkspace, uploadNovelCover, updateChapterDraft, updateWritingAgentSession, updateNovelMeta, updateNovelPlanFile } from './api'
-import { buildFixedNovelCoverDataUrl, downloadCoverAssetImage, type NovelCoverCropState } from './cover-image'
+import { createWritingAgentSession, createNovelWorkspace, createChapterDraft, deleteNovelWorkspace, deleteChapterDraft, getChapterContent, getStudioPayload, getWritingAgentSessionHistory, listNovelPlanFiles, listWritingAgentSessions, publishNovelWorkspace, updateChapterDraft, updateWritingAgentSession, updateNovelMeta } from './api'
+import { downloadCoverAssetImage } from './cover-image'
 import { getMe } from '../community/api'
 import ChapterSettingsPanel from './components/ChapterSettingsPanel'
 import ChapterSidebar from './components/ChapterSidebar'
@@ -41,7 +41,7 @@ import { AgentConversationRail } from './components/AgentTaskSidebar'
 import StudioSettingsDialog, { type StudioSettingsSection } from './components/StudioSettingsDialog'
 import WorkspaceNovelSwitcher from './components/WorkspaceNovelSwitcher'
 import WorkPerspective from './components/WorkPerspective'
-import WorkInspector, { type WorkInspectorTab } from './components/WorkInspector'
+import WorkInspector from './components/WorkInspector'
 import IdePerspective from './components/IdePerspective'
 import IdeNavigationRail from './components/IdeNavigationRail'
 import StudioChapterViewer from './components/StudioChapterViewer'
@@ -55,7 +55,6 @@ import ContextDetailDialog from './agent/components/ContextDetailDialog'
 import { WORKSPACE_WRITE_TOOLS, useAgentStore, type ComposerReference } from './agent/agentStore'
 import { getMessageText } from './agent/lib/panel-helpers'
 import { PanelResizeHandle } from './panel-resize'
-import { WORK_CONVERSATION_WIDTH_LIMITS, useStudioPanelWidths, type ResizablePanel, type StudioPanelWidths } from './panel-widths'
 import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterDraftState, ChapterPendingReview, CoverFormState, EditableNovelStatus, EditorSelectionState, MobileView, NovelFormState, PlanPendingReview, ProjectNotesState, SaveState, ToolPanel, WorkspaceDocumentView, WorkspacePlanFile } from './types'
 
 
@@ -66,34 +65,14 @@ import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdat
 import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
-/** Work 检查区/查看器布局按作品记忆：切换作品时恢复该作品上次的界面 */
-type WorkPanelUiState = { rightOpen: boolean; viewer: 'chapter' | 'document' | null; inspectorTab: WorkInspectorTab; selectedTreeItemId?: string | null; selectedChapterId?: string | null }
-const WORK_PANEL_UI_STORAGE_KEY = 'chevoink:studio-work-panel-ui'
-
-function readWorkPanelUi(novelId: string): WorkPanelUiState | null {
-  try {
-    const raw = window.localStorage.getItem(WORK_PANEL_UI_STORAGE_KEY)
-    if (!raw) {
-      return null
-    }
-
-    const value = (JSON.parse(raw) as Record<string, WorkPanelUiState | undefined>)[novelId]
-    return value && typeof value.rightOpen === 'boolean' ? value : null
-  } catch {
-    return null
-  }
-}
-
-function writeWorkPanelUi(novelId: string, state: WorkPanelUiState) {
-  try {
-    const raw = window.localStorage.getItem(WORK_PANEL_UI_STORAGE_KEY)
-    const map = raw ? (JSON.parse(raw) as Record<string, WorkPanelUiState>) : {}
-    map[novelId] = state
-    window.localStorage.setItem(WORK_PANEL_UI_STORAGE_KEY, JSON.stringify(map))
-  } catch {
-    // 持久化失败不影响布局切换
-  }
-}
+import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
+import { createCatalogActions } from './components/catalog-actions'
+import { useChapterPersistence } from './components/use-chapter-persistence'
+import { useWorkspaceLayout } from './components/use-workspace-layout'
+import { useCoverActions } from './components/use-cover-actions'
+import { usePlanSync } from './components/use-plan-sync'
+import { createPlanDocumentActions } from './components/plan-document-actions'
+import { createPlanReviewActions } from './components/plan-review-actions'
 
 export default function StudioWorkspace() {
   const { novelId } = useParams()
@@ -165,31 +144,16 @@ export default function StudioWorkspace() {
   const [mobileView, setMobileView] = useState<MobileView>('assistant')
   // 上下文详情弹窗（上下文记录/压缩记录/最终上下文）：由记忆面板占用卡「查看详情」打开
   const [contextDetailOpen, setContextDetailOpen] = useState(false)
-  const [workspacePerspective, setWorkspacePerspective] = useState<'work' | 'ide'>(() => {
-    if (typeof window === 'undefined') return 'work'
-    return window.localStorage.getItem(`chevoink:perspective:${activeNovelId}`) === 'ide' ? 'ide' : 'work'
-  })
-  const [workspaceSidebarOpen, setWorkspaceSidebarOpen] = useState(() => {
-    if (typeof window === 'undefined') return true
-    return window.localStorage.getItem('chevoink:workspace-sidebar') !== 'collapsed'
-  })
-  // 左侧创作栏宽度（首帧从持久化读，后续由侧栏稳定后上报）：
-  // 侧栏折叠后用它动态收窄聊天区最小宽度，给查看器让出更大的向左拉伸空间
-  const [workspaceSidebarWidth, setWorkspaceSidebarWidth] = useState(() => {
-    if (typeof window === 'undefined') return 280
-    const value = Number(window.localStorage.getItem('chevoink:studio-sidebar-width'))
-    return Number.isFinite(value) && value >= 200 ? value : 280
-  })
+  const {
+    workspacePerspective, setWorkspacePerspective,
+    workspaceSidebarOpen, setWorkspaceSidebarOpen, setWorkspaceSidebarWidth,
+    workRightOpen, setWorkRightOpen, workInspectorTab, setWorkInspectorTab,
+    workViewer, setWorkViewer, ideTreeOpen, setIdeTreeOpen,
+    ideSidebarTab, setIdeSidebarTab, ideAgentOpen, setIdeAgentOpen,
+    panelWidths, beginPanelResize,
+  } = useWorkspaceLayout(activeNovelId)
   const [studioSettingsOpen, setStudioSettingsOpen] = useState(false)
   const [studioSettingsSection, setStudioSettingsSection] = useState<StudioSettingsSection>('general')
-  const [workRightOpen, setWorkRightOpen] = useState(false)
-  const [workInspectorTab, setWorkInspectorTab] = useState<WorkInspectorTab>('work')
-  const [workViewer, setWorkViewer] = useState<'chapter' | 'document' | null>(null)
-  // 切换作品时保存上一作品的检查区布局、恢复当前作品上次的布局（右侧栏开关/页签/查看器，
-  // 含刷新后首次进入），像 Codex 一样每个作品回到自己当时的界面
-  const [ideTreeOpen, setIdeTreeOpen] = useState(true)
-  const [ideSidebarTab, setIdeSidebarTab] = useState<WorkInspectorTab>('work')
-  const [ideAgentOpen, setIdeAgentOpen] = useState(true)
   const featureFlags = studioQuery.data?.featureFlags ?? DEFAULT_AGENT2_FEATURE_FLAGS
   const workspaceActivities = useAgentStore((state) => state.workspaceActivities)
   const workspaceActivitiesVersion = useAgentStore((state) => state.activitiesVersion)
@@ -206,38 +170,6 @@ export default function StudioWorkspace() {
   const [feedbackKind, setFeedbackKind] = useState<FeedbackKind | null>(null)
   // 创作区内滚动条静止时隐藏，滚动中才显示
   useAutoHideScrollbars()
-  // Work 对话展开时统一保留 360px；越过阈值后由 WorkPerspective 切为浮动输入。
-  const conversationMinWidth = WORK_CONVERSATION_WIDTH_LIMITS.collapsedMin
-  const getPanelMaximum = useCallback((panel: ResizablePanel, widths: StudioPanelWidths) => {
-    const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
-    // Work 必须同时为最左创作栏（最大 392）、聊天轨（44）和可完整操作的 Agent 对话
-    // 保留空间；IDE 没有外层创作栏，但仍保证正文/编辑器不会被两侧面板夹没。
-    // 侧栏折叠后保留收窄为「聊天轨 44 + 压缩后的聊天区最小宽度」，
-    // 查看器拖拽上限同步放大；侧栏展开后由 normalizeForViewport 自动回弹。
-    const centerReserve = workspacePerspective === 'work'
-      ? (workspaceSidebarOpen ? workspaceSidebarWidth : 0) + 44 + conversationMinWidth
-      : 520
-    if (panel === 'tree') {
-      return viewportWidth - centerReserve - (ideAgentOpen ? widths.agent : 46)
-    }
-    if (panel === 'agent') {
-      return viewportWidth - centerReserve - (ideTreeOpen ? widths.tree : 46)
-    }
-    const inspectorWidth = workRightOpen ? widths.workInspector : 46
-    const viewerWidth = workViewer ? widths.workViewer : 0
-    if (panel === 'workTask') return viewportWidth - centerReserve - inspectorWidth - viewerWidth
-    if (panel === 'workInspector') return viewportWidth - centerReserve - viewerWidth
-    return viewportWidth - centerReserve - inspectorWidth
-  }, [ideAgentOpen, ideTreeOpen, workRightOpen, workViewer, workspacePerspective, workspaceSidebarOpen, workspaceSidebarWidth, conversationMinWidth])
-  const { panelWidths, beginPanelResize } = useStudioPanelWidths({
-    onCollapse: (panel) => {
-      if (panel === 'tree') setIdeTreeOpen(false)
-      if (panel === 'agent') setIdeAgentOpen(false)
-      if (panel === 'workInspector') setWorkRightOpen(false)
-      if (panel === 'workViewer') setWorkViewer(null)
-    },
-    getMaximum: getPanelMaximum,
-  })
   const [activeToolPanel, setActiveToolPanel] = useState<ToolPanel | null>(null)
   const platformCapabilities = useMemo(() => getPlatformCapabilities(), [])
   const [agentPrompt, setAgentPrompt] = useState('')
@@ -274,32 +206,17 @@ export default function StudioWorkspace() {
   const taskScopeOwner = taskUiUserId ?? queryClient.getQueryData<UserMePayload>(['community', 'me'])?.user?.id ?? 'current'
   const taskUiScope = activeAgentTaskWindowId && agentStateNovelId === activeNovelId
     ? `${taskScopeOwner}:${activeNovelId}:${activeAgentTaskWindowId}` : undefined
-  const panelOwner = useRef<string>()
   const taskLocationRef = useRef({ novelId: activeNovelId, taskId: activeAgentTaskWindowId })
   taskLocationRef.current = { novelId: activeNovelId, taskId: activeAgentTaskWindowId }
-  const [workPanelScope, setWorkPanelScope] = useState<string>()
-  useLayoutEffect(() => {
-    if (!taskUiScope) return
-    if (panelOwner.current !== taskUiScope) {
-      panelOwner.current = taskUiScope
-      setWorkPanelScope(taskUiScope)
-      const restored = readWorkPanelUi(taskUiScope)
-      setWorkRightOpen(restored?.rightOpen ?? false)
-      setWorkViewer(restored?.viewer ?? null)
-      setWorkInspectorTab(restored?.inspectorTab ?? 'work')
-      if (restored?.selectedTreeItemId !== undefined) setSelectedTreeItemId(restored.selectedTreeItemId)
-      if (restored?.selectedChapterId !== undefined) setSelectedChapterId(restored.selectedChapterId)
-      return
-    }
-    writeWorkPanelUi(taskUiScope, { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab, selectedTreeItemId, selectedChapterId })
-  }, [taskUiScope, workRightOpen, workViewer, workInspectorTab, selectedTreeItemId, selectedChapterId])
+  const workPanelScope = useWorkPanelState(taskUiScope,
+    { rightOpen: workRightOpen, viewer: workViewer, inspectorTab: workInspectorTab, selectedTreeItemId, selectedChapterId },
+    { setRightOpen: setWorkRightOpen, setViewer: setWorkViewer, setInspectorTab: setWorkInspectorTab, setSelectedTreeItemId, setSelectedChapterId })
   const [agentRunState, setAgentRunState] = useState<AgentRunState>(createIdleAgentRunState)
   const [agentArtifacts, setAgentArtifacts] = useState<AgentArtifact[]>([])
   const [activeAgentArtifactId, setActiveAgentArtifactId] = useState<string | null>(null)
   // 计划文件夹云端副本：覆盖非活跃任务窗口/历史会话的计划，刷新后不丢失
   const [serverPlanFiles, setServerPlanFiles] = useState<WorkspacePlanFile[]>([])
-  const planSyncTimerRef = useRef<number | null>(null)
-  const planSyncPayloadRef = useRef<{ artifactId: string; title: string; content: string } | null>(null)
+  const { flushPlanServerSync, schedulePlanServerSync } = usePlanSync()
   const agentRunAbortControllerRef = useRef<AbortController | null>(null)
   const coverGenerationWasActiveRef = useRef(false)
   const [editorSelection, setEditorSelection] = useState<EditorSelectionState>({
@@ -366,19 +283,12 @@ export default function StudioWorkspace() {
   const createChapterLockRef = useRef(false)
   const agentExecutionChapterTargetRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    window.localStorage.setItem(`chevoink:perspective:${activeNovelId}`, workspacePerspective)
-  }, [activeNovelId, workspacePerspective])
-
-  useEffect(() => {
-    window.localStorage.setItem('chevoink:workspace-sidebar', workspaceSidebarOpen ? 'open' : 'collapsed')
-  }, [workspaceSidebarOpen])
 
   useEffect(() => {
     if (!featureFlags.dualWorkspace && workspacePerspective !== 'ide') {
       setWorkspacePerspective('ide')
     }
-  }, [featureFlags.dualWorkspace, workspacePerspective])
+  }, [featureFlags.dualWorkspace, workspacePerspective, setWorkspacePerspective])
 
   useEffect(() => subscribePlatformLifecycle({
     onBack: () => {
@@ -857,7 +767,7 @@ export default function StudioWorkspace() {
       agentRunAbortControllerRef.current?.abort()
       flushPlanServerSync()
     }
-  }, [])
+  }, [flushPlanServerSync])
 
   // 计划文件夹云端持久化：作品切换时拉取全量计划（plan_save 已落库，这里跨会话聚合）
   useEffect(() => {
@@ -879,7 +789,7 @@ export default function StudioWorkspace() {
       cancelled = true
     }
      
-  }, [activeNovelId])
+  }, [activeNovelId, flushPlanServerSync])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !currentNovel?.id) {
@@ -1016,7 +926,6 @@ export default function StudioWorkspace() {
   const chapterDirtyRef = useRef(chapterDirty)
   chapterDirtyRef.current = chapterDirty
   // 切章守卫与编辑器 blur flush 可能几乎同时触发保存，in-flight 期间直接跳过，避免并发写同一章节。
-  const chapterSavingRef = useRef(false)
   const selectedChapterIdStateRef = useRef(selectedChapterId)
   selectedChapterIdStateRef.current = selectedChapterId
 
@@ -1634,6 +1543,9 @@ export default function StudioWorkspace() {
     ? activeLiveToolDraft?.content
     : undefined
   const selectChapterFromToolRef = useRef(handleSelectChapter)
+  const { handleSelectPlanFromTree, handleRequestDeletePlan, handleRequestCreatePlan, handleRenamePlan, handleWorkspaceDocumentChange } = createPlanDocumentActions({
+    activeNovelId, savedPlanFiles, agentArtifacts, selectedTreeItemId, catalogPreview, setSelectedTreeItemId, setWorkViewer, setMobileView, setActiveAgentArtifactId, setAgentArtifacts, setServerPlanFiles, setChapterSaveState, setChapterSaveMessage, setAgentRunState, setWorkspaceDialog, setCatalogDocument, updateAgentArtifact, schedulePlanServerSync,
+  })
   const selectPlanFromToolRef = useRef(handleSelectPlanFromTree)
   const selectAgentTaskWindowFromToolRef = useRef(handleSelectAgentTaskWindow)
   selectChapterFromToolRef.current = handleSelectChapter
@@ -1685,7 +1597,7 @@ export default function StudioWorkspace() {
       }
     }
     clearToolNavigationRequest()
-  }, [clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective])
+  }, [clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective, setIdeSidebarTab, setIdeTreeOpen, setWorkInspectorTab, setWorkRightOpen, setWorkViewer])
 
   // 记忆沉淀卡点击：把记忆面板切到可见位置，由当前可见的记忆中心实例开覆层闪卡
   useEffect(() => {
@@ -1702,7 +1614,7 @@ export default function StudioWorkspace() {
       setWorkInspectorTab('context')
       setWorkRightOpen(true)
     }
-  }, [memorySpotlight, workspacePerspective])
+  }, [memorySpotlight, workspacePerspective, setIdeSidebarTab, setIdeTreeOpen, setWorkInspectorTab, setWorkRightOpen])
 
   // 当前计划文档命中审查态时，正文区呈现绿(新增)/红(删除) diff（与章节审查一致，fix1）
   const activePlanPendingReview = useMemo(() => {
@@ -2392,338 +2304,12 @@ export default function StudioWorkspace() {
     })
   }
 
-  const persistChapter = useCallback(
-    async (reason: 'manual' | 'auto' | 'apply') => {
-      // 编辑器输入经 LocalFirstTextarea 防抖上报，闭包里的 chapterDraft 可能落后；
-      // 保存时一律以最新 ref 为准，blur/自动保存都能拿到当前输入。
-      const draft = chapterDraftStateRef.current
-      if (!draft) {
-        return
-      }
-
-      // 仅拦截待审查的那些章，其他章节正常保存
-      if (pendingChapterReviewsRef.current.some((item) => item.chapterId === draft.id)) {
-        if (reason !== 'auto') {
-          promptConfirmPendingChapterReview('保存当前章节')
-        }
-        return
-      }
-
-      if (!draft.title.trim() || !draft.content.trim()) {
-        if (reason !== 'auto') {
-          setChapterSaveState('error')
-          setChapterSaveMessage('章节标题和正文都不能为空。')
-        }
-        return
-      }
-
-      if (chapterSavingRef.current) {
-        return
-      }
-      chapterSavingRef.current = true
-
-      setChapterSaveState('saving')
-      setChapterSaveMessage(reason === 'auto' ? '正在自动保存草稿...' : '正在保存章节...')
-
-      try {
-        const localDraftId = draft.localOnly ? draft.id : null
-        const payload = {
-          title: draft.title.trim(),
-          summary: draft.summary.trim() || undefined,
-          content: draft.content,
-          status: draft.status,
-          visibility: draft.visibility,
-          ...(draft.localOnly ? {} : { expectedRevision: draft.revision }),
-        }
-
-        const savedChapter = draft.localOnly
-          ? await createChapterDraft(activeNovelId, payload)
-          : await updateChapterDraft(activeNovelId, draft.id, payload)
-
-        setChapters((current) =>
-          replaceChapterItem(current, localDraftId, toChapterListItem(savedChapter)),
-        )
-        const latestDraft = chapterDraftStateRef.current
-        const editsArrivedDuringSave = Boolean(
-          latestDraft && latestDraft.id === draft.id && (
-            latestDraft.title !== draft.title ||
-            latestDraft.summary !== draft.summary ||
-            latestDraft.content !== draft.content ||
-            latestDraft.status !== draft.status ||
-            latestDraft.visibility !== draft.visibility
-          ),
-        )
-        // 保存请求可能跨越切章动作才完成：只有章节仍处于打开状态才写回编辑器状态，
-        // 绝不把旧章内容盖到已切换的新章草稿上。
-        const chapterStillOpen = latestDraft?.id === draft.id
-        if (localDraftId) setSelectedTreeItemId(`chapter:${savedChapter.id}`)
-        if (localDraftId || selectedChapterIdStateRef.current === draft.id) setSelectedChapterId(savedChapter.id)
-        if (editsArrivedDuringSave && latestDraft) {
-          // 网络请求期间用户仍可能继续输入。只接收服务端 revision/真实 id，绝不拿旧响应覆盖
-          // 新输入；保留 dirty 让下一轮自动保存继续追上。
-          setChapterDraft({ ...latestDraft, id: savedChapter.id, revision: savedChapter.revision, localOnly: false })
-          setChapterDirty(true)
-        } else if (chapterStillOpen) {
-          setChapterDraft(buildChapterDraft(savedChapter))
-          setChapterDirty(false)
-        }
-        if (chapterStillOpen) {
-          setChapterSaveState('saved')
-          setChapterLastSavedAt(savedChapter.updatedAt)
-          setChapterSaveMessage(
-            editsArrivedDuringSave
-              ? '已保存上一批修改，正在继续保存新输入...'
-              : reason === 'auto'
-              ? `已自动保存于 ${formatDateTime(savedChapter.updatedAt)}`
-              : `已保存于 ${formatDateTime(savedChapter.updatedAt)}`,
-          )
-        }
-        setCurrentNovel((current) =>
-          current
-            ? {
-                ...current,
-                chapterCount: draft.localOnly ? current.chapterCount + 1 : current.chapterCount,
-                updatedAt: savedChapter.updatedAt,
-              }
-            : current,
-        )
-
-        syncStudioPayload((current) => {
-          if (!current) {
-            return current
-          }
-
-          return {
-            ...current,
-            novel: {
-              ...current.novel,
-              chapterCount: draft.localOnly
-                ? current.novel.chapterCount + 1
-                : current.novel.chapterCount,
-              updatedAt: savedChapter.updatedAt,
-            },
-            draftChapter:
-              savedChapter.status === 'draft'
-                ? savedChapter
-                : current.draftChapter?.id === savedChapter.id
-                  ? null
-                  : current.draftChapter,
-            chapters: replaceChapterItem(
-              current.chapters,
-              localDraftId,
-              toChapterListItem(savedChapter),
-            ),
-          }
-        })
-      } catch (error) {
-        setChapterSaveState('error')
-        setChapterSaveMessage(error instanceof Error ? error.message : '章节保存失败，请稍后重试。')
-      } finally {
-        chapterSavingRef.current = false
-      }
-    },
-    [activeNovelId, syncStudioPayload],
-  )
-
-  useEffect(() => {
-    if (!chapterDraft || !chapterDirty) {
-      return
-    }
-
-    setChapterSaveState('pending')
-    setChapterSaveMessage('检测到修改，正在自动保存...')
-    const timer = window.setTimeout(() => {
-      void persistChapter('auto')
-    }, 800)
-
-    return () => window.clearTimeout(timer)
-  }, [chapterDirty, chapterDraft, persistChapter])
-
-  const coverPromptMutation = useMutation({
-    mutationFn: async () => {
-      if (!coverForm) {
-        throw new Error('封面参数尚未准备完成')
-      }
-
-      return generateCoverPrompt({
-        novelTitle: coverForm.novelTitle.trim(),
-        summary: coverForm.summary.trim(),
-        genre: coverForm.genre.trim(),
-        protagonist: coverForm.protagonist.trim() || undefined,
-        stylePreference: coverForm.stylePreference.trim() || undefined,
-      })
-    },
-    onSuccess: (result) => {
-      setCoverForm((current) =>
-        current
-          ? {
-              ...current,
-              prompt: result.prompt,
-              negativePrompt: result.negativePrompt ?? '',
-            }
-          : current,
-      )
-      setCoverKeywords(result.visualKeywords)
-      setCoverMessage('提示词已生成，可继续微调后再生成封面。')
-      toast.success('封面提示词已生成，可继续微调后直接生成封面。')
-      setActiveToolPanel('cover')
-      setMobileView('cover')
-    },
-    onError: (error: Error) => {
-      setCoverMessage(error.message)
-      toast.error(error.message || '封面提示词生成失败，请稍后重试。')
-    },
+  const persistChapter = useChapterPersistence({
+    activeNovelId, chapterDraft, chapterDirty, chapterDraftStateRef, pendingChapterReviewsRef, selectedChapterIdStateRef, promptConfirmPendingChapterReview, setChapterSaveState, setChapterSaveMessage, setChapters, setSelectedTreeItemId, setSelectedChapterId, setChapterDraft, setChapterDirty, setChapterLastSavedAt, setCurrentNovel, syncStudioPayload,
   })
 
-  const coverImageMutation = useMutation({
-    mutationFn: async () => {
-      if (!coverForm?.prompt.trim()) {
-        throw new Error('请先生成或补充封面提示词。')
-      }
-
-      return generateCoverImages({
-        prompt: coverForm.prompt,
-        size: FIXED_NOVEL_COVER_SIZE,
-        count: coverForm.count,
-        novelId: activeNovelId,
-      })
-    },
-    onSuccess: (result) => {
-      setCoverAssets((current) => [...result.images, ...current])
-      setSelectedCoverId(result.images[0]?.id ?? null)
-      setCoverMessage(`候选封面已生成 ${result.images.length} 张，可先预览再设为正式封面。`)
-      setActiveToolPanel('cover')
-      setMobileView('cover')
-      syncStudioPayload((current) =>
-        current ? { ...current, coverAssets: [...result.images, ...current.coverAssets] } : current,
-      )
-      if (result.images.length > 0) {
-        setWorkspaceDialog({
-          title: '封面生成完成',
-          description: `已经生成 ${result.images.length} 张封面候选图。现在可以去查看、下载，或者一键设为作品封面。`,
-          confirmLabel: '去查看',
-          cancelLabel: '稍后',
-          onConfirm: () => {
-            setActiveToolPanel('cover')
-            setMobileView('cover')
-          },
-        })
-      }
-    },
-    onError: (error: Error) => {
-      setCoverMessage(error.message)
-    },
-    onMutate: () => {
-      setCoverGenerationBusy(true)
-    },
-    onSettled: () => {
-      setCoverGenerationBusy(false)
-    },
-  })
-
-  const coverUploadMutation = useMutation({
-    mutationFn: async (crop: NovelCoverCropState) => {
-      if (!currentNovel) {
-        throw new Error('作品信息尚未加载完成。')
-      }
-
-      if (!pendingCoverUploadFile) {
-        throw new Error('还没有选择要上传的封面图片。')
-      }
-
-      const coverDataUrl = await buildFixedNovelCoverDataUrl(pendingCoverUploadFile, crop)
-      return uploadNovelCover(currentNovel.id, { coverDataUrl })
-    },
-    onSuccess: ({ novel, asset }) => {
-      setCoverAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)])
-      setSelectedCoverId(asset.id)
-      setCurrentNovel((current) =>
-        current
-          ? {
-              ...novel,
-              coverUrl: asset.imageUrl,
-              coverAssetId: asset.id,
-            }
-          : current,
-      )
-      setCoverMessage('本地封面已按固定书封比例上传，并设为当前作品封面。')
-      setActiveToolPanel('cover')
-      setMobileView('cover')
-      // 封面更换后同步本机书架快照与站内缓存列表，避免书架/收藏/详情继续显示旧封面
-      updateShelfCover(novel.id, asset.imageUrl)
-      void queryClient.invalidateQueries({ queryKey: ['novel-detail', novel.id] })
-      void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
-      void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
-      void queryClient.invalidateQueries({ queryKey: ['home'] })
-      syncStudioPayload((current) =>
-        current
-          ? {
-              ...current,
-              novel: {
-                ...current.novel,
-                ...novel,
-                coverUrl: asset.imageUrl,
-                coverAssetId: asset.id,
-              },
-              coverAssets: [asset, ...current.coverAssets.filter((item) => item.id !== asset.id)],
-            }
-          : current,
-      )
-    },
-    onSettled: () => {
-      setPendingCoverUploadFile(null)
-    },
-    onError: (error: Error) => {
-      setCoverMessage(error.message)
-    },
-  })
-
-  const coverSelectMutation = useMutation({
-    mutationFn: async (asset: CoverAsset) => {
-      if (!currentNovel) {
-        throw new Error('作品信息尚未加载完成')
-      }
-
-      return updateNovelMeta(currentNovel.id, {
-        coverAssetId: asset.id,
-        coverPrompt: coverForm?.prompt.trim() || asset.prompt,
-      })
-    },
-    onSuccess: (updatedNovel, asset) => {
-      setCurrentNovel((current) =>
-        current
-          ? {
-              ...updatedNovel,
-              coverUrl: asset.imageUrl,
-              coverAssetId: asset.id,
-            }
-          : current,
-      )
-      setSelectedCoverId(asset.id)
-      setCoverMessage('作品封面已更新。')
-      // 封面更换后同步本机书架快照与站内缓存列表，避免书架/收藏/详情继续显示旧封面
-      updateShelfCover(updatedNovel.id, asset.imageUrl)
-      void queryClient.invalidateQueries({ queryKey: ['novel-detail', updatedNovel.id] })
-      void queryClient.invalidateQueries({ queryKey: ['studio', 'my-novels'] })
-      void queryClient.invalidateQueries({ queryKey: ['community', 'me'] })
-      void queryClient.invalidateQueries({ queryKey: ['home'] })
-      syncStudioPayload((current) =>
-        current
-          ? {
-              ...current,
-              novel: {
-                ...current.novel,
-                ...updatedNovel,
-                coverUrl: asset.imageUrl,
-                coverAssetId: asset.id,
-              },
-            }
-          : current,
-      )
-    },
-    onError: (error: Error) => {
-      setCoverMessage(error.message)
-    },
+  const { coverPromptMutation, coverImageMutation, coverUploadMutation, coverSelectMutation } = useCoverActions({
+    activeNovelId, currentNovel, coverForm, pendingCoverUploadFile, setCoverForm, setCoverKeywords, setCoverMessage, setActiveToolPanel, setMobileView, setCoverAssets, setSelectedCoverId, setWorkspaceDialog, setCoverGenerationBusy, setCurrentNovel, setPendingCoverUploadFile, syncStudioPayload,
   })
 
   function handleOpenCoverCropDialog(file: File) {
@@ -3380,187 +2966,9 @@ export default function StudioWorkspace() {
   }
 
   // 计划审查条（plan/14 方案F）：✓保留仅清审查态；✕撤销把云端计划回写到本次修订前
-  function handleKeepPendingPlanReview() {
-    if (!pendingPlanReview || pendingPlanReviewBusy) {
-      return
-    }
-    useAgentStore.getState().markWorkspaceActivitiesAccepted({ toolNames: ['plan_save'] })
-    setPendingPlanReview(null)
-    setChapterSaveState('saved')
-    setChapterSaveMessage(`已保留对计划《${pendingPlanReview.title}》的修订。`)
-  }
-
-  async function handleRevertPendingPlanReview() {
-    if (!pendingPlanReview || pendingPlanReviewBusy) {
-      return
-    }
-
-    const review = pendingPlanReview
-    setPendingPlanReviewBusy(true)
-    try {
-      // 新建计划的撤销：直接从计划夹移除，而非回写空内容
-      if (review.isCreate) {
-        await updateNovelPlanFile(review.backendArtifactId, { saved: false })
-
-        setServerPlanFiles((current) =>
-          current.filter((plan) => plan.backendArtifactId !== review.backendArtifactId),
-        )
-        setAgentArtifacts((current) =>
-          current.map((artifact) =>
-            artifact.backendArtifactId === review.backendArtifactId
-              ? { ...artifact, savedAsPlan: false }
-              : artifact,
-          ),
-        )
-        setSelectedTreeItemId((current) =>
-          current && current.startsWith('plan:') ? null : current,
-        )
-
-        setPendingPlanReview(null)
-        setChapterSaveState('saved')
-        setChapterSaveMessage(`已撤销新建的计划《${review.title}》。`)
-        return
-      }
-
-      await updateNovelPlanFile(review.backendArtifactId, {
-        title: review.beforeTitle,
-        content: review.before,
-      })
-
-      // 本地计划夹/产物列表同步回修订前的内容
-      setServerPlanFiles((current) =>
-        current.map((plan) =>
-          plan.backendArtifactId === review.backendArtifactId
-            ? { ...plan, title: review.beforeTitle, content: review.before.trim() }
-            : plan,
-        ),
-      )
-      setAgentArtifacts((current) =>
-        current.map((artifact) =>
-          artifact.backendArtifactId === review.backendArtifactId
-            ? {
-                ...artifact,
-                title: review.beforeTitle,
-                content: review.before,
-                rawContent: review.before,
-              }
-            : artifact,
-        ),
-      )
-
-      setPendingPlanReview(null)
-      setChapterSaveState('saved')
-      setChapterSaveMessage(`计划《${review.beforeTitle}》已恢复到本次修订前。`)
-    } catch (error) {
-      setChapterSaveState('error')
-      setChapterSaveMessage(
-        error instanceof Error ? error.message : '撤销计划修订失败，请稍后重试。',
-      )
-    } finally {
-      setPendingPlanReviewBusy(false)
-    }
-  }
-
-  function handleRequestRejectPendingPlanReview() {
-    if (!pendingPlanReview || pendingPlanReviewBusy) {
-      return
-    }
-
-    setWorkspaceDialog({
-      title: pendingPlanReview.isCreate ? '撤销这份新建的计划？' : '撤销本次计划修订？',
-      description: pendingPlanReview.isCreate
-        ? `《${pendingPlanReview.title}》是 AI 本次新建的计划，撤销后会从计划文件夹移除。`
-        : `《${pendingPlanReview.title}》将恢复到本次修订前的内容，AI 新写的这部分计划会被移除。`,
-      confirmLabel: '撤销修订',
-      cancelLabel: '再想想',
-      tone: 'danger',
-      onConfirm: () => handleRevertPendingPlanReview(),
-    })
-  }
-
-  // 计划块级采纳（片段右下角✓）：把该变更块写进审查基线；全部块定夺完毕即视为整份保留
-  function handleAcceptPlanReviewHunk(hunkIndex: number) {
-    const review = pendingPlanReview
-    if (!review || pendingPlanReviewBusy) {
-      return
-    }
-
-    const resolved = resolveReviewHunk(review.before, review.after, hunkIndex, 'accept')
-    if (buildReviewDiff(resolved.before, review.after).hunkCount === 0) {
-      handleKeepPendingPlanReview()
-      return
-    }
-
-    setPendingPlanReview({ ...review, before: resolved.before })
-  }
-
-  // 计划块级撤回：把该变更块从计划内容中还原并回写云端；全部块定夺完毕即结束审查
-  async function handleRejectPlanReviewHunk(hunkIndex: number) {
-    const review = pendingPlanReview
-    if (!review || pendingPlanReviewBusy) {
-      return
-    }
-
-    const { hunkCount } = buildReviewDiff(review.before, review.after)
-    // 新建计划只剩这一个变更块时，撤回等价于撤销整份新建计划
-    if (review.isCreate && hunkCount <= 1) {
-      await handleRevertPendingPlanReview()
-      return
-    }
-
-    const resolved = resolveReviewHunk(review.before, review.after, hunkIndex, 'reject')
-    setPendingPlanReviewBusy(true)
-    try {
-      await updateNovelPlanFile(review.backendArtifactId, { content: resolved.after })
-
-      // 本地计划夹/产物列表同步到撤回后的内容
-      setServerPlanFiles((current) =>
-        current.map((plan) =>
-          plan.backendArtifactId === review.backendArtifactId
-            ? { ...plan, content: resolved.after.trim() }
-            : plan,
-        ),
-      )
-      setAgentArtifacts((current) =>
-        current.map((artifact) =>
-          artifact.backendArtifactId === review.backendArtifactId
-            ? { ...artifact, content: resolved.after, rawContent: resolved.after }
-            : artifact,
-        ),
-      )
-
-      if (buildReviewDiff(review.before, resolved.after).hunkCount === 0) {
-        setPendingPlanReview(null)
-        setChapterSaveState('saved')
-        setChapterSaveMessage(`已撤回该处变更，计划《${review.title}》审查完成。`)
-      } else {
-        setPendingPlanReview({ ...review, after: resolved.after })
-        setChapterSaveState('saved')
-        setChapterSaveMessage('已撤回该处计划变更。')
-      }
-    } catch (error) {
-      setChapterSaveState('error')
-      setChapterSaveMessage(error instanceof Error ? error.message : '撤回该处计划变更失败，请稍后重试。')
-    } finally {
-      setPendingPlanReviewBusy(false)
-    }
-  }
-
-  // 计划块级✕撤回入口：自定义弹窗确认后才真正回滚该处片段
-  function handleRequestRejectPlanReviewHunk(hunkIndex: number) {
-    if (!pendingPlanReview || pendingPlanReviewBusy) {
-      return
-    }
-
-    setWorkspaceDialog({
-      title: '撤回这一处计划变更？',
-      description: '这一处绿色/红色片段将恢复为 AI 修订前的内容，撤回后不可恢复。',
-      confirmLabel: '撤回',
-      cancelLabel: '再想想',
-      tone: 'danger',
-      onConfirm: () => handleRejectPlanReviewHunk(hunkIndex),
-    })
-  }
+  const { handleKeepPendingPlanReview, handleRevertPendingPlanReview, handleRequestRejectPendingPlanReview, handleAcceptPlanReviewHunk, handleRequestRejectPlanReviewHunk } = createPlanReviewActions({
+    pendingPlanReview, pendingPlanReviewBusy, setPendingPlanReview, setPendingPlanReviewBusy, setServerPlanFiles, setAgentArtifacts, setSelectedTreeItemId, setChapterSaveState, setChapterSaveMessage, setWorkspaceDialog,
+  })
 
   // 工作区变更头部的一键接受：逐章保留全部待审正文，再保留待审计划
   function handleApproveAllPendingReviews() {
@@ -3836,28 +3244,6 @@ export default function StudioWorkspace() {
     setMobileView('editor')
   }
 
-  async function handleCreateLocalVolume() {
-    setChapterSaveState('saving')
-    setChapterSaveMessage('正在创建新卷...')
-    try {
-      const nextOrder = volumes.length + 1
-      const created = await createVolume(activeNovelId, {
-        title: `第 ${nextOrder} 卷`,
-        position: nextOrder,
-      })
-      const nextVolume: StudioPayload['volumes'][number] = { ...created, chapterCount: 0, wordCount: 0 }
-      setVolumes((current) => [...current, nextVolume].sort((left, right) => left.orderIndex - right.orderIndex))
-      syncStudioPayload((current) => current ? {
-        ...current,
-        volumes: [...current.volumes, nextVolume].sort((left, right) => left.orderIndex - right.orderIndex),
-      } : current)
-      setChapterSaveState('saved')
-      setChapterSaveMessage(`已创建“${created.title}”，现在可以在卷内新建章节。`)
-    } catch (error) {
-      setChapterSaveState('error')
-      setChapterSaveMessage(error instanceof Error ? error.message : '新卷创建失败，请稍后重试。')
-    }
-  }
 
   function handleRequestCreateVolume() {
     setWorkspaceDialog({
@@ -3870,252 +3256,7 @@ export default function StudioWorkspace() {
     })
   }
 
-  async function handleMoveChapterInTree(chapterId: string, targetVolumeId: string, position: number) {
-    if (chapterDirty) {
-      toast.error('请等待当前章节自动保存后再调整顺序。')
-      return
-    }
-    const target = chapters.find((chapter) => chapter.id === chapterId)
-    if (!target || (target.volumeId === targetVolumeId && target.orderInVolume === position)) return
-    try {
-      await moveChapter(activeNovelId, chapterId, {
-        targetVolumeId,
-        position,
-        expectedRevision: target.revision,
-      })
-      await refreshWorkspaceAfterAgentWrite()
-      toast.success('章节顺序已更新。')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '章节移动失败，请重试。')
-    }
-  }
 
-  async function handleMovePlanInTree(planId: string, position: number) {
-    const target = savedPlanFiles.find((plan) => plan.id === planId)
-    if (!target?.backendArtifactId) {
-      toast.error('这份计划仍在同步中，请稍后再排序。')
-      return
-    }
-    const currentIndex = savedPlanFiles.findIndex((plan) => plan.id === planId)
-    if (currentIndex === position - 1) return
-    try {
-      await updateNovelPlanFile(target.backendArtifactId, { position })
-      const items = await listNovelPlanFiles(activeNovelId)
-      setServerPlanFiles(items.map(buildServerPlanFile))
-      toast.success('计划顺序已更新。')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '计划移动失败，请重试。')
-    }
-  }
-
-  function handleSelectPlanFromTree(planId: string) {
-    setSelectedTreeItemId(`plan:${planId}`)
-    setWorkViewer('document')
-    if (agentArtifacts.some((artifact) => artifact.id === planId)) {
-      setActiveAgentArtifactId(planId)
-    }
-    setMobileView('editor')
-  }
-
-  function handleRequestDeletePlan(planId: string) {
-    const targetPlan = savedPlanFiles.find((plan) => plan.id === planId)
-
-    if (!targetPlan) {
-      return
-    }
-
-    const targetArtifact =
-      agentArtifacts.find((artifact) => artifact.id === planId && artifact.savedAsPlan) ?? null
-    const planTitle = targetPlan.title.trim() || '这份计划'
-    if (targetArtifact) {
-      setActiveAgentArtifactId(targetArtifact.id)
-    }
-
-    setWorkspaceDialog({
-      title: '确认删除这份计划',
-      description: `删除后，“${planTitle}”会从左侧计划文件夹移除，但不会影响这轮 Agent 对话记录。`,
-      confirmLabel: '确认删除',
-      cancelLabel: '取消',
-      tone: 'danger',
-      onConfirm: async () => {
-        if (targetArtifact) {
-          setAgentArtifacts((current) =>
-            current.map((artifact) =>
-              artifact.id === planId
-                ? {
-                    ...artifact,
-                    savedAsPlan: false,
-                  }
-                : artifact,
-            ),
-          )
-        }
-        setServerPlanFiles((current) =>
-          current.filter((plan) =>
-            targetPlan.backendArtifactId
-              ? plan.backendArtifactId !== targetPlan.backendArtifactId
-              : plan.id !== planId,
-          ),
-        )
-        // 同步云端标记，刷新后不再出现在计划文件夹
-        if (targetPlan.backendArtifactId) {
-          try {
-            await updateNovelPlanFile(targetPlan.backendArtifactId, { saved: false })
-          } catch {
-            /* 云端同步失败时本地已移除，刷新后可重新删除 */
-          }
-        }
-        setChapterSaveState('saved')
-        setChapterSaveMessage('这份计划已从计划文件夹移除。')
-        setAgentRunState((current) => ({
-          ...current,
-          statusText: '已删除这份计划。',
-        }))
-      },
-    })
-  }
-
-  /** 手工新建空白计划：落到云端后直接选中，作者可在编辑区改名/补充内容 */
-  async function handleCreatePlanFile() {
-    setChapterSaveState('saving')
-    setChapterSaveMessage('正在新建计划...')
-
-    try {
-      const item = await createNovelPlanFile(activeNovelId)
-      const nextPlan = buildServerPlanFile(item)
-      setServerPlanFiles((current) => [...current, nextPlan])
-      setSelectedTreeItemId(`plan:${nextPlan.id}`)
-      setMobileView('editor')
-      setChapterSaveState('saved')
-      setChapterSaveMessage('已新建一份空白计划，可直接改名或补充内容。')
-    } catch (error) {
-      setChapterSaveState('error')
-      setChapterSaveMessage(error instanceof Error ? error.message : '新建计划失败，请稍后重试。')
-    }
-  }
-
-  function handleRequestCreatePlan() {
-    setWorkspaceDialog({
-      title: '确认新建计划',
-      description: '将会在计划文件夹新建一份空白计划，Agent 后续可直接读取它。确定现在新建吗？',
-      confirmLabel: '确认新建',
-      cancelLabel: '取消',
-      tone: 'default',
-      onConfirm: async () => {
-        await handleCreatePlanFile()
-      },
-    })
-  }
-
-  /** 计划设置面板内改名：本地产物与云端列表同步更新，再去抖 PATCH */
-  function handleRenamePlan(planId: string, nextTitle: string) {
-    const targetPlan = savedPlanFiles.find((plan) => plan.id === planId)
-
-    if (!targetPlan) {
-      return
-    }
-
-    updateAgentArtifact(planId, (current) => ({
-      ...current,
-      title: nextTitle.trim() || current.title,
-    }))
-    setServerPlanFiles((current) =>
-      current.map((plan) =>
-        plan.id === planId ||
-        Boolean(targetPlan.backendArtifactId && plan.backendArtifactId === targetPlan.backendArtifactId)
-          ? { ...plan, title: nextTitle.trim() || plan.title }
-          : plan,
-      ),
-    )
-    if (targetPlan.backendArtifactId) {
-      schedulePlanServerSync(
-        targetPlan.backendArtifactId,
-        nextTitle.trim() || targetPlan.title,
-        targetPlan.content,
-      )
-    }
-    setChapterSaveState('saved')
-    setChapterSaveMessage('计划名称已更新。')
-  }
-
-  /** 计划编辑去抖同步云端：先替换待发送负载，800ms 无新输入后 PATCH */
-  function flushPlanServerSync() {
-    if (planSyncTimerRef.current !== null) {
-      window.clearTimeout(planSyncTimerRef.current)
-      planSyncTimerRef.current = null
-    }
-    const payload = planSyncPayloadRef.current
-    planSyncPayloadRef.current = null
-    if (payload) {
-      void updateNovelPlanFile(payload.artifactId, {
-        title: payload.title,
-        content: payload.content,
-      }).catch(() => {
-        /* 同步失败不打断编辑，下次编辑会重新触发 */
-      })
-    }
-  }
-
-  function schedulePlanServerSync(artifactId: string, title: string, content: string) {
-    if (planSyncPayloadRef.current && planSyncPayloadRef.current.artifactId !== artifactId) {
-      flushPlanServerSync()
-    }
-    planSyncPayloadRef.current = { artifactId, title, content }
-    if (planSyncTimerRef.current !== null) {
-      window.clearTimeout(planSyncTimerRef.current)
-    }
-    planSyncTimerRef.current = window.setTimeout(() => {
-      planSyncTimerRef.current = null
-      flushPlanServerSync()
-    }, 800)
-  }
-
-  function handleWorkspaceDocumentChange(next: { title: string; content: string }) {
-    if (selectedTreeItemId === 'catalog') {
-      setCatalogDocument((current) => {
-        const fallbackTitle = current?.title ?? catalogPreview.title
-        const nextTitle = next.title || fallbackTitle
-
-        return {
-          title: nextTitle,
-          content: next.content,
-          manualTitle: Boolean(nextTitle.trim()) && nextTitle.trim() !== catalogPreview.title,
-          manualContent: next.content.trim() !== catalogPreview.content.trim(),
-        }
-      })
-      setChapterSaveState('saved')
-      setChapterSaveMessage('目录已更新。')
-      return
-    }
-
-    if (selectedTreeItemId?.startsWith('plan:')) {
-      const artifactId = selectedTreeItemId.slice('plan:'.length)
-      const targetPlan = savedPlanFiles.find((plan) => plan.id === artifactId)
-      updateAgentArtifact(artifactId, (current) => ({
-        ...current,
-        title: next.title.trim() || current.title,
-        content: next.content,
-        rawContent: next.content,
-      }))
-      setServerPlanFiles((current) =>
-        current.map((plan) =>
-          plan.id === artifactId ||
-          Boolean(targetPlan?.backendArtifactId && plan.backendArtifactId === targetPlan.backendArtifactId)
-            ? { ...plan, title: next.title.trim() || plan.title, content: next.content }
-            : plan,
-        ),
-      )
-      if (targetPlan?.backendArtifactId) {
-        schedulePlanServerSync(
-          targetPlan.backendArtifactId,
-          next.title.trim() || targetPlan.title,
-          next.content,
-        )
-      }
-      setChapterSaveState('saved')
-      setChapterSaveMessage('创作计划已更新。')
-    }
-  }
 
   function handleRequestDeleteChapterFromEditor() {
     if (!chapterDraft) {
@@ -4186,54 +3327,12 @@ export default function StudioWorkspace() {
     })
   }
 
-  async function handleDeleteChapterById(chapterId: string) {
-    const currentIndex = chapters.findIndex((chapter) => chapter.id === chapterId)
-    if (currentIndex < 0) {
-      return
-    }
 
-    const remainingChapters = removeChapterAndCompact(chapters, chapterId)
-    const fallbackChapter =
-      remainingChapters[Math.min(currentIndex, remainingChapters.length - 1)] ??
-      remainingChapters[remainingChapters.length - 1] ??
-      null
-
-    await deleteChapterDraft(activeNovelId, chapterId, chapters[currentIndex].revision)
-    setChapters((current) => removeChapterAndCompact(current, chapterId))
-    if (selectedChapterId === chapterId || chapterDraft?.id === chapterId) {
-      setSelectedChapterId(fallbackChapter?.id ?? null)
-    }
-    toast.success('章节已删除。')
-  }
-
-  /** 作品树右键重命名章节：当前章改草稿走自动保存，其它章直接 PATCH 并同步列表 */
-  async function handleRenameChapterById(chapterId: string, nextTitle: string) {
-    const trimmed = nextTitle.trim()
-    if (!trimmed) {
-      return
-    }
-
-    if (chapterDraft?.id === chapterId) {
-      handleChapterDraftChange({ ...chapterDraft, title: trimmed })
-      return
-    }
-
-    const target = chapters.find((chapter) => chapter.id === chapterId)
-    if (!target) {
-      return
-    }
-
-    try {
-      const updated = await updateChapterDraft(activeNovelId, chapterId, {
-        title: trimmed,
-        expectedRevision: target.revision,
-      })
-      setChapters((current) => current.map((chapter) => chapter.id === chapterId ? { ...chapter, title: updated.title, revision: updated.revision } : chapter))
-      toast.success('章节标题已更新。')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '章节重命名失败，请重试。')
-    }
-  }
+  const { handleCreateLocalVolume, handleMoveChapterInTree, handleMovePlanInTree, handleDeleteChapterById, handleRenameChapterById } = createCatalogActions({
+    activeNovelId, volumes, chapters, chapterDirty, chapterDraft, selectedChapterId, savedPlanFiles,
+    setVolumes, setChapters, setSelectedChapterId, setServerPlanFiles, setChapterSaveState,
+    setChapterSaveMessage, syncStudioPayload, refreshWorkspaceAfterAgentWrite, handleChapterDraftChange, toast,
+  })
 
   if (studioQuery.isError) {
     return (
@@ -4515,6 +3614,78 @@ export default function StudioWorkspace() {
     )
   }
 
+  // Mobile and IDE use the same editing/review contract; only presentation differs.
+  function renderEditor(presentation: Pick<ComponentProps<typeof EditorCanvas>, 'variant' | 'embedded'>) {
+    return (
+    <EditorCanvas
+      {...presentation}
+      chapterDraft={chapterDraft}
+      workspaceDocument={activeWorkspaceDocument}
+      chapterLoading={chapterQuery.isLoading}
+      chapterErrorMessage={chapterQuery.isError ? chapterSaveMessage : null}
+      chapterSaveState={chapterSaveState}
+      chapterSaveMessage={saveDisplayMessage}
+      latestWordCountLabel={latestWordCountLabel}
+      selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
+      onSelectionChange={setEditorSelection}
+      selection={editorSelection}
+      onAddSelection={handleAddViewerSelectionToAgent}
+      onSave={() => void persistChapter('manual')}
+      onRetryLoad={() => chapterQuery.refetch()}
+      onCreateChapter={handleRequestCreateChapter}
+      onCreateVolume={handleRequestCreateVolume}
+      onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
+      onOpenPlanSettings={() => {
+        if (selectedTreeItemId?.startsWith('plan:')) {
+          setPlanSettingsPlanId(selectedTreeItemId.slice('plan:'.length))
+        }
+      }}
+      onPublishNovel={handlePublishNovel}
+      novelPublished={novelForm?.status === 'published'}
+      onStatusChange={handleEditorStatusChange}
+      onChange={handleChapterDraftChange}
+      onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
+      onRetrySave={handleRetrySave}
+      onEditorBlur={handleEditorBlurFlush}
+      pendingChapterReview={activeChapterPendingReview}
+      pendingChapterReviewBusy={pendingChapterReviewBusy}
+      onKeepPendingReview={() => {
+        if (activeChapterPendingReview) {
+          handleKeepPendingChapterReview(activeChapterPendingReview)
+        }
+      }}
+      onRevertPendingReview={() => {
+        if (activeChapterPendingReview) {
+          handleRequestRejectPendingChapterReview(activeChapterPendingReview)
+        }
+      }}
+      onAcceptReviewHunk={(hunkIndex) => {
+        if (activeChapterPendingReview) {
+          handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
+        }
+      }}
+      onRejectReviewHunk={(hunkIndex) => {
+        if (activeChapterPendingReview) {
+          handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
+        }
+      }}
+      reviewFileIndex={activeReviewFileIndex}
+      reviewFileCount={reviewFileCount}
+      onNavigateReviewFile={handleNavigateReviewFile}
+      pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
+      onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
+      pendingPlanReview={activePlanPendingReview}
+      streamingContent={activeWorkspaceDocument ? documentStreamingPreview : chapterStreamingPreview}
+      writeLocked={activeWorkspaceDocument ? documentStreamingPreview !== undefined : chapterStreamingPreview !== undefined}
+      pendingPlanReviewBusy={pendingPlanReviewBusy}
+      onKeepPendingPlanReview={handleKeepPendingPlanReview}
+      onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
+      onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
+      onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
+    />
+    )
+  }
+
   return (
     <>
       <div
@@ -4561,72 +3732,7 @@ export default function StudioWorkspace() {
 
             {mobileView === 'editor' ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <EditorCanvas
-                  variant="mobile"
-                  chapterDraft={chapterDraft}
-                  workspaceDocument={activeWorkspaceDocument}
-                  chapterLoading={chapterQuery.isLoading}
-                  chapterErrorMessage={chapterQuery.isError ? chapterSaveMessage : null}
-                  chapterSaveState={chapterSaveState}
-                  chapterSaveMessage={saveDisplayMessage}
-                  latestWordCountLabel={latestWordCountLabel}
-                  selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
-                  onSelectionChange={setEditorSelection}
-                  selection={editorSelection}
-                  onAddSelection={handleAddViewerSelectionToAgent}
-                  onSave={() => void persistChapter('manual')}
-                  onRetryLoad={() => chapterQuery.refetch()}
-                  onCreateChapter={handleRequestCreateChapter}
-                  onCreateVolume={handleRequestCreateVolume}
-                  onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
-                  onOpenPlanSettings={() => {
-                    if (selectedTreeItemId?.startsWith('plan:')) {
-                      setPlanSettingsPlanId(selectedTreeItemId.slice('plan:'.length))
-                    }
-                  }}
-                  onPublishNovel={handlePublishNovel}
-                  novelPublished={novelForm?.status === 'published'}
-                  onStatusChange={handleEditorStatusChange}
-                  onChange={handleChapterDraftChange}
-                  onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
-                  onRetrySave={handleRetrySave}
-                  onEditorBlur={handleEditorBlurFlush}
-                  pendingChapterReview={activeChapterPendingReview}
-                  pendingChapterReviewBusy={pendingChapterReviewBusy}
-                  onKeepPendingReview={() => {
-                    if (activeChapterPendingReview) {
-                      handleKeepPendingChapterReview(activeChapterPendingReview)
-                    }
-                  }}
-                  onRevertPendingReview={() => {
-                    if (activeChapterPendingReview) {
-                      handleRequestRejectPendingChapterReview(activeChapterPendingReview)
-                    }
-                  }}
-                  onAcceptReviewHunk={(hunkIndex) => {
-                    if (activeChapterPendingReview) {
-                      handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
-                    }
-                  }}
-                  onRejectReviewHunk={(hunkIndex) => {
-                    if (activeChapterPendingReview) {
-                      handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
-                    }
-                  }}
-                  reviewFileIndex={activeReviewFileIndex}
-                  reviewFileCount={reviewFileCount}
-                  onNavigateReviewFile={handleNavigateReviewFile}
-                  pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
-                  onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
-                  pendingPlanReview={activePlanPendingReview}
-                  streamingContent={activeWorkspaceDocument ? documentStreamingPreview : chapterStreamingPreview}
-                  writeLocked={activeWorkspaceDocument ? documentStreamingPreview !== undefined : chapterStreamingPreview !== undefined}
-                  pendingPlanReviewBusy={pendingPlanReviewBusy}
-                  onKeepPendingPlanReview={handleKeepPendingPlanReview}
-                  onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
-                  onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
-                  onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
-                />
+                {renderEditor({ variant: 'mobile' })}
               </div>
             ) : null}
 
@@ -5073,72 +4179,7 @@ export default function StudioWorkspace() {
               </div>
 
               <div className="min-h-0 border-r border-[var(--border-subtle)] bg-[var(--surface-default)]">
-                <EditorCanvas
-                  embedded
-                  chapterDraft={chapterDraft}
-                  workspaceDocument={activeWorkspaceDocument}
-                  chapterLoading={chapterQuery.isLoading}
-                  chapterErrorMessage={chapterQuery.isError ? chapterSaveMessage : null}
-                  chapterSaveState={chapterSaveState}
-                  chapterSaveMessage={saveDisplayMessage}
-                  latestWordCountLabel={latestWordCountLabel}
-                  selectedCommentCount={activeChapterListItem?.commentCount ?? 0}
-                  onSelectionChange={setEditorSelection}
-                  selection={editorSelection}
-                  onAddSelection={handleAddViewerSelectionToAgent}
-                  onSave={() => void persistChapter('manual')}
-                  onRetryLoad={() => chapterQuery.refetch()}
-                  onCreateChapter={handleRequestCreateChapter}
-                  onCreateVolume={handleRequestCreateVolume}
-                  onOpenChapterSettings={() => setEditorChapterSettingsOpen(true)}
-                  onOpenPlanSettings={() => {
-                    if (selectedTreeItemId?.startsWith('plan:')) {
-                      setPlanSettingsPlanId(selectedTreeItemId.slice('plan:'.length))
-                    }
-                  }}
-                  onPublishNovel={handlePublishNovel}
-                  novelPublished={novelForm?.status === 'published'}
-                  onStatusChange={handleEditorStatusChange}
-                  onChange={handleChapterDraftChange}
-                  onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
-                  onRetrySave={handleRetrySave}
-                  onEditorBlur={handleEditorBlurFlush}
-                  pendingChapterReview={activeChapterPendingReview}
-                  pendingChapterReviewBusy={pendingChapterReviewBusy}
-                  onKeepPendingReview={() => {
-                    if (activeChapterPendingReview) {
-                      handleKeepPendingChapterReview(activeChapterPendingReview)
-                    }
-                  }}
-                  onRevertPendingReview={() => {
-                    if (activeChapterPendingReview) {
-                      handleRequestRejectPendingChapterReview(activeChapterPendingReview)
-                    }
-                  }}
-                  onAcceptReviewHunk={(hunkIndex) => {
-                    if (activeChapterPendingReview) {
-                      handleAcceptReviewHunk(activeChapterPendingReview, hunkIndex)
-                    }
-                  }}
-                  onRejectReviewHunk={(hunkIndex) => {
-                    if (activeChapterPendingReview) {
-                      handleRequestRejectReviewHunk(activeChapterPendingReview, hunkIndex)
-                    }
-                  }}
-                  reviewFileIndex={activeReviewFileIndex}
-                  reviewFileCount={reviewFileCount}
-                  onNavigateReviewFile={handleNavigateReviewFile}
-                  pendingReviewRemaining={!activeChapterPendingReview && selectedChapterId === reviewHandoffChapterId ? reviewFileCount : 0}
-                  onGoToNextReviewFile={() => handleNavigateReviewFile(1)}
-                  pendingPlanReview={activePlanPendingReview}
-                  streamingContent={activeWorkspaceDocument ? documentStreamingPreview : chapterStreamingPreview}
-                  writeLocked={activeWorkspaceDocument ? documentStreamingPreview !== undefined : chapterStreamingPreview !== undefined}
-                  pendingPlanReviewBusy={pendingPlanReviewBusy}
-                  onKeepPendingPlanReview={handleKeepPendingPlanReview}
-                  onRevertPendingPlanReview={handleRequestRejectPendingPlanReview}
-                  onAcceptPlanReviewHunk={handleAcceptPlanReviewHunk}
-                  onRejectPlanReviewHunk={handleRequestRejectPlanReviewHunk}
-                />
+                {renderEditor({ embedded: true })}
               </div>
 
               <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--app-bg)]">

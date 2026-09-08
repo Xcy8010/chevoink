@@ -23,7 +23,6 @@ import {
 import { useWorkConversation } from '../../components/work-conversation-context'
 import { WorkConversationRestore } from '../../components/WorkConversationRestore'
 import { copyToClipboard } from '@/lib/clipboard'
-import { useKeyboardPushScroll } from '@/hooks/useKeyboardPushScroll'
 import { cn } from '@/lib/utils'
 import type {
   AgentAttachmentMeta,
@@ -49,22 +48,21 @@ import {
   enqueueAgentRequest,
   fetchAgentQueue,
   actOnAgentQueue,
-  continueAgentLoopRun,
   deleteAgentSession,
   deleteAgentSessionMessage,
   fetchAgentSessionMessages,
   fetchAgentSessions,
   forkAgentSession,
   renameAgentSession,
-  resolveAgentApproval,
-  resolveAgentQuestion,
   rollbackAgentSessionMessage,
   startAgentLoopRun,
-  stopAgentLoopRun,
 } from '../agentApi'
 import { isRunActive, readSessionMessagesCache, useAgentStore, type ComposerReference } from '../agentStore'
 import { shouldShowProcessingHint, formatSessionTime, getMessageText, phaseLabel, shouldKeepLiveSessionMessages, skillPhaseLabel } from '../lib/panel-helpers'
 import { useAgentStream } from '../useAgentStream'
+import { projectMessages } from '../lib/message-projection'
+import { useMessageScroll } from './use-message-scroll'
+import { useRunControls } from './use-run-controls'
 import { AgentActivityBar } from './AgentActivityBar'
 import { AgentComposer } from './AgentComposer'
 import { AgentQueueTray } from './AgentQueueTray'
@@ -187,13 +185,7 @@ export function AgentPanel({
   const phase = useAgentStore((state) => state.phase)
   const resumeableRunId = useAgentStore((state) => state.resumeableRunId)
   const messages = useAgentStore((state) => state.messages)
-  const recentConversationText = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const text = getMessageText(messages[index].parts).replace(/\s+/g, ' ').trim()
-      if (text) return text.slice(0, 1000)
-    }
-    return ''
-  }, [messages])
+  const { recentConversationText, blockInfoById, lastAssistantId } = useMemo(() => projectMessages(messages), [messages])
   // 正文已定稿的消息 id：定稿后不再画流式光标（等答题/审批/工具执行期间光标不应常闪）
   const finalizedTextIds = useAgentStore((state) => state.finalizedTextIds)
   const pendingApproval = useAgentStore((state) => state.pendingApproval)
@@ -262,10 +254,9 @@ export function AgentPanel({
     (!conversationReady &&
       (sessionResolving || (sessionId !== null && hydratingSessionId === sessionId) || !conversationSettled))
   const [actionError, setActionError] = useState<string | null>(null)
-  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null)
-  useEffect(() => {
-    if (!isRunActive(phase) || stoppingRunId !== runId) setStoppingRunId(null)
-  }, [phase, runId, stoppingRunId])
+  const { stoppingRunId, handleStop, handleContinue, handleResolveApproval, handleResolveQuestion } = useRunControls({
+    runId, resumeableRunId, sessionId, phase, pendingApproval, pendingQuestion, connect, setActionError,
+  })
   // 任务「更多」菜单与重命名弹窗（原 StudioCommandBar 任务三点按钮迁入）
   const [taskMenuOpen, setTaskMenuOpen] = useState(false)
   const [taskRenaming, setTaskRenaming] = useState(false)
@@ -334,10 +325,9 @@ export function AgentPanel({
   // 懒创建会话：首次发送时 sessionId 从 null 变为新建 id，此时正在流式输出，需跳过历史恢复避免冲掉直播消息
   const lazySessionRef = useRef<string | null>(null)
 
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  // 自动跟随开关：用户上滑离开底部后暂停自动滚底（避免运行中回看历史被强制弹回），滚回底部附近自动恢复
-  const pinnedToBottomRef = useRef(true)
-  const lastScrollTopRef = useRef(0)
+  const { scrollRef, pinnedToBottomRef, lastScrollTopRef, handleMessagesScroll } = useMessageScroll({
+    messages, pendingApproval, pendingQuestion, conversationLoading, collapsed: workConversation.collapsed,
+  })
   const active = isRunActive(phase)
   const creditSummaryQuery = useQuery({
     queryKey: ['credits', 'summary'],
@@ -498,41 +488,6 @@ export function AgentPanel({
   }, [copyInviteLink, inviteDialogOpen, referralQuery.data?.inviteUrl])
 
 
-  // 连续助手消息归为一个对话块（一轮 run 输出）：块级统计操作总数，run 结束只折叠出一行「已处理 n 个操作」
-  const blockInfoById = useMemo(() => {
-    const map = new Map<string, { firstId: string; lastId: string; ops: number }>()
-    let firstId: string | null = null
-    let ops = 0
-    let ids: string[] = []
-    const flush = () => {
-      if (!firstId) {
-        return
-      }
-      const blockFirst = firstId
-      // 块尾消息用于挂结论操作条（复制 / 创建分支），每个对话块结尾都要有
-      const blockLast = ids[ids.length - 1] ?? blockFirst
-      for (const id of ids) {
-        map.set(id, { firstId: blockFirst, lastId: blockLast, ops })
-      }
-      firstId = null
-      ops = 0
-      ids = []
-    }
-    for (const message of messages) {
-      if (message.role === 'assistant') {
-        if (!firstId) {
-          firstId = message.id
-        }
-        ids.push(message.id)
-        ops += message.parts.filter((part) => part.type !== 'text').length
-      } else {
-        flush()
-      }
-    }
-    flush()
-    return map
-  }, [messages])
-
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({})
   const handleToggleBlockSummary = useCallback((blockId: string) => {
     setExpandedBlocks((current) => ({ ...current, [blockId]: !current[blockId] }))
@@ -656,101 +611,8 @@ export function AgentPanel({
       // 兜底：会话切换/面板卸载时结束水合标记，不让加载态悬挂
       useAgentStore.getState().endSessionHydration(sessionId)
     }
-  }, [sessionId, connect, disconnect])
+  }, [sessionId, connect, disconnect, pinnedToBottomRef, lastScrollTopRef])
 
-  // 消息更新自动滚动到底部（仅当用户本就贴底时）。
-  // 消息流用 content-visibility 虚拟化，scrollHeight 起初只是估算值：面板新挂载（如进入沉浸层）时
-  // 单次滚底只能跳到「估算底部」，随后底部消息真实布局、高度膨胀，位置会停在半山腰；
-  // 改为逐帧追底直到连续多帧稳定贴底才收敛
-  useEffect(() => {
-    if (conversationLoading || workConversation.collapsed) {
-      return
-    }
-    const node = scrollRef.current
-    if (!node) {
-      return
-    }
-    if (!pinnedToBottomRef.current) {
-      return
-    }
-    let attempts = 0
-    let stableTicks = 0
-    let frame = requestAnimationFrame(function step() {
-      // 用户中途上滑脱离贴底：立刻停止追底，不和手势抢滚动
-      if (!pinnedToBottomRef.current) {
-        return
-      }
-      if (node.scrollHeight - node.scrollTop - node.clientHeight > 1) {
-        node.scrollTop = node.scrollHeight
-        lastScrollTopRef.current = node.scrollTop
-        stableTicks = 0
-      } else {
-        stableTicks += 1
-      }
-      attempts += 1
-      // 连续 3 帧稳定贴底视为布局收敛；上限 30 帧防止极端情况下空转
-      if (attempts < 30 && stableTicks < 3) {
-        frame = requestAnimationFrame(step)
-      }
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [messages, pendingApproval, pendingQuestion, conversationLoading, workConversation.collapsed])
-
-  // 跟踪用户是否贴底。只要出现一次「向上滚动」就立刻脱离贴底：
-  // 流式输出时每个增量都会触发自动滚底，若只用「距底 80px」判定，用户手指刚上滑十几像素
-  // 就会被下一个增量拽回底部、并把贴底标记重新置回 true，表现为整个对话根本滑不动。
-  const handleMessagesScroll = useCallback(() => {
-    const node = scrollRef.current
-    if (!node || node.clientHeight === 0) {
-      return
-    }
-    const previousTop = lastScrollTopRef.current
-    lastScrollTopRef.current = node.scrollTop
-    const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-    // scrollTop 变小但人仍在底部 → 是内容高度变化（content-visibility 估算修正/清空重建）
-    // 引发的浏览器钳制，不是用户上滑，不能据此关闭贴底跟随
-    if (node.scrollTop < previousTop - 2 && distanceToBottom > 1) {
-      pinnedToBottomRef.current = false
-      return
-    }
-    // 只在回到底部附近时恢复贴底；不在中途向下滚时置 false——自动滚底后底部内容真实布局撑高会让
-    // 距底距离瞬间超阈值，若据此关贴底会把追底收敛循环自己打断
-    if (distanceToBottom < 80) {
-      pinnedToBottomRef.current = true
-    }
-  }, [])
-
-  // 聊天轨道的导航必须滚动本面板的消息容器，而不是交给浏览器猜测最近的滚动祖先。
-  // 同时关闭贴底跟随，避免运行中的自动滚动把用户刚选择的历史轮次又拉回最新消息。
-  // 页面同时存在多个 AgentPanel 实例（如 IDE 侧栏常驻隐藏），消息 id 会跨实例撞车：
-  // getElementById 可能命中隐藏实例的元素，导致可见实例 contains 检查失败、导航静默失效。
-  // 因此必须在自己实例的容器内定位目标，且零高度容器（不可见实例）直接忽略。
-  useEffect(() => {
-    const handleConversationNavigate = (event: Event) => {
-      const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
-      if (!messageId) return
-      const container = scrollRef.current
-      if (!container || container.clientHeight === 0) return
-      const target = container.querySelector<HTMLElement>(`[id="agent-message-${messageId}"]`)
-      if (!target) return
-      pinnedToBottomRef.current = false
-      const containerRect = container.getBoundingClientRect()
-      const targetRect = target.getBoundingClientRect()
-      const top = container.scrollTop + targetRect.top - containerRect.top - (container.clientHeight - targetRect.height) / 2
-      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
-      // 导航落点高亮：让“点击轨道 → 定位到这一轮”有可见反馈
-      target.classList.remove('agent-msg-flash')
-      // 强制重启动画：连续点击同一轨道也能再次闪烁
-      void target.offsetWidth
-      target.classList.add('agent-msg-flash')
-      window.setTimeout(() => target.classList.remove('agent-msg-flash'), 1500)
-    }
-    window.addEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)
-    return () => window.removeEventListener('chevoink:agent-conversation-navigate', handleConversationNavigate)
-  }, [])
-
-  // 键盘弹起 / 底部导航隐藏使消息容器变矮时，像微信/QQ 一样把对话顶上去
-  useKeyboardPushScroll(scrollRef)
 
   const handleSend = useCallback(
     async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => {
@@ -837,84 +699,10 @@ export function AgentPanel({
         throw error
       }
     },
-    [sessionId, voiceScopeKey, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits, queueQuery],
+    [sessionId, voiceScopeKey, novelId, chapterId, selection, ensureSession, connect, onNewSession, modelTier, customModelId, selectedReasoningEffort, refetchCredits, queueQuery, pinnedToBottomRef],
   )
 
-  const handleStop = useCallback(async () => {
-    if (!runId || stoppingRunId === runId) {
-      return
-    }
-    try {
-      setStoppingRunId(runId)
-      await stopAgentLoopRun(runId)
-    } catch (error) {
-      setStoppingRunId(null)
-      setActionError(error instanceof Error ? error.message : '停止失败，请稍后再试。')
-    }
-  }, [runId, stoppingRunId])
 
-  const continuationViewEpoch = useRef(0)
-  useEffect(() => {
-    continuationViewEpoch.current += 1
-    return () => { continuationViewEpoch.current += 1 }
-  }, [sessionId])
-  const handleContinue = useCallback(async () => {
-    const epoch = continuationViewEpoch.current
-    const targetRunId = runId ?? resumeableRunId
-    if (!targetRunId) {
-      return
-    }
-    setActionError(null)
-    try {
-      const result = await continueAgentLoopRun(targetRunId)
-      // Switching windows while the request is pending must not hydrate the old run into the new view.
-      if (epoch !== continuationViewEpoch.current) return
-      useAgentStore.getState().beginRun(result.runId, '请继续完成之前的任务。', sessionId)
-      connect(result.runId)
-    } catch (error) {
-      if (epoch !== continuationViewEpoch.current) return
-      setActionError(error instanceof Error ? error.message : '续跑失败，请稍后再试。')
-    }
-  }, [runId, resumeableRunId, sessionId, connect])
-
-  const handleResolveApproval = useCallback(
-    async (approved: boolean, alwaysAllow: boolean) => {
-      if (!runId || !pendingApproval) {
-        return
-      }
-      try {
-        await resolveAgentApproval(runId, {
-          callId: pendingApproval.callId,
-          approvalId: pendingApproval.approvalId,
-          approved,
-          alwaysAllow,
-        })
-      } catch (error) {
-        setActionError(error instanceof Error ? error.message : '提交失败，请稍后再试。')
-      }
-    },
-    [runId, pendingApproval],
-  )
-
-  const handleResolveQuestion = useCallback(
-    async (answer: string) => {
-      if (!runId || !pendingQuestion) {
-        return
-      }
-      try {
-        await resolveAgentQuestion(runId, {
-          requestId: pendingQuestion.requestId,
-          callId: pendingQuestion.callId,
-          answer,
-        })
-      } catch (error) {
-        setActionError(error instanceof Error ? error.message : '提交失败，请稍后再试。')
-      }
-    },
-    [runId, pendingQuestion],
-  )
-
-  const lastAssistantId = [...messages].reverse().find((message) => message.role === 'assistant')?.id
   const canContinue = (Boolean(runId) && (phase === 'paused' || phase === 'failed')) || (!runId && Boolean(resumeableRunId))
   const combinedError = actionError ?? errorMessage
 
@@ -1146,7 +934,7 @@ export function AgentPanel({
   useLayoutEffect(() => {
     const node = scrollRef.current
     if (!workConversation.collapsed && node && !pinnedToBottomRef.current) node.scrollTop = lastScrollTopRef.current
-  }, [workConversation.collapsed])
+  }, [workConversation.collapsed, scrollRef, pinnedToBottomRef, lastScrollTopRef])
   useEffect(() => {
     if (workConversation.collapsed && (pendingApproval || pendingQuestion || combinedError || quotaDialogOpen)) workConversation.expand()
   }, [workConversation, pendingApproval, pendingQuestion, combinedError, quotaDialogOpen])

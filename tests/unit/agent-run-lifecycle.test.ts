@@ -6,7 +6,7 @@ import type { chatWithTools as chatType } from '../../api/lib/ai-service.js'
 
 const mocks = vi.hoisted(() => ({
   chat: vi.fn(), emit: vi.fn(), persist: vi.fn(async () => ({})), dispose: vi.fn(async () => {}),
-  update: vi.fn<(input: { data: Record<string, unknown> }) => Promise<{ taskSpec: TaskSpec | null; usage?: unknown; currentTurn?: number; startedAt?: Date }>>(async () => ({ taskSpec: null })), previous: vi.fn(async () => null),
+  update: vi.fn<(input: { data: Record<string, unknown> }) => Promise<{ taskSpec: TaskSpec | null; usage?: unknown; currentTurn?: number; startedAt?: Date; events?: Array<{ type: string; createdAt: Date }> }>>(async () => ({ taskSpec: null })), previous: vi.fn(async () => null),
   todos: vi.fn(async (): Promise<AgentTodoItem[]> => []),
   priorRuns: vi.fn(),
   report: vi.fn(async () => ({ chineseCharacters: 0, content: '' })),
@@ -203,6 +203,29 @@ describe('original task context on resume', () => {
 describe('persisted legacy checkpoint budgets', () => {
   const resume = () => executeAgentRun({ runId: 'run', sessionId: 'session', userId: 'user', novelId: 'novel',
     chapterId: null, mode: 'build', prompt: '继续原任务', resume: true })
+  it('resumes actual work after a paused gap without resetting token consumption', async () => {
+    const now = Date.now(), started = now - (env.agentRunWallClockMinutes + 10) * 60_000
+    mocks.update.mockResolvedValueOnce({ taskSpec: null, currentTurn: 1, startedAt: new Date(started),
+      usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 },
+      events: [{ type: 'run.started', createdAt: new Date(started) },
+        { type: 'run.paused', createdAt: new Date(started + 60_000) }] })
+    queue(response('已完成。'))
+    await resume()
+    expect(mocks.chat).toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished', status: 'succeeded',
+      usage: expect.objectContaining({ totalTokens: 130 }) }))
+  })
+
+  it('does not pay for another wrap-up when actual execution time is exhausted', async () => {
+    mocks.update.mockResolvedValueOnce({ taskSpec: null, currentTurn: 1,
+      startedAt: new Date(Date.now() - (env.agentRunWallClockMinutes + 1) * 60_000),
+      usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } })
+    await resume()
+    expect(mocks.chat).not.toHaveBeenCalled()
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished', status: 'failed',
+      usage: expect.objectContaining({ totalTokens: 120 }) }))
+  })
+
   it('retains cumulative usage, earned slices, progress and the original clock on resume', async () => {
     const started = Date.now() - 1000
     const checkpoint = { version: 1, runStartedAt: started, resumeCount: 1, compactionCount: 1,

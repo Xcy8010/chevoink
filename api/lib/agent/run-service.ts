@@ -34,6 +34,7 @@ import { assertTaskAuthorizationRuntimeReady } from './task-authorization.js'
 import { assertLegacyRuntimeCompatible } from './runtime-identity.js'
 import { fenceLocallyStoppedLegacyRun, pauseDurableTask, pauseDurableTaskForAttention, pauseLegacyOrphanRun, recoverLegacyOrphanRun } from './runtime-lifecycle.js'
 import { resumeDurableTask } from './runtime-resume.js'
+import { recoverRunElapsedMs, savedRunUsageSchema } from './checkpoint.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { assertCreditAccess, getModelTierRuntime } from '../credits.js'
 import { getRunEventBus, loadPersistedEvents, prepareRunEventResume } from './events.js'
@@ -739,6 +740,20 @@ async function continueLoopRunLocked(
     eventStartSeq = await prepareRunEventResume(run.id)
   } catch {
     throw new DataAccessError(503, 'RUN_EVENTS_PENDING', '任务记录尚未完成同步，请稍后继续；不会重复启动任务。')
+  }
+  // Reject a genuinely exhausted execution before admitting another run or
+  // generating a paid summary. Paused gaps come from the flushed event journal.
+  if (run.startedAt) {
+    const boundaries = await prisma.agentRunEvent.findMany({ where: { runId: run.id,
+      type: { in: ['run.started', 'run.paused', 'run.finished'] } }, orderBy: { seq: 'asc' }, select: { type: true, createdAt: true } })
+    const elapsed = recoverRunElapsedMs(run.startedAt.getTime(), Date.now(),
+      boundaries.map(event => ({ type: event.type, at: event.createdAt.getTime() })))
+    if (elapsed === null) throw new DataAccessError(409, 'RUN_TIME_UNCONFIRMED', '原任务执行时间记录不一致，未启动续跑。')
+    const saved = savedRunUsageSchema.safeParse(run.usage)
+    const minutes = saved.success && (saved.data.checkpoint?.resumeCount ?? 0) > 0
+      ? env.agentRunWallClockLongMinutes : env.agentRunWallClockMinutes
+    if (elapsed + (saved.success ? saved.data.checkpoint?.inheritedExecutionMs ?? 0 : 0) > minutes * 60_000) throw new DataAccessError(409, 'RUN_TIME_EXHAUSTED',
+      `任务累计执行时长已达${minutes}分钟上限（已排除有记录的暂停等待时间）。未发起模型请求；已保存成果保留，重复继续不会增加预算。`)
   }
   // B0 still serializes service admissions with withUserRunLock. Include saved
   // queued/recovering work in the limit, not just controllers in this process.

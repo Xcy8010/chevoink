@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 const coverageThresholds = process.env.CI
-  ? { statements: 18, branches: 59, functions: 32, lines: 18 }
+  ? { statements: 30, branches: 73, functions: 52, lines: 30 }
   : { statements: 10, branches: 59, functions: 15, lines: 10 }
 
 export default defineConfig({
@@ -25,7 +25,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
       reportOnFailure: true,
-      // CI 带 PostgreSQL，锁定 2026-09-02 全量基线；本地无 DB 时集成组会跳过，使用独立的纯测试基线。
+      // CI 带 PostgreSQL，锁定已验证的 2026-09-08 基线下限；40%仍是未完成目标，不改变覆盖分母来达标。
       // 两档都只允许后续抬高，不允许靠删测试或关闭 DB 用例降线。
       thresholds: coverageThresholds,
     },

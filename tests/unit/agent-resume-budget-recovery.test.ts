@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { recoverLegacyRunUsage, savedRunUsageSchema } from '../../api/lib/agent/checkpoint.js'
+import { recoverLegacyRunUsage, recoverRunElapsedMs, savedRunUsageSchema } from '../../api/lib/agent/checkpoint.js'
 import { continuityRepairRounds } from '../../api/lib/agent/story-compiler.js'
 
 describe('legacy resume budget receipts', () => {
+  it('excludes paused gaps but never resets a missing-terminal execution interval', () => {
+    expect(recoverRunElapsedMs(0, 10000, [
+      { type: 'run.started', at: 0 }, { type: 'run.started', at: 1000 },
+      { type: 'run.paused', at: 2000 }, { type: 'run.started', at: 9000 },
+      { type: 'run.finished', at: 9500 },
+    ])).toBe(2500)
+    expect(recoverRunElapsedMs(0, 10000, [])).toBe(10000)
+    expect(recoverRunElapsedMs(0, 10000, [{ type: 'run.paused', at: 2000 }])).toBe(2000)
+    expect(recoverRunElapsedMs(0, 10000, [{ type: 'run.started', at: 11000 }])).toBeNull()
+    expect(recoverRunElapsedMs(0, 10000, [{ type: 'run.paused', at: 2000 }, { type: 'run.started', at: 1000 }])).toBeNull()
+  })
   it('recovers all known consumption instead of granting a fresh budget', () => {
     expect(recoverLegacyRunUsage(2, [
       { turn: 1, requestTokens: 100, responseTokens: 20 },

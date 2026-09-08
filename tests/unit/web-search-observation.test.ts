@@ -11,6 +11,10 @@ vi.mock('../../api/lib/credits.js', () => ({ consumeCredits: mocks.charge, WEB_S
 vi.mock('../../api/lib/tool-model-config.js', () => ({ getToolModelRuntime: mocks.configuration }))
 vi.mock('../../api/lib/agent/research-sources.js', async original => ({
   ...await original<typeof import('../../api/lib/agent/research-sources.js')>(),
+  reserveResearchRequest: vi.fn(async () => true),
+  settleResearchRequest: vi.fn(async () => {}),
+  findResearchSearchOutcome: vi.fn(async () => null),
+  saveResearchSearchOutcome: vi.fn(async () => {}),
   registerResearchSources: async (_scope: unknown, entries: Array<{ url: string }>) => entries.map((entry, index) => ({ id: `source-${index}`, canonicalUrl: entry.url })),
 }))
 
@@ -23,6 +27,26 @@ const context = (): ToolContext => ({ userId: 'fixture', novelId: 'fixture', cha
   runId: randomUUID(), callId: randomUUID(), mode: 'build', creativeFreedom: 'balanced', qualityMode: 'premium', signal: new AbortController().signal, emit: vi.fn() })
 
 describe('search URL handoff to the model', () => {
+  it('reuses a persisted same-task search after process-local cache loss without charging again', async () => {
+    const { findResearchSearchOutcome, saveResearchSearchOutcome } = await import('../../api/lib/agent/research-sources.js')
+    vi.mocked(findResearchSearchOutcome).mockResolvedValueOnce({ provider: 'bocha', results: [] })
+    const savedBefore = vi.mocked(saveResearchSearchOutcome).mock.calls.length
+    const result = await webSearchTool.execute(context(), { query: '已保存的目录查询', maxResults: 2 })
+    expect(result.output).toContain('没有返回结果')
+    expect(mocks.search).not.toHaveBeenCalled()
+    expect(mocks.charge).not.toHaveBeenCalled()
+    expect(vi.mocked(saveResearchSearchOutcome).mock.calls).toHaveLength(savedBefore)
+  })
+  it('releases a reservation cancelled before charging and never dispatches it', async () => {
+    const { reserveResearchRequest, settleResearchRequest } = await import('../../api/lib/agent/research-sources.js')
+    const controller = new AbortController()
+    const ctx = { ...context(), signal: controller.signal }
+    vi.mocked(reserveResearchRequest).mockImplementationOnce(async () => { controller.abort(new Error('cancel during reservation')); return true })
+    await expect(webSearchTool.execute(ctx, { query: '目录', maxResults: 2 })).rejects.toThrow('cancel during reservation')
+    expect(settleResearchRequest).toHaveBeenCalledWith(ctx, 'released')
+    expect(mocks.charge).not.toHaveBeenCalled()
+    expect(mocks.search).not.toHaveBeenCalled()
+  })
   it('identifies search endpoint 404 without leaking upstream details or calling it a missing book', async () => {
     const { WebSearchError } = await vi.importActual<typeof import('../../api/lib/web-search-service.js')>('../../api/lib/web-search-service.js')
     mocks.search.mockRejectedValue(new WebSearchError('private upstream detail', [

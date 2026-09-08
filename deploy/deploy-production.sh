@@ -48,6 +48,17 @@ npm run build:client
 
 if [[ -f "ecosystem.config.cjs" ]]; then
   pm2 startOrReload ecosystem.config.cjs --update-env
+  # Verify the actual API process, not merely the build shell or an npm parent.
+  pm2 jlist | node --input-type=module -e '
+import {readFileSync, realpathSync} from "node:fs";
+import {resolve} from "node:path";
+const app = JSON.parse(readFileSync(0, "utf8")).find(app => app.name === "chevoink-api");
+if (!app || app.pm2_env.status !== "online" || app.pm2_env.pm_exec_path !== resolve("api/server.ts")
+    || realpathSync(`/proc/${app.pid}/exe`) !== realpathSync(process.env.CHEVOINK_NODE_BINARY)) {
+  console.error("[chevoink] API did not start directly with the pinned Node; web release not published");
+  process.exit(1);
+}
+console.log("[chevoink] API process uses the pinned Node directly");'
   pm2 save
 fi
 

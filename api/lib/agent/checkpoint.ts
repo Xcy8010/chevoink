@@ -54,8 +54,29 @@ export const runCheckpointSchema = z.object({
   // Only the budget guard includes preceding runs of the same explicit task.
   inheritedTokens: z.number().int().nonnegative().default(0),
   inheritedTurns: z.number().int().nonnegative().default(0),
+  inheritedExecutionMs: z.number().int().nonnegative().optional(),
 }).strict().refine(value => value.writeBaseline <= value.writeProgress && value.readBaseline <= value.readProgress)
 export type RunCheckpointState = z.infer<typeof runCheckpointSchema>
+
+/** Count execution intervals, not the gaps between terminal and restart events.
+ * Missing terminal events remain charged conservatively until the next known
+ * stop; nested starts never reset the clock. This does not alter token usage. */
+export function recoverRunElapsedMs(startedAt: number, stoppedAt: number,
+  events: Array<{ type: string; at: number }>): number | null {
+  if (![startedAt, stoppedAt].every(Number.isSafeInteger) || startedAt < 0 || stoppedAt < startedAt) return null
+  let activeSince: number | null = startedAt, previous = startedAt, elapsed = 0
+  for (const event of events) {
+    if (!Number.isSafeInteger(event.at) || event.at < previous || event.at > stoppedAt) return null
+    previous = event.at
+    if (event.type === 'run.started') activeSince ??= event.at
+    else if (event.type === 'run.paused' || event.type === 'run.finished') {
+      if (activeSince !== null) elapsed += event.at - activeSince
+      activeSince = null
+    }
+  }
+  if (activeSince !== null) elapsed += stoppedAt - activeSince
+  return Number.isSafeInteger(elapsed) ? elapsed : null
+}
 
 export const savedRunUsageSchema = z.object({
   promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative(),
