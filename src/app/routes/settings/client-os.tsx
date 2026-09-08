@@ -40,4 +40,16 @@ export const CLIENT_OS_OPTIONS = [
   { key: 'harmony', label: '鸿蒙', icon: HarmonyIcon, iconClassName: 'text-[var(--text-primary)]' },
 ] as const
 
-export type ClientOsKey = (typeof CLIENT_OS_OPTIONS)[number]['key']
+export function WindowsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M2 3h9v9H2zm11 0h9v9h-9zM2 14h9v9H2zm11 0h9v9h-9z" />
+    </svg>
+  )
+}
+
+export const DESKTOP_CLIENT_OS_OPTIONS = [
+  { key: 'windows', label: 'Windows', icon: WindowsIcon, iconClassName: 'text-[var(--text-primary)]' },
+] as const
+
+export type ClientOsKey = (typeof CLIENT_OS_OPTIONS)[number]['key'] | 'windows'

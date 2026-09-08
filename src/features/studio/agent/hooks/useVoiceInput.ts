@@ -1,4 +1,5 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 import {
   deleteVoiceModel,
   disposeVoiceEngine,
@@ -99,6 +100,9 @@ function errorMessage(error: unknown): string {
 /** Local PCM capture only. The sole output is a draft callback, never a send action. */
 export function useVoiceInput(options: VoiceInputOptions): VoiceInputController {
   const [status, setStatus] = useState<VoiceInputStatus>('checking')
+  const desktopStatus = useRef(status)
+  desktopStatus.current = status
+  useEffect(() => registerDesktopSave(() => !['requesting-permission', 'recording', 'transcribing', 'downloading', 'deleting'].includes(desktopStatus.current)), [])
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
   const [elapsed, setElapsed] = useState(0)

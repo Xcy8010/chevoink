@@ -1,0 +1,56 @@
+name: Windows Desktop
+
+on:
+  push:
+    branches: [chevoink-windows, main]
+    paths: ['desktop/windows/**', '.github/workflows/windows-desktop.yml']
+  pull_request:
+    paths: ['desktop/windows/**', '.github/workflows/windows-desktop.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/windows
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: desktop/windows/package-lock.json
+      - name: Install locked Rust toolchain
+        run: rustup show
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/windows/src-tauri/target
+          key: windows-rust-1.94-${{ hashFiles('desktop/windows/src-tauri/Cargo.lock') }}
+      - run: npm ci
+      - name: Rust formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Rust lint
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build internal installer (not a signed public release)
+        run: npm run build -- --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-internal-${{ github.sha }}
+          path: desktop/windows/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7

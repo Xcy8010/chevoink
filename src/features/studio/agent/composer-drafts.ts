@@ -1,4 +1,5 @@
 import { useAgentStore } from './agentStore'
+import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 
 type State = ReturnType<typeof useAgentStore.getState>
 type Draft = Pick<State, 'composerDraft' | 'composerAttachments' | 'composerReferences' | 'composerSkillIds' | 'composerUploading'>
@@ -9,6 +10,16 @@ let active: string | undefined
 const empty = (): Draft => ({ composerDraft: '', composerAttachments: [], composerReferences: [], composerSkillIds: [], composerUploading: 0 })
 const pick = (state: State): Draft => ({ composerDraft: state.composerDraft, composerAttachments: state.composerAttachments, composerReferences: state.composerReferences, composerSkillIds: state.composerSkillIds, composerUploading: state.composerUploading })
 const resolve = (scope: string): string => aliases.get(scope) ?? scope
+
+registerDesktopSave(() => {
+  if (!active) return true
+  const draft = pick(useAgentStore.getState())
+  if (draft.composerUploading > 0) return false
+  try {
+    localStorage.setItem(prefix + active, JSON.stringify({ ...draft, composerUploading: 0 }))
+    return true
+  } catch { return false }
+})
 
 /** Read the owning window, never the visible window's draft when scopes differ. */
 export function hasComposerDraft(scope: string): boolean {

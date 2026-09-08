@@ -1,6 +1,8 @@
 ﻿import { forwardRef, useCallback, useEffect, useRef, useState, type ChangeEvent, type CompositionEvent, type FocusEvent, type SyntheticEvent, type TextareaHTMLAttributes } from 'react'
 
 import { cn } from '@/lib/utils'
+import { isWindowsDesktopApp } from '@/lib/desktop-app'
+import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 
 import type { EditorSelectionState } from '../types'
 
@@ -86,6 +88,14 @@ const LocalFirstTextarea = forwardRef<HTMLTextAreaElement, LocalFirstTextareaPro
     },
     [clearCommitTimer, commitDelay, flushPending],
   )
+
+  useEffect(() => {
+    if (!isWindowsDesktopApp()) return
+    const flush = () => { if (!composingRef.current) flushPending() }
+    window.addEventListener('chevoink:desktop-flush-input', flush)
+    const unregister = registerDesktopSave(() => !composingRef.current && localRef.current === committedRef.current)
+    return () => { window.removeEventListener('chevoink:desktop-flush-input', flush); unregister() }
+  }, [flushPending])
 
   // 外部权威值变化（Agent 写入、审查保留/撤销、服务端同步、切章）时覆盖本地。
   // 本地上报后的回声（value === committedRef）不会触发覆盖，光标与滚动保持稳定。

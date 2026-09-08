@@ -47,6 +47,14 @@ coverage/
 *.sw?
 .vite
 .local-storage
+.tools/
+desktop/windows/src-tauri/target/
+desktop/windows/src-tauri/gen/
+desktop/windows/test-results/
+*.pfx
+*.p12
+*.key
+*.exe
 
 # Offline voice assets: generated locally, never commit model/runtime binaries
 /output/voice-assets/

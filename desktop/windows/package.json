@@ -1,0 +1,10 @@
+{
+  "name": "chevoink-windows",
+  "version": "1.0.0",
+  "private": true,
+  "license": "AGPL-3.0",
+  "type": "module",
+  "engines": { "node": "22.23.2", "npm": "10.9.8" },
+  "scripts": { "dev": "tauri dev", "build": "tauri build --bundles nsis", "tauri": "tauri" },
+  "devDependencies": { "@tauri-apps/cli": "2.11.4" }
+}
