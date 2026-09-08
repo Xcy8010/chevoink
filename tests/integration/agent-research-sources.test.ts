@@ -104,12 +104,18 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
       expect(await prisma.agentResearchContent.count({ where: { sourceId: source.id } })).toBe(0)
       const text = '这份材料描述了村庄兴建水渠的过程，工匠与村民合作解决道路和水流的问题。'.repeat(500)
       const page = { ...assessReaderText(text, '水渠'), finalUrl: source.canonicalUrl, provider: 'direct' as const, retryable: false, contentKind: 'article' as const,
-        links: [{ url: 'https://example.com/chapter?id=20', title: '第20章' }] }
+        links: Array.from({ length: 19 }, (_, index) => ({ url: `https://example.com/chapter?id=${20 + index}`, title: `第${20 + index}章` })) }
       const saved = await saveResearchContent(scope, source.id, page)
       expect((await saveResearchContent(scope, source.id, page)).id).toBe(saved.id)
       const first = await readResearchContent(scope, { contentRef: saved.id, revision: saved.revision })
       expect(first).toMatchObject({ text: text.slice(0, 6000), truncated: true, nextCursor: '6000' })
-      expect(first.links).toEqual(page.links)
+      expect(first.links).toEqual(page.links.slice(0, 8))
+      expect(first).toMatchObject({ linksTotal: 19, linksNextOffset: 8 })
+      const secondLinks = await readResearchContent(scope, { contentRef: saved.id, revision: saved.revision, linksOffset: 8 })
+      const lastLinks = await readResearchContent(scope, { contentRef: saved.id, revision: saved.revision, linksOffset: 16 })
+      expect([...first.links, ...secondLinks.links, ...lastLinks.links]).toEqual(page.links)
+      expect(lastLinks.linksNextOffset).toBeNull()
+      await expect(readResearchContent(scope, { contentRef: saved.id, revision: saved.revision, linksOffset: 20 })).rejects.toMatchObject({ code: 'RESEARCH_RANGE_INVALID' })
       const located = await readResearchContent(scope, { contentRef: saved.id, revision: saved.revision, find: '村庄', offset: 6500, limit: 200 })
       const matchAt = text.indexOf('村庄', 6500)
       expect(located.match).toEqual({ start: matchAt, end: matchAt + 2 })

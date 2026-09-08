@@ -8,7 +8,7 @@ export function extractReaderLinks(html: string, finalUrl: string): Array<{ url:
   const { document } = parseHTML(html)
   const links = new Map<string, { url: string; title: string }>()
   for (const anchor of document.querySelectorAll('a[href]')) {
-    if (links.size >= 256) break
+    if (links.size >= 4096) break
     try {
       const url = parsePublicHttpUrl(new URL(anchor.getAttribute('href')!, base).href, true)
       const title = anchor.textContent?.replace(/\s+/g, ' ').trim().slice(0, 160) ?? ''
@@ -16,7 +16,7 @@ export function extractReaderLinks(html: string, finalUrl: string): Array<{ url:
       links.set(url.href, { url: url.href, title })
     } catch { /* Unsupported/unsafe anchors are not discovery results. */ }
   }
-  return [...links.values()].sort((a, b) => Number(/第.{1,12}章|chapter\s*\d/i.test(b.title)) - Number(/第.{1,12}章|chapter\s*\d/i.test(a.title))).slice(0, 8)
+  return [...links.values()].sort((a, b) => Number(/第.{1,12}章|chapter\s*\d/i.test(b.title)) - Number(/第.{1,12}章|chapter\s*\d/i.test(a.title)))
 }
 
 export type ReaderQuality = { readable: boolean; privateUseRatio: number; replacementRatio: number; textChars: number }

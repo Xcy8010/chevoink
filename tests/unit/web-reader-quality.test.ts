@@ -10,9 +10,10 @@ describe('reader content quality without navigation false positives', () => {
     const html = '<a href="/about">关于</a><a href="http://127.0.0.1/private">私网</a><a href="javascript:alert(1)">脚本</a><a href="https://other.example/reader/1">其他站点</a>'
       + Array.from({ length: 12 }, (_, i) => `<a href="/reader/${100 + i}?page=2&amp;source=index">第${i + 1}章</a>`).join('')
     const links = extractReaderLinks(html, 'https://fanqienovel.com/page/123')
-    expect(links).toHaveLength(8)
+    expect(links).toHaveLength(13)
     expect(links[0]).toEqual({ title: '第1章', url: 'https://fanqienovel.com/reader/100?page=2&source=index' })
-    expect(links.every(item => item.url.startsWith('https://fanqienovel.com/reader/'))).toBe(true)
+    expect(links.slice(0, 12).every(item => item.url.startsWith('https://fanqienovel.com/reader/'))).toBe(true)
+    expect(links[11].title).toBe('第12章')
   })
   it('excludes private-use icon navigation and hidden content from body quality', () => {
     const result = extractReaderHtml(`<html><head><title>水渠观察</title></head><body><nav>${'\ue123'.repeat(1000)}</nav><div hidden>${'\ufffd'.repeat(500)}</div><article><h1>水渠观察</h1><p>${body.repeat(6)}</p></article></body></html>`)

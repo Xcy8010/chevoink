@@ -186,6 +186,7 @@ const webReadParameters = z.object({
   sourceId: z.string().min(1).max(64).optional().describe('本任务已注册的来源编号'),
   refresh: z.boolean().optional().describe('仅需检查来源新版本时设为true；默认复用本任务保存的正文，不重复联网'),
   contentRef: z.string().min(1).max(64).optional().describe('已保存正文编号；续读不会重新访问网站'),
+  linksOffset: z.number().int().nonnegative().optional().describe('仅列出保存页面的链接分页，每页8项；须同时提供contentRef和revision，不回传正文、不重新联网'),
   revision: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('续读时必须提供原正文版本'),
   offset: z.number().int().nonnegative().optional().describe('已保存正文窗口起点，使用上次返回的nextCursor'),
   find: z.string().min(1).max(200).refine(value => Boolean(value.trim()), '检索词不能为空白').optional().describe('可选：在保存版本中精确查找文本并返回附近窗口；offset作为检索起点，不联网'),
@@ -193,6 +194,7 @@ const webReadParameters = z.object({
   if ([value.url, value.sourceId, value.contentRef].filter(Boolean).length !== 1) ctx.addIssue({ code: 'custom', message: 'url、sourceId、contentRef必须且只能提供一个' })
   if (Boolean(value.contentRef) !== Boolean(value.revision) || (!value.contentRef && value.offset !== undefined)) ctx.addIssue({ code: 'custom', message: 'revision和offset仅用于已有contentRef的续读；必须携带原revision' })
   if (value.find !== undefined && !value.contentRef) ctx.addIssue({ code: 'custom', message: 'find只用于已保存的contentRef和revision，不能对网页地址直接检索' })
+  if (value.linksOffset !== undefined && (!value.contentRef || value.find !== undefined || value.offset !== undefined)) ctx.addIssue({ code: 'custom', message: '链接分页只用于contentRef和revision，不能与正文检索或offset混用' })
 })
 
 function presentResearchWindow(page: Awaited<ReturnType<typeof readResearchContent>>) {
@@ -207,13 +209,21 @@ function presentResearchWindow(page: Awaited<ReturnType<typeof readResearchConte
   }
 }
 
-async function presentSavedResearchWindow(ctx: ToolContext, page: Awaited<ReturnType<typeof readResearchContent>>) {
+async function presentSavedResearchWindow(ctx: ToolContext, page: Awaited<ReturnType<typeof readResearchContent>>, linksOnly = false) {
   const visible = presentResearchWindow(page)
+  if (linksOnly) {
+    visible.output = '以下只列出保存页面的真实链接，没有读取这些链接的正文。'
+    visible.summary = '已读取保存页面的链接分页'
+    visible.display.markdown = visible.output
+  }
   if (page.links?.length) {
     const discovered = await registerResearchSources(ctx, page.links)
     visible.output += '\n保存页面的实际链接（仅发现，不代表已读取或属于目标书，请核对标题）：\n'
       + discovered.map((entry, index) => `${page.links[index].title}\nURL: ${entry.canonicalUrl}\nsourceId: ${entry.id}`).join('\n')
   }
+  visible.output += `\n本页保存了${page.linksTotal}个链接（提取上限4096，不代表完整目录）；${page.linksNextOffset !== null
+    ? `继续列出链接请调用web_read，contentRef=${page.contentRef}、revision=${page.revision}、linksOffset=${page.linksNextOffset}；无需重新联网。`
+    : '已到保存链接列表末尾，不代表已读或已分析全书。'}`
   ctx.signal.throwIfAborted()
   return visible
 }
@@ -229,9 +239,9 @@ export const webReadTool = defineTool({
   async execute(ctx, args) {
     ctx.signal.throwIfAborted()
     if (args.contentRef && args.revision) {
-      const page = await readResearchContent(ctx, { contentRef: args.contentRef, revision: args.revision, offset: args.offset, find: args.find })
+      const page = await readResearchContent(ctx, { contentRef: args.contentRef, revision: args.revision, offset: args.offset, find: args.find, linksOffset: args.linksOffset })
       ctx.signal.throwIfAborted()
-      return presentSavedResearchWindow(ctx, page)
+      return presentSavedResearchWindow(ctx, page, args.linksOffset !== undefined)
     }
     const registered = args.sourceId ? await resolveResearchSource(ctx, args.sourceId) : await findResearchSource(ctx, args.url!)
     if (!registered && args.url) await assertResearchUrlProvenance(ctx, args.url)

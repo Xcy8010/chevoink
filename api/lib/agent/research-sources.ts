@@ -10,7 +10,7 @@ import { countReportChineseCharacters } from '../../../shared/agent-output.js'
 
 type Scope = { userId: string; sessionId: string; novelId: string; runId: string }
 
-const savedLinksSchema = z.array(z.object({ url: z.string().min(1).max(8192), title: z.string().min(1).max(160) }).strict()).max(8)
+const savedLinksSchema = z.array(z.object({ url: z.string().min(1).max(8192), title: z.string().min(1).max(160) }).strict()).max(4096)
 function checkedSavedLinks(value: unknown, finalUrl: string) {
   const origin = new URL(finalUrl).origin
   return savedLinksSchema.parse(value ?? []).map(link => {
@@ -304,8 +304,10 @@ export async function saveResearchContent(scope: Scope, sourceId: string, result
 
 /** Saved windows make no network calls and consume no document-fetch quota.
  * Offsets use JS UTF-16 indices consistently with the existing attachment tools. */
-export async function readResearchContent(scope: Scope, input: { contentRef: string; revision: string; offset?: number; limit?: number; find?: string }) {
+export async function readResearchContent(scope: Scope, input: { contentRef: string; revision: string; offset?: number; limit?: number; find?: string; linksOffset?: number }) {
   const offset = input.offset ?? 0, limit = input.limit ?? 6000
+  const linksOffset = input.linksOffset ?? 0
+  if (!Number.isSafeInteger(linksOffset) || linksOffset < 0) throw new DataAccessError(400, 'RESEARCH_RANGE_INVALID', '链接分页位置无效。')
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 6000) {
     throw new DataAccessError(400, 'RESEARCH_RANGE_INVALID', '正文窗口位置或大小无效。')
   }
@@ -327,7 +329,10 @@ export async function readResearchContent(scope: Scope, input: { contentRef: str
     const end = Math.min(content.text.length, start + limit)
     const quality = content.quality
     const links = checkedSavedLinks(quality && typeof quality === 'object' && !Array.isArray(quality) ? quality.links : undefined, content.finalUrl)
-    return { sourceId: source.id, contentRef: content.id, revision: content.revision, contentHash: content.contentHash, links,
+    if (linksOffset > links.length) throw new DataAccessError(400, 'RESEARCH_RANGE_INVALID', '链接分页超出保存范围。')
+    return { sourceId: source.id, contentRef: content.id, revision: content.revision, contentHash: content.contentHash,
+      links: links.slice(linksOffset, linksOffset + 8), linksTotal: links.length,
+      linksNextOffset: linksOffset + 8 < links.length ? linksOffset + 8 : null,
       excerptHash: hash(content.text.slice(start, end)),
       finalUrl: content.finalUrl, contentKind: content.contentKind, provider: content.provider,
       text: content.text.slice(start, end), returnedRange: { start, end, total: content.text.length },
