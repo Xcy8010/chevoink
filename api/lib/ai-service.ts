@@ -34,6 +34,7 @@ import {
 } from '../../shared/contracts/index.js'
 
 type TextCompletionOptions = {
+  signal?: AbortSignal
   userId: string
   action: string
   novelId?: string | null
@@ -761,6 +762,7 @@ export async function generateTextCompletion(
   options: TextCompletionOptions,
 ) {
   options = { ...options }
+  options.signal?.throwIfAborted()
   const modelRuntime = await getModelTierRuntime(options.modelTier ?? 'speed')
   const completionReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
   ensureTextProviderConfigured(modelRuntime.apiKey)
@@ -774,7 +776,9 @@ export async function generateTextCompletion(
     novelId: options.novelId, chapterId: options.chapterId, targetType: options.targetType, targetId: options.targetId,
     providerName: modelRuntime.provider })
   try {
+  options.signal?.throwIfAborted()
   const response = await fetch(endpoint, {
+    signal: options.signal,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

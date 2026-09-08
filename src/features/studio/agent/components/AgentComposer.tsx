@@ -66,6 +66,7 @@ type AgentComposerProps = {
   voiceScopeKey?: string
   voiceDisabled?: boolean
   running: boolean
+  stopping?: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
   onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => Promise<void> | void
@@ -237,6 +238,7 @@ export function AgentComposer({
   voiceScopeKey,
   voiceDisabled = false,
   running,
+  stopping = false,
   disabled = false,
   onSend,
   onStop,
@@ -992,11 +994,12 @@ export function AgentComposer({
           <button
             type="button"
             onClick={onStop}
+            disabled={stopping}
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-contrast)] text-[var(--text-contrast)] transition-opacity hover:opacity-85 mobile:h-11 mobile:w-11"
-            aria-label="停止运行"
-            title="停止运行"
+            aria-label={stopping ? '正在停止运行' : '停止运行'}
+            title={stopping ? '正在取消请求并保存进度…' : '停止运行'}
           >
-            <Square className="h-3.5 w-3.5 fill-current" />
+            {stopping ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Square className="h-3.5 w-3.5 fill-current" />}
           </button>
         ) : (
           <button

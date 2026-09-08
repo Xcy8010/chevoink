@@ -262,6 +262,10 @@ export function AgentPanel({
     (!conversationReady &&
       (sessionResolving || (sessionId !== null && hydratingSessionId === sessionId) || !conversationSettled))
   const [actionError, setActionError] = useState<string | null>(null)
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isRunActive(phase) || stoppingRunId !== runId) setStoppingRunId(null)
+  }, [phase, runId, stoppingRunId])
   // 任务「更多」菜单与重命名弹窗（原 StudioCommandBar 任务三点按钮迁入）
   const [taskMenuOpen, setTaskMenuOpen] = useState(false)
   const [taskRenaming, setTaskRenaming] = useState(false)
@@ -837,15 +841,17 @@ export function AgentPanel({
   )
 
   const handleStop = useCallback(async () => {
-    if (!runId) {
+    if (!runId || stoppingRunId === runId) {
       return
     }
     try {
+      setStoppingRunId(runId)
       await stopAgentLoopRun(runId)
     } catch (error) {
+      setStoppingRunId(null)
       setActionError(error instanceof Error ? error.message : '停止失败，请稍后再试。')
     }
-  }, [runId])
+  }, [runId, stoppingRunId])
 
   const continuationViewEpoch = useRef(0)
   useEffect(() => {
@@ -1668,6 +1674,7 @@ export function AgentPanel({
           onOpenSkillManager={onOpenSkills}
           onOpenModelSettings={() => onOpenStudioSettings?.('models')}
           onStop={() => void handleStop()}
+          stopping={stoppingRunId === runId && runId !== null}
         />
       </div>
       {attachmentPreview && (

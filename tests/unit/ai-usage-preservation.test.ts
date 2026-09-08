@@ -27,6 +27,21 @@ async function invoke(usages: Array<Record<string, unknown>>) {
 }
 
 describe('explicit zero provider usage is not missing usage', () => {
+  it('aborts auxiliary requests immediately without dispatching a retry or billing unknown usage as zero', async () => {
+    const controller = new AbortController()
+    const fetching = vi.fn(async (_url: unknown, init: RequestInit) => {
+      expect(init.signal).toBe(controller.signal)
+      controller.abort()
+      init.signal!.throwIfAborted()
+      return new Response('{}')
+    })
+    vi.stubGlobal('fetch', fetching)
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetching).toHaveBeenCalledOnce()
+    expect(mocks.charge).not.toHaveBeenCalled()
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetching).toHaveBeenCalledOnce()
+  })
   it('returns generated output while retaining a failed settlement for recovery', async () => {
     mocks.charge.mockRejectedValueOnce(new Error('wallet unavailable'))
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '已保存用量的完整结果' } }], usage: { prompt_tokens: 12, completion_tokens: 3 } }))))

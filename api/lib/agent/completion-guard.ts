@@ -28,6 +28,9 @@ export function hasDurableProgress(part: Extract<AgentMessagePart, { type: 'tool
   if (part.status !== 'success') return false
   const display = part.display
   if (display?.kind === 'chapterDiff') return display.appliedDirectly && display.before !== display.after
+  // Quality tools retain the report card after an actual atomic rewrite.
+  // Only the accompanying undo snapshot proves a write; a report alone does not.
+  if (display?.kind === 'qualityReport') return part.snapshot?.target === 'chapter' && part.snapshot.field === 'content'
   if (display?.kind === 'planDiff') return display.before !== display.after
   if (display?.kind === 'todoList') {
     const completed = new Set(previousTodos.filter(item => item.status === 'completed').map(item => item.content))

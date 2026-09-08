@@ -458,6 +458,7 @@ export async function handleToolCall(
       },
     }
   } catch (error) {
+    if (ctx.signal.aborted) return fail('已中断', '用户已请求暂停，停止后续执行；已保存内容保留。', 'failed')
     if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
     if (error instanceof DataAccessError && error.code.startsWith('WEB_READ_')) {
       // Access/quality refusals are not successful reads or permission to bypass the gate.
@@ -1425,7 +1426,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         if (outcome.part.status === 'success') {
           const durableProgress = hasDurableProgress(outcome.part, todoItems)
           const display = outcome.part.display
-          const stateChanged = display?.kind === 'chapterDiff' || display?.kind === 'planDiff'
+          const stateChanged = STATE_SENSITIVE_VALIDATORS.has(call.name) || display?.kind === 'chapterDiff' || display?.kind === 'planDiff'
             ? durableProgress
             : Boolean(tool && !tool.readOnly && !STATE_SENSITIVE_VALIDATORS.has(call.name) && !REPEATABLE_TOOLS.has(call.name) && call.name !== 'todo_write')
           admission.record(admissionKey, outcome.observation, stateChanged)

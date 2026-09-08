@@ -74,9 +74,10 @@ async function applyRigorousContinuityRepairs(
       response = await generateTextCompletion(
         '你是中文网文连续性修订编辑。严谨创作模式要求把本轮有证据的 error 和 warning 都落实到正文。只做局部替换，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
         `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
-        { userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
+        { signal: ctx.signal, userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
       )
     } catch {
+      ctx.signal.throwIfAborted()
       // 修订器不可用时保留检查结果与原正文，不让可选自动修订拖垮整个 CHECK。
       continue
     }
@@ -518,6 +519,11 @@ export const continuityValidateTool = defineTool({
     })
     if (!compilation?.chapter || !compilation.bridge) return { output: '编译任务不存在或尚未写入目标章节，不能执行独立连续性检查。' }
     const chapter = compilation.chapter
+    const quality = await getLatestQualityReport(ctx.userId, ctx.novelId, chapter.id)
+    // After quality has repaired this revision, continuity must verify without
+    // rewriting it again and invalidating quality in an endless ping-pong.
+    const verificationOnly = quality?.compilationId === compilation.id && quality.chapterRevision === chapter.revision
+      && !['analyzing', 'stale', 'failed'].includes(quality.status)
     const bridge = compilation.bridge
     const sourceChapter = bridge.fromChapterId ? await prisma.chapter.findFirst({ where: { id: bridge.fromChapterId, novelId: ctx.novelId }, select: { revision: true } }) : null
     const sourceUnchanged = !bridge.fromChapterId || sourceChapter?.revision === bridge.sourceRevision
@@ -526,7 +532,7 @@ export const continuityValidateTool = defineTool({
       const findings = cachedValidation.findings ?? []
       const errorCount = cachedValidation.errorCount ?? findings.filter((item) => item.severity === 'error').length
       const warningCount = cachedValidation.warningCount ?? findings.filter((item) => item.severity === 'warning').length
-      if (ctx.creativeFreedom === 'balanced' && findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
+      if (!verificationOnly && ctx.creativeFreedom === 'balanced' && findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
         const repaired = await applyRigorousContinuityRepairs(ctx, chapter, findings, compilation.id)
         if (repaired) {
           return {
@@ -538,7 +544,7 @@ export const continuityValidateTool = defineTool({
         }
       }
       return {
-        output: `当前 r${chapter.revision} 已完成连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；${errorCount ? '仍有错误，不能提交，修订后重新检查。' : '无需再次消耗 Critic。'}`,
+        output: `当前 r${chapter.revision} 已完成连续性检查，直接复用结果：${errorCount} 个错误、${warningCount} 个警告；${errorCount ? (verificationOnly ? '最终复核仍有错误，不能提交；保留证据并报告阻塞，不再自动循环修订。' : '仍有错误，不能提交，修订后重新检查。') : '无需再次消耗 Critic，继续提交章节终态。'}`,
         summary: `复用连续性检查 · ${errorCount} 错误 ${warningCount} 警告`,
         display: { kind: 'storyCompiler', compilationId: compilation.id, phase: errorCount > 0 ? 'repair' : 'check', title: '连续性检查', detail: `${errorCount} 错误 · ${warningCount} 警告 · 已复用`, items: findings.map((item) => `${item.severity === 'error' ? '错误' : '警告'}：${item.evidence}`), errorCount, warningCount },
       }
@@ -563,8 +569,9 @@ export const continuityValidateTool = defineTool({
     const criticResponses = await Promise.all(criticPrompts.map((systemPrompt, index) => generateTextCompletion(
       systemPrompt,
       criticInput,
-      { userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
+      { signal: ctx.signal, userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
     ).catch(() => '')))
+    ctx.signal.throwIfAborted()
     const parsedCriticResponses = criticResponses.map(parseIndependentContinuityResult)
     const criticFallback = parsedCriticResponses.some((response) => !response.structured)
     const independentFindings = parsedCriticResponses
@@ -578,7 +585,7 @@ export const continuityValidateTool = defineTool({
       summary: '独立连续性复核未完成',
     }
     const phase = result.errorCount > 0 ? 'repair' : 'check'
-    if (ctx.creativeFreedom === 'balanced' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
+    if (!verificationOnly && ctx.creativeFreedom === 'balanced' && result.findings.length > 0 && !ctx.protectedChapterIds?.has(chapter.id)) {
       const repaired = await applyRigorousContinuityRepairs(ctx, chapter, result.findings, compilation.id)
       if (repaired) {
         return {
@@ -591,7 +598,7 @@ export const continuityValidateTool = defineTool({
     }
     return {
       output: (continuityRepairRounds(compilation.validation) >= 2 ? '自动修订已达到两轮上限，本次仅复核，不再自动改写。不要重复调用检查来追求零警告；有错误时保留正文并明确报告未解决证据，禁止带错提交。\n' : '') + (result.errorCount > 0
-        ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
+        ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。${verificationOnly ? '质量修订后的最终复核仍有错误，保留证据并报告阻塞，不再循环自动改写或带错提交。' : '只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。'}\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
         : `CHECK 通过：0 个错误、${result.warningCount} 个警告。可以调用 chapter_bridge_commit 提交本章终态。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`),
       summary: `连续性检查${criticFallback ? '（确定性兜底）' : ''} · ${result.errorCount} 错误 ${result.warningCount} 警告`,
       display: {

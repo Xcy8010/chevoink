@@ -137,9 +137,10 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
       response = await generateTextCompletion(
         `你是与 Writer/Critic 上下文隔离的局部修订编辑。只替换每条 evidence 本身，不扩写相邻内容，不改变事实、情节结果、人物知识或作者刻意的口语与断句。删除优先于同义词替换；补写只补建议中缺失的具体动作、选择或后果。punctuation_misuse 只移除误用符号，保留人物直接话语和逐字引文。replacement 可以为空。严格只输出 JSON：{"patches":[{"findingId":"原 id","replacement":"只替换证据范围的文本"}]}。必须为每个输入 id 返回且只返回一次。`,
         remaining.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
-        { userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
+        { signal: ctx.signal, userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
       )
     } catch {
+      ctx.signal.throwIfAborted()
       // 修订器不可用时保留报告与正文，交回用户稍后重试，不把质量检查标成执行失败。
       continue
     }
@@ -153,6 +154,7 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
     }
   }
   const replacements = [...patches.values()]
+  ctx.signal.throwIfAborted()
   if (replacements.length === 0) return null
   // 模型若仍漏掉个别项，只应用已逐字绑定的安全补丁，并把漏项退回待审，不让整章修订归零。
   await selectQualityFindings(ctx.userId, ctx.novelId, report.id, replacements.map((patch) => patch.findingId))
@@ -214,13 +216,15 @@ ${bundle.chapter.content}
     try {
       const response = await generateTextCompletion(
         buildCriticSystem('balanced'), userPrompt,
-        { userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
+        { signal: ctx.signal, userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
       )
       rawCriticFindings = criticEnvelopeSchema.parse(parseJsonObject(response)).findings
         .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.quote === finding.quote) === index)
     } catch {
+      ctx.signal.throwIfAborted()
       criticFallback = true
     }
+    ctx.signal.throwIfAborted()
     const criticFindings = calibrateCriticFindings(rawCriticFindings, bundle.feedback)
     const created = await persistHumanityQualityReport({
       userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,

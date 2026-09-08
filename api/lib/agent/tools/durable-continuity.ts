@@ -78,12 +78,15 @@ export async function executeDurableContinuity(ctx: ToolContext, tool: AgentTool
     const coverage = { version: 1 as const, contentHash: runtimeJson({ content: compilation.chapter.content }).hash,
       charCount: compilation.chapter.content.length, sourceHash: source ? runtimeJson(source).hash : null }
     const cached = z.object({ independentCheck: z.literal('complete'), checkedRevision: z.number(), findings: z.array(continuityFindingInputSchema), coverage: coverageSchema }).safeParse(compilation.validation)
+    const quality = await tx.chapterQualityReport.findFirst({ where: { userId: ctx.userId, novelId: ctx.novelId,
+      chapterId: compilation.chapter.id, compilationId: compilation.id, chapterRevision: compilation.chapter.revision,
+      status: { notIn: ['analyzing', 'stale', 'failed'] } }, select: { id: true } })
     const reusable = (!args.focus || continuityRepairRounds(compilation.validation) >= 2) && cached.success && cached.data.checkedRevision === compilation.chapter.revision && runtimeJson(cached.data.coverage).hash === runtimeJson(coverage).hash
     return { kind: 'check' as const, version: 1 as const, compiler: baseline, chapter: compilation.chapter, sourceId, coverage,
       criticSystem: criticPrompt, repairSystem: repairPrompt,
       criticInput: [`章节：《${compilation.chapter.title}》@r${compilation.chapter.revision}`, args.focus ? `额外关注：${args.focus}` : '',
         `章节桥：${JSON.stringify(compilation.bridge)}`, `场景任务：${JSON.stringify(compilation.sceneTasks)}`, `完整正文（${coverage.charCount}字符）：\n${compilation.chapter.content}`].filter(Boolean).join('\n'),
-      repair: continuityRepairRounds(compilation.validation) < 2 && state.configuration.creativeFreedom === 'balanced' && !state.configuration.protectedChapterIds.includes(compilation.chapter.id),
+      repair: !quality && continuityRepairRounds(compilation.validation) < 2 && state.configuration.creativeFreedom === 'balanced' && !state.configuration.protectedChapterIds.includes(compilation.chapter.id),
       cached: reusable ? cached.data.findings : null, route: null, price: null }
   })
   if (work.kind === 'check' && !work.cached && !work.route) {

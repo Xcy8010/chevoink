@@ -488,6 +488,29 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
     expect(events().filter(event => event.type === 'tool.result')).toHaveLength(3)
   })
 
+  it('invalidates continuity after a quality report actually rewrites text, then commits', async () => {
+    let revision = 1, checkedRevision = 0, committed = false
+    mocks.tools = [
+      tool('continuity_validate', async () => { checkedRevision = revision; return { output: `r${revision}通过` } }, false),
+      tool('quality_analyze', async () => {
+        revision++
+        return { output: '质量修订完成', display: { kind: 'qualityReport', reportId: 'q', chapterId: 'c', chapterRevision: revision,
+          status: 'repaired', repairRound: 1, findings: [] },
+          snapshot: { target: 'chapter', targetId: 'c', field: 'content', previousValue: '旧正文' } }
+      }, false),
+      tool('chapter_bridge_commit', async () => {
+        committed = checkedRevision === revision
+        return committed ? { output: '已提交' } : { outcome: 'failed', output: '旧版本不能提交' }
+      }, false),
+    ]
+    queue(response('', [call('first', 'continuity_validate')]), response('', [call('quality', 'quality_analyze')]),
+      response('', [call('verify', 'continuity_validate')]), response('', [call('commit', 'chapter_bridge_commit')]), response())
+    await run('完成本章质量检查并提交章节终态')
+    expect(mocks.tools[0].execute).toHaveBeenCalledTimes(2)
+    expect(committed).toBe(true)
+    expect(events().filter(event => event.type === 'tool.result' && !event.ok)).toHaveLength(0)
+  })
+
   it('typed continue restores pending todos and never reports success on repeated empty steps', async () => {
     mocks.todos.mockResolvedValue([{ content: '完成第七章整改', status: 'pending' }])
     queue(...Array.from({ length: 5 }, () => response('现在写入正文。')))
