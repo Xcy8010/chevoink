@@ -99,6 +99,20 @@ describe('search URL handoff to the model', () => {
     expect(mocks.search).toHaveBeenCalledOnce()
     expect(mocks.charge).toHaveBeenCalledOnce()
   })
+  it('persists refund evidence before propagating an attempted-search cancellation', async () => {
+    const { WebSearchError } = await vi.importActual<typeof import('../../api/lib/web-search-service.js')>('../../api/lib/web-search-service.js')
+    const controller = new AbortController()
+    const ctx = { ...context(), signal: controller.signal }
+    const attempts = [{ provider: 'bocha' as const, outcome: 'aborted' as const, durationMs: 20 }]
+    mocks.search.mockImplementation(async () => {
+      controller.abort(new Error('author stopped'))
+      throw new WebSearchError('搜索已取消', attempts)
+    })
+    await expect(webSearchTool.execute(ctx, { query: '目录', maxResults: 2 })).rejects.toThrow('author stopped')
+    expect(mocks.refund).toHaveBeenCalledWith(ctx.userId, `web-search:${ctx.runId}:${ctx.callId}`, { attempts })
+    expect(mocks.reconcile).toHaveBeenCalledOnce()
+    expect(mocks.search).toHaveBeenCalledOnce()
+  })
   it('delivers the same complete URL to observation and UI without guessing or dropping query parameters', async () => {
     const result = { title: '作品目录', url: 'https://example.com/chapter?id=19&page=2', source: 'example.com', snippet: '公开目录信息。' }
     mocks.search.mockResolvedValue({ provider: 'bocha', results: [result] })
@@ -169,6 +183,19 @@ describe('provider response boundaries', () => {
     const result = await (await actualSearch())('目录', 2, undefined, null)
     expect(result.results.map(item => item.url)).toEqual([url, 'https://example.com/chapter?id=20'])
     expect(result.attempts).toEqual([expect.objectContaining({ provider: 'bocha', outcome: 'results' })])
+  })
+  it('preserves cancelled attempt evidence without starting another provider', async () => {
+    env.webSearchProvider = 'bocha'
+    const controller = new AbortController()
+    const fetcher = vi.fn(async () => {
+      controller.abort(new Error('stopped'))
+      throw controller.signal.reason
+    })
+    vi.stubGlobal('fetch', fetcher)
+    await expect((await actualSearch())('目录', 2, controller.signal, null)).rejects.toMatchObject({
+      attempts: [expect.objectContaining({ provider: 'bocha', outcome: 'aborted' })],
+    })
+    expect(fetcher).toHaveBeenCalledOnce()
   })
   it('does not start any request after cancellation', async () => {
     env.webSearchProvider = 'bocha'

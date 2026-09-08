@@ -340,6 +340,9 @@ export async function searchWeb(
     if (emptyProvider) return { provider: emptyProvider, results: [], attempts }
     throw new WebSearchError('所有搜索引擎均未返回有效响应', attempts)
   } catch (error) {
+    // Preserve attempted-request evidence for cancellation settlement. A
+    // pre-request cancellation still propagates unchanged and cannot refund.
+    if (signal?.aborted && attempts.length) throw new WebSearchError('搜索已取消', attempts)
     if (signal?.aborted || error instanceof WebSearchError) throw error
     throw new WebSearchError('搜索服务未完成有效请求', attempts)
   } finally {

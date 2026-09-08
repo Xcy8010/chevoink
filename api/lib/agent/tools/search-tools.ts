@@ -150,7 +150,6 @@ export const webSearchTool = defineTool({
         display: { kind: 'webSearch', query: args.query, provider: outcome.provider, results: outcome.results },
       }
     } catch (error) {
-      ctx.signal.throwIfAborted()
       // Wallet integrity/idempotency errors use CREDIT_, quota errors use
       // CREDITS_. Neither is a supplier outage or grounds for an automatic refund.
       if (error instanceof DataAccessError && /^CREDITS?_/.test(error.code)) throw error
@@ -159,6 +158,7 @@ export const webSearchTool = defineTool({
         // Intent survives any settlement failure; the bounded server sweep retries it.
         await reconcileCreditRefunds({ userId: ctx.userId, limit: 10 }).catch(() => undefined)
       }
+      ctx.signal.throwIfAborted()
       // Only expose bounded protocol facts, never upstream response bodies,
       // request IDs, credentials or arbitrary exception messages.
       const failures = error instanceof WebSearchError ? error.attempts.slice(0, 3).map(attempt => {
