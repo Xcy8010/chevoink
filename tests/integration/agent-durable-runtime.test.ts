@@ -1547,7 +1547,7 @@ describe.runIf(available)('durable quality actual tool chain', () => {
 })
 
 describe.runIf(available)('durable continuity actual tool chain', () => {
-  it.each(['success', 'repair', 'format', 'truncated', 'format-retry', 'unknown', 'stale-chapter', 'stale-compiler', 'rollback-resume', 'late-resume', 'protected', 'missing', 'long', 'repair-stale', 'stale-source', 'approval-denied'] as const)('%s preserves paid results and atomic business effects', async scenario => {
+  it.each(['success', 'repair', 'fused-repair', 'format', 'truncated', 'format-retry', 'unknown', 'stale-chapter', 'stale-compiler', 'rollback-resume', 'late-resume', 'protected', 'missing', 'long', 'repair-stale', 'stale-source', 'approval-denied'] as const)('%s preserves paid results and atomic business effects', async scenario => {
     vi.spyOn(storyMemory, 'processMemoryExtractionJob').mockResolvedValue(undefined)
     await fixture(async f => {
       let lease = await claim(f)
@@ -1579,7 +1579,7 @@ describe.runIf(available)('durable continuity actual tool chain', () => {
         baseUrl: 'https://provider.invalid/v1', apiKey: 'fixture-not-real', reasoningEffort: 'low', reasoningEfforts: ['low'], visionEnabled: false, contextWindowTokens: null })
       vi.spyOn(tokenPrices, 'resolveDurableTokenPrice').mockResolvedValue({ version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 10000,
         rateCardId: 'continuity-fixture', rates: { inputNano: 100000, cacheNano: 100000, outputNano: 1000000 } })
-      const repairing = ['repair', 'format-retry', 'rollback-resume', 'repair-stale'].includes(scenario)
+      const repairing = ['repair', 'fused-repair', 'format-retry', 'rollback-resume', 'repair-stale'].includes(scenario)
       let requests = 0
       const fetchMock = vi.fn(async (_url: unknown, init: RequestInit) => {
         requests++
@@ -1592,7 +1592,8 @@ describe.runIf(available)('durable continuity actual tool chain', () => {
         if (sourceId) await prisma.chapter.update({ where: { id: sourceId }, data: { content: '新的前文', revision: { increment: 1 } } })
         if (scenario === 'stale-compiler') await prisma.storyCompilation.update({ where: { id: compilationId }, data: { preparedContext: { changed: true } } })
         if (scenario === 'late-resume') await pauseDurableTask(f.userId, lease.runId)
-        const content = scenario === 'format' || scenario === 'format-retry' && requests === 2 ? 'broken JSON'
+        const content = scenario === 'fused-repair' ? '{"findings":[{"signal":"body","severity":"error","evidence":"原文存在冲突","suggestion":"局部修订"}],"patches":[{"oldText":"原文","newText":"新文"}]}'
+          : scenario === 'format' || scenario === 'format-retry' && requests === 2 ? 'broken JSON'
           : requests === 1 ? JSON.stringify({ findings: repairing || scenario === 'protected' ? [{ signal: 'body', severity: 'error', evidence: '原文有身体状态冲突', suggestion: '改成新文' }] : [] })
           : '{"patches":[{"oldText":"原文","newText":"新文"}]}'
         return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: scenario === 'truncated' ? 'length' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 0 } })}\n\ndata: [DONE]\n\n`)
@@ -1637,7 +1638,7 @@ describe.runIf(available)('durable continuity actual tool chain', () => {
       const failed = ['format', 'truncated', 'stale-chapter', 'stale-compiler', 'missing', 'repair-stale', 'stale-source'].includes(scenario)
       expect(result).toMatchObject({ kind: 'tool', result: failed ? { outcome: 'failed' } : { summary: expect.stringContaining('连续性检查') } })
       if (scenario === 'success') expect(await step()).toMatchObject({ result: { summary: expect.stringContaining('复用') } })
-      const expectedRequests = scenario === 'missing' ? 0 : scenario === 'format-retry' ? 3 : repairing ? 2 : 1
+      const expectedRequests = scenario === 'missing' ? 0 : scenario === 'fused-repair' ? 1 : scenario === 'format-retry' ? 3 : repairing ? 2 : 1
       expect(fetchMock).toHaveBeenCalledTimes(expectedRequests)
       expect(await prisma.creditLedgerEntry.count({ where: { userId: f.userId } })).toBe(expectedRequests)
       const chapter = await prisma.chapter.findUniqueOrThrow({ where: { id: f.chapterId } })
@@ -1769,6 +1770,31 @@ describe.runIf(available).each(['continuity', 'quality'] as const)('auxiliary mo
 })
 
 describe.runIf(available)('continuity validation and atomic commit', () => {
+  it('fuses safe repairs into one critic request, still requires full revised-text verification, and reuses that result', async () => {
+    vi.spyOn(storyMemory, 'processMemoryExtractionJob').mockResolvedValue(undefined)
+    await fixture(async f => {
+      const prepared = await prepareStoryCompilation({ ...f, chapterId: f.chapterId, mode: 'balanced', intentSummary: '检查当前章节' })
+      const compilationId = prepared.compilation.id
+      const state = { knowledge: [], emotion: [], body: [], objects: [], relationships: [], openLoops: [] }
+      await saveSceneTasks({ ...f, compilationId, tasks: [{ purpose: '推进场景', entryState: state, goal: '寻找线索', obstacle: '门已上锁', choice: '绕路', cost: '耗费时间', turn: '发现脚印', exitState: state,
+        styleBudget: { description: 'low', dialogue: 'medium', rhetoric: 'low' } }] })
+      const completion = vi.spyOn(aiService, 'generateTextCompletion').mockResolvedValueOnce('{"findings":[{"signal":"body","severity":"error","evidence":"原文存在冲突","suggestion":"局部修订"}],"patches":[{"oldText":"原文","newText":"修订正文"}]}')
+        .mockResolvedValueOnce('{"findings":[]}')
+      const ctx: ToolContext = { ...f, callId: 'critic', mode: 'build', creativeFreedom: 'balanced', qualityMode: 'balanced', signal: new AbortController().signal, emit: () => {} }
+      expect(await continuityValidateTool.execute(ctx, { compilationId })).toMatchObject({ summary: '连续性检查 · 自动修订 1 处' })
+      expect(completion).toHaveBeenCalledTimes(1)
+      const updated = await prisma.chapter.findUniqueOrThrow({ where: { id: f.chapterId } })
+      const saved = await prisma.storyCompilation.findUniqueOrThrow({ where: { id: compilationId } })
+      expect(saved.validation).toMatchObject({ checkedRevision: updated.revision - 1 })
+      expect(await continuityValidateTool.execute(ctx, { compilationId })).toMatchObject({ summary: '连续性检查 · 0 错误 0 警告' })
+      expect(completion).toHaveBeenCalledTimes(2)
+      expect(completion.mock.calls[1][1]).toContain(updated.content)
+      expect(completion.mock.calls[1][1]).toContain('本次只读复核')
+      expect(completion.mock.calls[1][2].reasoningEffort).toBe('low')
+      await continuityValidateTool.execute(ctx, { compilationId })
+      expect(completion).toHaveBeenCalledTimes(2)
+    })
+  })
   it.each(['unavailable', 'stale-critic', 'stale-commit', 'source-commit', 'commit-rollback', 'commit', 'tool-unavailable', 'tool-stale', 'repair-race'] as const)('%s never certifies another revision or partially commits memory', async scenario => {
     await fixture(async f => {
       const first = await prisma.chapter.findUniqueOrThrow({ where: { id: f.chapterId } })

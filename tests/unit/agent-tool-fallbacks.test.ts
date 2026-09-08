@@ -4,7 +4,7 @@ import { buildAgentIdentityPrompt } from '../../api/lib/agent/context.js'
 import { parseResearchSynthesis } from '../../api/lib/agent/research-dossier.js'
 import { coerceToolArgumentEnvelope } from '../../api/lib/agent/tools/argument-coercion.js'
 import { getToolByName } from '../../api/lib/agent/tools/registry.js'
-import { parseIndependentContinuityResult } from '../../api/lib/agent/tools/story-compiler-tools.js'
+import { parseIndependentContinuityResult, parseContinuityPatches, continuityReviewTail } from '../../api/lib/agent/tools/story-compiler-tools.js'
 import { BUILT_IN_MODEL_TIERS, type ResearchDossierBuild } from '../../shared/contracts/index.js'
 import { AGENT_PANEL_WIDTH_LIMITS, WORK_CONVERSATION_WIDTH_LIMITS } from '../../src/features/studio/panel-widths.js'
 
@@ -20,6 +20,25 @@ const researchInput: ResearchDossierBuild = {
 }
 
 describe('Agent 工具协议与结构化输出兜底', () => {
+  it('accepts fused minimal patches but rejects ambiguous, overlapping and invented anchors', () => {
+    const parse = (patches: unknown, text = '左手受伤，右手提灯。') => parseContinuityPatches(JSON.stringify({ findings: [], patches }), text)
+    expect(parse([{ oldText: '右手', newText: '左手' }])).toEqual([{ oldText: '右手', newText: '左手' }])
+    expect(parse([{ oldText: '不存在', newText: '新文' }])).toBeNull()
+    expect(parse([{ oldText: '手', newText: '脚' }])).toBeNull()
+    expect(parse([{ oldText: '左手受伤', newText: '受伤' }, { oldText: '受伤', newText: '包扎' }])).toBeNull()
+    expect(parse([{ oldText: 'aaa', newText: 'b' }], 'aaaa')).toBeNull()
+    expect(parse([{ oldText: '右手', newText: '右手' }])).toEqual([])
+    expect(parseContinuityPatches('{"findings":[]}', '原文')).toBeNull()
+  })
+  it('uses previous findings only as clues, retaining full revision verification and a read-only final pass', () => {
+    const finding = { signal: 'body', severity: 'error', evidence: '左手受伤', suggestion: '保留伤势限制' }
+    const tail = continuityReviewTail({ independentCheck: 'complete', checkedRevision: 3, findings: [finding] }, 4, false)
+    expect(tail).toContain('不是当前版通过凭证')
+    expect(tail).toContain('完整检查新版正文')
+    expect(tail).toContain('只读复核')
+    expect(tail).toContain('左手受伤')
+    expect(continuityReviewTail({ independentCheck: 'unavailable', checkedRevision: 3, findings: [finding] }, 4, true)).not.toContain('左手受伤')
+  })
   it('统一解包字符串 arguments 与命名参数列表', () => {
     expect(coerceToolArgumentEnvelope({ arguments: '{"title":"第六章规划","content":"完整正文"}' })).toEqual({ title: '第六章规划', content: '完整正文' })
     expect(coerceToolArgumentEnvelope([

@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import app from '../../api/app.js'
 import { prisma } from '../../api/lib/prisma.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
+import { chapterReadTool } from '../../api/lib/agent/tools/read-tools.js'
+import type { ToolContext } from '../../api/lib/agent/tools/types.js'
 import {
   commitChapterBridge,
   prepareStoryCompilation,
@@ -60,6 +62,25 @@ describe.skipIf(!dbAvailable)('Agent 3.0 Story Compiler 与 Chapter Bridge（需
       data: { sessionId: session.id, userId, novelId, chapterId: chapter2Id, mode: 'act', action: 'workspaceAgent', agentType: 'writingOrchestrator', status: 'running', engine: 'loop' },
     })
     runId = run.id
+  })
+
+  it('reads an explicit whole-book chapter number without guessing IDs and never substitutes the editor chapter', async () => {
+    const ctx: ToolContext = { userId, novelId, runId, chapterId: chapter2Id, sessionId: '', callId: 'read',
+      mode: 'build', creativeFreedom: 'balanced', qualityMode: 'premium', emit: () => {}, signal: new AbortController().signal }
+    const found = await chapterReadTool.execute(ctx, { chapterOrder: 1 })
+    expect(found.observedState).toMatchObject({ id: chapter1Id })
+    expect(found.output).toContain('铜钥匙')
+    for (const args of [{ chapterId: 'stale-id' }, { chapterId: chapter1Id, chapterOrder: 2 }, { chapterOrder: 99 }]) {
+      const failure = await chapterReadTool.execute(ctx, args)
+      expect(failure.outcome).toBe('failed')
+      expect(failure.summary).toBe('章节标识已失效或不匹配')
+      expect(failure.observedState).toBeUndefined()
+    }
+    const foreign = await chapterReadTool.execute({ ...ctx, userId: 'another-user' }, { chapterOrder: 1 })
+    expect(foreign.outcome).toBe('failed')
+    expect(foreign.output).not.toContain('铜钥匙')
+    const missing = await chapterReadTool.execute({ ...ctx, chapterId: null }, {})
+    expect(missing.summary).toBe('未指定要读取的章节')
   })
 
   it('自动修订额度原子限一次，复核和重新准备不重置', async () => {

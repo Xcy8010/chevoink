@@ -143,11 +143,13 @@ Use forward-compatible migrations; code rollback must not down-migrate away comm
 
 ## 7. Remaining closure work
 
+2026-09-09 continuity/message fixes: `chapter_read` accepts an exact whole-book `chapterOrder`; conflicting identifiers or foreign targets never fall back to the editor chapter. Error cards identify target failures. Markdown removes leftover line boxes/empty paragraphs from hidden tool-status lines without flattening prose or code. The continuity critic may return minimal factual patches in the same response, applied only with unique, non-overlapping verbatim anchors; otherwise the separate repair fallback remains. Full revised-text verification, the model and low reasoning effort remain unchanged. Prior findings are clues, not a pass certificate; changing guidance moves to the prompt tail to preserve reusable prefixes. Eligible cases save one model request; no unmeasured latency or literary-quality percentage is claimed.
+
 - Global lines/statements ≥40%, each critical module lines/branches ≥80%, API/data and all fault-matrix acceptance.
 - Further frontend/backend boundaries, dependency/cycle checks, full Work/IDE/mobile/reader/community/admin end-to-end acceptance.
 - Authorized whole-book manifest, per-chapter analysis receipts, missing-chapter recovery and report completion; read ranges are insufficient.
 - Phase authorization for research-then-write, full research budgets and complete cost attribution.
-- Automated unknown-provider-usage reconciliation, complete billing recovery/reconciliation evidence, V2 shadow/approval.
+- Automated unknown-provider-usage reconciliation, complete billing recovery/reconciliation evidence and further grouped V2 observations. The explicitly approved 25% cache discount with the V1 ceiling is active; the seven-day wait was waived, not completed. Other price changes retain their original approval gates.
 - Independent security review, database restore, cross-version rollback, immutable application releases, real performance and literary non-inferiority.
 - Product blind reviews, retention and complete paid/payment flows; describe the product as beta, not a verified commercial release.
 

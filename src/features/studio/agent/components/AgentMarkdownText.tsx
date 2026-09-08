@@ -22,9 +22,13 @@ function removeProtocolText({ containsAgentProtocolArtifact, stripAgentProtocolA
           const clean = stripAgentProtocolArtifacts(node.value)
           node.value = clean ? leading + clean + trailing : ''
         }
-        node.value = node.value.replace(/^\s*\[调用\s*(?:工具|tool)[^\n]*$/gim, '')
+        const cleaned = node.value.replace(/^[\t ]*\[调用\s*(?:工具|tool)[^\r\n]*(?:\r?\n|$)/gim, '')
+        // Hidden status lines must not leave whitespace-pre-wrap line boxes behind.
+        if (cleaned !== node.value) node.value = cleaned.trimEnd()
       }
       node.children?.forEach(visit)
+      if (node.children) node.children = node.children.filter(child =>
+        !(child.type === 'text' && !child.value) && !(child.type === 'paragraph' && !child.children?.length))
     }
     visit(tree)
   }

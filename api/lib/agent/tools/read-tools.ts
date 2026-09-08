@@ -138,9 +138,10 @@ export const chapterReadTool = defineTool({
   name: 'chapter_read',
   title: '读取章节正文',
   description:
-    '读取指定章节的正文。支持 offset/limit 按字符分段读取（正文超过 6000 字时建议分段）。写作或改写前先读相关章节，禁止盲写。',
+    '读取指定章节的正文。已知全书第N章可直接传 chapterOrder=N，无需猜测ID；卷内序号不能当全书序号。chapterId只能来自已返回的当前作品目录，不可与首次 novel_get_context 同批猜测ID。支持 offset/limit 按字符分段读取（正文超过6000字时建议分段）。写作或改写前先读相关章节，禁止盲写。',
   parameters: z.object({
     chapterId: z.string().optional().describe('章节 ID，可从 novel_get_context 的章节列表获取；缺省时默认读当前正在编辑的章节'),
+    chapterOrder: z.number().int().positive().optional().describe('全书章节序号（不是卷内序号）；知道第N章时直接用它定位。与chapterId同时提供时必须指向同一章'),
     offset: z.number().int().min(0).optional().describe('起始字符位置，默认 0'),
     limit: z.number().int().min(1).max(12000).optional().describe('读取字符数，默认 6000'),
   }),
@@ -156,18 +157,20 @@ export const chapterReadTool = defineTool({
         tx => chapterReadTool.execute({ ...captured, durableRead: undefined, transaction: tx }, effective))
     }
     const db = ctx.transaction ?? prisma
-    const chapterId = args.chapterId?.trim() || ctx.chapterId
-    if (!chapterId) {
-      return { outcome: 'failed', output: '未传 chapterId 且当前没有正在编辑的章节。请先用 novel_get_context 查看章节列表拿到 chapterId。' }
+    const chapterId = args.chapterId?.trim() || (args.chapterOrder ? undefined : ctx.chapterId)
+    if (!chapterId && !args.chapterOrder) {
+      return { outcome: 'failed', summary: '未指定要读取的章节', output: '未传 chapterId/chapterOrder 且当前没有正在编辑的章节。知道全书第N章可直接传 chapterOrder=N；否则先用 novel_get_context 查看章节列表。' }
     }
-    const chapter = await db.chapter.findFirst({
-      where: { id: chapterId, novelId: ctx.novelId, authorId: ctx.userId },
+    const matches = await db.chapter.findMany({
+      where: { ...(chapterId ? { id: chapterId } : {}), ...(args.chapterOrder ? { orderIndex: args.chapterOrder } : {}), novelId: ctx.novelId, authorId: ctx.userId },
       select: { id: true, title: true, content: true, wordCount: true, summary: true, revision: true },
+      take: 2,
     })
-
-    if (!chapter) {
-      return { outcome: 'failed', output: `章节 ${chapterId} 不存在或不属于当前作品。` }
+    if (matches.length !== 1) {
+      return { outcome: 'failed', summary: matches.length ? '章节序号不唯一' : '章节标识已失效或不匹配',
+        output: '当前作品中未找到唯一匹配的章节，未读取其他章节，也未建立写入基线。请使用 novel_get_context 返回的当前目录核对 chapterId；已知全书序号时可只传 chapterOrder。不要重复发送旧ID，不能以编辑器当前章节替代目标。' }
     }
+    const chapter = matches[0]
 
     // 读取即记录写入基线：后续写入前校验 revision，防止同毫秒写入或时钟精度导致漏判冲突
     if (!ctx.transaction) recordChapterBaseline(ctx.runId, chapter.id, chapter.revision)

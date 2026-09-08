@@ -54,6 +54,7 @@ Version 2.0 · 2026-09-08. Applies to fixes, optimization, refactoring and new f
 ## 5. Quality, arguments and Token efficiency
 
 - Continuity checks factual/causal/character-knowledge consistency, not aesthetics. At most one concentrated automatic factual repair, followed by read-only verification. Warnings do not trigger endless rewriting.
+- Critic and patch generation may share a request, but a pre-repair report cannot certify revised text. Patch anchors must be unique and non-overlapping in the original text; never cascade replacements into newly generated text. A stale read ID must not select a guessed chapter; distinguish whole-book from in-volume numbering.
 - Cached reports require matching revision/hash, sources and protocol. Changed dependencies invalidate; failed/unknown reports never certify success.
 - Humanity findings require unique contiguous verbatim evidence. One local correction is allowed for an invalid quote, not dropping findings, lowering standards or rewriting the chapter to pass.
 - Distinguish provider, credit, authentication, timeout, cancellation and format failures. Retry only classified transient errors within attempt/deadline limits; never blindly retry billing failures.
