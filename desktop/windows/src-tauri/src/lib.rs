@@ -4,10 +4,10 @@ mod window;
 #[cfg(windows)]
 mod windows_webview;
 
-use navigation::{is_app_url, is_download_url, safe_filename, APP_ORIGIN};
+use navigation::{is_app_url, is_fallback_url, APP_ORIGIN};
 use tauri::{
     menu::{Menu, MenuItem},
-    webview::{DownloadEvent, NewWindowResponse},
+    webview::NewWindowResponse,
     Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_opener::OpenerExt;
@@ -63,56 +63,8 @@ pub fn run() {
                     .min_inner_size(640.0, 480.0)
                     .data_directory(data)
                     .disable_drag_drop_handler()
-                    .on_navigation(|url| {
-                        is_app_url(url)
-                            || url.as_str() == "http://tauri.localhost/"
-                            || url.as_str() == "tauri://localhost/"
-                            || url.as_str() == "http://tauri.localhost/index.html"
-                            || url.as_str() == "tauri://localhost/index.html"
-                    })
+                    .on_navigation(|url| is_app_url(url) || is_fallback_url(url))
                     .on_new_window(|_, _| NewWindowResponse::Deny)
-                    .on_download(|webview, event| match event {
-                        DownloadEvent::Requested { url, destination } => {
-                            if !is_download_url(&url) {
-                                return false;
-                            }
-                            let name = safe_filename(
-                                destination
-                                    .file_name()
-                                    .and_then(|v| v.to_str())
-                                    .unwrap_or("Chevoink-export.txt"),
-                            );
-                            if let Some(path) =
-                                rfd::FileDialog::new().set_file_name(name).save_file()
-                            {
-                                *destination = path;
-                                webview
-                                    .app_handle()
-                                    .state::<window::CloseState>()
-                                    .downloads
-                                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        DownloadEvent::Finished { success, .. } => {
-                            let state = webview.app_handle().state::<window::CloseState>();
-                            let _ = state.downloads.fetch_update(
-                                std::sync::atomic::Ordering::SeqCst,
-                                std::sync::atomic::Ordering::SeqCst,
-                                |n| Some(n.saturating_sub(1)),
-                            );
-                            if !success {
-                                window::notice(
-                                    "下载未完成",
-                                    "文件未完整保存，请重试。原作品不受影响。",
-                                );
-                            }
-                            true
-                        }
-                        _ => false,
-                    })
                     .build()?;
             window::install(&window)?;
             #[cfg(windows)]

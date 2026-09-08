@@ -8,6 +8,11 @@ export default tseslint.config(
   // Local third-party audit checkouts and generated models are not application sources.
   { ignores: ['dist', '.dbg', '.repo-audit', '.tools', 'desktop/windows/src-tauri/target', 'desktop/windows/src-tauri/gen', 'coverage', 'output/voice-assets', 'public/voice'] },
   {
+    files: ['desktop/windows/shell-ui/*.js'],
+    ...js.configs.recommended,
+    languageOptions: { ecmaVersion: 2022, globals: globals.browser },
+  },
+  {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
     languageOptions: {

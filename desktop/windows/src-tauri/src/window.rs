@@ -32,21 +32,42 @@ pub fn notice(title: &str, message: &str) {
 }
 
 pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
-    if let Some(monitor) = window.current_monitor()? {
-        let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+    if let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) {
+        let work = monitor.work_area();
+        let scale = window.scale_factor()?;
+        let inner = window.inner_size()?;
+        let outer = window.outer_size()?;
+        let frame_width = outer.width.saturating_sub(inner.width);
+        let frame_height = outer.height.saturating_sub(inner.height);
+        let available = tauri::PhysicalSize::new(
+            work.size.width.saturating_sub(frame_width).max(1),
+            work.size.height.saturating_sub(frame_height).max(1),
+        );
+        let size = available.to_logical::<f64>(scale);
         window.set_min_size(Some(tauri::LogicalSize::new(
             640.0_f64.min(size.width),
             480.0_f64.min(size.height),
         )))?;
-        let current = window
-            .inner_size()?
-            .to_logical::<f64>(window.scale_factor()?);
-        if current.width > size.width || current.height > size.height {
-            window.set_size(tauri::LogicalSize::new(
-                current.width.min(size.width),
-                current.height.min(size.height),
+        if !window.is_maximized()? && !window.is_fullscreen()? {
+            window.set_size(tauri::PhysicalSize::new(
+                inner.width.min(available.width),
+                inner.height.min(available.height),
             ))?;
-            window.center()?;
+            let position = window.outer_position()?;
+            window.set_position(tauri::PhysicalPosition::new(
+                visible_coordinate(
+                    position.x,
+                    work.position.x,
+                    work.size.width,
+                    outer.width.min(work.size.width),
+                ),
+                visible_coordinate(
+                    position.y,
+                    work.position.y,
+                    work.size.height,
+                    outer.height.min(work.size.height),
+                ),
+            ))?;
         }
     }
     let owned = window.clone();
@@ -59,6 +80,27 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+fn visible_coordinate(position: i32, origin: i32, available: u32, extent: u32) -> i32 {
+    let start = i64::from(origin);
+    let end = start + i64::from(available.saturating_sub(extent));
+    i64::from(position)
+        .clamp(start, end)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restore_stays_inside_work_area_including_negative_monitor_coordinates() {
+        assert_eq!(visible_coordinate(4000, 0, 1920, 1280), 640);
+        assert_eq!(visible_coordinate(-5000, -1920, 1920, 1280), -1920);
+        assert_eq!(visible_coordinate(-1800, -1920, 1920, 1280), -1800);
+        assert_eq!(visible_coordinate(100, 0, 640, 1280), 0);
+        assert_eq!(visible_coordinate(0, 40, 1040, 800), 40);
+    }
 }
 
 pub fn request_close(window: &WebviewWindow) {

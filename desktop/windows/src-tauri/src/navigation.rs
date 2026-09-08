@@ -2,6 +2,21 @@ use url::Url;
 
 pub const APP_ORIGIN: &str = "https://chevoink.chevolink.com";
 
+pub fn is_fallback_url(url: &Url) -> bool {
+    matches!(
+        (url.scheme(), url.host_str()),
+        ("http", Some("tauri.localhost")) | ("tauri", Some("localhost"))
+    ) && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.path(), "/" | "/index.html")
+        && url.query().is_none()
+        && matches!(
+            url.fragment(),
+            None | Some("dns" | "tls" | "timeout" | "network" | "crash" | "engine")
+        )
+}
+
 pub fn is_app_url(url: &Url) -> bool {
     url.origin().ascii_serialization() == APP_ORIGIN
         && url.username().is_empty()
@@ -42,6 +57,21 @@ pub fn safe_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fallback_navigation_has_no_arbitrary_path_or_parameters() {
+        assert!(is_fallback_url(
+            &Url::parse("http://tauri.localhost/#tls").unwrap()
+        ));
+        for value in [
+            "http://tauri.localhost/other",
+            "http://tauri.localhost:8888/",
+            "http://tauri.localhost/?url=https://evil.test",
+            "http://tauri.localhost/#<script>",
+            "http://user@tauri.localhost/",
+        ] {
+            assert!(!is_fallback_url(&Url::parse(value).unwrap()));
+        }
+    }
     #[test]
     fn origin_is_exact_and_never_a_prefix() {
         assert!(is_app_url(

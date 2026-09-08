@@ -47,3 +47,37 @@ it('save exceptions and scope changes fail closed', async () => {
   const changed = registerDesktopSave(() => { changed(); return true })
   expect(await flushDesktopSaves()).toBe(false)
 })
+
+it.each(['input', 'beforeinput', 'compositionstart', 'change'])('does not close over %s arriving during persistence', async (type) => {
+  desktop()
+  const remove = registerDesktopSave(async () => {
+    document.dispatchEvent(new Event(type))
+    return true
+  })
+  expect(await flushDesktopSaves()).toBe(false)
+  remove()
+  expect(await flushDesktopSaves()).toBe(true)
+})
+
+it('does not blur or flush inputs on Web/Android', async () => {
+  const input = document.createElement('input')
+  document.body.appendChild(input)
+  input.focus()
+  expect(await flushDesktopSaves()).toBe(true)
+  expect(document.activeElement).toBe(input)
+  input.remove()
+})
+
+it('releases change listeners when a save never settles', async () => {
+  desktop()
+  vi.useFakeTimers()
+  const removed = vi.spyOn(document, 'removeEventListener')
+  const unregister = registerDesktopSave(() => new Promise<boolean>(() => {}))
+  try {
+    const result = flushDesktopSaves()
+    await vi.advanceTimersByTimeAsync(7600)
+    expect(await result).toBe(false)
+    expect(removed).toHaveBeenCalledWith('input', expect.any(Function), true)
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { unregister(); vi.useRealTimers() }
+})

@@ -30,7 +30,24 @@ pub fn schedule_check(app: &AppHandle) {
 }
 
 pub fn check(app: &AppHandle, manual: bool) {
+    // Development profiles never discover or install packages from the production channel.
+    if app.config().identifier != "com.chevoink.desktop" {
+        if manual {
+            crate::window::notice(
+                "开发版客户端",
+                "开发版不使用正式更新通道，请通过开发构建更新。",
+            );
+        }
+        return;
+    }
     let state = app.state::<UpdateState>();
+    if state
+        .pending
+        .lock()
+        .map_or(true, |pending| pending.is_some())
+    {
+        return;
+    }
     if state.busy.swap(true, Ordering::SeqCst) {
         return;
     }
