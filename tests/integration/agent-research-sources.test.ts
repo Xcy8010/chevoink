@@ -170,6 +170,14 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
         offset = window.returnedRange.end
       }
       expect(assembled).toBe(text)
+      const changedLinks = await saveResearchContent(scope, source.id, { ...page, links: page.links.slice(0, 9) })
+      expect(changedLinks.id).not.toBe(saved.id)
+      expect(changedLinks.revision).not.toBe(saved.revision)
+      expect((await readResearchContent(scope, { contentRef: saved.id, revision: saved.revision })).linksTotal).toBe(19)
+      const legacyRevision = createHash('sha256').update(JSON.stringify([saved.contentHash, saved.finalUrl, saved.contentKind])).digest('hex')
+      const legacy = await prisma.agentResearchContent.create({ data: { ...saved, id: randomUUID(), revision: legacyRevision,
+        quality: { ...page.quality, links: page.links.slice(0, 8) } } })
+      expect((await readResearchContent(scope, { contentRef: legacy.id, revision: legacyRevision })).linksTotal).toBe(8)
       await expect(readResearchContent(scope, { contentRef: saved.id, revision: '0'.repeat(64) })).rejects.toMatchObject({ code: 'RESEARCH_REVISION_MISMATCH' })
       await expect(readResearchContent(scope, { contentRef: saved.id, revision: saved.revision, offset: text.length + 1 })).rejects.toMatchObject({ code: 'RESEARCH_RANGE_INVALID' })
       const nextId = randomUUID()

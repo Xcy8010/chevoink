@@ -291,13 +291,13 @@ export async function saveResearchContent(scope: Scope, sourceId: string, result
   const finalUrl = canonicalResearchUrl(result.finalUrl)
   const links = checkedSavedLinks(result.links, finalUrl)
   const contentHash = hash(result.text)
-  const revision = hash(JSON.stringify([contentHash, finalUrl, result.contentKind]))
+  const revision = hash(JSON.stringify([contentHash, finalUrl, result.contentKind, links]))
   return prisma.$transaction(async tx => {
     await ownedSource(tx, scope, sourceId)
     await tx.agentResearchSource.update({ where: { id: sourceId }, data: { readFailure: Prisma.DbNull } })
     return tx.agentResearchContent.upsert({ where: { sourceId_revision: { sourceId, revision } }, update: {}, create: {
       id: randomUUID(), sourceId, revision, contentHash, finalUrl, provider: result.provider,
-      contentKind: result.contentKind, text: result.text, quality: { ...checked.quality, links },
+      contentKind: result.contentKind, text: result.text, quality: { ...checked.quality, links, revisionVersion: 2 },
     } })
   })
 }
@@ -318,8 +318,12 @@ export async function readResearchContent(scope: Scope, input: { contentRef: str
     const content = await tx.agentResearchContent.findUnique({ where: { id: input.contentRef } })
     if (!content) return denied()
     const source = await ownedSource(tx, scope, content.sourceId)
+    const quality = content.quality
+    const metadata = quality && typeof quality === 'object' && !Array.isArray(quality) ? quality : null
+    const links = checkedSavedLinks(metadata?.links, content.finalUrl)
+    const revisionParts = [content.contentHash, content.finalUrl, content.contentKind]
     if (input.revision !== content.revision || hash(content.text) !== content.contentHash
-      || hash(JSON.stringify([content.contentHash, content.finalUrl, content.contentKind])) !== content.revision) {
+      || hash(JSON.stringify(metadata?.revisionVersion === 2 ? [...revisionParts, links] : revisionParts)) !== content.revision) {
       throw new DataAccessError(409, 'RESEARCH_REVISION_MISMATCH', '正文版本不一致，不能用其他版本替换引用。')
     }
     if (offset > content.text.length) throw new DataAccessError(400, 'RESEARCH_RANGE_INVALID', '正文窗口超出保存范围。')
@@ -327,8 +331,6 @@ export async function readResearchContent(scope: Scope, input: { contentRef: str
     if (matchAt === -1) throw new DataAccessError(404, 'RESEARCH_MATCH_NOT_FOUND', '当前保存版本的指定位置之后没有匹配文本；未联网，也不代表其他版本或来源没有该信息。')
     const start = matchAt === null ? offset : Math.max(offset, matchAt - Math.min(200, Math.floor(limit / 4), limit - input.find!.length))
     const end = Math.min(content.text.length, start + limit)
-    const quality = content.quality
-    const links = checkedSavedLinks(quality && typeof quality === 'object' && !Array.isArray(quality) ? quality.links : undefined, content.finalUrl)
     if (linksOffset > links.length) throw new DataAccessError(400, 'RESEARCH_RANGE_INVALID', '链接分页超出保存范围。')
     return { sourceId: source.id, contentRef: content.id, revision: content.revision, contentHash: content.contentHash,
       links: links.slice(linksOffset, linksOffset + 8), linksTotal: links.length,
