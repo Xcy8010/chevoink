@@ -69,12 +69,19 @@ jobs:
       - name: Export dependency license evidence
         run: ./export-dependencies.ps1
       - name: Build internal installer (not a signed public release)
-        run: npm run build -- --ci
+        run: |
+          npm run build -- --ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid installer version' }
+          $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
+          New-Item -ItemType Directory -Path test-results/installers/standard -Force | Out-Null
+          Copy-Item -LiteralPath $installer -Destination "test-results/installers/standard/Chevoink_${version}_x64-setup.exe" -ErrorAction Stop
       - uses: actions/upload-artifact@v4
         with:
           name: windows-internal-${{ github.sha }}
           path: |
-            desktop/windows/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/windows/test-results/installers/standard/*.exe
             desktop/windows/test-results/windows-dependencies.json
           if-no-files-found: error
           retention-days: 7
@@ -86,10 +93,11 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid installer version' }
           $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
           if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Offline installer missing' }
-          Rename-Item -LiteralPath $installer -NewName "Chevoink_${version}_x64-webview2-offline-setup.exe"
+          New-Item -ItemType Directory -Path test-results/installers/offline -Force | Out-Null
+          Copy-Item -LiteralPath $installer -Destination "test-results/installers/offline/Chevoink_${version}_x64-webview2-offline-setup.exe" -ErrorAction Stop
       - uses: actions/upload-artifact@v4
         with:
           name: windows-internal-webview2-offline-${{ github.sha }}
-          path: desktop/windows/src-tauri/target/release/bundle/nsis/*_x64-webview2-offline-setup.exe
+          path: desktop/windows/test-results/installers/offline/*.exe
           if-no-files-found: error
           retention-days: 7

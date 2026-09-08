@@ -8,6 +8,17 @@ Verified on 2026-09-08 against code and production revision `71f7adc`; [CI passe
 
 React SPA + Express + PostgreSQL monolith for writing, reading, community and administration; Android uses a Capacitor shell. Production runs one PM2 instance. Independent workers and multi-instance disaster recovery are **not fully delivered**.
 
+The candidate Windows shell in `desktop/windows/` loads the same-origin website using Tauri/WebView2, without duplicating business logic or running a local backend. Signing and real-device release acceptance are incomplete; see [Windows acceptance status](WINDOWS_DESKTOP.md). Its Node/Rust toolchain must not become a production API installation or deployment dependency.
+
+### Windows change boundaries
+
+- Platform identifiers select compatibility paths, not authorization. Windows changes must preserve Android UA detection, APK updates and voice-plugin paths.
+- Keep native capabilities in the host and the two narrow remote commands. Any added command requires origin, ACL, payload and negative-test review; no generic shell or filesystem-path bridge.
+- Normal close/update must await the existing save pipeline. Unknown or failed saves and active recording/downloads keep the window open by default. Never auto-resolve reviews, resend tasks or settle charges.
+- Record web gates and Windows fmt/clippy/test/packaging separately against a specific commit. DOM tests cannot replace real WebView2, installation, updates, permissions or DPI acceptance.
+- Apply Authenticode before updater signing and hashes. Platform releases must not claim the repository-wide Latest flag. Do not advertise unverified stable downloads or present internal packages as stable releases.
+- The enhanced offline package only embeds the WebView2 installer; retain the ordinary package's version, appId and business code. It does not enable offline writing. Upgrades must preserve cookies, drafts, layouts and pending reviews.
+
 | Layer | Entry points and responsibility |
 | --- | --- |
 | Frontend | `src/app`; `src/features/studio`, reader, community, admin and other business domains |

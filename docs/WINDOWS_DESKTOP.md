@@ -4,6 +4,7 @@
 
 ## 当前证据
 
+- `c56f0f6` 的 [网页四闸](https://github.com/Xcy8010/chevoink/actions/runs/34272648450) 与 [Windows 双安装包构建](https://github.com/Xcy8010/chevoink/actions/runs/34272648418) 均通过：普通包、内嵌 WebView2 离线安装器的增强包分别作为内部 artifact 保存。二者尚未通过签名或缺内核真机安装验收，不是公开发行版。
 - `f040381` 的 [Windows 构建](https://github.com/Xcy8010/chevoink/actions/runs/34268535896) 通过 Rust fmt、clippy、test 和 NSIS 打包，生成内部 `Chevoink_1.0.0_x64-setup.exe`，2,625,246 字节。
 - 同提交 [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34268535994) 已通过四闸与依赖审计。
 - `237abf2` 已修正前一提交的测试模块排列 lint 问题，并补齐同文档保存串行化与依赖清单；该提交的 [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34271173267) 与 [Windows 构建和 RustSec 审计](https://github.com/Xcy8010/chevoink/actions/runs/34271173331) 均通过。退出保存竞态防护、启动故障分类、工作区约束、全屏映射及非阻塞导出对话框已通过编译/定向测试，尚不等于真机交互通过。
@@ -29,6 +30,7 @@
 | 故障页 | 包内静态资源；区分启动 DNS、TLS、超时，已有写作页断网不替换；不自动重发任务 |
 | 下载入口 | 原设置行和弹窗样式；电脑仅 Windows，手机原选项，平台判定不依赖宽度；无稳定包不开放假入口 |
 | 更新候选 | 原生检查/确认、官方 updater 验签、固定下载源、24 小时自动检查间隔、开发版隔离 |
+| 安装构建 | 标准用户 NSIS；普通包在线补装 WebView2，增强包内嵌 Evergreen 安装器；同版本、同 appId、同业务代码 |
 
 ## 未完成的发布门槛
 
