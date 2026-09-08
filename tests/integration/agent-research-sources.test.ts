@@ -125,11 +125,15 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
       const resumedScope = { ...scope, runId: resumedId }
       expect((await registerResearchSource(resumedScope, source.canonicalUrl)).id).toBe(source.id)
       expect((await findResearchSource(resumedScope, source.canonicalUrl))?.id).toBe(source.id)
-      for (const code of ['WEB_READ_NOT_FOUND', 'WEB_READ_BLOCKED', 'WEB_READ_GARBLED', 'WEB_READ_INSUFFICIENT'] as const) {
+      for (const code of ['WEB_READ_NOT_FOUND', 'WEB_READ_BLOCKED', 'WEB_READ_GARBLED', 'WEB_READ_INSUFFICIENT',
+        'WEB_READ_TOO_LARGE', 'WEB_READ_UNSAFE_URL', 'WEB_READ_UNSUPPORTED_TYPE', 'WEB_READ_HTTP_ERROR',
+        'WEB_READ_SOURCE_ERROR', 'WEB_READ_PROTOCOL_ERROR', 'WEB_READ_PARSE_ERROR',
+        'WEB_READ_COMPLEX_DOCUMENT', 'WEB_READ_HOSTED_TARGET_RESTRICTED'] as const) {
         await recordResearchReadFailure(scope, source.id, { ...page, status: 'unreadable', code })
         expect(await getResearchReadFailure(resumedScope, source.id)).toMatchObject({ code })
       }
       for (const code of ['WEB_READ_UNAVAILABLE', 'WEB_READ_HOSTED_UNAVAILABLE'] as const) {
+        await prisma.agentResearchSource.update({ where: { id: source.id }, data: { readFailure: { code, retryAt: '2000-01-01T00:00:00.000Z' } } })
         const started = Date.now()
         await recordResearchReadFailure(scope, source.id, { ...page, status: 'transient_error', retryable: true, code })
         const failure = await getResearchReadFailure(resumedScope, source.id)
@@ -139,6 +143,9 @@ describe.skipIf(!available)('J4 private versioned research sources', () => {
       }
       // Retry-After survives restart and is not shortened to the default negative TTL.
       await recordResearchReadFailure(scope, source.id, { ...page, status: 'transient_error', code: 'WEB_READ_RATE_LIMITED', retryAfter: '3600' })
+      expect(Date.parse((await getResearchReadFailure(resumedScope, source.id))!.retryAt)).toBeGreaterThan(Date.now() + 3_500_000)
+      await recordResearchReadFailure(scope, source.id, { ...page, status: 'transient_error', retryable: true, code: 'WEB_READ_UNAVAILABLE' })
+      expect(await getResearchReadFailure(resumedScope, source.id)).toMatchObject({ code: 'WEB_READ_RATE_LIMITED' })
       expect(Date.parse((await getResearchReadFailure(resumedScope, source.id))!.retryAt)).toBeGreaterThan(Date.now() + 3_500_000)
       const retryDate = new Date(Date.now() + 7200_000).toUTCString()
       await recordResearchReadFailure(scope, source.id, { ...page, status: 'transient_error', code: 'WEB_READ_RATE_LIMITED', retryAfter: retryDate })

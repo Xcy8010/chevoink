@@ -239,7 +239,10 @@ export async function findResearchSource(scope: Scope, value: string) {
 
 const failureSchema = z.object({
   code: z.enum(['WEB_READ_NOT_FOUND', 'WEB_READ_BLOCKED', 'WEB_READ_GARBLED', 'WEB_READ_RATE_LIMITED',
-    'WEB_READ_INSUFFICIENT', 'WEB_READ_UNAVAILABLE', 'WEB_READ_HOSTED_UNAVAILABLE']),
+    'WEB_READ_INSUFFICIENT', 'WEB_READ_UNAVAILABLE', 'WEB_READ_HOSTED_UNAVAILABLE',
+    'WEB_READ_TOO_LARGE', 'WEB_READ_UNSAFE_URL', 'WEB_READ_UNSUPPORTED_TYPE', 'WEB_READ_HTTP_ERROR',
+    'WEB_READ_SOURCE_ERROR', 'WEB_READ_PROTOCOL_ERROR', 'WEB_READ_PARSE_ERROR',
+    'WEB_READ_COMPLEX_DOCUMENT', 'WEB_READ_HOSTED_TARGET_RESTRICTED']),
   retryAt: z.string().datetime(),
 }).strict()
 
@@ -267,6 +270,11 @@ export async function recordResearchReadFailure(scope: Scope, sourceId: string, 
   }
   await prisma.$transaction(async tx => {
     await ownedSource(tx, scope, sourceId)
+    await tx.$queryRaw`SELECT id FROM agent_research_sources WHERE id = ${sourceId} FOR UPDATE`
+    const source = await ownedSource(tx, scope, sourceId)
+    const previous = failureSchema.safeParse(source.readFailure)
+    // A late timeout must not shorten a Retry-After already received by another attempt.
+    if (previous.success && Date.parse(previous.data.retryAt) > retryAt) return
     await tx.agentResearchSource.update({ where: { id: sourceId }, data: { readFailure: { code: result.code, retryAt: new Date(retryAt).toISOString() } } })
   })
 }
