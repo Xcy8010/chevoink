@@ -5,26 +5,29 @@ Var ChevoinkInstalled
 
 ; Existing shortcuts may cache the old executable icon by its unchanged path.
 ; Use an installed, content-versioned icon, never a build/tool-cache path.
+!macro RefreshChevoinkIcon shortcut
+  !insertmacro IsShortcutTarget "${shortcut}" "$INSTDIR\chevoink-desktop.exe"
+  Pop $0
+  ${If} $0 = 1
+    ; Modify only IconLocation: preserve target, arguments and AppUserModelId.
+    !insertmacro ComHlpr_CreateInProcInstance ${CLSID_ShellLink} ${IID_IShellLink} r0 ""
+    ${If} $0 P<> 0
+      ${IUnknown::QueryInterface} $0 '("${IID_IPersistFile}",.r1)'
+      ${If} $1 P<> 0
+        ${IPersistFile::Load} $1 '("${shortcut}", ${STGM_READWRITE})'
+        ${IShellLink::SetIconLocation} $0 '("$INSTDIR\chevoink-logo-212aa389.ico", 0)'
+        ${IPersistFile::Save} $1 '("${shortcut}",1)'
+        ${IUnknown::Release} $1 ""
+      ${EndIf}
+      ${IUnknown::Release} $0 ""
+    ${EndIf}
+    System::Call 'shell32::SHChangeNotify(i 0x00002000, i 0x0005, w "${shortcut}", p 0)'
+  ${EndIf}
+!macroend
+
 Function RefreshChevoinkShortcuts
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-  Pop $0
-  ${If} $0 = 1
-    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "$INSTDIR\chevoink-logo-212aa389.ico" 0
-    !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
-    System::Call 'shell32::SHChangeNotify(i 0x00002000, i 0x0005, w "$DESKTOP\${PRODUCTNAME}.lnk", p 0)'
-  ${EndIf}
-  !if "${STARTMENUFOLDER}" != ""
-    StrCpy $1 "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
-  !else
-    StrCpy $1 "$SMPROGRAMS\${PRODUCTNAME}.lnk"
-  !endif
-  !insertmacro IsShortcutTarget "$1" "$INSTDIR\${MAINBINARYNAME}.exe"
-  Pop $0
-  ${If} $0 = 1
-    CreateShortcut "$1" "$INSTDIR\${MAINBINARYNAME}.exe" "" "$INSTDIR\chevoink-logo-212aa389.ico" 0
-    !insertmacro SetLnkAppUserModelId "$1"
-    System::Call 'shell32::SHChangeNotify(i 0x00002000, i 0x0005, w "$1", p 0)'
-  ${EndIf}
+  !insertmacro RefreshChevoinkIcon "$DESKTOP\Chevoink.lnk"
+  !insertmacro RefreshChevoinkIcon "$SMPROGRAMS\Chevoink.lnk"
 FunctionEnd
 
 Function .onGUIEnd
