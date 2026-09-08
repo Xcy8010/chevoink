@@ -185,39 +185,14 @@ try {
     Remove-Item $ArchivePath -Force
   }
 
-  $TarArgs = @(
-    "-czf", $ArchivePath,
-    "--exclude=node_modules",
-    "--exclude=dist",
-    "--exclude=public/voice",
-    "--exclude=.local-storage",
-    "--exclude=.dbg",
-    "--exclude=.git",
-    "--exclude=.deploy-production.tar.gz",
-    "api",
-    "deploy",
-    "plan",
-    "prisma",
-    "public",
-    "scripts",
-    "shared",
-    "src",
-    ".env.example",
-    ".gitignore",
-    ".node-version",
-    "ecosystem.config.cjs",
-    "eslint.config.js",
-    "index.html",
-    "nodemon.json",
-    "package-lock.json",
-    "package.json",
-    "postcss.config.js",
-    "start-local-server.bat",
-    "tailwind.config.js",
-    "tsconfig.json",
-    "vite.config.ts"
-  )
-  Invoke-CheckedCommand -FilePath "tar.exe" -ArgumentList $TarArgs -WorkingDirectory $ProjectRoot
+  # Package exactly a committed revision, never local drafts, credentials or
+  # untracked audit repositories. CI and deployment must refer to the same SHA.
+  $ReleaseRevision = (& git -C $ProjectRoot rev-parse --verify HEAD).Trim()
+  if ($LASTEXITCODE -ne 0 -or $ReleaseRevision -notmatch '^[a-f0-9]{40}$') {
+    throw "Cannot resolve release revision"
+  }
+  Invoke-CheckedCommand -FilePath "git" -ArgumentList @("archive", "--format=tar.gz", "--output=$ArchivePath", $ReleaseRevision) -WorkingDirectory $ProjectRoot
+  Write-Host "Release revision: $ReleaseRevision"
 
   Write-Step "Waiting for SSH to become ready"
   Wait-ForSshReady -KeyPath $KeyPath -UserName $UserName -HostName $HostName

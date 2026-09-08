@@ -17,6 +17,17 @@ fi
 ln -sfn "$SHARED_ENV" "$CURRENT_RELEASE/.env"
 
 cd "$CURRENT_RELEASE"
+# Keep the system runtime untouched; use the release's pinned side-by-side Node.
+PINNED_NODE=$(tr -d '\r\n' < .node-version)
+if [[ ! "$PINNED_NODE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "[chevoink] invalid pinned Node version" >&2
+  exit 1
+fi
+NODE_BIN="$APP_ROOT/runtime/node-v${PINNED_NODE}-linux-x64/bin"
+if [[ -x "$NODE_BIN/node" ]]; then
+  export PATH="$NODE_BIN:$PATH"
+fi
+export CHEVOINK_NODE_BINARY="$(command -v node)"
 # Refuse an incompatible host before dependency replacement or DB migration.
 # Checking the lock's exact Node/npm contract here needs no installed packages.
 node --input-type=module -e '
