@@ -15,6 +15,7 @@ import GlobalSearchBox from '@/features/search/GlobalSearchBox'
 import { brandMeta } from '@/lib/theme/tokens'
 import { enterImmersiveFullscreen } from '@/lib/immersive-fullscreen'
 import { isNativeApp } from '@/lib/native-app'
+import { isWindowsDesktopApp } from '@/lib/desktop-app'
 import { cn } from '@/lib/utils'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useShellStore } from '@/store/useShellStore'
@@ -898,7 +899,7 @@ export default function AppShell({ title, description, children }: AppShellProps
 
       {/* 首次进入网站的全屏选择弹窗：默认不开启全屏，由用户自己选；选择后不再弹出，
           「开启」按钮点击本身就是用户手势，可直接进入全屏；APP 壳内天生全屏，不弹 */}
-      {!fullscreenPromptSeen && !isNativeApp() ? (
+      {!fullscreenPromptSeen && !isNativeApp() && !isWindowsDesktopApp() ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4">
           <div className="w-full max-w-[380px] rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 shadow-xl">
             <h3 className="text-lg font-semibold text-[var(--text-primary)]">选择浏览方式</h3>

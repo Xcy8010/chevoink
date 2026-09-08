@@ -1,10 +1,14 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { updateNovelPlanFile } from '../api'
+import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 
 /** Batches one document's latest edit; changing documents flushes the previous payload. */
 export function usePlanSync() {
   const timer = useRef<number | null>(null)
   const pending = useRef<{ artifactId: string; title: string; content: string } | null>(null)
+  const inflight = useRef(new Set<Promise<void>>())
+  const documentWrites = useRef(new Map<string, Promise<void>>())
+  const failed = useRef(new Set<string>())
   const flushPlanServerSync = useCallback(() => {
     if (timer.current !== null) {
       window.clearTimeout(timer.current)
@@ -13,9 +17,21 @@ export function usePlanSync() {
     const payload = pending.current
     pending.current = null
     if (payload) {
-      void updateNovelPlanFile(payload.artifactId, { title: payload.title, content: payload.content }).catch(() => {
+      // Serialize a document's writes so a slow older request cannot overwrite a newer save.
+      // Different documents remain independent; the existing debounce remains unchanged.
+      const previous = documentWrites.current.get(payload.artifactId)
+      const send = () => updateNovelPlanFile(payload.artifactId, { title: payload.title, content: payload.content })
+      const request = (previous ? previous.then(send) : send()).then(() => {
+        failed.current.delete(payload.artifactId)
+      }).catch(() => {
+        failed.current.add(payload.artifactId)
         // Preserve the existing retry-on-next-edit behavior.
+      }).finally(() => {
+        inflight.current.delete(request)
+        if (documentWrites.current.get(payload.artifactId) === request) documentWrites.current.delete(payload.artifactId)
       })
+      documentWrites.current.set(payload.artifactId, request)
+      inflight.current.add(request)
     }
   }, [])
   const schedulePlanServerSync = useCallback((artifactId: string, title: string, content: string) => {
@@ -27,5 +43,10 @@ export function usePlanSync() {
       flushPlanServerSync()
     }, 800)
   }, [flushPlanServerSync])
+  useEffect(() => registerDesktopSave(async () => {
+    flushPlanServerSync()
+    await Promise.all([...inflight.current])
+    return !pending.current && inflight.current.size === 0 && failed.current.size === 0
+  }), [flushPlanServerSync])
   return { flushPlanServerSync, schedulePlanServerSync }
 }

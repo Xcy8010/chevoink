@@ -36,3 +36,35 @@ it('keeps empty flushes idempotent and allows a later edit after failure', async
   expect(update).toHaveBeenCalledTimes(2)
   expect(update).toHaveBeenLastCalledWith('a', { title: 'A', content: 'retry' })
 })
+
+it('serializes writes to the same document without blocking another document', async () => {
+  let finishFirst!: () => void
+  update.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve }))
+  const { result } = renderHook(usePlanSync)
+  act(() => {
+    result.current.schedulePlanServerSync('a', 'A', 'old')
+    result.current.flushPlanServerSync()
+    result.current.schedulePlanServerSync('a', 'A', 'new')
+    result.current.flushPlanServerSync()
+    result.current.schedulePlanServerSync('b', 'B', 'independent')
+    result.current.flushPlanServerSync()
+  })
+  expect(update.mock.calls.map((call) => call[1].content)).toEqual(['old', 'independent'])
+  await act(async () => { finishFirst(); await Promise.resolve() })
+  expect(update.mock.calls.map((call) => call[1].content)).toEqual(['old', 'independent', 'new'])
+})
+
+it('continues queued latest content after an older save fails', async () => {
+  let failFirst!: (error: Error) => void
+  update.mockImplementationOnce(() => new Promise<void>((_, reject) => { failFirst = reject }))
+  const { result } = renderHook(usePlanSync)
+  act(() => {
+    result.current.schedulePlanServerSync('a', 'A', 'old')
+    result.current.flushPlanServerSync()
+    result.current.schedulePlanServerSync('a', 'A', 'latest')
+    result.current.flushPlanServerSync()
+  })
+  expect(update).toHaveBeenCalledOnce()
+  await act(async () => { failFirst(new Error('offline')); await Promise.resolve() })
+  expect(update).toHaveBeenLastCalledWith('a', { title: 'A', content: 'latest' })
+})

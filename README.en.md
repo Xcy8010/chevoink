@@ -136,6 +136,7 @@ Still in beta: whole-book per-chapter analysis, V2 shadow pricing, independent s
 | --- | --- |
 | Try the product now | [Live site](https://chevoink.chevolink.com) (web, no install needed) |
 | Install the Android app | [Download & install guide](#download--install-android-app) · [Releases page](https://github.com/Xcy8010/chevoink/releases) |
+| Windows client development | [Build instructions](desktop/windows/README.md) · [Acceptance status](docs/WINDOWS_DESKTOP.md); internal candidate, not yet a signed public release |
 | Learn how to use it | [User guide](#user-guide) |
 | Explore features | [Feature overview](#feature-overview) |
 | Understand Agent 3.0 | [Runtime flow & architecture](#chevoink-agent-30) · [Agent 3.0 proposal (Chinese)](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |

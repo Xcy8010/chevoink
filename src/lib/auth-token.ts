@@ -6,9 +6,12 @@
  * 同值，持久化到 localStorage 后随请求以 Authorization 头兜底，保证登录态不丢。
  */
 
+import { isWindowsDesktopApp } from './desktop-app'
+
 const STORAGE_KEY = 'chevoink-session-token'
 
 export function getSessionToken(): string | null {
+  if (isWindowsDesktopApp()) return null
   try {
     return window.localStorage.getItem(STORAGE_KEY)
   } catch {
@@ -18,6 +21,11 @@ export function getSessionToken(): string | null {
 
 export function setSessionToken(token: string | null): void {
   try {
+    if (isWindowsDesktopApp()) {
+      // Called only after verified authentication or explicit logout; never clear drafts.
+      window.localStorage.removeItem(STORAGE_KEY)
+      return
+    }
     if (token) {
       window.localStorage.setItem(STORAGE_KEY, token)
     } else {

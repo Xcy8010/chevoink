@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Only version information and nonce-scoped save acknowledgements, no plugin commands",
+  "local": false,
+  "windows": ["main"],
+  "remote": { "urls": ["https://chevoink.chevolink.com"] },
+  "permissions": ["allow-desktop-get-info", "allow-desktop-report-state"]
+}

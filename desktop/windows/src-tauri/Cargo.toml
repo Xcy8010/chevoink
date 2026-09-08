@@ -1,0 +1,38 @@
+[package]
+name = "chevoink-desktop"
+version = "1.0.2"
+description = "Chevoink Windows client"
+edition = "2021"
+rust-version = "1.94"
+license = "AGPL-3.0"
+
+[lib]
+name = "chevoink_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-single-instance = "=2.4.4"
+tauri-plugin-window-state = "=2.4.1"
+tauri-plugin-opener = "=2.5.5"
+tauri-plugin-updater = "=2.11.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+rfd = "0.15"
+tokio = { version = "1", features = ["time"] }
+reqwest = { version = "0.13", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -8,6 +8,17 @@
 
 Chevoink 是 React SPA + Express + PostgreSQL 的单体应用，包含小说创作、阅读、社区与管理后台；Android 使用 Capacitor 壳。当前生产为 PM2 单实例，**不是已完成独立 worker / 多实例容灾的系统**。
 
+Windows 候选壳位于 `desktop/windows/`，使用 Tauri/WebView2 加载同源网站，不复制业务、不启动本地后端。尚未完成签名和真机发布验收，见 [Windows 验收状态](WINDOWS_DESKTOP.md)。此目录的 Node/Rust 工具链不进入生产 API 安装或部署依赖。
+
+### Windows 改动边界
+
+- 平台标识只作兼容分流，不是授权凭证；Windows 适配不能改写 Android 的 UA、APK 更新或语音插件路径。
+- 原生能力集中在宿主，远程页只保留两条窄命令；新增命令必须同时审查来源、ACL、载荷与负面测试，禁止通用 shell/文件路径桥接。
+- 正常退出/更新须等待原保存链路；未知、失败、录音/下载未结束时默认留在窗口。不得自动处理审查、重发任务或结算。
+- 网页四闸与 Windows fmt/clippy/test/打包分别取证，均对应具体提交；DOM 测试不能替代真实 WebView2、安装、更新、权限和 DPI 验收。
+- 正式包先 Authenticode，再 updater 签名和摘要；平台 Release 不占全仓 Latest。没有验证过的稳定资产，不开放虚假下载入口；内部包不得冒充稳定发行版。
+- 离线增强包仅内嵌 WebView2 安装器，与普通包保持相同版本、appId 和业务代码，不宣称离线创作。升级不得清 Cookie、草稿、布局或待审查数据。
+
 | 层 | 入口与职责 |
 | --- | --- |
 | 前端 | `src/app` 路由；`src/features/studio` 创作；reader、community、admin 等按业务域组织 |

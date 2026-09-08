@@ -5,6 +5,7 @@ import { buildChapterDraft } from '../lib/form-state'
 import { formatDateTime } from '../lib/agent-session'
 import { replaceChapterItem, toChapterListItem } from '../lib/plan-review'
 import type { ChapterDraftState, ChapterPendingReview, SaveState } from '../types'
+import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 
 type ChapterPersistence = {
   activeNovelId: string
@@ -189,5 +190,16 @@ export function useChapterPersistence(options: ChapterPersistence) {
 
     return () => window.clearTimeout(timer)
   }, [chapterDirty, chapterDraft, persistChapter, setChapterSaveState, setChapterSaveMessage])
+  useEffect(() => registerDesktopSave(async () => {
+    const owner = epoch.current
+    const deadline = Date.now() + 6500
+    while (Date.now() < deadline) {
+      if (owner !== epoch.current) return false
+      if (!latest.current.chapterDirty && !chapterSavingRef.current) return true
+      if (!chapterSavingRef.current) await persistChapter('auto')
+      await new Promise((resolve) => window.setTimeout(resolve, 40))
+    }
+    return false
+  }), [persistChapter])
   return persistChapter
 }

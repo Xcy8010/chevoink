@@ -22,7 +22,6 @@ import {
 
 import { ApiClientError, requestJson } from '@/app/api-client'
 import BottomSheet from '@/components/layout/BottomSheet'
-import { useDevice } from '@/components/layout/device-context'
 import AppState from '@/components/ui/AppState'
 import { SettingsSkeleton } from '@/components/ui/Skeleton'
 import Button from '@/components/ui/Button'
@@ -46,7 +45,9 @@ import type {
   UpdateMyProfileRequest,
   User,
 } from '../../../shared/contracts'
-import { ANDROID_APK_URL, CLIENT_OS_OPTIONS, type ClientOsKey } from './settings/client-os'
+import { ANDROID_APK_URL, CLIENT_OS_OPTIONS, DESKTOP_CLIENT_OS_OPTIONS, type ClientOsKey } from './settings/client-os'
+import { isMobileClientPlatform, isWindowsDesktopApp } from '@/lib/desktop-app'
+import { getWindowsDownload, WINDOWS_RELEASES_URL, type WindowsDownload } from '@/lib/windows-download'
 import {
   DEFAULT_PRIVACY,
   PRIVACY_ITEMS,
@@ -69,7 +70,6 @@ export default function SettingsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const toast = useToast()
-  const { isMobile } = useDevice()
   const theme = useShellStore((state) => state.theme)
   const setTheme = useShellStore((state) => state.setTheme)
   const fullscreenEnabled = useShellStore((state) => state.fullscreenEnabled)
@@ -102,9 +102,23 @@ export default function SettingsPage() {
   /** 检测更新：仅 APP 壳内使用 */
   const [updateChecking, setUpdateChecking] = useState(false)
   const [availableUpdate, setAvailableUpdate] = useState<VersionManifest | null>(null)
-  /** 客户端下载弹窗：仅手机浏览器使用 */
+  /** 下载平台不依赖窗口宽度；Windows 包就绪前不开放桌面入口。 */
+  const mobileClient = isMobileClientPlatform()
+  const clientOptions = mobileClient ? CLIENT_OS_OPTIONS : DESKTOP_CLIENT_OS_OPTIONS
+  const [windowsDownload, setWindowsDownload] = useState<WindowsDownload | null>(null)
+  const [clientDownloading, setClientDownloading] = useState(false)
   const [clientDialogOpen, setClientDialogOpen] = useState(false)
   const [selectedClientOs, setSelectedClientOs] = useState<ClientOsKey | null>(null)
+  const clientDialogRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!clientDialogOpen) return
+    const previousFocus = document.activeElement
+    setSelectedClientOs(null)
+    clientDialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
+    }
+  }, [clientDialogOpen, mobileClient])
   /** 退出登录二次确认弹窗 */
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const [logoutSubmitting, setLogoutSubmitting] = useState(false)
@@ -112,6 +126,15 @@ export default function SettingsPage() {
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (mobileClient || isNativeApp() || isWindowsDesktopApp()) return
+    const controller = new AbortController()
+    void getWindowsDownload(controller.signal).then((download) => {
+      if (!controller.signal.aborted) setWindowsDownload(download)
+    }).catch(() => { /* No public stable package: do not advertise a broken download. */ })
+    return () => controller.abort()
+  }, [mobileClient])
 
   useEffect(() => {
     setNickname(sessionUser?.nickname ?? '')
@@ -184,7 +207,22 @@ export default function SettingsPage() {
   }
 
   /** 确认下载客户端：安卓直接前往下载 APK，苹果/鸿蒙暂未开发 */
-  function handleClientDownload(os: ClientOsKey) {
+  async function handleClientDownload(os: ClientOsKey) {
+    if (!clientOptions.some((option) => option.key === os) || clientDownloading) return
+    if (os === 'windows') {
+      setClientDownloading(true)
+      try {
+        const download = await getWindowsDownload()
+        setWindowsDownload(download)
+        window.location.assign(download.url)
+        setClientDialogOpen(false)
+      } catch {
+        toast.error('Windows 下载暂不可用，请稍后重试或查看发布页')
+      } finally {
+        setClientDownloading(false)
+      }
+      return
+    }
     if (os === 'android') {
       openExternalUrl(ANDROID_APK_URL)
       setClientDialogOpen(false)
@@ -586,16 +624,16 @@ export default function SettingsPage() {
     </section>
   ) : null
 
-  /** 客户端分组：仅手机浏览器展示；点击弹出选择系统的下载弹窗 */
+  /** 两个平台共用原下载容器；原生壳不重复下载自己。 */
   const clientSection =
-    !isNativeApp() && isMobile ? (
+    !isNativeApp() && !isWindowsDesktopApp() && (mobileClient || windowsDownload) ? (
       <section>
         <SectionTitle>客户端</SectionTitle>
         <div className="divide-y divide-[var(--border-subtle)]">
           <SettingsRow
             icon={<Download className="h-[18px] w-[18px]" />}
-            title="安装启创墨域客户端"
-            caption="安装 APP 获得更流畅的阅读与创作体验"
+            title={mobileClient ? '安装启创墨域客户端' : '下载客户端'}
+            caption={mobileClient ? '安装 APP 获得更流畅的阅读与创作体验' : `Windows x64 · ${windowsDownload?.version}`}
             chevron="right"
             onClick={() => {
               setSelectedClientOs(null)
@@ -616,14 +654,29 @@ export default function SettingsPage() {
           >
             <div
               role="dialog"
+              ref={clientDialogRef}
+              aria-modal="true"
               aria-label="安装启创墨域客户端"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setClientDialogOpen(false)
+                } else if (event.key === 'Tab') {
+                  const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href]'))
+                  const first = controls[0]
+                  const last = controls[controls.length - 1]
+                  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+                  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+                }
+              }}
               className="w-full rounded-t-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 pb-[calc(24px+var(--safe-bottom))] shadow-[0_24px_64px_rgba(15,23,42,0.18)] sm:max-w-[400px] sm:rounded-[28px] sm:pb-6"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2">
                   <h3 className="text-lg font-semibold text-[var(--text-primary)]">安装启创墨域客户端</h3>
-                  <p className="text-sm leading-6 text-[var(--text-secondary)]">请选择你要下载的版本</p>
+                  <p className="text-sm leading-6 text-[var(--text-secondary)]">{mobileClient ? '请选择你要下载的版本' : '适用于 Windows x64'}</p>
                 </div>
                 <Button
                   onClick={() => setClientDialogOpen(false)}
@@ -636,8 +689,8 @@ export default function SettingsPage() {
                 </Button>
               </div>
 
-              <div className="mt-6 grid grid-cols-3 gap-3">
-                {CLIENT_OS_OPTIONS.map((os) => {
+              <div className={cn('mt-6 grid gap-3', mobileClient ? 'grid-cols-3' : 'grid-cols-1')}>
+                {clientOptions.map((os) => {
                   const selected = selectedClientOs === os.key
 
                   return (
@@ -670,11 +723,13 @@ export default function SettingsPage() {
                 <Button
                   variant="primary"
                   className="mt-6 h-11 w-full"
-                  onClick={() => handleClientDownload(selectedClientOs)}
+                  disabled={clientDownloading}
+                  onClick={() => void handleClientDownload(selectedClientOs)}
                 >
-                  立即下载{CLIENT_OS_OPTIONS.find((os) => os.key === selectedClientOs)?.label}端
+                  {clientDownloading ? '正在获取下载地址…' : selectedClientOs === 'windows' ? '下载 Windows 客户端' : `立即下载${clientOptions.find((os) => os.key === selectedClientOs)?.label}端`}
                 </Button>
               ) : null}
+              {!mobileClient ? <a className="mt-3 block text-center text-sm text-[var(--text-secondary)]" href={WINDOWS_RELEASES_URL} target="_blank" rel="noopener noreferrer">查看发布说明与备用下载</a> : null}
             </div>
           </div>,
           document.body,

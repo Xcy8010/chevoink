@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chevoink",
+  "version": "1.0.2",
+  "identifier": "com.chevoink.desktop",
+  "build": { "frontendDist": "../shell-ui" },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'",
+      "capabilities": ["main"]
+    }
+  },
+  "plugins": { "updater": { "pubkey": "", "endpoints": [] } },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "AI-assisted long-form writing workspace",
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": { "installMode": "currentUser", "languages": ["SimpChinese", "English"], "displayLanguageSelector": true, "installerHooks": "installer-hooks.nsh" }
+    }
+  }
+}

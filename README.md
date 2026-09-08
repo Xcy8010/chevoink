@@ -136,6 +136,7 @@ Agent 支持有预算和进展校验的长任务续跑；暂停后恢复原任�
 | --- | --- |
 | 直接体验产品 | [线上地址](https://chevoink.chevolink.com)（网页端，无需安装） |
 | 安装安卓 APP | [下载与安装教程](#下载与安装安卓-app) · [Releases 页面](https://github.com/Xcy8010/chevoink/releases) |
+| Windows 客户端开发 | [构建说明](desktop/windows/README.md) · [验收状态](docs/WINDOWS_DESKTOP.md)；当前为内部候选版，尚未正式签名发布 |
 | 了解怎么用 | [使用教程](#使用教程) |
 | 了解功能 | [功能一览](#功能一览) |
 | 了解 Agent 3.0 | [运行流程与系统架构](#chevoink-agent-30) · [Agent 3.0 方案](./plan/23-Agent3.0中文网文人类化创作与技能生态升级方案.md) |

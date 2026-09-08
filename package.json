@@ -40,6 +40,7 @@
     "@mozilla/readability": "^0.6.0",
     "@prisma/client": "6.12.0",
     "@tanstack/react-query": "^5.83.0",
+    "@tauri-apps/api": "2.11.1",
     "@xyflow/react": "^12.8.6",
     "clsx": "^2.1.1",
     "cors": "^2.8.5",

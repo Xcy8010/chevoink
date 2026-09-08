@@ -1,0 +1,105 @@
+name: Windows Desktop
+
+on:
+  push:
+    branches: [chevoink-windows, main]
+    paths: ['desktop/windows/**', '.github/workflows/windows-desktop.yml']
+  pull_request:
+    paths: ['desktop/windows/**', '.github/workflows/windows-desktop.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned audit tooling
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 install cargo-audit --version 0.22.2 --locked
+      - name: Audit locked Rust dependencies
+        run: |
+          mkdir -p desktop/windows/test-results
+          cargo +1.94.0 audit --file desktop/windows/src-tauri/Cargo.lock --json > desktop/windows/test-results/rust-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-rust-audit-${{ github.sha }}
+          path: desktop/windows/test-results/rust-audit.json
+          if-no-files-found: warn
+          retention-days: 14
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/windows
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: desktop/windows/package-lock.json
+      - name: Install locked Rust toolchain
+        run: rustup show
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/windows/src-tauri/target
+          key: windows-rust-1.94-${{ hashFiles('desktop/windows/src-tauri/Cargo.lock') }}
+      - run: npm ci
+      - name: Rust formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Rust lint
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Export dependency license evidence
+        run: ./export-dependencies.ps1
+      - name: Build internal installer (not a signed public release)
+        run: |
+          npm run build -- --ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid installer version' }
+          $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
+          New-Item -ItemType Directory -Path test-results/installers/standard -Force | Out-Null
+          Copy-Item -LiteralPath $installer -Destination "test-results/installers/standard/Chevoink_${version}_x64-setup.exe" -ErrorAction Stop
+      - name: Launch packaged desktop and reject startup crashes
+        run: ./smoke-startup.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-internal-${{ github.sha }}
+          path: |
+            desktop/windows/test-results/installers/standard/*.exe
+            desktop/windows/test-results/windows-dependencies.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Build internal installer with offline WebView2 runtime
+        run: |
+          npm run build:offline -- --ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid installer version' }
+          $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Offline installer missing' }
+          New-Item -ItemType Directory -Path test-results/installers/offline -Force | Out-Null
+          Copy-Item -LiteralPath $installer -Destination "test-results/installers/offline/Chevoink_${version}_x64-webview2-offline-setup.exe" -ErrorAction Stop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-internal-webview2-offline-${{ github.sha }}
+          path: desktop/windows/test-results/installers/offline/*.exe
+          if-no-files-found: error
+          retention-days: 7
