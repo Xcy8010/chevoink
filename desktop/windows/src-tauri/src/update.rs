@@ -109,6 +109,16 @@ async fn check_inner(
     }
     let bytes = update.download(|_, _| {}, || {}).await?;
     // The official updater verifies its signature before returning the payload.
+    let install = tauri::async_runtime::spawn_blocking(|| {
+        rfd::MessageDialog::new()
+            .set_title("安装客户端更新")
+            .set_description("安装包已下载并通过更新签名校验。现在保存并退出以安装更新吗？选择取消将继续使用现有版本。")
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .show()
+    }).await?;
+    if install != rfd::MessageDialogResult::Ok {
+        return Ok(());
+    }
     *app.state::<UpdateState>()
         .pending
         .lock()

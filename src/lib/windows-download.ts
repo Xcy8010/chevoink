@@ -30,7 +30,25 @@ export async function getWindowsDownload(signal?: AbortSignal): Promise<WindowsD
     cache: 'no-store', redirect: 'error', credentials: 'omit',
   })
   if (!response.ok) throw new Error('Windows 客户端暂不可下载，请稍后重试')
-  const text = await response.text()
-  if (text.length > 32768) throw new Error('Windows 下载信息无效')
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('Windows 下载信息无效')
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let text = ''
+  let bytes = 0
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > 32768) throw new Error('Windows 下载信息无效')
+      text += decoder.decode(chunk.value, { stream: true })
+    }
+    text += decoder.decode()
+  } catch (error) {
+    await reader.cancel().catch(() => undefined)
+    throw error
+  } finally {
+    reader.releaseLock()
+  }
   return parseWindowsDownload(JSON.parse(text))
 }

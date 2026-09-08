@@ -4,6 +4,29 @@ import { getWindowsDownload, parseWindowsDownload } from '../../src/lib/windows-
 const manifest = (url = 'https://chevoink.chevolink.com/download/windows/1.0.0/Chevoink_1.0.0_x64-setup.exe') => ({ version: '1.0.0', platforms: { 'windows-x86_64': { url, signature: 'test-signature' } } })
 afterEach(() => vi.unstubAllGlobals())
 
+it('reads a valid manifest including a split UTF-8 sequence', async () => {
+  const data = new TextEncoder().encode(JSON.stringify({ ...manifest(), notes: '客户端' }))
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({
+    start(controller) {
+      for (const byte of data) controller.enqueue(new Uint8Array([byte]))
+      controller.close()
+    },
+  }))))
+  await expect(getWindowsDownload()).resolves.toMatchObject({ version: '1.0.0' })
+})
+
+it('cancels an oversized stream before buffering its full response', async () => {
+  const cancel = vi.fn()
+  let pulls = 0
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({
+    pull(controller) { pulls++; controller.enqueue(new Uint8Array(32769)) },
+    cancel,
+  }))))
+  await expect(getWindowsDownload()).rejects.toThrow('下载信息无效')
+  expect(cancel).toHaveBeenCalledOnce()
+  expect(pulls).toBeLessThanOrEqual(2)
+})
+
 it('selects the exact Windows stable artifact, independently of Android latest', () => {
   expect(parseWindowsDownload(manifest()).version).toBe('1.0.0')
   expect(parseWindowsDownload(manifest('https://github.com/Xcy8010/chevoink/releases/download/windows-v1.0.0/Chevoink_1.0.0_x64-setup.exe')).url).toContain('windows-v1.0.0')

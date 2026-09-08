@@ -9,6 +9,7 @@ pub struct CloseState {
     nonce: Mutex<Option<String>>,
     pub allow: AtomicBool,
     pub downloads: AtomicUsize,
+    confirming: AtomicBool,
 }
 
 #[derive(serde::Deserialize)]
@@ -89,6 +90,9 @@ pub fn request_close(window: &WebviewWindow) {
 
 pub fn acknowledge(window: &WebviewWindow, report: SaveReport) -> Result<(), String> {
     let state = window.state::<CloseState>();
+    if state.confirming.load(Ordering::SeqCst) {
+        return Err("Native close confirmation is already open".into());
+    }
     let pending = state
         .nonce
         .lock()
@@ -106,6 +110,13 @@ pub fn acknowledge(window: &WebviewWindow, report: SaveReport) -> Result<(), Str
 }
 
 fn confirm_discard(window: &WebviewWindow, nonce: &str) {
+    if window
+        .state::<CloseState>()
+        .confirming
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
     let window = window.clone();
     let nonce = nonce.to_owned();
     std::thread::spawn(move || {
@@ -114,12 +125,19 @@ fn confirm_discard(window: &WebviewWindow, nonce: &str) {
             .set_buttons(rfd::MessageButtons::OkCancelCustom("留在窗口".into(), "放弃未保存内容并退出".into())).show();
         if answer == rfd::MessageDialogResult::Custom("放弃未保存内容并退出".into()) {
             finish(&window, &nonce);
-        } else if let Ok(mut pending) = window.state::<CloseState>().nonce.lock() {
-            if pending.as_deref() == Some(&nonce) {
-                *pending = None;
+        } else {
+            let state = window.state::<CloseState>();
+            if let Ok(mut pending) = state.nonce.lock() {
+                if pending.as_deref() == Some(&nonce) {
+                    *pending = None;
+                }
             }
             window.state::<crate::update::UpdateState>().clear_pending();
         }
+        window
+            .state::<CloseState>()
+            .confirming
+            .store(false, Ordering::SeqCst);
     });
 }
 

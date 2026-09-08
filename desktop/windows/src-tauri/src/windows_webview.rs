@@ -9,10 +9,7 @@ use webview2_com::{
     take_pwstr, Microsoft::Web::WebView2::Win32::*, NavigationCompletedEventHandler,
     NewWindowRequestedEventHandler, PermissionRequestedEventHandler, ProcessFailedEventHandler,
 };
-use windows::{
-    core::{Interface, HSTRING, PWSTR},
-    Win32::Foundation::BOOL,
-};
+use windows::core::{Interface, BOOL, HSTRING, PWSTR};
 
 /// Windows-specific permission/navigation/crash hooks are kept here, not in the web UI.
 pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
