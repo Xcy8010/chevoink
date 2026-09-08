@@ -45,7 +45,7 @@ export type CreditAccountSummary = {
 
 export type CreditLedgerItem = {
   /** Original settled price; never today's model configuration. */
-  pricing?: { version: 'credits-v2-itemized'; rateCardId: string; inputPerMillion: number; cachePerMillion: number; outputPerMillion: number } | null
+  pricing?: { version: 'credits-v2-itemized'; rateCardId: string; inputPerMillion: number; cachePerMillion: number; outputPerMillion: number; v1CeilingMultiplier?: number } | null
   id: string
   delta: number
   kind: string

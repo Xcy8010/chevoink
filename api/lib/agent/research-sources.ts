@@ -181,6 +181,12 @@ export async function reserveResearchRequest(scope: Scope & { callId: string }, 
     const previous = await tx.agentResearchRequest.findUnique({ where: { id } })
     if (previous) throw new DataAccessError(409, 'RESEARCH_REQUEST_ALREADY_RESERVED',
       '此联网调用已有执行记录，未重复请求。请使用已保存的来源或核对原调用结果。')
+    const recentReads = await tx.agentResearchRequest.findMany({ where: { scopeKey, kind: 'read', status: 'consumed' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 2, select: { savedOutcome: true } })
+    if (recentReads.length === 2 && recentReads.every(item => item.savedOutcome !== null
+      && typeof item.savedOutcome === 'object' && !Array.isArray(item.savedOutcome) && item.savedOutcome.ok === false)) {
+      throw new DataAccessError(429, 'RESEARCH_NO_PROGRESS', '连续两次页面读取失败，已停止本任务新增联网请求，不再收费重试。请使用已有证据说明限制；如需进一步研究，请用户提供可读取的官方链接或有权使用的文件。')
+    }
     const baselineId = hash(JSON.stringify([scopeKey, kind, 'baseline']))
     let baseline = await tx.agentResearchRequest.findUnique({ where: { id: baselineId } })
     if (!baseline) {
@@ -193,8 +199,10 @@ export async function reserveResearchRequest(scope: Scope & { callId: string }, 
           AND (${kind}='search' OR e.payload->'args'->>'contentRef' IS NULL)
           AND NOT (e.run_id=${scope.runId} AND e.payload->>'callId'=${scope.callId})`
       const units = Number(counts[0].units)
+      const spec = taskSpecSchema.safeParse(run.taskSpec)
+      const extended = spec.success && spec.data.researchBudget === 'extended'
       baseline = await tx.agentResearchRequest.create({ data: { id: baselineId, ownerRunId: scope.runId, scopeKey, kind,
-        units, requestKey: hash('legacy-baseline'), requestLimit: kind === 'search' ? 5 : 8, status: 'baseline' } })
+        units, requestKey: hash('legacy-baseline'), requestLimit: extended ? (kind === 'search' ? 5 : 8) : 2, status: 'baseline' } })
     }
     const used = await tx.agentResearchRequest.aggregate({ where: { scopeKey, kind, status: { not: 'released' } }, _sum: { units: true } })
     if ((used._sum.units ?? 0) >= baseline.requestLimit) return false
@@ -209,6 +217,17 @@ export async function settleResearchRequest(scope: Scope & { callId: string }, s
     const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
     const id = hash(JSON.stringify([scopeKey, scope.runId, scope.callId]))
     await tx.agentResearchRequest.updateMany({ where: { id, ownerRunId: scope.runId, scopeKey, status: 'reserved' }, data: { status } })
+  })
+}
+
+/** Persist the transport outcome for the task-scoped no-progress breaker. */
+export async function recordResearchReadOutcome(scope: Scope & { callId: string }, ok: boolean) {
+  return prisma.$transaction(async tx => {
+    const { taskKey } = await ownedTask(tx, scope)
+    const scopeKey = hash(JSON.stringify([scope.userId, scope.sessionId, scope.novelId, taskKey]))
+    const id = hash(JSON.stringify([scopeKey, scope.runId, scope.callId]))
+    await tx.agentResearchRequest.updateMany({ where: { id, scopeKey, kind: 'read', status: 'consumed', savedOutcome: { equals: Prisma.DbNull } },
+      data: { savedOutcome: { ok } } })
   })
 }
 

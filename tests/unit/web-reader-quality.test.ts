@@ -6,6 +6,9 @@ import { decodeWebPageBuffer } from '../../api/lib/html-extract.js'
 const body = '山谷里的村民清晨出发，沿着河岸查看新修的水渠。他们记录水位与天气，并讨论下一阶段的耕种计划。'
 
 describe('reader content quality without navigation false positives', () => {
+  it.each(['', '<!-- gateway response -->', '<script>window.location="/verify"</script>'])('handles rootless or script-only HTML without throwing: %s', html => {
+    expect(extractReaderHtml(html)).toMatchObject({ status: 'unreadable', code: 'WEB_READ_INSUFFICIENT', text: '' })
+  })
   it('returns actual bounded same-site chapter links without inventing URLs', () => {
     const html = '<a href="/about">关于</a><a href="http://127.0.0.1/private">私网</a><a href="javascript:alert(1)">脚本</a><a href="https://other.example/reader/1">其他站点</a>'
       + Array.from({ length: 12 }, (_, i) => `<a href="/reader/${100 + i}?page=2&amp;source=index">第${i + 1}章</a>`).join('')

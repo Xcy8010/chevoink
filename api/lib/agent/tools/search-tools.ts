@@ -14,7 +14,7 @@ import type { ToolContext } from './types.js'
 import { registerResearchSource, registerResearchSources, resolveResearchSource, saveResearchContent, readResearchContent,
   findResearchSource, getResearchReadFailure, recordResearchReadFailure,
   assertResearchUrlProvenance, findSavedResearchContent,
-  reserveResearchRequest, settleResearchRequest, recordResearchWindow,
+  reserveResearchRequest, settleResearchRequest, recordResearchWindow, recordResearchReadOutcome,
   findResearchSearchOutcome, saveResearchSearchOutcome,
   researchReportSaveParameters, saveResearchReportSection, readResearchReport } from '../research-sources.js'
 
@@ -77,7 +77,7 @@ export const webSearchTool = defineTool({
   name: 'web_search',
   title: '联网搜索',
   description:
-    '当作者明确要求联网搜索/查资料，或任务涉及记忆与章节知识无法覆盖的外部事实（真实人物事件、专业术语、行业数据、时事）时，用本工具获取实时信息；作品内部设定、角色、伏笔等问题用 memory_search，不要用本工具。返回的是摘要；若摘要不足以回答问题，用 web_read 深读最相关的 1-2 个链接原文后再作答。引用搜索结果时在回复中注明来源。一次任务最多搜索 5 次。',
+    '当作者明确要求联网搜索/查资料或需要核对外部事实时使用；作品内部设定用memory_search。普通任务最多2次搜索，明确深度研究最多5次，以本轮冻结预算为准。先定位官方作品页并核对书名、作者；摘要不足再用web_read读最相关1-2个来源。不要为了耗尽预算扩展销量、影视化等未要求的话题；失败、无新证据或预算用尽后停止联网并说明缺失。',
   parameters: webSearchParameters,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
@@ -104,7 +104,7 @@ export const webSearchTool = defineTool({
     if (!cached && !await reserveResearchRequest(ctx, 'search', cacheKey)) {
       return {
         output:
-          '本次任务的联网搜索次数已用完（每次任务最多 5 次）。保留已有来源，说明未获得的证据及剩余工作；可以解释分析方法，但不能凭既有知识补造目标书的情节、人物或引用。',
+          '本次任务的联网搜索预算已用完，本次未请求、未收费。普通任务最多2次，明确深度研究最多5次；继续运行不会重置预算。保留已有来源并交付有证据支持的分析，说明缺失；不要反复调用、扩大话题或凭既有知识补造目标书情节。',
         outcome: 'failed',
         summary: '搜索预算已用尽',
       }
@@ -247,7 +247,7 @@ export const webReadTool = defineTool({
   name: 'web_read',
   title: '网页深读',
   description:
-    '读取公开网页并核验正文质量，保存正文版本，单次返回最多6000字符；后续用contentRef、revision和offset续读保存版本，不重复获取网页或消耗获取额度。遇到登录/付费/验证码/拒绝访问、缺失或乱码时明确失败，不代表已读全文；仅公开JS空壳可使用已配置的托管Reader。一次任务最多获取8个页面；不能据此宣称读完整本书。',
+    '读取公开网页并核验质量，单次返回最多6000字符；用contentRef、revision、offset续读缓存，不重复获取或收费。普通任务最多获取2页，明确深度研究最多8页；连续两次失败即停止新增联网。官方作品页是简介/目录，不是章节正文；书评和新闻也不是原著。仅沿真实链接读取，不猜地址；登录、付费、验证、乱码时如实停止，不得声称读完。',
   parameters: webReadParameters,
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: true,
@@ -285,6 +285,7 @@ export const webReadTool = defineTool({
     }
     await settleResearchRequest(ctx, 'consumed')
     const result = await readPublicWebPage(source.canonicalUrl, ctx.signal)
+    await recordResearchReadOutcome(ctx, result.status === 'ok')
     ctx.signal.throwIfAborted()
     if (result.status !== 'ok') {
       await recordResearchReadFailure(ctx, source.id, result)

@@ -62,6 +62,8 @@ export const taskSpecSchema = z.object({
   id: z.string().min(1),
   runId: z.string().min(1).optional(),
   intent: taskIntentSchema,
+  /** Frozen from the original request, never selected by a search tool. */
+  researchBudget: z.enum(['standard', 'extended']).optional(),
   scope: taskScopeSchema,
   /** Additive migration: missing means legacy/unmigrated, never implicit consent. */
   authorization: taskAuthorizationSchema.optional(),

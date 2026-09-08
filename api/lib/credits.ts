@@ -193,14 +193,14 @@ async function listPublicModelOptions(): Promise<CreditModelOption[]> {
   const activePrices = await getActiveTokenPrices([...BUILT_IN_MODEL_TIERS])
   if (configs.length === 0) return MODEL_FALLBACKS.map(item => {
     const price = activePrices.get(item.tier)
-    return { ...item, pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null }
+    return { ...item, pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates, v1CeilingBps: price.v1CeilingBps }).pricing : null }
   })
   return configs.flatMap((item) => {
     if (!item.tier || !['lite', 'speed', 'standard', 'performance', 'ultimate'].includes(item.tier)) return []
     const capabilities = parseModelCapabilities(item.metadata, item.provider)
     const price = activePrices.get(item.tier)
     return [{
-      pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null,
+      pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates, v1CeilingBps: price.v1CeilingBps }).pricing : null,
       tier: item.tier as CreditModelOption['tier'],
       label: item.displayName,
       multiplier: item.multiplierBps / 10000,
@@ -943,9 +943,10 @@ export async function consumeTokenCredits(input: {
         return { chargedMilli: 0, remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
           exhausted: false, pendingUsage: true }
       }
-      amountMilli = validateBillingInput(() => calculateV2ChargeMilli(usage.requestTokens!, usage.responseTokens!, usage.promptCacheHitTokens, frozen.rates))
+      amountMilli = validateBillingInput(() => calculateV2ChargeMilli(usage.requestTokens!, usage.responseTokens!, usage.promptCacheHitTokens, frozen.rates, frozen.v1CeilingBps))
       metadata = { pricingVersion: frozen.version, rateCardId: frozen.rateCardId, rates: frozen.rates,
-        cacheHitTokens: usage.promptCacheHitTokens, cacheMissTokens: usage.promptCacheMissTokens }
+        cacheHitTokens: usage.promptCacheHitTokens, cacheMissTokens: usage.promptCacheMissTokens,
+        ...(frozen.v1CeilingBps !== undefined ? { v1CeilingBps: frozen.v1CeilingBps } : {}) }
     } else {
       if (frozen && frozen.multiplierBps !== multiplierBps) throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用倍率与用量记录不一致。')
       amountMilli = calculateTokenChargeMilli(input.requestTokens, input.responseTokens, multiplierBps)

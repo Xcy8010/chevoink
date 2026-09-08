@@ -6,6 +6,17 @@ const MAX_DB_INT = 2_147_483_647
 
 describe('V2 itemized integer pricing', () => {
   const rates = { inputNano: 100000, cacheNano: 20000, outputNano: 1000000 }
+  it('caps the discounted sum at the frozen V1 charge, including output-heavy requests', () => {
+    const quarter = { inputNano: 110000, cacheNano: 27500, outputNano: 1100000 }
+    expect(calculateV2ChargeMilli(10000, 1000, 0, quarter, 11000)).toBe(1100)
+    expect(calculateV2ChargeMilli(10000, 0, 10000, quarter, 11000)).toBe(275)
+    expect(calculateV2ChargeMilli(10000, 5000, 10000, quarter, 11000)).toBe(5500)
+    expect(() => calculateV2ChargeMilli(100, 0, null, quarter, 11000)).toThrow(BillingCacheUsageRequired)
+    for (let i = 0; i < 1000; i++) {
+      const p = i * 103, o = i % 43, hit = Math.floor(p * (i % 11) / 10)
+      expect(calculateV2ChargeMilli(p, o, hit, quarter, 11000)).toBeLessThanOrEqual(calculateTokenChargeMilli(p, o, 11000))
+    }
+  })
   it('sums input/cache/output once, with no second tier multiplier', () => {
     expect(calculateV2ChargeMilli(10000, 1000, 5000, rates)).toBe(1600)
     expect(calculateV2ChargeMilli(10000, 1000, 0, rates)).toBe(2000)

@@ -7,6 +7,7 @@ export const itemizedRatesSchema = z.object({ inputNano: z.number().int().positi
   cacheNano: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), outputNano: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict()
   .refine(value => value.cacheNano <= value.inputNano)
 export const itemizedTokenPriceSchema = z.object({ version: z.literal(V2_PRICING_VERSION), modelTier: z.enum(SERVER_MODEL_TIERS),
-  multiplierBps: multiplier, rateCardId: z.string().min(1).max(64), rates: itemizedRatesSchema }).strict()
+  multiplierBps: multiplier, rateCardId: z.string().min(1).max(64), rates: itemizedRatesSchema,
+  v1CeilingBps: multiplier.optional() }).strict()
 export const tokenPriceSchema = z.union([z.object({ version: z.literal(V1_PRICING_VERSION), modelTier: z.enum(SERVER_MODEL_TIERS), multiplierBps: multiplier }).strict(), itemizedTokenPriceSchema])
 export type TokenPrice = z.infer<typeof tokenPriceSchema>

@@ -37,6 +37,7 @@ function LedgerRow({ item, onTask }: { item: CreditLedgerItem; onTask?: (runId: 
         {item.pricing && <p className="mt-1 break-words text-xs leading-5 text-[var(--text-tertiary)]">
           分项计费 · 输入 {item.pricing.inputPerMillion} / 缓存 {item.pricing.cachePerMillion} / 输出 {item.pricing.outputPerMillion} Credits/百万 Token
           <span className="block">按本次费率版本结算，已含档位倍率</span>
+          {item.pricing.v1CeilingMultiplier !== undefined && <span className="block">单次费用不超过原V1价格（冻结倍率 {item.pricing.v1CeilingMultiplier}）</span>}
         </p>}
       </div>
       <span className={`text-sm font-medium tabular-nums ${positive ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--text-primary)]'}`}>
@@ -141,6 +142,7 @@ export default function AccountUsagePage() {
           {summary.models.some(model => model.pricing) && <section className="mt-6 rounded-[16px] border border-[var(--border-subtle)] p-5" aria-label="当前分项费率">
             <h2 className="text-sm font-semibold">当前分项费率</h2>
             <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">单位为 Credits / 百万 Token，已含档位倍率。按非缓存输入、缓存输入和输出分别计算，每次调用合计后向上取整至 0.001 Credit；历史调用按原费率结算。</p>
+            {summary.models.some(model => model.pricing?.v1CeilingMultiplier !== undefined) && <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">缓存折扣档位：缓存输入按普通输入的25%计价，单次费用不超过该次调用冻结的原V1价格。供应商未返回完整用量时暂不结算，待核实后按原快照处理；联网搜索仍为每次2 Credits，缓存复用不重复收费。</p>}
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-xs tabular-nums">
                 <thead><tr>{['档位', '输入', '缓存输入', '输出'].map(label => <th key={label} className="px-2 py-2 font-medium">{label}</th>)}</tr></thead>

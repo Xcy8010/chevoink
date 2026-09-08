@@ -87,6 +87,8 @@ Version 2.0 · 2026-09-08. Applies to fixes, optimization, refactoring and new f
 
 ## 8. Testing and release
 
+An explicitly approved discount-only release may waive the shadow wait, but must record a distinct approval, never fabricated seven-day evidence. The exception is limited to verified quarter-price cached input with a frozen V1 ceiling, replay hash, quality verification, notice and superadmin authorization. Other price changes retain the original gate.
+
 Four gates: `npm run check` → `npm run lint` → `npx vitest run --coverage` → `npm run build`. CI additionally runs Agent eval and production/full dependency audits.
 
 - Use pinned Node/npm and npm ci; do not upgrade the lockfile while validating.

@@ -4,7 +4,7 @@ import { prisma } from '../../api/lib/prisma.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { canonicalResearchUrl, registerResearchSource, resolveResearchSource, saveResearchContent, readResearchContent,
   findResearchSource, getResearchReadFailure, recordResearchReadFailure,
-  reserveResearchRequest, settleResearchRequest, recordResearchWindow,
+  reserveResearchRequest, settleResearchRequest, recordResearchWindow, recordResearchReadOutcome,
   findResearchSearchOutcome, saveResearchSearchOutcome,
   saveResearchReportSection, readResearchReport, readResearchReportForDelivery, assertResearchUrlProvenance, findSavedResearchContent } from '../../api/lib/agent/research-sources.js'
 import { assessReaderText } from '../../api/lib/web-reader-quality.js'
@@ -14,6 +14,45 @@ const available = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handle
 afterAll(async () => { await prisma.$disconnect() })
 
 describe.skipIf(!available)('J4 private versioned research sources', () => {
+  it('freezes small research budgets, stops consecutive failures across resume, and isolates the next task', async () => {
+    const user = await prisma.user.create({ data: { nickname: 'budget-fixture', passwordHash: 'test-only' } })
+    try {
+      const novel = await prisma.novel.create({ data: { authorId: user.id, title: '预算', slug: randomUUID(), summary: '' } })
+      const session = await prisma.agentSession.create({ data: { userId: user.id, novelId: novel.id, title: '预算' } })
+      const id = randomUUID()
+      const spec = buildTaskSpec({ runId: id, novelId: novel.id, prompt: '分析番茄小说上的某本书' })
+      expect(spec.researchBudget).toBe('standard')
+      const base = { userId: user.id, novelId: novel.id, sessionId: session.id, mode: 'act' as const,
+        action: 'workspaceAgent' as const, agentType: 'writingOrchestrator' as const, status: 'running' as const }
+      await prisma.agentRun.create({ data: { ...base, id, taskSpec: JSON.parse(JSON.stringify(spec)) } })
+      const scope = { ...base, runId: id }
+      for (let i = 0; i < 2; i++) {
+        const call = { ...scope, callId: randomUUID() }
+        expect(await reserveResearchRequest(call, 'search', `query-${i}`)).toBe(true)
+        await settleResearchRequest(call, 'consumed')
+      }
+      expect(await reserveResearchRequest({ ...scope, callId: randomUUID() }, 'search', 'third')).toBe(false)
+      for (let i = 0; i < 2; i++) {
+        const call = { ...scope, callId: randomUUID() }
+        expect(await reserveResearchRequest(call, 'read', `page-${i}`)).toBe(true)
+        await settleResearchRequest(call, 'consumed')
+        await recordResearchReadOutcome(call, false)
+        await recordResearchReadOutcome(call, true) // replay cannot rewrite failure
+      }
+      const resumedId = randomUUID()
+      await prisma.agentRun.create({ data: { ...base, id: resumedId, taskSpec: JSON.parse(JSON.stringify({ ...spec, runId: resumedId })) } })
+      await expect(reserveResearchRequest({ ...scope, runId: resumedId, callId: randomUUID() }, 'search', 'new-query'))
+        .rejects.toMatchObject({ code: 'RESEARCH_NO_PROGRESS' })
+      const nextId = randomUUID()
+      await prisma.agentRun.create({ data: { ...base, id: nextId, taskSpec: JSON.parse(JSON.stringify(buildTaskSpec({ runId: nextId, novelId: novel.id, prompt: '深度研究下一本书' }))) } })
+      expect(await reserveResearchRequest({ ...scope, runId: nextId, callId: randomUUID() }, 'search', 'new-task')).toBe(true)
+    } finally {
+      await prisma.agentRun.deleteMany({ where: { userId: user.id } })
+      await prisma.agentSession.deleteMany({ where: { userId: user.id } })
+      await prisma.novel.deleteMany({ where: { authorId: user.id } })
+      await prisma.user.delete({ where: { id: user.id } })
+    }
+  })
   it('recovers report sections in the same task, rejects stale/foreign writes, and stops without modifying creative content', async () => {
     const user = await prisma.user.create({ data: { nickname: 'report-fixture', passwordHash: 'test-only' } })
     try {

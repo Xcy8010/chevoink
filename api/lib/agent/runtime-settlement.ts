@@ -66,7 +66,7 @@ export async function settleProviderOperation(input: { userId: string; attemptId
     try {
       amountMilli = frozenPrice.version === V1_PRICING_VERSION
         ? calculateV1ChargeMilli(usage.promptTokens, usage.completionTokens, frozenPrice.multiplierBps)
-        : calculateV2ChargeMilli(usage.promptTokens, usage.completionTokens, usage.cacheHitTokens, frozenPrice.rates)
+        : calculateV2ChargeMilli(usage.promptTokens, usage.completionTokens, usage.cacheHitTokens, frozenPrice.rates, frozenPrice.v1CeilingBps)
     } catch (error) {
       if (error instanceof BillingCacheUsageRequired) return { status: 'pending' as const, reason: 'cache_usage_not_confirmed' as const }
       throw error
@@ -88,7 +88,8 @@ export async function settleProviderOperation(input: { userId: string; attemptId
       requestTokens: usage.promptTokens, responseTokens: usage.completionTokens,
       allowPartialOnExhaustion: true,
       metadata: { pricingVersion: frozenPrice.version, taskRootId: operation.taskRootId, operationId: operation.id,
-        ...(frozenPrice.version === V2_PRICING_VERSION ? { rateCardId: frozenPrice.rateCardId, rates: frozenPrice.rates, cacheHitTokens: usage.cacheHitTokens, cacheMissTokens: usage.cacheMissTokens } : {}),
+        ...(frozenPrice.version === V2_PRICING_VERSION ? { rateCardId: frozenPrice.rateCardId, rates: frozenPrice.rates, cacheHitTokens: usage.cacheHitTokens, cacheMissTokens: usage.cacheMissTokens,
+          ...(frozenPrice.v1CeilingBps !== undefined ? { v1CeilingBps: frozenPrice.v1CeilingBps } : {}) } : {}),
         attemptId: attempt.id, requestHash: attempt.requestHash, usageRevision: usage.revision, observationHash: usage.observationHash },
     })
     const payload = { operationId: operation.id, attemptId: attempt.id, pricingVersion: frozenPrice.version,

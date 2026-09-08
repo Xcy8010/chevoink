@@ -55,6 +55,9 @@ export function assessReaderText(text: string, title = ''): ReaderQualityResult 
 
 export function extractReaderHtml(html: string, useReadability = true): ReaderQualityResult {
   const { document } = parseHTML(html)
+  // Empty/script-only/error fragments can have no root. linkedom's body getter
+  // throws in that case; such a response is unreadable, not a parser crash.
+  if (!document.documentElement) return assessReaderText('')
   const title = (document.querySelector('title')?.textContent ?? document.querySelector('h1')?.textContent ?? '').trim().slice(0, 300)
   if (document.querySelectorAll('*').length > 20000) return { ...assessReaderText('', title), status: 'unreadable', code: 'WEB_READ_COMPLEX_DOCUMENT' }
   // Do not strip explicit access/error gates before checking them.
@@ -64,7 +67,7 @@ export function extractReaderHtml(html: string, useReadability = true): ReaderQu
   for (const node of document.querySelectorAll('script,style,noscript,svg,nav,footer,aside,form,button,[hidden],[aria-hidden="true"]')) node.remove()
   for (const node of document.querySelectorAll('br')) node.replaceWith(document.createTextNode('\n'))
   for (const node of document.querySelectorAll('p,h1,h2,h3,h4,li,blockquote')) node.appendChild(document.createTextNode('\n\n'))
-  const candidate = document.querySelector('article,[role="main"],main') ?? document.body
+  const candidate = document.querySelector('article,[role="main"],main') ?? document.querySelector('body') ?? document.documentElement
   let text = candidate?.textContent ?? ''
   if (!text.trim()) text = document.documentElement?.textContent ?? ''
   if (useReadability) {

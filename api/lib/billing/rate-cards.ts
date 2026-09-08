@@ -14,6 +14,10 @@ export const rateCardEvidenceSchema = z.object({ note: z.string().trim().min(1).
   allGroupsReviewed: z.literal(true).optional(),
   qualityPassed: z.literal(true).optional(),
   publicNoticeRef: z.string().trim().min(1).max(512).optional(),
+  /** Explicit owner-approved discount release, not a simulated seven-day shadow. */
+  discountApproval: z.object({ approvalRef: z.string().trim().min(1).max(512),
+    waiveShadowPeriod: z.literal(true), replaySamples: z.number().int().positive(),
+    maximumIncreaseMilli: z.literal(0) }).strict().optional(),
 }).strict()
 
 async function assertAdmin(tx: RuntimeTx, actorId: string, mutation = true) {
@@ -53,14 +57,24 @@ export async function transitionRateCard(actorId: string, input: { id: string; e
   const expected = z.number().int().nonnegative().parse(input.expectedRevision)
   const next = statusSchema.parse(input.status)
   const evidence = rateCardEvidenceSchema.parse(input.evidence)
-  if (next === 'approved' && (!evidence.reportHash || evidence.shadowDays === undefined || evidence.totalFeeDeviationPercent === undefined
+  if (next === 'approved' && !evidence.discountApproval && (!evidence.reportHash || evidence.shadowDays === undefined || evidence.totalFeeDeviationPercent === undefined
     || evidence.userTaskP95AbsoluteDeviationPercent === undefined || evidence.cashCostIncreasePercent === undefined || !evidence.allGroupsReviewed || !evidence.qualityPassed)) throw new DataAccessError(409, 'CREDIT_RATE_REVIEW_REQUIRED', '批准前必须记录影子、分组费用、质量与现金成本评审证据。')
   if (next === 'active' && !evidence.publicNoticeRef) throw new DataAccessError(409, 'CREDIT_RATE_NOTICE_REQUIRED', '生效前必须记录对外费率说明。')
   return runtimeTransaction(async tx => {
     await assertAdmin(tx, actorId)
     await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext('credit-rate-card-lifecycle'))`
     const card = await tx.creditRateCard.findUniqueOrThrow({ where: { id } })
-    checkedPrice(card)
+    const price = checkedPrice(card)
+    if (next === 'approved' && evidence.discountApproval) {
+      const config = await tx.aiModelConfig.findFirst({ where: { ownerUserId: null, tier: card.modelTier }, select: { multiplierBps: true } })
+      const bps = config?.multiplierBps
+      if (!evidence.reportHash || !evidence.qualityPassed || bps === undefined || bps <= 0
+        || price.multiplierBps !== bps || price.v1CeilingBps !== bps
+        || price.rates.inputNano !== bps * 10 || price.rates.outputNano !== bps * 100
+        || price.rates.cacheNano * 4 !== price.rates.inputNano) {
+        throw new DataAccessError(409, 'CREDIT_RATE_DISCOUNT_INVALID', '快速折扣发布仅允许已核对当前倍率的25%缓存价格、V1封顶、回放报告与明确批准。')
+      }
+    }
     if (card.revision === expected + 1 && card.status === next) {
       const event = await tx.creditRateCardEvent.findUnique({ where: { rateCardId_revision: { rateCardId: id, revision: card.revision } } })
       if (event?.actorId === actorId && runtimeJson(event.evidence).hash === runtimeJson(evidence).hash) return card

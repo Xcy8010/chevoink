@@ -51,7 +51,7 @@ StudioWorkspace and AgentPanel remain substantial orchestration components. Deco
 
 ### 3.1 Production V1
 
-Read-only verification on 2026-09-08 found no active V2 rate cards. Current pricing is `credits-v1-exact`.
+The pre-discount baseline on 2026-09-08 used `credits-v1-exact`; historical operations retain this price. The approved V2 release below is enabled through audited active rate cards.
 
 P = confirmed prompt tokens; O = confirmed completion tokens; m = the operation's frozen tier multiplier.
 
@@ -73,7 +73,7 @@ Production selectable multiplier snapshot: Speed **1.1**, Standard **1.0**, Perf
 
 Sources: `api/lib/billing/pricing.ts`, `credits.ts`, `billing/token-price.ts`, `ai-service.ts`.
 
-### 3.2 V2 implementation is not price activation
+### 3.2 Cache-discount V2 and an explicitly approved release exception
 
 ```text
 U = P − H                       # confirmed cache-hit tokens H
@@ -83,7 +83,13 @@ wallet milli = ceil(N / 1,000,000)
 
 Rates are nano-Credits per token and **already include tier/calibration**. Do not multiply again. Unknown cache usage requires reconciliation when cache/input rates differ; equal rates permit calculation from total input. Rate-card lifecycle: draft → shadow → approved → active, with immutable hashes and events.
 
-Offline replay: `npx tsx scripts/audit-credit-pricing.ts <replay.json>`. It consumes de-identified confirmed usage and a frozen candidate; it does not access wallets, charge, fit or approve rates. Activation still requires 7–14 days of shadow evidence, grouped fee impact, cash costs, quality, public notice and separate approval. Otherwise retain V1.
+Offline replay: `npx tsx scripts/audit-credit-pricing.ts <replay.json>`. It consumes de-identified confirmed usage and a frozen candidate; it does not access wallets, charge, fit or approve rates.
+
+On 2026-09-08 the owner approved quarter-price cached input, unchanged ordinary input/output rates, and a frozen `v1CeilingBps`: charge the smaller of itemized and original V1 amounts. The owner waived the seven-day wait after verification. This exception requires the exact discount, verified configured multipliers, cap, replay hash, quality validation, approval reference, superadmin and public notice. This is not seven-day shadow evidence or lower provider cash costs; other price changes retain the original gate.
+
+Usage/ledger views expose frozen rates and cap. Unknown cache remains pending, never zero. Historical snapshots remain unchanged. After activation, do not roll back to an application that cannot parse the cap; use a forward fix or an explicitly compatible pricing/protocol rollback.
+
+Offline replay cutoff: 2026-09-08 15:40 UTC. Of 6,570 observations, only 51 Speed requests had complete confirmed receipts: V1 446.341 versus capped V2 284.069 Credits, maximum per-request increase 0. The other 6,519 lacked historical confirmation/cache fields and were excluded. No historical charges were modified; do not extrapolate to other tiers or provider cash costs. Report hash: `0670d947df573eb9228f7c446e7a3b4f7d8995145c4a5d6c756c5e374c1e221b`.
 
 ## 4. Token and latency work
 
@@ -95,7 +101,7 @@ Offline replay: `npx tsx scripts/audit-credit-pricing.ts <replay.json>`. It cons
 | Durable text/link lists with cursors | Re-fetching the same source/catalog | Read coverage is not completed chapter analysis |
 | Failed attempts, negative cache, Retry-After | Blind retries against unavailable/restricted sources | Restrictions remain; metadata is not full text |
 | Deterministic receipts/context reduction | Repeated old tool payloads in context | Preserve goals, constraints, recent tool pairs and retrieval references |
-| Original task-root budgets and deduplicated read progress | Budget resets on retries; premature completion without todo | Default external attempts remain search 5 / deep-read 8; full-book policy unfinished |
+| Original task-root budgets and deduplicated read progress | Budget resets on retries; premature completion without todo | New standard tasks: search 2 / fetch 2; explicitly deep research: 5 / 8. Two consecutive read failures stop new network work; cached paging spends no fetch quota. Full-book policy remains unfinished |
 | Operation receipts, idempotency and refund intent | Duplicate charges and lost cancellation refunds | Some unknown-usage reconciliation remains unfinished |
 
 Fault tests establish control-flow invariants. There is **no published matched before/after experiment** for identical tasks, models and budgets, so no verified percentage Token saving, P95 improvement or cash-cost reduction is claimed. Model quality, chapter length and quality gates were not lowered to manufacture savings.
@@ -103,6 +109,8 @@ Fault tests establish control-flow invariants. There is **no published matched b
 ## 5. Verification and performance snapshot
 
 Revision `71f7adc`, isolated remote PostgreSQL 16 with least-privileged role and Node 22.23.2; no rewriting production author content for tests.
+
+The cache-discount/reader batch passed all four pre-release gates: 161 files, 1,894 tests; global lines/statements 33.65%, branches 76.08%, functions 55.80%. The table below retains the preceding release baseline. Deployment still requires successful CI for the exact commit; pre-release verification is not a deployment claim.
 
 | Measure | Result |
 | --- | --- |

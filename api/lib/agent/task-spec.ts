@@ -110,6 +110,7 @@ export function buildTaskSpec(input: {
     id: randomUUID(),
     runId: input.runId,
     intent,
+    researchBudget: /完整拆书|全书拆解|逐章分析|逐章拆解|深度研究|全面研究|深入研究|深入分析|深度分析|拆解这本小说|拆解整本|full.book|deep research/i.test(input.prompt) ? 'extended' : 'standard',
     scope: { novelId: input.novelId, chapterIds, selection },
     goals: [input.prompt.trim().slice(0, 1000) || '继续完成上一轮任务'],
     hardConstraints: directives
@@ -140,7 +141,8 @@ export function buildTaskSpec(input: {
 
 export function renderTaskSpec(spec: TaskSpec): string {
   if (spec.intent === 'research_analysis') {
-    return `[系统] 本轮只读研究契约（taskSpecId=${spec.id}）：\n目标：${spec.goals.join('；')}\n只读取资料并交付分析；不得创建或改写章节、卷、作品、记忆、封面或派生写作窗口，历史写作指令不构成本轮授权。正文不可读或覆盖不足必须说明缺失，不能虚称全书读完。按照用户要求完整输出报告，不套用写作任务的简短收尾规则。复杂任务可维护本轮真实待办，无待办不补建已完成清单。\n预期交付：${spec.expectedOutputs.map(item => item.description).join('；')}。`
+    const budget = spec.researchBudget === 'extended' ? '最多5次搜索、8次页面获取' : '最多2次搜索、2次页面获取'
+    return `[系统] 本轮只读研究契约（taskSpecId=${spec.id}）：\n目标：${spec.goals.join('；')}\n只读取资料并交付分析；不得创建或改写章节、卷、作品、记忆、封面或派生写作窗口，历史写作指令不构成本轮授权。正文不可读或覆盖不足必须说明缺失，不能虚称全书读完。按照用户要求完整输出报告，不套用写作任务的简短收尾规则。复杂任务可维护本轮真实待办，无待办不补建已完成清单。\n联网预算：${budget}，缓存续读不消耗获取额度；连续两次读取失败后停止新增联网，保留已有证据并说明限制。普通分析不自行扩展到影视化、销量或结局争议。用户指定外部平台作品时直接搜索官方来源，不先搜索本平台作品库。优先官方作品页，再沿真实章节链接读取；书评、新闻、简介只能作为对应类型的资料，不是原著正文。\n预期交付：${spec.expectedOutputs.map(item => item.description).join('；')}。`
   }
   const hard = spec.hardConstraints.map((item) => `- ${item.text}`).join('\n') || '- 无'
   const freedomLabel = spec.creativeFreedom === 'stable' ? '平衡延续' : spec.creativeFreedom === 'bold' ? '大胆探索' : '严谨创作'

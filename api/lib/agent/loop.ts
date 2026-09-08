@@ -461,9 +461,15 @@ export async function handleToolCall(
   } catch (error) {
     if (ctx.signal.aborted) return fail('已中断', '用户已请求暂停，停止后续执行；已保存内容保留。', 'failed')
     if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
-    if (error instanceof DataAccessError && error.code.startsWith('WEB_READ_')) {
+    if (error instanceof DataAccessError && (error.code.startsWith('WEB_READ_') || error.code === 'RESEARCH_NO_PROGRESS')) {
       // Access/quality refusals are not successful reads or permission to bypass the gate.
-      return fail('网页读取未完成', error.message, 'failed')
+      const labels: Record<string, string> = {
+        WEB_READ_BLOCKED: '网站要求验证或限制访问', WEB_READ_NOT_FOUND: '页面不存在或已删除',
+        WEB_READ_INSUFFICIENT: '未取得足够可读内容', WEB_READ_GARBLED: '正文乱码，无法可靠读取',
+        WEB_READ_BUDGET: '页面获取预算已用尽', RESEARCH_NO_PROGRESS: '连续读取失败，已停止联网',
+        WEB_READ_RATE_LIMITED: '网站限流，请稍后重试', WEB_READ_PARSE_ERROR: '页面结构解析失败',
+      }
+      return fail(labels[error.code] ?? '网页读取未完成', error.message, 'failed')
     }
     // 错误即观察：不中断 run，把错误回填给模型自行重试或换路
     const message = error instanceof Error ? error.message : String(error)

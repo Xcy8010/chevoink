@@ -8,7 +8,7 @@ export type PricingReplaySample = {
 
 /** Replays the same confirmed usage against a frozen candidate. Never reads a
  * wallet, clips to balances, fits a price to validation data, or writes a charge. */
-export function evaluatePricingReplay(samples: PricingReplaySample[], rates: Record<string, ItemizedTokenRates>) {
+export function evaluatePricingReplay(samples: PricingReplaySample[], rates: Record<string, ItemizedTokenRates>, ceilings: Record<string, number> = {}) {
   const groups = new Map<string, { kind: 'user' | 'task' | 'tier'; oldMilli: number; newMilli: number }>()
   let invalidSamples = 0, oldMilli = 0, newMilli = 0
   for (const sample of samples) {
@@ -16,7 +16,7 @@ export function evaluatePricingReplay(samples: PricingReplaySample[], rates: Rec
       if (!sample.userKey || !sample.taskKey || sample.promptTokens === null || sample.completionTokens === null
         || !Object.prototype.hasOwnProperty.call(rates, sample.modelTier)) throw new Error('Unconfirmed sample')
       const oldAmount = calculateV1ChargeMilli(sample.promptTokens, sample.completionTokens, sample.multiplierBps)
-      const newAmount = calculateV2ChargeMilli(sample.promptTokens, sample.completionTokens, sample.cacheHitTokens, rates[sample.modelTier])
+      const newAmount = calculateV2ChargeMilli(sample.promptTokens, sample.completionTokens, sample.cacheHitTokens, rates[sample.modelTier], ceilings[sample.modelTier])
       if (!Number.isSafeInteger(oldMilli + oldAmount) || !Number.isSafeInteger(newMilli + newAmount)) throw new Error('Unsafe total')
       oldMilli += oldAmount; newMilli += newAmount
       for (const [kind, key] of [['user', sample.userKey], ['task', JSON.stringify([sample.userKey, sample.taskKey])], ['tier', sample.modelTier]] as const) {

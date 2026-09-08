@@ -130,6 +130,12 @@ export async function readPublicWebPage(value: string, signal: AbortSignal): Pro
       acceptedContentTypes: ['text/html', 'application/xhtml+xml', 'text/plain', 'application/json', 'application/xml', 'text/xml'],
     })
     finalUrl = page.finalUrl
+    // A successful HTTP redirect to a known challenge endpoint is not an
+    // article. Never send this access gate to a hosted reader as a JS shell.
+    const destination = new URL(finalUrl)
+    if (destination.hostname === 'sec.douban.com' && /^\/c(?:\/|$)/.test(destination.pathname)) {
+      return failure('WEB_READ_BLOCKED', finalUrl, 'blocked')
+    }
     const isJson = page.contentType.split(';')[0].trim() === 'application/json'
     const raw = decodeWebPageBuffer(page.bytes, page.contentType)
     let outcome: ReaderQualityResult

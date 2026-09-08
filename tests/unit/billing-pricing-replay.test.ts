@@ -7,6 +7,11 @@ const sample = (promptTokens: number, completionTokens: number): PricingReplaySa
 const rates = { speed: { inputNano: 100000, cacheNano: 100000, outputNano: 1000000 } }
 
 describe('frozen candidate fee distribution', () => {
+  it('replays the explicit price ceiling but never interprets a discount as automatic approval', () => {
+    const report = evaluatePricingReplay([{ ...sample(10000, 1000), cacheHitTokens: 0 }],
+      { speed: { inputNano: 100000, cacheNano: 25000, outputNano: 1000000 } }, { speed: 10000 })
+    expect(report).toMatchObject({ oldMilli: 1000, newMilli: 1000, activationApproved: false })
+  })
   it('does not approve activation from an equal-total replay', () => {
     const report = evaluatePricingReplay([sample(10000, 0)], rates)
     expect(report).toMatchObject({ oldMilli: 1000, newMilli: 1000, feeDistributionWithinLimits: true, activationApproved: false })

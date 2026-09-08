@@ -42,7 +42,7 @@ export function assertItemizedRates(rates: ItemizedTokenRates): void {
 
 /** Plan30 §13.8.2/4: sum exact nano amounts, round once to wallet milli.
  * Missing cache is computable only for equal input/cache rates (d=1). */
-export function calculateV2ChargeMilli(promptTokens: number, completionTokens: number, cacheHitTokens: number | null, rates: ItemizedTokenRates): number {
+export function calculateV2ChargeMilli(promptTokens: number, completionTokens: number, cacheHitTokens: number | null, rates: ItemizedTokenRates, v1CeilingBps?: number): number {
   assertCreditInteger(promptTokens)
   assertCreditInteger(completionTokens)
   assertItemizedRates(rates)
@@ -52,7 +52,11 @@ export function calculateV2ChargeMilli(promptTokens: number, completionTokens: n
   } else if (promptTokens !== 0 && rates.inputNano !== rates.cacheNano) throw new BillingCacheUsageRequired()
   const hit = BigInt(cacheHitTokens ?? 0)
   const nano = (BigInt(promptTokens) - hit) * BigInt(rates.inputNano) + hit * BigInt(rates.cacheNano) + BigInt(completionTokens) * BigInt(rates.outputNano)
-  const milli = (nano + 999999n) / 1000000n
+  let milli = (nano + 999999n) / 1000000n
+  if (v1CeilingBps !== undefined) {
+    const ceiling = BigInt(calculateV1ChargeMilli(promptTokens, completionTokens, v1CeilingBps))
+    if (milli > ceiling) milli = ceiling
+  }
   if (milli > BigInt(MAX_CREDIT_STORAGE_INT)) throw new BillingInputError()
   return Number(milli)
 }

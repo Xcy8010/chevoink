@@ -297,7 +297,7 @@ export async function getAdminModelManagement(): Promise<AdminModelManagementPay
       const configurationReady = databaseReady || Boolean(fallback) || (model.tier === 'speed' && model.modelName !== 'unconfigured')
       const price = modelKind === 'text' && model.tier ? prices.get(model.tier) : null
       return {
-        pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates }).pricing : null,
+        pricing: price ? presentLedgerPrice({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates, v1CeilingBps: price.v1CeilingBps }).pricing : null,
         id: model.id, tier: model.tier, modelKind, provider: fallback?.provider ?? model.provider, displayName: model.displayName,
         modelName: fallback?.modelName ?? model.modelName, baseUrl: fallback?.baseUrl ?? model.baseUrl, multiplier: model.multiplierBps / 10_000,
         enabled: model.enabled || Boolean(fallback), selectable: model.selectable, isDefault: model.isDefault,

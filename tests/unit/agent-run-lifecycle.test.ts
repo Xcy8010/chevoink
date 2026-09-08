@@ -441,7 +441,7 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
     await run('读取公开网页资料')
     const results = events().filter(event => event.type === 'tool.result')
     expect(results).toHaveLength(1)
-    expect(results[0]).toMatchObject({ callId: 'reader-blocked', ok: false, summary: '网页读取未完成' })
+    expect(results[0]).toMatchObject({ callId: 'reader-blocked', ok: false, summary: '网站要求验证或限制访问' })
     const nextContext = JSON.stringify(mocks.chat.mock.calls[1][0].messages)
     expect(nextContext).toContain('不得绕过')
     expect(nextContext).not.toContain('可以调整参数重试')

@@ -11,6 +11,36 @@ const available = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handle
 afterAll(async () => { await prisma.$disconnect() })
 
 describe.runIf(available)('versioned V2 rate-card lifecycle', () => {
+  it('permits an explicitly approved quarter-cache discount only with a verified V1 ceiling', async () => {
+    const admin = await prisma.user.create({ data: { nickname: 'discount-fixture', passwordHash: 'test-only', role: 'admin', isSuperAdmin: true } })
+    const ids = [randomUUID(), randomUUID()]
+    const existing = await prisma.aiModelConfig.findFirst({ where: { ownerUserId: null, tier: 'basic' } })
+    const config = existing ?? await prisma.aiModelConfig.create({ data: { key: randomUUID(), tier: 'basic', provider: 'fixture',
+      displayName: 'fixture', modelName: 'fixture', multiplierBps: 15000 } })
+    try {
+      const bps = config.multiplierBps
+      const price = { version: 'credits-v2-itemized', modelTier: 'basic', multiplierBps: bps,
+        rates: { inputNano: bps * 10, cacheNano: bps * 2.5, outputNano: bps * 100 } }
+      const evidence = { note: 'fixture explicit waiver, not seven-day evidence', reportHash: 'b'.repeat(64), qualityPassed: true,
+        discountApproval: { approvalRef: 'fixture-owner-approval', waiveShadowPeriod: true, replaySamples: 100, maximumIncreaseMilli: 0 } }
+      for (let index = 0; index < 2; index++) {
+        await createRateCard(admin.id, { ...price, rateCardId: ids[index], ...(index ? { v1CeilingBps: bps } : {}) })
+        await transitionRateCard(admin.id, { id: ids[index], expectedRevision: 0, status: 'shadow', evidence: { note: 'offline replay only' } })
+      }
+      await expect(transitionRateCard(admin.id, { id: ids[0], expectedRevision: 1, status: 'approved', evidence }))
+        .rejects.toMatchObject({ code: 'CREDIT_RATE_DISCOUNT_INVALID' })
+      await transitionRateCard(admin.id, { id: ids[1], expectedRevision: 1, status: 'approved', evidence })
+      await expect(transitionRateCard(admin.id, { id: ids[1], expectedRevision: 2, status: 'active', evidence: { note: 'missing notice' } }))
+        .rejects.toMatchObject({ code: 'CREDIT_RATE_NOTICE_REQUIRED' })
+      expect((await prisma.creditRateCardEvent.findMany({ where: { rateCardId: ids[1], status: 'approved' } }))[0].evidence)
+        .toMatchObject({ discountApproval: evidence.discountApproval })
+    } finally {
+      await prisma.creditRateCardEvent.deleteMany({ where: { rateCardId: { in: ids } } })
+      await prisma.creditRateCard.deleteMany({ where: { id: { in: ids } } })
+      if (!existing) await prisma.aiModelConfig.delete({ where: { id: config.id } })
+      await prisma.user.delete({ where: { id: admin.id } })
+    }
+  })
   it('requires review, atomically replaces one active version, preserves old price, and rejects mutation', async () => {
     const admin = await prisma.user.create({ data: { nickname: 'rate-card-fixture', passwordHash: 'test-only', role: 'admin', isSuperAdmin: true } })
     const ids = [randomUUID(), randomUUID()]

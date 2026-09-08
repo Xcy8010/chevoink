@@ -30,6 +30,27 @@ async function fixture(run: (userId: string, input: ConsumeCreditInput) => Promi
 }
 
 describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (isolated PG)', () => {
+  it('settles and refunds capped V2 exactly once without repricing the frozen request', async () => {
+    await fixture(async userId => {
+      const price = { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 11000, v1CeilingBps: 11000,
+        rateCardId: 'fixture-quarter', rates: { inputNano: 110000, cacheNano: 27500, outputNano: 1100000 } }
+      const usage = await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture',
+        modelName: 'fixture', action: 'fixture', targetType: 'text', modelTier: 'speed', multiplierBps: 11000,
+        requestTokens: 10000, responseTokens: 1000, promptCacheHitTokens: 0, promptCacheMissTokens: 10000,
+        durationMs: 1, billingSnapshot: price, usageSource: 'reported' } })
+      try {
+        const input = { userId, usageLogId: usage.id, requestTokens: 10000, responseTokens: 1000, modelTier: 'speed' as const, multiplierBps: 11000 }
+        const charges = await Promise.all([consumeTokenCredits(input), consumeTokenCredits(input)])
+        expect(charges.map(item => item.chargedMilli)).toEqual([1100, 1100])
+        expect(await prisma.creditLedgerEntry.count({ where: { userId, sourceType: 'model_tokens' } })).toBe(1)
+        const ledger = await prisma.creditLedgerEntry.findFirstOrThrow({ where: { userId, sourceType: 'model_tokens' } })
+        expect(ledger.metadata).toMatchObject({ v1CeilingBps: 11000, rateCardId: 'fixture-quarter' })
+        await refundCreditCharge(userId, `usage:${usage.id}`, 'fixture-refund')
+        expect(await prisma.creditLedgerEntry.findFirstOrThrow({ where: { userId, kind: 'refund' } }))
+          .toMatchObject({ deltaMilli: 1100, metadata: { v1CeilingBps: 11000 } })
+      } finally { await prisma.aiUsageLog.delete({ where: { id: usage.id } }) }
+    })
+  })
   it('settles default-path V2 from an immutable pre-dispatch price without double multiplying, and defers unknown usage', async () => {
     await fixture(async userId => {
       const price = { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 50000,

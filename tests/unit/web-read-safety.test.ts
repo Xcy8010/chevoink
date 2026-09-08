@@ -16,6 +16,7 @@ vi.mock('../../api/lib/agent/research-sources.js', async original => ({
   ...await original<typeof import('../../api/lib/agent/research-sources.js')>(),
   reserveResearchRequest: vi.fn(async () => true),
   settleResearchRequest: vi.fn(async () => {}),
+  recordResearchReadOutcome: vi.fn(async () => {}),
   recordResearchWindow: vi.fn(async () => {}),
   assertResearchUrlProvenance: vi.fn(async () => {}),
   findSavedResearchContent: vi.fn(async () => null),
@@ -60,6 +61,14 @@ beforeEach(() => {
 afterEach(() => { env.webReaderFallback = originalFallback; env.webReaderFirecrawlApiKey = originalFirecrawlKey; vi.restoreAllMocks(); vi.unstubAllGlobals(); transport.mockReset() })
 
 describe('web_read trustworthy outcomes', () => {
+  it('recognizes a Douban security redirect and never sends it to a hosted reader', async () => {
+    env.webReaderFallback = 'jina'
+    transport.mockResolvedValueOnce(new Response('', { status: 302, headers: { location: 'https://sec.douban.com/c?r=article' } }))
+    transport.mockResolvedValueOnce(new Response('<html><title>豆瓣</title><script src="challenge.js"></script><body>请完成验证</body></html>', { headers: { 'content-type': 'text/html' } }))
+    expect(await readPublicWebPage('https://www.douban.com/note/1/', new AbortController().signal))
+      .toMatchObject({ status: 'blocked', code: 'WEB_READ_BLOCKED', text: '', provider: 'direct' })
+    expect(transport).toHaveBeenCalledTimes(2)
+  })
   it('releases a fetch reservation cancelled before network dispatch', async () => {
     const { reserveResearchRequest, settleResearchRequest } = await import('../../api/lib/agent/research-sources.js')
     const controller = new AbortController()
