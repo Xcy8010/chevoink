@@ -98,6 +98,21 @@ function context(): ToolContext {
 }
 
 describe('original task context on resume', () => {
+  it('announces parameter preparation before the model finishes, without admitting execution early', async () => {
+    mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      input.onChunk?.({ type: 'tool-call-start', id: 'preparing-read', name: 'chapter_read' })
+      expect(events()).toContainEqual(expect.objectContaining({ type: 'tool.delta', callId: 'preparing-read', toolName: 'chapter_read', title: 'chapter_read', argsChars: 0 }))
+      expect(events().filter(event => event.type === 'tool.call')).toEqual([])
+      input.onChunk?.({ type: 'tool-call-arguments-delta', id: 'preparing-read', delta: ' '.repeat(1024) })
+      expect(events().filter(event => event.type === 'tool.delta').at(-1)).toMatchObject({ toolName: 'chapter_read', argsChars: 1024 })
+      expect(mocks.tools[0].execute).not.toHaveBeenCalled()
+      return response('', [call('preparing-read')])
+    })
+    queue(response('已核对。'))
+    await run()
+    expect(events().filter(event => event.type === 'tool.call').map(event => event.callId)).toEqual(['preparing-read'])
+    expect(mocks.tools[0].execute).toHaveBeenCalledOnce()
+  })
   it('restores the complete research request on typed continue and does not revive legacy writing authority', async () => {
     const originalPrompt = '搜索并拆解这本小说，不要写章节。' + '核对人物与情节证据。'.repeat(130)
     const taskSpec = { ...buildTaskSpec({ runId: 'original', novelId: 'novel', prompt: originalPrompt }), intent: 'write' as const }

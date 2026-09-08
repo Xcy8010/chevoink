@@ -464,7 +464,7 @@ function settleRunningToolParts(messages: AgentUIMessage[], summary: string): Ag
     }
     return {
       ...message,
-      parts: message.parts.map((part) =>
+      parts: message.parts.filter((part) => !(part.type === 'tool-call' && part.preparing)).map((part) =>
         part.type === 'tool-call' && part.status === 'running'
           ? { ...part, status: 'failed' as const, summary }
           : part,
@@ -896,7 +896,12 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             messages: updateMessageParts(state.messages, event.messageId, (parts) => {
               const withoutText = parts.filter((part) => part.type !== 'text')
               if (!event.text) return withoutText
-              if (!event.asReasoning) return [...withoutText, { type: 'text' as const, text: event.text }]
+              if (!event.asReasoning) {
+                // Final prose must stay before parameter-preview cards, not jump below them.
+                const previewIndex = withoutText.findIndex(part => part.type === 'tool-call' && part.preparing)
+                const at = previewIndex < 0 ? withoutText.length : previewIndex
+                return [...withoutText.slice(0, at), { type: 'text' as const, text: event.text }, ...withoutText.slice(at)]
+              }
               let reasoningIndex = -1
               for (let index = withoutText.length - 1; index >= 0; index -= 1) {
                 if (withoutText[index]?.type === 'reasoning') {
@@ -958,6 +963,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                         toolName: event.toolName,
                         title: event.title,
                         args: event.args ?? part.args,
+                        preparing: false,
                         ...(event.subagentCallId && !part.subagentCallId ? { subagentCallId: event.subagentCallId } : {}),
                       }
                     : part,
@@ -979,19 +985,28 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           }
         }
 
-        case 'tool.delta':
-          // 参数流式生成进度：更新对应工具卡片的已生成字符数
+        case 'tool.delta': {
+          // Late or foreign previews cannot resurrect stopped tasks or settled calls.
+          if (event.runId !== state.runId || !isRunActive(state.phase)) return {}
+          const existing = state.messages.find(message => message.id === event.messageId)?.parts
+            .find(part => part.type === 'tool-call' && part.callId === event.callId)
+          if (existing?.type === 'tool-call' && existing.status !== 'running') return base
           return {
             ...base,
             ...(event.draft ? { liveToolDrafts: { ...state.liveToolDrafts, [event.callId]: event.draft } } : {}),
-            messages: updateMessageParts(state.messages, event.messageId, (parts) =>
-              parts.map((part) =>
+            messages: updateMessageParts(state.messages, event.messageId, (parts) => {
+              if (!existing && event.toolName && event.title) return [...parts, {
+                type: 'tool-call', callId: event.callId, toolName: event.toolName, title: event.title,
+                args: null, status: 'running', preparing: true, progressChars: event.argsChars,
+              }]
+              return parts.map((part) =>
                 part.type === 'tool-call' && part.callId === event.callId && part.status === 'running'
                   ? { ...part, progressChars: event.argsChars }
                   : part,
-              ),
-            ),
+              )
+            }),
           }
+        }
 
         case 'subagent.progress':
           // 子 Agent 内嵌执行进度：更新到对应的 subagent_run 容器卡片
@@ -1043,6 +1058,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                   ? {
                       ...part,
                       status: event.ok ? 'success' : 'failed',
+                      preparing: false,
                       summary: event.summary,
                       display: event.display,
                       durationMs: event.durationMs,

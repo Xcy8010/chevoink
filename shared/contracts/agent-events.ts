@@ -297,6 +297,9 @@ export type AgentStreamEventBody =
       messageId: string
       callId: string
       argsChars: number
+      /** 参数准备预告，不代表已通过执行授权；每次增量携带以支持重连。 */
+      toolName?: string
+      title?: string
       /** chapter/plan 长文本参数的增量预览，前端据此逐字显示并锁定编辑器。 */
       draft?: AgentToolDraft
     }
@@ -359,6 +362,8 @@ export type AgentMessagePart =
       accepted?: boolean
       /** 参数流式生成进度（已生成的参数字符数），仅 running 态有意义 */
       progressChars?: number
+      /** 仅客户端瞬态：参数尚在生成，未正式执行或保存。 */
+      preparing?: boolean
       /** 写操作的回滚快照：仅服务端持久化使用，消息列表接口返回前会剥离 */
       snapshot?: AgentRollbackSnapshot
       /** 非 undefined 表示该工具调用属于某个子 Agent 内嵌执行，值为所属 subagent_run 调用的 callId */

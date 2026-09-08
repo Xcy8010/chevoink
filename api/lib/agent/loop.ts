@@ -1236,8 +1236,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       // 登记本轮缓冲：流式正文/思考与轮末组装的 parts 都记在这里，供中止时补落库
       liveTurn = { messageId, parts: [], streamedText: '', streamedReasoning: '' }
 
-      // Parameter generation is not execution. Keep transient document previews, but only
-      // handleToolCall may announce an admitted call; blocked calls never create a spinner.
+      // Preview preparation immediately without announcing an admitted execution.
+      // Only handleToolCall emits tool.call; unadmitted previews expire at the step boundary.
       const announcedToolNames = new Map<string, string>()
       const toolArgsProgress = new Map<string, { chars: number; lastEmitted: number }>()
       const streamingToolArgs = new Map<string, string>()
@@ -1278,7 +1278,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
             }
           } else if (chunk.type === 'tool-call-start') {
             lastActivityAt = Date.now()
-            if (chunk.id) announcedToolNames.set(chunk.id, chunk.name)
+            if (chunk.id) {
+              announcedToolNames.set(chunk.id, chunk.name)
+              const tool = tools.find(candidate => candidate.name === chunk.name)
+              if (tool) bus.emitTransient({ type: 'tool.delta', messageId, callId: chunk.id,
+                toolName: tool.name, title: tool.title, argsChars: 0 })
+            }
           } else if (chunk.type === 'tool-call-arguments-delta') {
             lastActivityAt = Date.now()
             if (chunk.id) {
@@ -1288,10 +1293,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
               const rawArgs = `${streamingToolArgs.get(chunk.id) ?? ''}${chunk.delta}`
               streamingToolArgs.set(chunk.id, rawArgs)
               const toolName = announcedToolNames.get(chunk.id) ?? ''
+              const tool = tools.find(candidate => candidate.name === toolName)
               const draft = extractStreamingToolDraft(toolName, rawArgs)
               if (draft || progress.chars - progress.lastEmitted >= TOOL_ARGS_PROGRESS_STEP) {
                 progress.lastEmitted = progress.chars
-                bus.emitTransient({ type: 'tool.delta', messageId, callId: chunk.id, argsChars: progress.chars, ...(draft ? { draft } : {}) })
+                bus.emitTransient({ type: 'tool.delta', messageId, callId: chunk.id, argsChars: progress.chars,
+                  ...(tool ? { toolName: tool.name, title: tool.title } : {}), ...(draft ? { draft } : {}) })
               }
             }
           }

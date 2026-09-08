@@ -37,6 +37,7 @@ Version 2.0 · 2026-09-08. Applies to fixes, optimization, refactoring and new f
 - Handle semantic empty contenteditable nodes, IME, paste, voice and attachments; test draft recovery.
 - Hover cards never auto-open on data changes. De-emphasize completed todos, highlight active work, avoid overlapping containers, update skeletons with layout changes.
 - Show truthful argument-preparation/execution/cancelling activity and clear it on termination. Do not leave loading cursors in old text.
+- Show a preparation card from the first tool-argument frame and upgrade it in place by callId. Preparation is neither authorized execution nor a saved workspace change. Keep only bounded latest previews for reconnects, not a persisted copy of every body snapshot; clear previews at step boundaries, pauses and results.
 - Narrow icon-only controls retain accessible labels, tooltips and keyboard focus. Respect reduced motion.
 - Cover Work/IDE/mobile, narrow widths, collapsed combinations, drag, scroll, focus, cancellation and queues. DOM tests are not real-browser/device performance acceptance.
 

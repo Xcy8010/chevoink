@@ -27,6 +27,48 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('R01 event journal persistence', () => {
+  it('replays only the latest preparation in seq order without persisting body snapshots', async () => {
+    const bus = new RunEventBus('preview-reconnect')
+    const preview = { type: 'tool.delta' as const, messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入章节正文', argsChars: 0 }
+    bus.emit({ type: 'message.start', messageId: 'm', role: 'assistant' })
+    bus.emitTransient(preview)
+    bus.emit({ type: 'reasoning.delta', messageId: 'm', delta: '准备正文' })
+    bus.emitTransient({ ...preview, argsChars: 80 })
+    const listener = vi.fn()
+    bus.subscribe(listener)
+    expect(listener.mock.calls.map(([event]) => event.seq)).toEqual([1, 3, 4])
+    expect(listener.mock.calls.at(-1)?.[0]).toMatchObject({ ...preview, argsChars: 80 })
+    const reconnect = vi.fn()
+    bus.subscribe(reconnect, 3)
+    expect(reconnect).toHaveBeenCalledOnce()
+    await bus.close()
+    expect(db.createMany.mock.calls.flatMap(([arg]) => arg.data.map((event: { type: string }) => event.type)))
+      .toEqual(['message.start', 'reasoning.delta'])
+  })
+
+  it.each(['tool.call', 'tool.result', 'step.finish', 'run.paused'] as const)('%s removes obsolete previews from reconnect', async type => {
+    const bus = new RunEventBus('preview-cleanup')
+    bus.emitTransient({ type: 'tool.delta', messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入', argsChars: 8 })
+    if (type === 'tool.call') bus.emit({ type, messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入', args: {} })
+    else if (type === 'tool.result') bus.emit({ type, messageId: 'm', callId: 'c', toolName: 'chapter_write', ok: false, summary: '未执行', durationMs: 0 })
+    else if (type === 'step.finish') bus.emit({ type, turn: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
+    else (await bus.commitTerminal({ type, reason: 'user_stop' }, async () => ({}))).publish()
+    const listener = vi.fn()
+    bus.subscribe(listener)
+    expect(listener.mock.calls.map(([event]) => event.type)).toEqual([type])
+    await bus.close()
+  })
+
+  it('bounds retained preparation snapshots', async () => {
+    const bus = new RunEventBus('preview-bound')
+    for (let i = 0; i < 20; i++) bus.emitTransient({ type: 'tool.delta', messageId: 'm', callId: String(i), argsChars: i })
+    const listener = vi.fn()
+    bus.subscribe(listener)
+    expect(listener).toHaveBeenCalledTimes(16)
+    expect(listener.mock.calls[0][0].callId).toBe('4')
+    await bus.close()
+    expect(db.createMany).not.toHaveBeenCalled()
+  })
   it('publishes a terminal event once, only after the state/journal transaction', async () => {
     const bus = new RunEventBus('terminal-commit')
     const listener = vi.fn()

@@ -15,6 +15,8 @@ export class RunEventBus {
   readonly runId: string
   private seq = 0
   private history: AgentStreamEvent[] = []
+  // Only the latest parameter preview per call is retained for live reconnects, never journaled.
+  private previews = new Map<string, AgentStreamEvent>()
   private listeners = new Set<EventListener>()
   private pendingPersist: AgentStreamEvent[] = []
   private flushPromise: Promise<void> | null = null
@@ -40,6 +42,7 @@ export class RunEventBus {
       ...body,
     }
 
+    this.reconcilePreviews(event)
     this.history.push(event)
     this.pendingPersist.push(event)
     // Live delivery is non-blocking; flush logs a sanitized failure and retains
@@ -58,12 +61,18 @@ export class RunEventBus {
   }
 
   /**
-   * 只面向当前 SSE 订阅者的高频预览事件。工具正文参数可能每几个 token 更新一次，
+   * 高频预览事件仅保留最新一份用于 SSE 重连。工具正文参数可能每几个 token 更新一次，
    * 不写 agent_run_events，避免把同一篇正文的所有中间副本反复落库；正式 tool.call/result 仍完整持久化。
    */
   emitTransient(body: AgentStreamEventBody): AgentStreamEvent {
     if (this.closed || this.committingTerminal) throw new Error(`事件总线已关闭：${this.runId}`)
     const event: AgentStreamEvent = { seq: ++this.seq, runId: this.runId, ts: new Date().toISOString(), ...body }
+    this.reconcilePreviews(event)
+    if (event.type === 'tool.delta') {
+      this.previews.delete(event.callId)
+      this.previews.set(event.callId, event)
+      if (this.previews.size > 16) this.previews.delete(this.previews.keys().next().value!)
+    }
     for (const listener of this.listeners) {
       try { listener(event) } catch { /* 单个订阅者异常不影响其它订阅者 */ }
     }
@@ -72,7 +81,8 @@ export class RunEventBus {
 
   /** 订阅事件：先补发 sinceSeq 之后的内存历史，再接 live 流 */
   subscribe(listener: EventListener, sinceSeq = 0): () => void {
-    for (const event of this.history) {
+    const replay = [...this.history, ...this.previews.values()].sort((a, b) => a.seq - b.seq)
+    for (const event of replay) {
       if (event.seq > sinceSeq) {
         try {
           listener(event)
@@ -116,6 +126,7 @@ export class RunEventBus {
         published = true
         this.committingTerminal = false
         this.closed = true
+        this.previews.clear()
         this.history.push(event)
         for (const listener of this.listeners) {
           try { listener(event) } catch { /* A disconnected listener cannot undo the commit. */ }
@@ -133,10 +144,17 @@ export class RunEventBus {
   /** run 结束后调用：等待落库完成并释放内存 */
   async close(): Promise<void> {
     this.closed = true
+    this.previews.clear()
     await this.flush()
     await this.terminalWrite
     this.listeners.clear()
     this.history = []
+  }
+
+  private reconcilePreviews(event: AgentStreamEvent): void {
+    if (event.type === 'tool.call' || event.type === 'tool.result') this.previews.delete(event.callId)
+    if (event.type === 'step.finish' || event.type === 'run.paused' || event.type === 'run.finished'
+      || (event.type === 'error' && !event.recoverable)) this.previews.clear()
   }
 
   private flush(): Promise<void> {

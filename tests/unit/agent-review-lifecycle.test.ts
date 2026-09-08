@@ -22,6 +22,45 @@ describe('Agent 写入审查生命周期', () => {
     expect(useAgentStore.getState().phase).toBe('paused')
   })
 
+  it('参数首帧创建准备卡，正文定稿不跳位，正式执行和完成复用同一卡片', () => {
+    const apply = useAgentStore.getState().applyEvent
+    const base = { runId: 'run-review', ts: new Date().toISOString() }
+    const preview = { type: 'tool.delta' as const, messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入章节正文', argsChars: 0 }
+    apply({ ...base, seq: 1, type: 'message.start', messageId: 'm', role: 'assistant' })
+    apply({ ...base, seq: 2, type: 'text.delta', messageId: 'm', delta: '开始写作。' })
+    apply({ ...base, seq: 3, ...preview })
+    expect(useAgentStore.getState().messages[0].parts[1]).toMatchObject({ preparing: true, status: 'running', args: null })
+    expect(useAgentStore.getState().workspaceActivities).toEqual([])
+    apply({ ...base, seq: 4, ...preview, argsChars: 50, draft: { kind: 'chapter', toolName: 'chapter_write', content: '正文预览' } })
+    expect(useAgentStore.getState().liveToolDrafts.c?.content).toBe('正文预览')
+    apply({ ...base, seq: 5, type: 'text.final', messageId: 'm', text: '开始写作。', asReasoning: false })
+    expect(useAgentStore.getState().messages[0].parts.map(part => part.type)).toEqual(['text', 'tool-call'])
+    apply({ ...base, seq: 6, type: 'tool.call', messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入章节正文', args: { content: '正文' } })
+    expect(useAgentStore.getState().messages[0].parts[1]).toMatchObject({ preparing: false, status: 'running' })
+    expect(useAgentStore.getState().workspaceActivities).toHaveLength(1)
+    apply({ ...base, seq: 7, type: 'tool.result', messageId: 'm', callId: 'c', toolName: 'chapter_write', ok: true, summary: '已写入', durationMs: 20 })
+    apply({ ...base, seq: 8, ...preview, argsChars: 60, draft: { kind: 'chapter', toolName: 'chapter_write', content: '迟到正文' } })
+    expect(useAgentStore.getState().liveToolDrafts).toEqual({})
+    expect(useAgentStore.getState().messages[0].parts).toHaveLength(2)
+    expect(useAgentStore.getState().messages[0].parts[1]).toMatchObject({ preparing: false, status: 'success' })
+  })
+
+  it.each(['step.finish', 'run.paused'] as const)('%s 清理未获执行的准备卡，不生成失败写入活动', (type) => {
+    const apply = useAgentStore.getState().applyEvent
+    const base = { runId: 'run-review', ts: new Date().toISOString() }
+    const preview = { type: 'tool.delta' as const, messageId: 'm', callId: 'c', toolName: 'chapter_write', title: '写入章节正文', argsChars: 8 }
+    apply({ ...base, seq: 1, type: 'message.start', messageId: 'm', role: 'assistant' })
+    apply({ ...base, seq: 2, ...preview })
+    apply(type === 'run.paused' ? { ...base, seq: 3, type, reason: 'user_stop' }
+      : { ...base, seq: 3, type, turn: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
+    if (type === 'run.paused') apply({ ...base, seq: 4, ...preview })
+    expect(useAgentStore.getState().messages[0].parts).toEqual([])
+    expect(useAgentStore.getState().workspaceActivities).toEqual([])
+    expect(useAgentStore.getState().liveToolDrafts).toEqual({})
+    apply({ ...base, seq: 99, ...preview, runId: 'other-run' })
+    expect(useAgentStore.getState().messages[0].parts).toEqual([])
+  })
+
   it('执行成功先保持已完成，作者采纳后才标记已接受', () => {
     const apply = useAgentStore.getState().applyEvent
     apply({ seq: 1, runId: 'run-review', ts: new Date().toISOString(), type: 'message.start', messageId: 'message-review', role: 'assistant' })
