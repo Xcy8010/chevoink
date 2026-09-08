@@ -6,10 +6,18 @@
 
 - `f040381` 的 [Windows 构建](https://github.com/Xcy8010/chevoink/actions/runs/34268535896) 通过 Rust fmt、clippy、test 和 NSIS 打包，生成内部 `Chevoink_1.0.0_x64-setup.exe`，2,625,246 字节。
 - 同提交 [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34268535994) 已通过四闸与依赖审计。
-- 随后的 `d41c2e0` 增加退出保存竞态防护、启动故障分类、窗口工作区约束、全屏映射、非阻塞导出对话框与组件回归测试；[根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34270437192) 通过，Windows 检查发现测试模块排列 lint 问题，修正后须重新验证，不能继承前一提交的通过状态。
+- `237abf2` 已修正前一提交的测试模块排列 lint 问题，并补齐同文档保存串行化与依赖清单；该提交的 [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34271173267) 与 [Windows 构建和 RustSec 审计](https://github.com/Xcy8010/chevoink/actions/runs/34271173331) 均通过。退出保存竞态防护、启动故障分类、工作区约束、全屏映射及非阻塞导出对话框已通过编译/定向测试，尚不等于真机交互通过。
 - 本地定向测试 4 个文件、39 项通过：Windows 下载清单、退出保存、设置组件与本地兜底页。它们不是安装/真机/完整安全验收。
 - 已在用户许可下启动内部安装器；用户按 Esc 停止界面自动化后，安装和真实窗口验收尚未完成。
-- `export-dependencies.ps1` 从锁定的 Windows 目标图生成 312 项脱敏依赖/许可证声明清单，无空缺声明；它不是完整 SBOM、法律意见或漏洞扫描。RustSec 扫描作为独立 CI 作业，结果另行核验。
+- `export-dependencies.ps1` 从锁定的 Windows 目标图生成 312 项脱敏依赖/许可证声明清单，无空缺声明；它不是完整 SBOM、法律意见或漏洞扫描。
+
+### 依赖审计限定结论
+
+`237abf2` 的 RustSec JSON 报告中 `vulnerabilities.count` 为 0，但仍有维护性和健全性警告，不可宣称零风险：
+
+- Windows 目标包含 `unic-char-property`、`unic-char-range`、`unic-common`、`unic-ucd-ident`、`unic-ucd-version` 五个停止维护的间接依赖，经 `urlpattern` → `tauri-utils` 引入。当前未以忽略规则消除警告；后续升级 Tauri 时必须复核锁文件及导航、权限匹配回归，正式发布前再次扫描并评估。
+- `proc-macro-error` 的停止维护警告及 `glib` 的 `RUSTSEC-2024-0429` 健全性警告出现在跨平台锁文件，但不在本次 Windows 目标依赖图中。这一范围判断不适用于未来 Linux 构建。
+- CI 保存原始 `rust-audit.json` 与 Windows 依赖声明清单；审计数据库会变化，当前通过不能替代正式发布提交的重跑，也不能替代宿主攻击测试和许可证审查。
 
 ## 已实现的范围
 
@@ -29,7 +37,7 @@
 3. 实际 Win11 安装、Cookie 登录与重开、IME、Blob 导出、上传、麦克风/WASM、听书、SSE 恢复、关闭保存及原界面对照。
 4. Win10 22H2 低配真机、多屏/不同 DPI、干净环境缺 WebView2 的在线/增强离线安装。用户目前仅提供 Win11，不能将 CI runner 称为另一台真机。
 5. 30 次冷热启动、10 轮窗口/任务切换、连续流和 60 分钟耐久的实际性能取样。
-6. Rust 依赖/许可证审计及宿主攻击测试；完整真实 WebView2 自动化与故障演练。
+6. 依赖维护性警告的发布前复核、完整许可证审查及宿主攻击测试；完整真实 WebView2 自动化与故障演练。
 7. 签名政策、公开隐私说明、卸载保留/显式清理验证、最终发布说明及 SBOM。
 8. 经验证提交合并、正式 Windows Release、资产回下载验签、官网同摘要镜像和独立稳定清单，最后部署网页下载入口。
 

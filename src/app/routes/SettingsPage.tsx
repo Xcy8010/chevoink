@@ -109,6 +109,16 @@ export default function SettingsPage() {
   const [clientDownloading, setClientDownloading] = useState(false)
   const [clientDialogOpen, setClientDialogOpen] = useState(false)
   const [selectedClientOs, setSelectedClientOs] = useState<ClientOsKey | null>(null)
+  const clientDialogRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!clientDialogOpen) return
+    const previousFocus = document.activeElement
+    setSelectedClientOs(null)
+    clientDialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
+    }
+  }, [clientDialogOpen, mobileClient])
   /** 退出登录二次确认弹窗 */
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const [logoutSubmitting, setLogoutSubmitting] = useState(false)
@@ -644,7 +654,22 @@ export default function SettingsPage() {
           >
             <div
               role="dialog"
+              ref={clientDialogRef}
+              aria-modal="true"
               aria-label="安装启创墨域客户端"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setClientDialogOpen(false)
+                } else if (event.key === 'Tab') {
+                  const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href]'))
+                  const first = controls[0]
+                  const last = controls[controls.length - 1]
+                  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+                  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+                }
+              }}
               className="w-full rounded-t-[28px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-6 pb-[calc(24px+var(--safe-bottom))] shadow-[0_24px_64px_rgba(15,23,42,0.18)] sm:max-w-[400px] sm:rounded-[28px] sm:pb-6"
               onClick={(event) => event.stopPropagation()}
             >

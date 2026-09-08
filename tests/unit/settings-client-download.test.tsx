@@ -70,6 +70,24 @@ it('does not advertise a stable package when discovery fails', async () => {
   expect(mocks.download).toHaveBeenCalledOnce()
 })
 
+it('keeps keyboard focus in the download dialog and restores it on Escape', async () => {
+  await show()
+  const trigger = screen.getByText('下载客户端').closest('button')!
+  trigger.focus()
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole('dialog')
+  const close = within(dialog).getByRole('button', { name: '关闭' })
+  expect(document.activeElement).toBe(close)
+  fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+  const backup = within(dialog).getByRole('link', { name: '查看发布说明与备用下载' })
+  expect(document.activeElement).toBe(backup)
+  fireEvent.keyDown(backup, { key: 'Tab' })
+  expect(document.activeElement).toBe(close)
+  fireEvent.keyDown(close, { key: 'Escape' })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+})
+
 it('keeps the dialog and backup release link when a selected download becomes unavailable', async () => {
   await show()
   fireEvent.click(screen.getByText('下载客户端'))
