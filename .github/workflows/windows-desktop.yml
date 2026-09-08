@@ -16,6 +16,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned audit tooling
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 install cargo-audit --version 0.22.2 --locked
+      - name: Audit locked Rust dependencies
+        run: |
+          mkdir -p desktop/windows/test-results
+          cargo +1.94.0 audit --file desktop/windows/src-tauri/Cargo.lock --json > desktop/windows/test-results/rust-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-rust-audit-${{ github.sha }}
+          path: desktop/windows/test-results/rust-audit.json
+          if-no-files-found: warn
+          retention-days: 14
   build:
     runs-on: windows-2022
     timeout-minutes: 45
@@ -46,11 +66,15 @@ jobs:
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Export dependency license evidence
+        run: ./export-dependencies.ps1
       - name: Build internal installer (not a signed public release)
         run: npm run build -- --ci
       - uses: actions/upload-artifact@v4
         with:
           name: windows-internal-${{ github.sha }}
-          path: desktop/windows/src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            desktop/windows/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/windows/test-results/windows-dependencies.json
           if-no-files-found: error
           retention-days: 7

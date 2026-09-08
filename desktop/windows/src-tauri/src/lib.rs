@@ -58,7 +58,12 @@ pub fn run() {
             // Load only the packaged page until native policies and the real-engine UA are installed.
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .title("Chevoink")
+                    .title(
+                        app.config()
+                            .product_name
+                            .clone()
+                            .unwrap_or_else(|| "Chevoink".into()),
+                    )
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(640.0, 480.0)
                     .data_directory(data)

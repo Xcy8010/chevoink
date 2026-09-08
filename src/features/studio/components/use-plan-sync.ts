@@ -7,6 +7,7 @@ export function usePlanSync() {
   const timer = useRef<number | null>(null)
   const pending = useRef<{ artifactId: string; title: string; content: string } | null>(null)
   const inflight = useRef(new Set<Promise<void>>())
+  const documentWrites = useRef(new Map<string, Promise<void>>())
   const failed = useRef(new Set<string>())
   const flushPlanServerSync = useCallback(() => {
     if (timer.current !== null) {
@@ -16,12 +17,20 @@ export function usePlanSync() {
     const payload = pending.current
     pending.current = null
     if (payload) {
-      const request = updateNovelPlanFile(payload.artifactId, { title: payload.title, content: payload.content }).then(() => {
+      // Serialize a document's writes so a slow older request cannot overwrite a newer save.
+      // Different documents remain independent; the existing debounce remains unchanged.
+      const previous = documentWrites.current.get(payload.artifactId)
+      const send = () => updateNovelPlanFile(payload.artifactId, { title: payload.title, content: payload.content })
+      const request = (previous ? previous.then(send) : send()).then(() => {
         failed.current.delete(payload.artifactId)
       }).catch(() => {
         failed.current.add(payload.artifactId)
         // Preserve the existing retry-on-next-edit behavior.
-      }).finally(() => { inflight.current.delete(request) })
+      }).finally(() => {
+        inflight.current.delete(request)
+        if (documentWrites.current.get(payload.artifactId) === request) documentWrites.current.delete(payload.artifactId)
+      })
+      documentWrites.current.set(payload.artifactId, request)
       inflight.current.add(request)
     }
   }, [])
