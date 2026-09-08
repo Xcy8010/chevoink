@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { prisma } from '../../api/lib/prisma.js'
+import { DataAccessError, prisma } from '../../api/lib/prisma.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { initializeDurableTask, attachRunToDurableTask, assertLegacyRuntimeCompatible, startLegacyRuntimeRun } from '../../api/lib/agent/runtime-identity.js'
 import { acquireRunLease, renewRunLease, revokeRunLease, releaseRunLease, withRunLease } from '../../api/lib/agent/runtime-lease.js'
@@ -1271,7 +1271,7 @@ describe.runIf(available)('durable domain postconditions', () => {
 })
 
 describe.runIf(available)('quality report integrity and atomic repair', () => {
-  it.each(['complete', 'unavailable', 'unlocated', 'ambiguous', 'report-rollback', 'stale-source', 'repair', 'repair-rollback', 'no-op', 'empty', 'concurrent', 'wrong-compilation', 'tool-fallback', 'foreign-run', 'legacy-report', 'hash-mismatch', 'outer-transaction', 'outer-rollback'] as const)('%s cannot promote unverified reports or partially repair', async scenario => {
+  it.each(['complete', 'unavailable', 'unlocated', 'ambiguous', 'report-rollback', 'stale-source', 'repair', 'repair-rollback', 'no-op', 'empty', 'concurrent', 'wrong-compilation', 'tool-fallback', 'foreign-run', 'legacy-report', 'hash-mismatch', 'outer-transaction', 'outer-rollback', 'evidence-corrected', 'evidence-unresolved', 'evidence-ambiguous', 'evidence-credit-failure', 'quality-provider-failure', 'continuity-provider-failure'] as const)('%s cannot promote unverified reports or partially repair', async scenario => {
     await fixture(async f => {
       const compilation = await prepareStoryCompilation({ ...f, chapterId: f.chapterId, mode: 'balanced', intentSummary: '质量检查' })
       const compilationId = compilation.compilation.id
@@ -1280,6 +1280,37 @@ describe.runIf(available)('quality report integrity and atomic repair', () => {
       await recordStoryCompilerWrite({ ...f, chapterId: f.chapterId, chapterOrderIndex: 1, chapterRevision: 1 })
       await validateStoryContinuity({ ...f, compilationId, findings: [], expectedChapterRevision: 1, independentCheck: 'complete' })
       const ctx: ToolContext = { ...f, callId: 'quality', mode: 'build', creativeFreedom: 'stable', qualityMode: 'balanced', signal: new AbortController().signal, emit: () => {} }
+      if (scenario === 'quality-provider-failure' || scenario === 'continuity-provider-failure') {
+        const error = new DataAccessError(402, 'CREDITS_EXHAUSTED', 'fixture credit gate')
+        const model = vi.spyOn(aiService, 'generateTextCompletion').mockRejectedValue(error)
+        // An explicit focus requests an independent check instead of reusing the fixture's valid baseline.
+        const action = scenario === 'quality-provider-failure'
+          ? qualityAnalyzeTool.execute(ctx, { chapterId: f.chapterId, compilationId })
+          : continuityValidateTool.execute(ctx, { compilationId, focus: '额外检查' })
+        await expect(action).rejects.toBe(error)
+        expect(model).toHaveBeenCalledTimes(1)
+        expect(await prisma.chapterQualityReport.count({ where: { chapterId: f.chapterId } })).toBe(0)
+        return
+      }
+      if (scenario.startsWith('evidence-')) {
+        if (scenario === 'evidence-ambiguous') await prisma.chapter.update({ where: { id: f.chapterId }, data: { content: '原文原文' } })
+        const before = await prisma.chapter.findUniqueOrThrow({ where: { id: f.chapterId } })
+        const finding = { signal: 'emotion_grounding', severity: 'warning', quote: '原...文', explanation: '缺少动作', suggestion: '局部调整', confidence: 0.9 }
+        const model = vi.spyOn(aiService, 'generateTextCompletion').mockResolvedValueOnce(JSON.stringify({ findings: [finding] }))
+        if (scenario === 'evidence-credit-failure') model.mockRejectedValueOnce(new DataAccessError(402, 'CREDITS_EXHAUSTED', 'fixture credit gate'))
+        else model.mockResolvedValueOnce(JSON.stringify({ corrections: scenario === 'evidence-unresolved' ? [] : [{ index: 0, quote: '原文' }] }))
+        const action = qualityAnalyzeTool.execute(ctx, { chapterId: f.chapterId, compilationId })
+        if (scenario === 'evidence-credit-failure') await expect(action).rejects.toMatchObject({ code: 'CREDITS_EXHAUSTED' })
+        else if (scenario === 'evidence-corrected') expect(await action).not.toHaveProperty('outcome')
+        else expect(await action).toMatchObject({ outcome: 'failed', summary: '质量证据定位未完成' })
+        expect(model).toHaveBeenCalledTimes(2)
+        expect(model.mock.calls[1][2].action).toBe('agent3HumanityEvidenceCorrection')
+        const saved = await prisma.chapterQualityReport.findFirstOrThrow({ where: { chapterId: f.chapterId }, include: { findings: true } })
+        expect(saved.status).toBe(scenario === 'evidence-corrected' ? 'needs_repair' : 'failed')
+        if (scenario === 'evidence-corrected') expect(saved.findings[0]).toMatchObject({ evidenceExcerpt: '原文', explanation: finding.explanation, suggestion: finding.suggestion })
+        expect(await prisma.chapter.findUniqueOrThrow({ where: { id: f.chapterId } })).toMatchObject({ content: before.content, revision: before.revision })
+        return
+      }
       if (scenario === 'tool-fallback') {
         const model = vi.spyOn(aiService, 'generateTextCompletion').mockResolvedValueOnce('{}').mockResolvedValueOnce('{"findings":[]}')
         expect(await qualityAnalyzeTool.execute(ctx, { chapterId: f.chapterId, compilationId })).toMatchObject({ outcome: 'failed' })

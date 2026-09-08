@@ -19,6 +19,7 @@ import {
   getQualityReport,
   listCharacterVoiceProfiles,
   listExperienceAnchors,
+  locateCriticFindings,
   persistHumanityQualityReport,
   recordQualityFindingFeedback,
   renderQualityLearning,
@@ -46,6 +47,9 @@ const REPAIR_BLOCK_CODES = new Set([
 ])
 
 const criticEnvelopeSchema = z.object({ findings: z.array(criticQualityFindingSchema).max(24) })
+const quoteCorrectionSchema = z.object({ corrections: z.array(z.object({
+  index: z.number().int().nonnegative(), quote: z.string().min(1).max(360),
+})).max(24) })
 const repairEnvelopeSchema = z.object({
   patches: z.array(z.object({ findingId: z.string().min(1), replacement: z.string().max(2_000) })).min(1).max(12),
 })
@@ -139,8 +143,9 @@ async function applySelectedQualityRepairs(ctx: ToolContext, report: QualityRepo
         remaining.map((finding) => `findingId=${finding.id}\nsignal=${finding.signal}\nevidence=「${finding.evidenceExcerpt}」\n原因=${finding.explanation}\n最小修法=${finding.suggestion}`).join('\n\n'),
         { signal: ctx.signal, userId: ctx.userId, action: attempt === 0 ? 'agent3HumanityRevision' : 'agent3HumanityRevisionRetry', novelId: ctx.novelId, chapterId: report.chapterId, targetType: 'quality_report', targetId: report.id, temperature: 0.3, reasoningEffort: 'low' },
       )
-    } catch {
+    } catch (error) {
       ctx.signal.throwIfAborted()
+      if (error instanceof DataAccessError) throw error
       // 修订器不可用时保留报告与正文，交回用户稍后重试，不把质量检查标成执行失败。
       continue
     }
@@ -213,16 +218,51 @@ ${bundle.chapter.content}
 正文结束。`
     let rawCriticFindings: z.infer<typeof criticQualityFindingSchema>[] = []
     let criticFallback = false
+    let correctionError: unknown
+    let attemptedEvidenceCorrection = false
+    // Provider, credit and configuration failures retain their real error code.
+    // Only malformed critic content belongs to the report's incomplete state.
+    const response = await generateTextCompletion(
+      buildCriticSystem('balanced'), userPrompt,
+      { signal: ctx.signal, userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
+    )
     try {
-      const response = await generateTextCompletion(
-        buildCriticSystem('balanced'), userPrompt,
-        { signal: ctx.signal, userId: ctx.userId, action: 'agent3HumanityCritic', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
-      )
       rawCriticFindings = criticEnvelopeSchema.parse(parseJsonObject(response)).findings
         .filter((finding, index, all) => all.findIndex((item) => item.signal === finding.signal && item.quote === finding.quote) === index)
     } catch {
       ctx.signal.throwIfAborted()
       criticFallback = true
+    }
+    if (!criticFallback) {
+      const invalid = rawCriticFindings.map((finding, index) => ({ finding, index }))
+        .filter(({ finding }) => locateCriticFindings(bundle.chapter.content, [finding]).length === 0)
+      if (invalid.length > 0) {
+        attemptedEvidenceCorrection = true
+        // Correct only failed evidence bindings once. Keep every original judgment;
+        // never regenerate the review, discard an issue, or alter the chapter here.
+        let corrected = ''
+        try {
+          corrected = await generateTextCompletion(
+          '你只负责校正质量报告的原文引用，不重新审稿、不增加或撤销意见。为每个 index 找到正文中连续、逐字且唯一的短引文，保留原问题含义；不得拼接、省略或改写引文。找不到证据就省略该 index，不得编造。严格输出 JSON：{"corrections":[{"index":0,"quote":"正文逐字引文"}]}。',
+          `待定位意见：${JSON.stringify(invalid)}\n完整正文：\n${bundle.chapter.content}`,
+          { signal: ctx.signal, userId: ctx.userId, action: 'agent3HumanityEvidenceCorrection', novelId: ctx.novelId, chapterId, targetType: 'chapter', targetId: chapterId, temperature: 0.15, reasoningEffort: 'low' },
+          )
+        } catch (error) {
+          ctx.signal.throwIfAborted()
+          // Save the original, incomplete findings below before exposing the
+          // provider/credit error. A failed correction must not erase paid work.
+          correctionError = error
+        }
+        try {
+          const corrections = quoteCorrectionSchema.parse(parseJsonObject(corrected)).corrections
+          for (const item of invalid) {
+            const candidates = corrections.filter((candidate) => candidate.index === item.index)
+            if (candidates.length !== 1) continue
+            const finding = { ...item.finding, quote: candidates[0].quote }
+            if (locateCriticFindings(bundle.chapter.content, [finding]).length === 1) rawCriticFindings[item.index] = finding
+          }
+        } catch { /* Remain incomplete; never reinterpret malformed corrections as success. */ }
+      }
     }
     ctx.signal.throwIfAborted()
     const criticFindings = calibrateCriticFindings(rawCriticFindings, bundle.feedback)
@@ -239,7 +279,12 @@ ${bundle.chapter.content}
       })
     }
     const report = await getQualityReport(ctx.userId, ctx.novelId, created.id)
-    if (report.status === 'failed') return { outcome: 'failed' as const, output: '独立质量检查没有完整、可定位的结果。确定性报告已保留，但不能视为质量通过；本次未自动修订，也不能据此提交章节桥。', summary: '独立质量检查未完成', display: reportDisplay(report) }
+    if (correctionError) throw correctionError
+    if (report.status === 'failed') return { outcome: 'failed' as const,
+      output: criticFallback
+        ? '质量模型返回的报告格式不完整，不能判定质量通过。确定性报告和正文已保留；不得重复改写正文来解决格式错误。'
+        : `质量模型已完成审查，但部分引用仍无法唯一定位，或意见数量超过报告上限；${attemptedEvidenceCorrection ? '已在本次调用内尝试一次引用校正，' : ''}仍不能判定质量通过。已保留可定位的意见和正文，禁止反复调用全量检查或修改正文来凑通过。`,
+      summary: criticFallback ? '质量报告格式不完整' : '质量证据定位未完成', display: reportDisplay(report) }
     const warningCount = report.findings.filter((finding) => finding.severity === 'warning').length
     const advisoryCount = report.findings.filter((finding) => finding.severity === 'advisory').length
     const selected = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(report.chapterId)

@@ -79,8 +79,9 @@ async function applyRigorousContinuityRepairs(
         `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
         { signal: ctx.signal, userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
       )
-    } catch {
+    } catch (error) {
       ctx.signal.throwIfAborted()
+      if (error instanceof DataAccessError) throw error
       // 修订器不可用时保留检查结果与原正文，不让可选自动修订拖垮整个 CHECK。
       continue
     }
@@ -577,7 +578,7 @@ export const continuityValidateTool = defineTool({
       systemPrompt,
       criticInput,
       { signal: ctx.signal, userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
-    ).catch(() => '')))
+    )))
     ctx.signal.throwIfAborted()
     const parsedCriticResponses = criticResponses.map(parseIndependentContinuityResult)
     const criticFallback = parsedCriticResponses.some((response) => !response.structured)

@@ -260,7 +260,7 @@ export async function buildHumanityQualityContext(userId: string, novelId: strin
   return { chapter, charter, compilation, profiles: mentionedProfiles, anchors: relevantAnchors, recentChapters, feedback: dataControl?.qualityTelemetryEnabled === false ? [] : feedback }
 }
 
-function locateCriticFindings(content: string, findings: CriticQualityFinding[]): LocatedQualityFinding[] {
+export function locateCriticFindings(content: string, findings: CriticQualityFinding[]): LocatedQualityFinding[] {
   const located: LocatedQualityFinding[] = []
   const occupied = new Set<string>()
   for (const finding of findings) {

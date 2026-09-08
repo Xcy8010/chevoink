@@ -62,7 +62,8 @@ import type { AgentArtifact, AgentLocalRollbackSnapshot, AgentRunState, ChapterD
 import { buildArtifactsFromHistory, mergeRestoredArtifactsWithSnapshot, readStoredAgentWorkspace } from './lib/agent-persistence.js'
 import { BOOTSTRAP_NOVEL_SUMMARY, BOOTSTRAP_NOVEL_TITLE, DEFAULT_NOVEL_ID, STUDIO_LAST_NOVEL_STORAGE_KEY, buildAgentTaskWindowFromSession, createLocalAgentTaskWindow, dedupeAgentTaskWindows, formatDateTime, formatWordCount, getAgentWorkspaceStorageKey, isBootstrapNovel, pickFallbackAgentTaskWindow, resolveNovelTitleState, shouldDisplayListedAgentSession, shouldShowWorkspaceNovel } from './lib/agent-session.js'
 import { buildChapterDraft, buildCoverForm, buildNovelFormState, buildNovelUpdatePayload, buildProjectNotes, createIdleAgentRunState, isNovelFormDirty } from './lib/form-state.js'
-import { PENDING_CHAPTER_REVIEW_STORAGE_PREFIX, PENDING_PLAN_REVIEW_STORAGE_PREFIX, buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, readStoredPendingReview, readStoredPendingReviewList, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem, writeStoredPendingReview } from './lib/plan-review.js'
+import { buildCatalogPreview, buildChapterReviewDescription, buildPendingChapterReview, buildServerPlanFile, buildWorkspacePlanFiles, mergeCatalogContentWithChapters, removeChapterAndCompact, replaceChapterItem, toChapterListItem, upsertChapterItem } from './lib/plan-review.js'
+import { usePendingReviewStorage } from './components/use-pending-review-storage'
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
@@ -243,32 +244,7 @@ export default function StudioWorkspace() {
   const [pendingPlanReview, setPendingPlanReview] = useState<PlanPendingReview | null>(null)
   const [pendingPlanReviewBusy, setPendingPlanReviewBusy] = useState(false)
   // 审查态持久化：刷新页面后恢复未定夺的审查条与 diff 视图（fix2b）
-  const pendingReviewHydratedNovelIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    pendingReviewHydratedNovelIdRef.current = null
-    setPendingChapterReviews(
-      readStoredPendingReviewList<ChapterPendingReview>(`${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`),
-    )
-    setPendingPlanReview(
-      readStoredPendingReview<PlanPendingReview>(`${PENDING_PLAN_REVIEW_STORAGE_PREFIX}${activeNovelId}`),
-    )
-    pendingReviewHydratedNovelIdRef.current = activeNovelId
-  }, [activeNovelId])
-  useEffect(() => {
-    if (pendingReviewHydratedNovelIdRef.current !== activeNovelId) {
-      return
-    }
-    writeStoredPendingReview(
-      `${PENDING_CHAPTER_REVIEW_STORAGE_PREFIX}${activeNovelId}`,
-      pendingChapterReviews.length > 0 ? pendingChapterReviews : null,
-    )
-  }, [activeNovelId, pendingChapterReviews])
-  useEffect(() => {
-    if (pendingReviewHydratedNovelIdRef.current !== activeNovelId) {
-      return
-    }
-    writeStoredPendingReview(`${PENDING_PLAN_REVIEW_STORAGE_PREFIX}${activeNovelId}`, pendingPlanReview)
-  }, [activeNovelId, pendingPlanReview])
+  usePendingReviewStorage(activeNovelId, pendingChapterReviews, pendingPlanReview, setPendingChapterReviews, setPendingPlanReview)
   const [workspaceDialog, setWorkspaceDialog] = useState<{
     title: string
     description: string
@@ -1717,11 +1693,7 @@ export default function StudioWorkspace() {
   }
 
   function handleCreateWorkspaceNovel() {
-    if (pendingChapterReviews.length > 0) {
-      promptConfirmPendingChapterReview('新建作品')
-      return
-    }
-
+    // Pending reviews belong to the old novel and remain persisted there.
     if (createNovelMutation.isPending) {
       return
     }
