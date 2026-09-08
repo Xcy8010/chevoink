@@ -21,11 +21,14 @@ cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run build -- --ci
+npm run build:offline -- --ci
 ```
 
 开发启动使用 `com.chevoink.desktop.dev`，正式配置使用 `com.chevoink.desktop`。二者 WebView2 数据目录独立；开发配置禁止使用正式更新通道。即使数据隔离，开发壳仍连接官网，不得用真实作品做破坏性测试。
 
-安装包生成在 `src-tauri/target/release/bundle/nsis/`。当前未配置正式签名时仅供内部测试。增强版离线 WebView2 安装包、正式发布流水线与更新实包验证尚未验收。
+安装包生成在 `src-tauri/target/release/bundle/nsis/`。当前未配置正式签名时仅供内部测试。`build:offline` 仅用 Tauri 官方 `offlineInstaller` 模式内嵌 Evergreen 安装器，不内嵌固定版本内核，不提供离线创作。两种构建保持相同 appId、版本、代码与数据目录。
+
+本地两条构建命令使用同一个输出文件名，顺序执行会替换上一种构建产物；需保留两种时先复制普通包到独立目录。CI 先上传普通包，再构建增强包并加 `-webview2-offline` 名称单独上传，避免混淆。正式更新仍使用标准安装包及独立稳定通道。增强包在缺内核的干净系统上的安装、正式发布流水线与更新实包验证尚未验收。
 
 ## 安全与退出
 

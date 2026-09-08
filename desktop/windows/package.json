@@ -5,6 +5,6 @@
   "license": "AGPL-3.0",
   "type": "module",
   "engines": { "node": "22.23.2", "npm": "10.9.8" },
-  "scripts": { "dev": "tauri dev --config src-tauri/tauri.dev.conf.json", "build": "tauri build --bundles nsis", "tauri": "tauri" },
+  "scripts": { "dev": "tauri dev --config src-tauri/tauri.dev.conf.json", "build": "tauri build --bundles nsis", "build:offline": "tauri build --bundles nsis --config src-tauri/tauri.offline.conf.json", "tauri": "tauri" },
   "devDependencies": { "@tauri-apps/cli": "2.11.4" }
 }

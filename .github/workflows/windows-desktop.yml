@@ -78,3 +78,18 @@ jobs:
             desktop/windows/test-results/windows-dependencies.json
           if-no-files-found: error
           retention-days: 7
+      - name: Build internal installer with offline WebView2 runtime
+        run: |
+          npm run build:offline -- --ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid installer version' }
+          $installer = Join-Path $PWD "src-tauri/target/release/bundle/nsis/Chevoink_${version}_x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Offline installer missing' }
+          Rename-Item -LiteralPath $installer -NewName "Chevoink_${version}_x64-webview2-offline-setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-internal-webview2-offline-${{ github.sha }}
+          path: desktop/windows/src-tauri/target/release/bundle/nsis/*_x64-webview2-offline-setup.exe
+          if-no-files-found: error
+          retention-days: 7
