@@ -148,6 +148,6 @@ export function renderTaskSpec(spec: TaskSpec): string {
     ? '贴合既有走向，只修明确错误。'
     : spec.creativeFreedom === 'bold'
       ? '优先探索新可能；检查建议仅提示，不自动改写。'
-      : '自动落实有证据的连续性警告与人类感质量建议，降低 AI 味并强化因果。'
+      : '连续性只对可证实的事实错误做一次集中最小修订，警告不自动改写；质量审美建议只展示。保留作者声音，不反复润色。质量修改后仅复核连续性，通过后提交，不来回重做两类检查。'
   return `[系统] 本轮任务契约（taskSpecId=${spec.id}）：\n意图：${spec.intent}\n目标：${spec.goals.join('；')}\n创作模式：${freedomLabel}（${freedomRule}）；质量模式：${spec.qualityMode}\n硬约束：\n${hard}\n预期交付：${spec.expectedOutputs.map((item) => item.description).join('；')}\n完成前必须验证：${spec.postconditions.map((item) => item.description).join('；') || '按用户目标核验结果'}。`
 }

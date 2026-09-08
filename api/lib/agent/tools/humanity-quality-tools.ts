@@ -243,7 +243,7 @@ ${bundle.chapter.content}
     const warningCount = report.findings.filter((finding) => finding.severity === 'warning').length
     const advisoryCount = report.findings.filter((finding) => finding.severity === 'advisory').length
     const selected = ctx.creativeFreedom === 'balanced' && !ctx.protectedChapterIds?.has(report.chapterId)
-      ? automaticRepairFindings(report, true)
+      ? automaticRepairFindings(report)
       : []
     if (selected.length > 0) {
       try {

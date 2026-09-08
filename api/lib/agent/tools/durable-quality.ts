@@ -128,6 +128,7 @@ export async function executeDurableQuality(ctx: ToolContext, tool: AgentTool, r
     const evaluated = prepareQualityFindings(frozen.chapter.content, deterministic.findings, findings, complete)
     const selected: Array<(typeof evaluated.findings)[number] & { key: string }> = []
     if (!frozen.cached && evaluated.complete && frozen.repair) for (const finding of evaluated.findings) {
+      if (finding.severity === 'advisory') continue
       if (selected.some(item => item.start < finding.end && finding.start < item.end)) continue
       selected.push({ ...finding, key: `${finding.signal}:${finding.start}:${finding.end}` })
       if (selected.length === 8) break
