@@ -4,7 +4,7 @@ import { DataAccessError, prisma } from '../prisma.js'
 import { getActiveRunIdBySession, hasActiveRunInSession } from './active-runs.js'
 import { publishDurableEvents } from './runtime-event-projection.js'
 
-const historyRunState = { select: { runtimeProtocolVersion: true, taskRoot: { select: { status: true } } } } as const
+const historyRunState = { select: { runtimeProtocolVersion: true, status: true, finishedAt: true, taskRoot: { select: { status: true } } } } as const
 
 function visibleHistoryParts(parts: AgentMessagePart[], run: { runtimeProtocolVersion: number; taskRoot: { status: string } | null }): AgentMessagePart[] {
   const stopped = run.runtimeProtocolVersion === 1 && ['paused', 'completed'].includes(run.taskRoot?.status ?? '')
@@ -163,6 +163,7 @@ export async function listLoopSessionMessages(
         role: record.role as 'user' | 'assistant',
         parts: await normalizeLegacyViewedImageUrls(userId, stripped),
         createdAt: record.createdAt.toISOString(),
+        completedAt: record.role === 'assistant' && record.run.status === 'completed' ? record.run.finishedAt?.toISOString() ?? null : null,
       })
     }
 
@@ -223,6 +224,7 @@ export async function listLoopSessionMessages(
       role: record.role as 'user' | 'assistant',
       parts: await normalizeLegacyViewedImageUrls(userId, stripped),
       createdAt: record.createdAt.toISOString(),
+      completedAt: record.role === 'assistant' && record.run.status === 'completed' ? record.run.finishedAt?.toISOString() ?? null : null,
     })
   }
 

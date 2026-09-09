@@ -1136,7 +1136,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             pendingApproval: null,
             pendingQuestion: null,
             liveToolDrafts: {},
-            messages: settleRunningToolParts(state.messages, '已中断'),
+            messages: settleRunningToolParts(state.messages, '已中断').map(message => message.role === 'assistant' && message.runId === event.runId
+              ? { ...message, completedAt: event.status === 'succeeded' ? event.ts : null } : message),
             workspaceActivities: settleRunningActivities(state.workspaceActivities),
             ...withoutRunningSession(state),
             ...(event.status === 'succeeded' ? withoutActiveSessionSignal(state) : noteSessionSignal(state, 'failed')),

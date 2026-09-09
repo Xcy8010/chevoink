@@ -386,6 +386,8 @@ export interface AgentUIMessage {
   role: 'user' | 'assistant'
   parts: AgentMessagePart[]
   createdAt: string
+  /** Actual successful run completion; absent while running or on legacy data. */
+  completedAt?: string | null
 }
 
 /** POST /api/agent/runs 新链路入参（模型自主决策，不再需要 task 类型） */

@@ -5,6 +5,7 @@ import { prisma } from '../../api/lib/prisma.js'
 import { createRunEventBus, disposeRunEventBus, loadPersistedEvents, prepareRunEventResume } from '../../api/lib/agent/events.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
 import { streamLoopRun } from '../../api/lib/agent/run-service.js'
+import { listLoopSessionMessages } from '../../api/lib/agent/session-messages.js'
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 const userId = randomUUID(), novelId = randomUUID(), sessionId = randomUUID()
@@ -62,6 +63,21 @@ describe.skipIf(!dbAvailable)('R01 real PostgreSQL journal commit and resume', (
     expect(listener).toHaveBeenCalledOnce()
     await disposeRunEventBus(runId)
     expect(await prisma.agentRunEvent.count({ where: { runId } })).toBe(1)
+  })
+
+  it('returns real completion timestamps in full and paged history without changing send times', async () => {
+    const runId = await newRun()
+    const createdAt = new Date('2026-09-09T10:00:00Z'), finishedAt = new Date('2026-09-09T10:05:00Z')
+    await prisma.agentRun.update({ where: { id: runId }, data: { status: 'completed', finishedAt } })
+    const userMessage = await prisma.agentMessage.create({ data: { runId, sessionId, role: 'user', parts: [], createdAt } })
+    const assistant = await prisma.agentMessage.create({ data: { runId, sessionId, role: 'assistant', parts: [{ type: 'text', text: '完成' }], createdAt } })
+    for (const options of [{}, { runLimit: 20 }]) {
+      const { messages } = await listLoopSessionMessages(userId, sessionId, options)
+      expect(messages.find(message => message.id === assistant.id)).toMatchObject({ createdAt: createdAt.toISOString(), completedAt: finishedAt.toISOString() })
+      expect(messages.find(message => message.id === userMessage.id)).toMatchObject({ createdAt: createdAt.toISOString(), completedAt: null })
+    }
+    await prisma.agentRun.update({ where: { id: runId }, data: { status: 'failed' } })
+    expect((await listLoopSessionMessages(userId, sessionId)).messages.find(message => message.id === assistant.id)?.completedAt).toBeNull()
   })
 
   it('rolls the state update back when the terminal event insert fails', async () => {

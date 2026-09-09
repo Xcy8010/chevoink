@@ -15,7 +15,6 @@ import {
   SlidersHorizontal,
   SquarePen,
   Trash2,
-  Undo2,
   Wrench,
   X,
 } from 'lucide-react'
@@ -65,6 +64,7 @@ import { projectMessages } from '../lib/message-projection'
 import { useMessageScroll } from './use-message-scroll'
 import { useRunControls } from './use-run-controls'
 import { AgentActivityBar } from './AgentActivityBar'
+import { MessageTime, UserMessageActions } from './MessageActions'
 import { AgentComposer } from './AgentComposer'
 import { AgentQueueTray } from './AgentQueueTray'
 import { AgentMessageParts } from './AgentMessageParts'
@@ -306,7 +306,6 @@ export function AgentPanel({
   const [editingTitle, setEditingTitle] = useState('')
 
   // 消息操作：悬停复制展开删除/回退；移动端长按展开；复制成功短暂打勾
-  const [expandedActionsId, setExpandedActionsId] = useState<string | null>(null)
   const [touchActionsId, setTouchActionsId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [confirmAction, setConfirmAction] = useState<
@@ -766,7 +765,6 @@ export function AgentPanel({
       cancelLongPress()
       longPressTimerRef.current = window.setTimeout(() => {
         setTouchActionsId(messageId)
-        setExpandedActionsId(messageId)
       }, 500)
     },
     [cancelLongPress],
@@ -894,7 +892,6 @@ export function AgentPanel({
       }
       setConfirmAction(null)
       setTouchActionsId(null)
-      setExpandedActionsId(null)
     } catch (error) {
       // 服务端已经没有这条消息（如此前已删除成功但界面未同步）：重拉历史对齐界面，不再报错
       if (
@@ -904,7 +901,6 @@ export function AgentPanel({
       ) {
         await reloadMessages()
         setTouchActionsId(null)
-        setExpandedActionsId(null)
       } else {
         setActionError(error instanceof Error ? error.message : '操作失败，请稍后再试。')
       }
@@ -1154,68 +1150,11 @@ export function AgentPanel({
                 <div
                   key={message.id}
                   id={`agent-message-${message.id}`}
-                  className="agent-msg-cv group flex items-center justify-end gap-1.5"
+                  className="agent-msg-cv group/message flex flex-col items-end gap-1.5"
                   onTouchStart={() => startLongPress(message.id)}
                   onTouchEnd={cancelLongPress}
                   onTouchMove={cancelLongPress}
                 >
-                  {/* 左侧操作组：hover 显示复制，悬停复制展开删除/回退；移动端长按展开 */}
-                  <div
-                    className={cn(
-                      'flex shrink-0 items-center gap-0.5 transition-opacity',
-                      touchActionsId === message.id
-                        ? 'opacity-100'
-                        : 'opacity-0 group-hover:opacity-100',
-                    )}
-                    onMouseEnter={() => setExpandedActionsId(message.id)}
-                    onMouseLeave={() => {
-                      if (touchActionsId !== message.id) {
-                        setExpandedActionsId((current) => (current === message.id ? null : current))
-                      }
-                    }}
-                  >
-                    {expandedActionsId === message.id ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setConfirmAction({ kind: 'rollbackMessage', messageId: message.id })
-                          }
-                          disabled={active}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label="回退到此对话之前"
-                          title="回退到此对话之前"
-                        >
-                          <Undo2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setConfirmAction({ kind: 'deleteMessage', messageId: message.id })
-                          }
-                          disabled={active}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label="删除这轮对话"
-                          title="删除这轮对话"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void handleCopyText(message.id, getMessageText(message.parts))}
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"
-                      aria-label="复制消息"
-                      title="复制"
-                    >
-                      {copiedId === message.id ? (
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  </div>
                   <div className="flex max-w-[82%] flex-col items-end gap-1.5">
                     {message.parts.some((part) => part.type === 'attachment') && (
                       <div className="flex flex-wrap justify-end gap-1.5">
@@ -1263,6 +1202,10 @@ export function AgentPanel({
                         .join('')}
                     </div>
                   </div>
+                  <UserMessageActions createdAt={message.createdAt} visible={touchActionsId === message.id} copied={copiedId === message.id} disabled={active}
+                    onCopy={() => void handleCopyText(message.id, getMessageText(message.parts))}
+                    onRollback={() => setConfirmAction({ kind: 'rollbackMessage', messageId: message.id })}
+                    onDelete={() => setConfirmAction({ kind: 'deleteMessage', messageId: message.id })} />
                 </div>
                 )
               }
@@ -1288,7 +1231,7 @@ export function AgentPanel({
                   key={message.id}
                   id={`agent-message-${message.id}`}
                   // 正在流式的消息不加 content-visibility，避免高度估算干扰自动滚底
-                  className={cn('min-w-0', message.id !== lastAssistantId && 'agent-msg-cv')}
+                  className={cn('group/reply min-w-0', message.id !== lastAssistantId && 'agent-msg-cv')}
                 >
                   <AgentMessageParts
                     parts={message.parts}
@@ -1303,7 +1246,7 @@ export function AgentPanel({
                   />
                   {/* 结论操作条：每个对话块结尾均提供复制与创建分支（纯 icon，悬停 title 说明，流式进行中不显示） */}
                   {isBlockLast && !messageRunActive && getMessageText(message.parts) ? (
-                    <div className="mt-1 flex justify-start gap-0.5">
+                    <div className="mt-1 flex items-center justify-start gap-0.5">
                       <button
                         type="button"
                         onClick={() =>
@@ -1330,6 +1273,7 @@ export function AgentPanel({
                           <GitBranch className="h-3.5 w-3.5" />
                         </button>
                       ) : null}
+                      <MessageTime value={message.completedAt} label="完成时间" className="ml-2 opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100 mobile:opacity-100" />
                     </div>
                   ) : null}
                 </div>
