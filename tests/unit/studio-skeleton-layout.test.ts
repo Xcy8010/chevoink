@@ -3,8 +3,20 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { parseHTML } from 'linkedom'
 import { StudioSkeleton } from '@/components/ui/Skeleton'
+import { readFileSync } from 'node:fs'
 
 describe('StudioSkeleton responsive layout', () => {
+  it('keeps dark shimmer independent from reversed surface colors and preserves light fallbacks', () => {
+    const css = readFileSync(new URL('../../src/index.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    const dark = css.match(/html\.dark \.studio-workspace \{([^}]+)\}/)![1]
+    expect(dark).toContain('--skeleton-base: #353535')
+    expect(dark).toContain('--skeleton-highlight: #414141')
+    expect(css).toContain('var(--skeleton-base, var(--surface-muted)) 25%')
+    expect(css).toContain('var(--skeleton-highlight, var(--surface-default)) 50%')
+    expect(css).toContain("[data-studio-region='mobile-conversation']\n) { background-color: var(--surface-default); }")
+    expect(css).toContain("[data-studio-region='mobile-composer']\n) { background-color: var(--studio-composer-bg); }")
+    expect(css).toContain('.studio-workspace .skeleton-shimmer { animation: none; }')
+  })
   const markup = renderToStaticMarkup(createElement(StudioSkeleton))
   const { document } = parseHTML(markup)
 

@@ -144,6 +144,8 @@ html.dark .studio-workspace {
   --surface-muted: #2b2b2b;
   --surface-elevated: #303030;
   --studio-composer-bg: #2b2b2b;
+  --skeleton-base: #353535;
+  --skeleton-highlight: #414141;
   --surface-contrast: #eef1f5;
   --surface-contrast-hover: #ffffff;
   --text-primary: #edf0f4;
@@ -528,9 +530,9 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 .skeleton-shimmer {
   background: linear-gradient(
     90deg,
-    var(--surface-muted) 25%,
-    var(--surface-default) 50%,
-    var(--surface-muted) 75%
+    var(--skeleton-base, var(--surface-muted)) 25%,
+    var(--skeleton-highlight, var(--surface-default)) 50%,
+    var(--skeleton-base, var(--surface-muted)) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
@@ -538,6 +540,19 @@ body.autohide-scrollbars *:not([data-scrolling='true'])::-webkit-scrollbar-thumb
 
 /* Work 默认收起查看器时：44px 轨道 + 44px 检查栏 + 296px 停靠卡 + 920px 对话。 */
 .studio-skeleton-work { container: studio-skeleton-work / inline-size; }
+/* Loading surfaces must match the finished workspace, not inherit the sidebar. */
+html.dark .studio-workspace :is(
+  .studio-skeleton-work,
+  [data-studio-region='desktop-command-bar'],
+  [data-studio-region='mobile-conversation']
+) { background-color: var(--surface-default); }
+html.dark .studio-workspace [data-studio-region='desktop-inspector-rail'] {
+  background-color: var(--app-bg);
+}
+html.dark .studio-workspace :is(
+  [data-studio-region='desktop-composer'],
+  [data-studio-region='mobile-composer']
+) { background-color: var(--studio-composer-bg); }
 @container studio-skeleton-work (min-width: 1304px) {
   .studio-skeleton-activity-dock { display: block; }
   [data-studio-region='desktop-activity'] { display: none; }
