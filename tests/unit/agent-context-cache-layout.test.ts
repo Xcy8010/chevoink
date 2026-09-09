@@ -137,6 +137,21 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     vi.restoreAllMocks()
   })
 
+  it('history is factual status data, not pseudo-call examples; failed calls and cover IDs survive', async () => {
+    vi.mocked(prisma.agentMessage.findMany).mockResolvedValue([{ id: 'tool-history', role: 'assistant', parts: [
+      { type: 'tool-call', toolName: 'chapter_read', status: 'failed', summary: '章节不存在' },
+      { type: 'tool-call', toolName: 'todo_write', status: 'success', summary: '1/2' },
+      { type: 'tool-call', toolName: 'cover_generate', status: 'success', display: { kind: 'coverImages', images: [{ id: 'cover-old' }] } },
+    ] }] as never)
+    const { messages } = await assembleContext(buildInput())
+    const history = String(messages[1].content)
+    expect(history).not.toContain('[调用工具')
+    expect(history).toContain('历史工具记录（failed）：chapter_read；章节不存在')
+    expect(history).toContain('旧待办状态已过时')
+    expect(history).not.toContain('1/2')
+    expect(history).toContain('coverAssetId：cover-old')
+  })
+
   it('system 只含固定规则，不含 wordCount/记忆正文/作品数据/指令/章节状态等逐轮变动内容', async () => {
     const { messages } = await assembleContext(buildInput())
     const system = messages[0]
@@ -147,7 +162,7 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     expect(content).toContain('信道纪律')
     expect(content).toContain('决策策略')
     expect(content).toContain('技能操作：作者明确要求')
-    expect(content).toContain('压缩标记')
+    expect(content).toContain('历史工具记录')
     expect(content).toContain('站内作品标签库')
     expect(content).toContain('作者当前编辑的章节以尾部快照为准；未指明章节时优先针对该章节操作。')
     expect(content).toContain('服务端工作区快照协议')

@@ -10,7 +10,34 @@ import {
 } from '../../api/lib/agent/checkpoint.js'
 import { createRepeatDetector } from '../../api/lib/agent/repeat-detect.js'
 import { toolSignature, ToolAdmissionGuard } from '../../api/lib/agent/tool-signature.js'
-import { isContinuationRequest, promisesFurtherAction } from '../../api/lib/agent/completion-guard.js'
+import { createProtocolRecoveryGuard, isContinuationRequest, promisesFurtherAction } from '../../api/lib/agent/completion-guard.js'
+
+describe('protocol recovery budgets', () => {
+  it('replays the incident: invalid / native / invalid / native / invalid is not a consecutive failure', () => {
+    const guard = createProtocolRecoveryGuard()
+    expect(guard.observe(false, true)).toBe('retry')
+    expect(guard.observe(true, false)).toBe('continue')
+    expect(guard.observe(false, true)).toBe('retry')
+    expect(guard.observe(true, false)).toBe('continue')
+    expect(guard.observe(false, true)).toBe('retry')
+  })
+  it('still stops three consecutive invalid responses; prose does not reset the streak', () => {
+    const guard = createProtocolRecoveryGuard()
+    expect(guard.observe(false, true)).toBe('retry')
+    expect(guard.observe(false, false)).toBe('continue')
+    expect(guard.observe(false, true)).toBe('retry')
+    expect(guard.observe(false, true)).toBe('stop')
+  })
+  it('successful calls never refill the total correction budget', () => {
+    const guard = createProtocolRecoveryGuard()
+    for (let i = 0; i < 6; i++) {
+      expect(guard.observe(false, true)).toBe('retry')
+      guard.observe(true, false)
+    }
+    expect(guard.observe(false, true)).toBe('stop')
+    expect(createProtocolRecoveryGuard().observe(false, true)).toBe('retry')
+  })
+})
 
 describe('plan/18 P0：工具调用签名', () => {
   it('同工具同参数：键顺序不同仍同签名', () => {

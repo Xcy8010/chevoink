@@ -1,5 +1,21 @@
 import type { AgentMessagePart, AgentTodoItem } from '../../../shared/contracts/index.js'
 
+/** Recovery is bounded both per consecutive failure and per run. A real call
+ * breaks the streak, but never replenishes the total paid correction budget. */
+export function createProtocolRecoveryGuard() {
+  let consecutive = 0
+  let total = 0
+  return {
+    observe(validCall: boolean, invalidProtocol: boolean): 'continue' | 'retry' | 'stop' {
+      if (validCall) consecutive = 0
+      if (!invalidProtocol) return 'continue'
+      consecutive += 1
+      total += 1
+      return consecutive <= 2 && total <= 6 ? 'retry' : 'stop'
+    },
+  }
+}
+
 /** Only unambiguous continuation commands inherit the previous task. */
 export function isContinuationRequest(prompt: string): boolean {
   return /^(?:请|请你|帮我)?\s*(?:继续|接着)(?:(?:执行|完成|处理)?(?:之前|此前|刚才|上次|上一轮|剩余|未完成)的?(?:任务|工作|整改|内容)?|执行|完成)?[。！!\s]*$/u.test(prompt.trim())

@@ -210,6 +210,7 @@ type AgentStoreState = {
   usage: AgentTokenUsage
   currentTurn: number
   lastSeq: number
+  lastVisibleOutput: { runId: string; at: number } | null
   outputSummary: string
   errorMessage: string | null
   errorCode: string | null
@@ -518,6 +519,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   usage: emptyUsage,
   currentTurn: 0,
   lastSeq: 0,
+  lastVisibleOutput: null,
   outputSummary: '',
   errorMessage: null,
   errorCode: null,
@@ -878,6 +880,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         case 'text.delta':
           return {
             ...base,
+            ...(event.runId === state.runId && event.delta.trim() ? { lastVisibleOutput: { runId: event.runId, at: Date.now() } } : {}),
             messages: updateMessageParts(state.messages, event.messageId, (parts) =>
               appendDelta(parts, 'text', event.delta),
             ),
@@ -919,6 +922,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         case 'reasoning.delta':
           return {
             ...base,
+            ...(event.runId === state.runId && event.delta.trim() ? { lastVisibleOutput: { runId: event.runId, at: Date.now() } } : {}),
             messages: updateMessageParts(state.messages, event.messageId, (parts) =>
               appendDelta(parts, 'reasoning', event.delta),
             ),

@@ -45,7 +45,7 @@ import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
 import { toolSignature, ToolAdmissionGuard } from './tool-signature.js'
-import { hasDurableProgress, hasReadProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
+import { createProtocolRecoveryGuard, hasDurableProgress, hasReadProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
 import { createRepeatDetector } from './repeat-detect.js'
 import {
   CHECKPOINT_BUDGET_SLICE,
@@ -1051,7 +1051,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
 
     let lastAssistantText = ''
     // 模型把工具调用写成正文文本而非真正 function calling 时的纠偏重试次数
-    let pseudoToolCallRetries = 0
+    const protocolRecovery = createProtocolRecoveryGuard()
     const toolNameList = tools.map((tool) => tool.name)
     // C3：规划类任务必须以 plan_save 落盘收尾，只聊天不落盘时回填提醒
     const expectsPlanSave = taskSpec.intent !== 'research_analysis' && params.mode === 'plan' && /(规划|大纲|计划)/.test(params.prompt)
@@ -1370,29 +1370,33 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       }
       if (cleanContent) {
         parts.push({ type: 'text', text: cleanContent })
-        lastAssistantText = cleanContent
       }
 
       const invalidToolProtocol =
         effectiveToolCalls.length === 0 &&
         (result.finishReason === 'tool_calls' || containsAgentProtocolInvocation(result.content) || looksLikePseudoToolCall(result.content, toolNameList))
+      const protocolDecision = protocolRecovery.observe(effectiveToolCalls.length > 0, invalidToolProtocol)
 
       if (invalidToolProtocol) {
-        if (pseudoToolCallRetries < 2) {
-          pseudoToolCallRetries += 1
+        // Do not feed an unsuccessful pseudo-call back as an assistant example.
+        messages.pop()
+        bus.emit({ type: 'text.final', messageId, text: '', asReasoning: false })
+        const diagnosticParts = parts.filter((part) => part.type === 'reasoning')
+        if (liveTurn) liveTurn.parts = diagnosticParts
+        console.warn('[agent-tool-protocol]', { runId, turn, finishReason: result.finishReason, decision: protocolDecision, contentChars: result.content.length })
+        if (protocolDecision === 'retry') {
           // 协议失败的执行叙述不能作为真实交付落库；只保留 reasoning 供展开排障。
-          const diagnosticParts = parts.filter((part) => part.type === 'reasoning')
           await persistMessage(messageId, runId, params.sessionId, 'assistant', diagnosticParts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
             content:
-              '[系统/P0] 你刚才没有产生任何可执行的 function call，却返回了工具协议标记或伪调用文本；操作完全没有执行。立即使用 API 原生 function calling 重试，正文信道必须为空。禁止输出 <invoke>、</invoke>、<tool_call>、<parameter>、</parameter> 或任何工具参数文本。',
+              '[系统/P0] 上次响应没有产生 API 原生 function call，该次操作未执行。历史工具记录不是调用语法。请通过本次请求提供的 tools 生成原生 tool_calls（含函数名和完整参数），不要在正文中描述或模拟调用。只重试尚未执行的操作，不重复已有真实工具回执的操作。',
           })
           continue
         }
 
-        const failureText = '模型连续返回无效工具调用协议，本轮已安全停止，未将这些文本视为已执行操作。请重新发起任务。'
+        const failureText = '模型工具调用格式异常，已达到本轮纠错上限并安全停止。已完成操作保留，异常文本未执行；可继续任务，若再次出现请切换支持工具调用的模型。'
         bus.emit({ type: 'text.delta', messageId, delta: failureText })
         bus.emit({ type: 'text.final', messageId, text: failureText, asReasoning: false })
         await persistMessage(messageId, runId, params.sessionId, 'assistant', [{ type: 'text', text: failureText }])
@@ -1400,6 +1404,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         await finalizeRun(runId, bus, 'failed', usage, turn, failureText, failureText)
         return
       }
+
+      if (cleanContent) lastAssistantText = cleanContent
 
       if (effectiveToolCalls.length === 0) {
         // C3：规划类任务未经 plan_save 落盘就想收尾，回填提醒（最多 2 次）防止全程只聊天不落盘

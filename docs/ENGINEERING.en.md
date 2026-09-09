@@ -1,5 +1,7 @@
 # Chevoink Engineering Documentation
 
+2026-09-09 output/protocol P0: generic waiting feedback follows actual text/reasoning deltas for the current run and returns after 1.5 seconds of silence without a running tool card. Historical tool summaries are factual status records, not pseudo-call examples. Invalid responses are not fed back as assistant examples; real calls reset the consecutive protocol-failure streak. Recovery remains capped at two consecutive corrections and six per run under existing run budgets. Text is never treated as executed work; model tiers, credit formulas and chapter content are unchanged.
+
 English | [简体中文](./ENGINEERING.md) · [Development standards](./DEVELOPMENT-STANDARDS.en.md)
 
 Verified on 2026-09-08 against code and production revision `71f7adc`; [CI passed](https://github.com/Xcy8010/chevoink/actions/runs/34240086273). Implementation, automated evidence and unverified product outcomes are deliberately distinguished.

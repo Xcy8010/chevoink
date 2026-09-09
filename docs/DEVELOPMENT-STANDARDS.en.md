@@ -1,5 +1,7 @@
 # Chevoink Development Standards
 
+2026-09-09 regression rules: suppress generic waiting feedback on actual text/reasoning deltas for the current run; restore it after 1.5 seconds of silence only without a running tool card. Use one cancellable timer, and test resumed output, replay, task switching, pause and user questions. Historical tool traces must be factual status records, not pseudo-call examples. Never execute or feed back invalid protocol prose as an assistant example. Real calls reset the consecutive failure streak, not the total correction budget: at most two consecutive corrections and six per run, within existing run budgets.
+
 English | [简体中文](./DEVELOPMENT-STANDARDS.md) · [Engineering state](./ENGINEERING.en.md)
 
 Version 2.0 · 2026-09-08. Applies to fixes, optimization, refactoring and new features. These are requirements, not a claim that every target has already been achieved.
