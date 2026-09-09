@@ -4,7 +4,7 @@ vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: vi.fn(), reserv
 vi.mock('../../api/lib/prisma.js', () => ({ DataAccessError: class extends Error {}, prisma: { aiUsageLog: { create: vi.fn(async () => ({ id: 'usage' })), update: vi.fn(async () => ({ id: 'usage' })), updateMany: vi.fn(async () => ({ count: 1 })) } } }))
 vi.mock('../../api/lib/billing/resolve-token-price.js', async original => ({ ...await original<object>(),
   resolveTokenPrice: async () => ({ version: 'credits-v1-exact', modelTier: 'speed', multiplierBps: 10000 }) }))
-import { chatWithTools } from '../../api/lib/ai-service.js'
+import { buildProviderToolChoice, chatWithTools } from '../../api/lib/ai-service.js'
 
 afterEach(() => vi.unstubAllGlobals())
 const delta = (args: string, first = false) => ({ choices: [{ delta: { tool_calls: [{ index: 0, ...(first ? { id: 'call', function: { name: 'scene_task_build', arguments: args } } : { function: { arguments: args } }) }] } }] })
@@ -22,7 +22,7 @@ describe('lossless tool argument transport', () => {
   it('requests native tool calls during correction without changing the allowed tool list', async () => {
     stream(`data: ${JSON.stringify(delta('{}', true))}\n\ndata: ${JSON.stringify(ending('tool_calls'))}\n\n`)
     const tools = [{ type: 'function' as const, function: { name: 'scene_task_build', description: 'test', parameters: { type: 'object' } } }]
-    const result = await chatWithTools({ messages: [], tools, toolChoice: 'required', providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
+    const result = await chatWithTools({ messages: [], tools, toolChoice: 'required', provider: 'openai', providerBaseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1', reasoningEffort: 'none', providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
     const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
     expect(body.tool_choice).toBe('required')
     expect(body.tools).toEqual(tools)
@@ -32,6 +32,31 @@ describe('lossless tool argument transport', () => {
     stream(`data: ${JSON.stringify(ending('stop'))}\n\n`)
     await chatWithTools({ messages: [], tools: [], toolChoice: 'required', providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
     expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).tool_choice).toBeUndefined()
+  })
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)('keeps DeepSeek %s reasoning and native tools without incompatible forced choice', async reasoningEffort => {
+    stream(`data: ${JSON.stringify(delta('{}', true))}\n\ndata: ${JSON.stringify(ending('tool_calls'))}\n\n`)
+    const tools = [{ type: 'function' as const, function: { name: 'scene_task_build', description: 'test', parameters: { type: 'object' } } }]
+    const result = await chatWithTools({ messages: [], tools, toolChoice: 'required', provider: 'deepseek', model: 'deepseek-v4.1-flash-expires-on-0910', reasoningEffort, providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
+    expect(body.tool_choice).toBeUndefined()
+    expect(body.thinking).toEqual({ type: 'enabled' })
+    expect(body.reasoning_effort).toBe(reasoningEffort)
+    expect(body.tools).toEqual(tools)
+    expect(result.toolCalls).toHaveLength(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    { provider: 'openai', model: 'deepseek-v4-pro', reasoningEffort: 'high' as const },
+    { provider: 'custom', model: 'deepseek/deepseek-r1', reasoningEffort: 'none' as const },
+    { provider: 'custom', model: 'deepseek-reasoner', reasoningEffort: 'none' as const },
+    { provider: 'custom', model: 'alias', providerBaseUrl: 'https://api.deepseek.com/v1', reasoningEffort: 'high' as const },
+  ])('protects compatible/custom DeepSeek routes: %j', input => {
+    expect(buildProviderToolChoice(input, 'required')).toEqual({})
+  })
+  it('retains explicit non-thinking forced choice and omits unrequested choices', () => {
+    const input = { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'none' as const }
+    expect(buildProviderToolChoice(input, 'required')).toEqual({ tool_choice: 'required' })
+    expect(buildProviderToolChoice(input)).toEqual({})
   })
   it.each(['\n', '\r\n', '\r'])('handles %j events, interleaved comments, UTF8 and EOF without final blank line', async newline => {
     stream([`: heartbeat`, '', `data: ${JSON.stringify(delta('{"tasks":[', true))}`, '', `data: ${JSON.stringify(delta('{"goal":"审俘破线"}]}'))}`, '', `data: ${JSON.stringify(ending('tool_calls'))}`].join(newline))

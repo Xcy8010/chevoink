@@ -444,6 +444,20 @@ export function buildProviderReasoningPayload(input: ProviderReasoningInput): Re
   return { reasoning_effort: input.reasoningEffort }
 }
 
+/** DeepSeek thinking accepts native tools, but rejects forced tool choice.
+ * Detect custom routes by model/host too; never disable reasoning to force a call. */
+export function buildProviderToolChoice(input: ProviderReasoningInput, requested?: 'required'): Record<string, unknown> {
+  if (!requested) return {}
+  let hostname = ''
+  try { hostname = new URL(input.providerBaseUrl ?? '').hostname.toLowerCase() } catch { /* model/provider still identify proxies */ }
+  const model = input.model.trim().toLowerCase()
+  const deepseek = input.provider?.trim().toLowerCase() === 'deepseek'
+    || /(?:^|\/)deepseek[-/]/.test(model)
+    || hostname === 'deepseek.com' || hostname.endsWith('.deepseek.com')
+  if (deepseek && (input.reasoningEffort !== 'none' || model.includes('reasoner') || /deepseek-r1/.test(model))) return {}
+  return { tool_choice: requested }
+}
+
 type ChatWithToolsParams = {
   /** Internal protocol correction only; never grants additional tool authority. */
   toolChoice?: 'required'
@@ -551,7 +565,11 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
 
   if (params.tools.length > 0) {
     body.tools = params.tools
-    if (params.toolChoice) body.tool_choice = params.toolChoice
+    Object.assign(body, buildProviderToolChoice({
+      provider: params.provider ?? env.aiTextProvider,
+      providerBaseUrl: params.providerBaseUrl ?? env.aiTextBaseUrl,
+      model, reasoningEffort,
+    }, params.toolChoice))
   }
   const encodedBody = JSON.stringify(body)
   const tier = params.usageLog.modelTier ?? 'speed'
