@@ -185,7 +185,17 @@ function containsProtocolSegment(text: string): boolean {
  * 例如供应商偶发附加的 `</invoke>` 只需清洗；若因此重跑工具，反而可能重复写入。
  */
 export function containsAgentProtocolInvocation(text: string): boolean {
-  return outputSegments(text).some(segment => !segment.code && PROTOCOL_INVOCATION_PATTERNS.some(pattern => pattern.test(segment.text)))
+  return outputSegments(text).some(segment => !segment.code && (
+    PROTOCOL_INVOCATION_PATTERNS.some(pattern => pattern.test(segment.text)) ||
+    /^[\t ]*(?:历史工具记录[\t ]*[（(](?:success|failed|running)[）)]\s*[：:]|\[调用\s*(?:工具|tool))/im.test(segment.text)
+  ))
+}
+
+/** Remove only generated receipt-shaped prose, never quoted code or author data. */
+export function stripAgentHistoryEchoes(text: string): string {
+  return outputSegments(text).map(segment => segment.code ? segment.text : segment.text.replace(
+    /^[\t ]*(?:历史工具记录[\t ]*[（(](?:success|failed|running)[）)]\s*[：:]|\[调用\s*(?:工具|tool))[^\r\n]*(?:\r?\n|$)/gim, '',
+  )).join('').trim()
 }
 
 export function stripAgentProtocolArtifacts(text: string): string {

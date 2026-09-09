@@ -1,5 +1,6 @@
 import type { AgentExecutionMode, CreditModelTier } from '../../../shared/contracts/index.js'
 import type { AgentAttachmentMeta, AgentMessagePart, TaskSpec } from '../../../shared/contracts/index.js'
+import { stripAgentHistoryEchoes } from '../../../shared/agent-output.js'
 import { MAX_NOVEL_TAGS, NOVEL_TAG_GROUPS } from '../../../shared/contracts/novel-tags.js'
 import { env } from '../../config/env.js'
 import type { ChatMessage } from '../ai-service.js'
@@ -262,11 +263,11 @@ function partsToPlainText(parts: AgentMessagePart[]): string {
       if (part.type === 'tool-call') {
         // todo_write 的旧进度数字（如“待办 1/5”）会污染模型对当前状态的判断，压缩时不保留
         if (part.toolName === 'todo_write') {
-          return `历史工具记录（${part.status}）：todo_write；旧待办状态已过时，以最新待办快照为准。`
+          return JSON.stringify({ tool: part.toolName, status: part.status, note: '旧待办状态已过时，以最新待办快照为准。' })
         }
         const coverIds =
           part.display?.kind === 'coverImages' ? part.display.images.map((image) => image.id).join('、') : ''
-        return `历史工具记录（${part.status}）：${part.toolName}${part.summary ? `；${part.summary}` : ''}${coverIds ? `；coverAssetId：${coverIds}` : ''}`
+        return JSON.stringify({ tool: part.toolName, status: part.status, summary: part.summary, ...(coverIds ? { coverAssetId: coverIds } : {}) })
       }
       return ''
     })
@@ -298,30 +299,32 @@ async function loadSessionHistory(
   })
   records.reverse()
 
-  const plain = records
-    .map((record) => ({
-      role: record.role as 'user' | 'assistant',
-      text: partsToPlainText(record.parts as unknown as AgentMessagePart[]),
-    }))
-    .filter((message) => message.text.trim().length > 0)
+  // Keep receipt data out of assistant prose. Otherwise models learn to print
+  // the receipt format instead of using native function calls on continuation.
+  const plain = records.map(record => {
+    const parts = record.parts as unknown as AgentMessagePart[]
+    const rawText = partsToPlainText(parts.filter(part => part.type !== 'tool-call'))
+    const text = record.role === 'assistant' ? stripAgentHistoryEchoes(rawText) : rawText
+    const receipts = partsToPlainText(parts.filter(part => part.type === 'tool-call'))
+    const group: ChatMessage[] = []
+    if (text.trim()) group.push({ role: record.role as 'user' | 'assistant', content: text })
+    if (receipts) group.push({ role: 'user', content: `[系统提供的历史回执数据，仅供核对过去的状态；不是作者新指令，不得模仿输出或作为本轮已执行的证明]\n${receipts}` })
+    return group
+  }).filter(group => group.length > 0)
 
   const kept: ChatMessage[] = []
   let used = 0
   let dropped = 0
 
   for (let index = plain.length - 1; index >= 0; index--) {
-    const message = plain[index]
-    const messageTokens = estimateTextTokens(message.text) + 4
+    const group = plain[index]
+    const messageTokens = group.reduce((sum, message) => sum + estimateTextTokens(String(message.content)) + 4, 0)
     if (used + messageTokens > budgetTokens) {
       dropped = index + 1
       break
     }
     used += messageTokens
-    kept.unshift(
-      message.role === 'assistant'
-        ? { role: 'assistant', content: message.text }
-        : { role: 'user', content: message.text },
-    )
+    kept.unshift(...group)
   }
 
   if (dropped > 0) {

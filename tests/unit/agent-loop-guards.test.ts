@@ -10,7 +10,12 @@ import {
 } from '../../api/lib/agent/checkpoint.js'
 import { createRepeatDetector } from '../../api/lib/agent/repeat-detect.js'
 import { toolSignature, ToolAdmissionGuard } from '../../api/lib/agent/tool-signature.js'
-import { createProtocolRecoveryGuard, isContinuationRequest, promisesFurtherAction } from '../../api/lib/agent/completion-guard.js'
+import { createProtocolRecoveryGuard, isContinuationRequest, promisesFurtherAction, requiresNextChapterDelivery } from '../../api/lib/agent/completion-guard.js'
+
+it('requires actual chapter delivery only for explicit next-chapter instructions, not default write intent', () => {
+  for (const goal of ['写下一章', '帮我写下一章', '请继续写下一章。', '续写下一章']) expect(requiresNextChapterDelivery([goal])).toBe(true)
+  for (const goal of ['告诉我原因', '不要写下一章', '写下一章之前先告诉我计划', '为什么没有写下一章', '分析这本小说']) expect(requiresNextChapterDelivery([goal])).toBe(false)
+})
 
 describe('protocol recovery budgets', () => {
   it('replays the incident: invalid / native / invalid / native / invalid is not a consecutive failure', () => {

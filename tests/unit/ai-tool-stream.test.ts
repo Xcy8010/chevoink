@@ -19,6 +19,20 @@ function stream(text: string) {
 }
 const invoke = () => chatWithTools({ messages: [], tools: [], providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
 describe('lossless tool argument transport', () => {
+  it('requests native tool calls during correction without changing the allowed tool list', async () => {
+    stream(`data: ${JSON.stringify(delta('{}', true))}\n\ndata: ${JSON.stringify(ending('tool_calls'))}\n\n`)
+    const tools = [{ type: 'function' as const, function: { name: 'scene_task_build', description: 'test', parameters: { type: 'object' } } }]
+    const result = await chatWithTools({ messages: [], tools, toolChoice: 'required', providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
+    expect(body.tool_choice).toBe('required')
+    expect(body.tools).toEqual(tools)
+    expect(result.toolCalls).toHaveLength(1)
+  })
+  it('does not add required tool choice to a tool-free wrap-up', async () => {
+    stream(`data: ${JSON.stringify(ending('stop'))}\n\n`)
+    await chatWithTools({ messages: [], tools: [], toolChoice: 'required', providerApiKey: 'fake-test-key', usageLog: { userId: 'test', action: 'test' } })
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).tool_choice).toBeUndefined()
+  })
   it.each(['\n', '\r\n', '\r'])('handles %j events, interleaved comments, UTF8 and EOF without final blank line', async newline => {
     stream([`: heartbeat`, '', `data: ${JSON.stringify(delta('{"tasks":[', true))}`, '', `data: ${JSON.stringify(delta('{"goal":"审俘破线"}]}'))}`, '', `data: ${JSON.stringify(ending('tool_calls'))}`].join(newline))
     const result = await invoke()

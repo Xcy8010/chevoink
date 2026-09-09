@@ -6,10 +6,37 @@ import {
   qualityFindingDispositionSchema,
   qualityFindingFeedbackSchema,
 } from '../../shared/contracts/index.js'
-import { analyzeDeterministicQuality, calibrateCriticFindings, resolveQualityChapterTarget } from '../../api/lib/agent/humanity-quality.js'
+import { analyzeDeterministicQuality, calibrateCriticFindings, resolveQualityChapterTarget, hasCommittedTaskChapter } from '../../api/lib/agent/humanity-quality.js'
 import { allTools } from '../../api/lib/agent/tools/registry.js'
 import { AGENT_TOOL_GOVERNANCE } from '../../api/lib/agent/tools/governance.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
+
+describe('next chapter delivery evidence', () => {
+  const row = { status: 'completed', stage: 'commit', chapterId: 'c', chapter: { id: 'c', novelId: 'n', wordCount: 3000, revision: 4 }, bridge: { toChapterId: 'c', targetRevision: 4, committedAt: new Date() } }
+  const makeDb = (rows: unknown[]) => {
+    const findMany = vi.fn().mockResolvedValue(rows)
+    return { findMany, db: { agentRun: { findFirst: vi.fn().mockResolvedValue({ taskRootId: 'root' }) }, storyCompilation: { findMany } } as unknown as Prisma.TransactionClient }
+  }
+  it('zero tool output or a completed todo list cannot certify a chapter', async () => {
+    const { db, findMany } = makeDb([])
+    expect(await hasCommittedTaskChapter(db, 'u', 'n', 'r')).toBe(false)
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'u', novelId: 'n', run: { taskRootId: 'root' }, status: { not: 'abandoned' } } }))
+  })
+  it('accepts a previously committed current revision after resume without requiring another rewrite', async () => {
+    expect(await hasCommittedTaskChapter(makeDb([row]).db, 'u', 'n', 'r')).toBe(true)
+  })
+  it.each([
+    { ...row, status: 'active' }, { ...row, stage: 'write' }, { ...row, chapter: null },
+    { ...row, chapter: { ...row.chapter, wordCount: 0 } },
+    { ...row, chapter: { ...row.chapter, novelId: 'foreign' } },
+    { ...row, bridge: null }, { ...row, bridge: { ...row.bridge, committedAt: null } },
+    { ...row, bridge: { ...row.bridge, targetRevision: 3 } },
+    { ...row, bridge: { ...row.bridge, toChapterId: 'another' } },
+  ])('rejects missing, stale or mismatched evidence %#', async incomplete => {
+    expect(await hasCommittedTaskChapter(makeDb([incomplete]).db, 'u', 'n', 'r')).toBe(false)
+    expect(await hasCommittedTaskChapter(makeDb([row, incomplete]).db, 'u', 'n', 'r')).toBe(false)
+  })
+})
 
 describe('质量检查默认目标', () => {
   const input = { userId: 'u', novelId: 'n', runId: 'r', fallbackChapterId: 'old-editor' }

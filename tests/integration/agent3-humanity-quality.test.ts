@@ -15,6 +15,7 @@ import {
   selectQualityFindings,
   resolveQualityChapterTarget,
   qualityCompilationScope,
+  hasCommittedTaskChapter,
 } from '../../api/lib/agent/humanity-quality.js'
 import { prisma } from '../../api/lib/prisma.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
@@ -63,7 +64,17 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
       expect(await resolveQualityChapterTarget({ userId, novelId, runId: resumeId, compilationId: compilation.id, fallbackChapterId: 'old-editor' })).toBe(chapterId)
       const scope = await qualityCompilationScope(prisma, userId, novelId, resumeId)
       expect(await prisma.storyCompilation.count({ where: { id: compilation.id, userId, novelId, ...scope } })).toBe(1)
+      expect(await hasCommittedTaskChapter(prisma, userId, novelId, resumeId)).toBe(false)
+      const revision = (await prisma.chapter.findUniqueOrThrow({ where: { id: chapterId }, select: { revision: true } })).revision
+      await prisma.chapterBridge.create({ data: { userId, novelId, compilationId: compilation.id, toChapterId: chapterId, targetOrderIndex: 1, targetRevision: revision,
+        committedAt: new Date(), knowledgeState: {}, bodyState: {}, objectState: {}, relationshipState: {}, emotionAftermath: {}, recentOpenings: [], recentEndings: [], openLoops: [] } })
+      await prisma.storyCompilation.update({ where: { id: compilation.id }, data: { status: 'completed', stage: 'commit' } })
+      expect(await hasCommittedTaskChapter(prisma, userId, novelId, resumeId)).toBe(true)
+      await prisma.chapterBridge.update({ where: { compilationId: compilation.id }, data: { targetRevision: revision - 1 } })
+      expect(await hasCommittedTaskChapter(prisma, userId, novelId, resumeId)).toBe(false)
+      await prisma.chapterBridge.update({ where: { compilationId: compilation.id }, data: { targetRevision: revision } })
       await prisma.agentRun.update({ where: { id: resumeId }, data: { taskSpec: buildTaskSpec({ runId: resumeId, novelId, prompt: '分析另一章' }) } })
+      expect(await hasCommittedTaskChapter(prisma, userId, novelId, resumeId)).toBe(false)
       await expect(resolveQualityChapterTarget({ userId, novelId, runId: resumeId, compilationId: compilation.id })).rejects.toMatchObject({ code: 'QUALITY_TARGET_AMBIGUOUS' })
     } finally {
       await prisma.storyCompilation.delete({ where: { id: compilation.id } })

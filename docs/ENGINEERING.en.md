@@ -1,5 +1,7 @@
 # Chevoink Engineering Documentation
 
+2026-09-09 recurrence fix: renaming history receipts did not prevent imitation. Receipts now live in separate read-only data messages, not assistant prose; legacy assistant echoes are removed from model context. Correction requests require native tool calls. Explicit next-chapter completion checks same-task persisted content and a committed bridge for its current revision. Existing messages, user wording, manuscripts and bills are not rewritten; typed continuation inherits the original contract even after an old false-completed status. Native choice semantics follow the [provider API](https://api-docs.deepseek.com/api/create-chat-completion/), never execution of prose.
+
 2026-09-09 output/protocol P0: generic waiting feedback follows actual text/reasoning deltas for the current run and returns after 1.5 seconds of silence without a running tool card. Historical tool summaries are factual status records, not pseudo-call examples. Invalid responses are not fed back as assistant examples; real calls reset the consecutive protocol-failure streak. Recovery remains capped at two consecutive corrections and six per run under existing run budgets. Text is never treated as executed work; model tiers, credit formulas and chapter content are unchanged.
 
 English | [简体中文](./ENGINEERING.md) · [Development standards](./DEVELOPMENT-STANDARDS.en.md)

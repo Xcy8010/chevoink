@@ -45,7 +45,7 @@ import type { AgentTool, ToolContext } from './tools/types.js'
 import { ORCHESTRATION_TOOL_NAMES, assertOrchestrationResumeGuard, buildOrchestrationResumeNote } from './tools/task-orchestration-tools.js'
 import { createVisibleTextStreamer, humanizeAgentVisibleText } from './visible-text.js'
 import { toolSignature, ToolAdmissionGuard } from './tool-signature.js'
-import { createProtocolRecoveryGuard, hasDurableProgress, hasReadProgress, isContinuationRequest, promisesFurtherAction } from './completion-guard.js'
+import { createProtocolRecoveryGuard, hasDurableProgress, hasReadProgress, isContinuationRequest, promisesFurtherAction, requiresNextChapterDelivery } from './completion-guard.js'
 import { createRepeatDetector } from './repeat-detect.js'
 import {
   CHECKPOINT_BUDGET_SLICE,
@@ -166,10 +166,6 @@ function wrapToolOutput(toolName: string, output: string): string {
  * 多模式覆盖：历史压缩标记格式、工具名+参数 JSON 同段出现、“我现在调用 xx”句式。
  */
 function looksLikePseudoToolCall(content: string, toolNames: string[]): boolean {
-  if (/\[调用\s*(?:工具|tool)/i.test(content)) {
-    return true
-  }
-
   const mentioned = toolNames.filter((name) => content.includes(name))
   if (mentioned.length > 0) {
     // 工具名与参数 JSON（如 {"title": …）同时出现：大概率在文本里模拟调用
@@ -1052,6 +1048,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     let lastAssistantText = ''
     // 模型把工具调用写成正文文本而非真正 function calling 时的纠偏重试次数
     const protocolRecovery = createProtocolRecoveryGuard()
+    let requireNativeToolCall = false
     const toolNameList = tools.map((tool) => tool.name)
     // C3：规划类任务必须以 plan_save 落盘收尾，只聊天不落盘时回填提醒
     const expectsPlanSave = taskSpec.intent !== 'research_analysis' && params.mode === 'plan' && /(规划|大纲|计划)/.test(params.prompt)
@@ -1268,6 +1265,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         onUsage: observeTurnUsage,
         messages,
         tools: openAITools,
+        ...(requireNativeToolCall && openAITools.length > 0 ? { toolChoice: 'required' as const } : {}),
         model: runtimeModelName,
         providerBaseUrl: modelRuntime.baseUrl,
         providerApiKey: modelRuntime.apiKey,
@@ -1376,15 +1374,20 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         effectiveToolCalls.length === 0 &&
         (result.finishReason === 'tool_calls' || containsAgentProtocolInvocation(result.content) || looksLikePseudoToolCall(result.content, toolNameList))
       const protocolDecision = protocolRecovery.observe(effectiveToolCalls.length > 0, invalidToolProtocol)
+      if (effectiveToolCalls.length > 0) requireNativeToolCall = false
 
       if (invalidToolProtocol) {
         // Do not feed an unsuccessful pseudo-call back as an assistant example.
         messages.pop()
         bus.emit({ type: 'text.final', messageId, text: '', asReasoning: false })
         const diagnosticParts = parts.filter((part) => part.type === 'reasoning')
-        if (liveTurn) liveTurn.parts = diagnosticParts
+        if (liveTurn) {
+          liveTurn.parts = diagnosticParts
+          liveTurn.streamedText = ''
+        }
         console.warn('[agent-tool-protocol]', { runId, turn, finishReason: result.finishReason, decision: protocolDecision, contentChars: result.content.length })
         if (protocolDecision === 'retry') {
+          requireNativeToolCall = true
           // 协议失败的执行叙述不能作为真实交付落库；只保留 reasoning 供展开排障。
           await persistMessage(messageId, runId, params.sessionId, 'assistant', diagnosticParts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
@@ -1432,14 +1435,17 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         const reportIncomplete = Boolean(report && report.chineseCharacters < reportMinimum)
         const reportReminder = reportIncomplete
           ? `\n本任务报告main已保存${report!.chineseCharacters}个汉字，要求至少${reportMinimum}个。先用research_report_read核对区块与revision，再用research_report_save只保存缺失或待修订区块；不得重写整份或凑字。来源读取失败时先核对搜索实际返回的URL、错误分类及页面真实链接，在既有预算内尝试可用来源，不编造地址、不重复请求已失败且未变化的来源。记录未取得的资料与受限原因，不能把简介或乱码当正文，也不能宣称已读全书；仅在确实需要用户提供信息时使用ask_user，不把上传小说作为排查404的前提。` : ''
-        const prematureFinish = reportIncomplete || unfinishedTodos.length > 0 || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
+        const chapterIncomplete = requiresNextChapterDelivery(taskSpec.goals)
+          && !await (await import('./humanity-quality.js')).hasCommittedTaskChapter(prisma, params.userId, params.novelId, runId)
+        const prematureFinish = chapterIncomplete || reportIncomplete || unfinishedTodos.length > 0 || result.finishReason === 'length' || promisesFurtherAction(cleanContent) || (expectsPlanSave && !planSavePerformed)
         if (prematureFinish && todoReminders < 4) {
+          requireNativeToolCall = true
           todoReminders += 1
           await persistMessage(messageId, runId, params.sessionId, 'assistant', parts)
           bus.emit({ type: 'step.finish', turn, usage: result.usage })
           messages.push({
             role: 'user',
-            content: `[系统] 当前回复尚不足以交付：仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。\n${renderTodoItems(unfinishedTodos)}${reportReminder}\n只在原授权范围内继续下一步，不重新规划已完成工作。有本任务既有清单时才更新真实完成进度；无清单且工作已完成时直接交付，不为结束任务补建空清单或已完成清单。无法完成的项保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
+            content: `[系统] 当前回复尚不足以交付：仍有未完成待办、未落盘产出，或回复只说明了下一步动作/被截断。${chapterIncomplete ? '\n本任务要求写下一章，但本任务作用域内尚无完整正文及对应当前版本的章节终态。先用真实工具核对已有编译与正文：尚未建立则准备本章，已有则完成缺失步骤；不要重写已完成章节，不要引用历史工具记录冒充本次执行。' : ''}\n${renderTodoItems(unfinishedTodos)}${reportReminder}\n只在原授权范围内继续下一步，不重新规划已完成工作。有本任务既有清单时才更新真实完成进度；无清单且工作已完成时直接交付，不为结束任务补建空清单或已完成清单。无法完成的项保持未完成并说明阻塞，严禁假标 completed。需要作者决策时使用 ask_user。`,
           })
           continue
         }

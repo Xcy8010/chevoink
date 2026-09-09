@@ -445,6 +445,8 @@ export function buildProviderReasoningPayload(input: ProviderReasoningInput): Re
 }
 
 type ChatWithToolsParams = {
+  /** Internal protocol correction only; never grants additional tool authority. */
+  toolChoice?: 'required'
   /** Internal callers freeze this value with their durable request. */
   maxOutputTokens?: number
   /** Internal server capability. Never populated from model/user JSON. */
@@ -549,6 +551,7 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
 
   if (params.tools.length > 0) {
     body.tools = params.tools
+    if (params.toolChoice) body.tool_choice = params.toolChoice
   }
   const encodedBody = JSON.stringify(body)
   const tier = params.usageLog.modelTier ?? 'speed'

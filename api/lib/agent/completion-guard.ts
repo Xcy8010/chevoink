@@ -27,6 +27,12 @@ export function promisesFurtherAction(text: string): boolean {
   return /(?:接下来|下一步|现在|马上|先|继续|直接)(?:我会|我将|会|将|去)?[^。\n]{0,24}(?:写入|写正文|修订|修复|检查|校验|整改|重建|补齐|读取|读回)/u.test(lastSentence)
 }
 
+/** Narrow to an explicit next-chapter instruction, not the legacy "write"
+ * default intent (which also contains questions and explanations). */
+export function requiresNextChapterDelivery(goals: string[]): boolean {
+  return goals.some(goal => /^(?:(?:请|帮我|请帮我|继续|接着)\s*)*(?:写|续写)(?:下[一1]|新的一)章(?:[。！!\s]|$)/u.test(goal.trim()))
+}
+
 const checkpointReadTools = new Set([
   'chapter_read', 'plan_read', 'novel_get_context', 'chapter_list_summaries', 'memory_search',
   'volume_list', 'structure_outline', 'web_read', 'platform_novel_read', 'research_report_read',

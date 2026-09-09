@@ -146,10 +146,24 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
     const { messages } = await assembleContext(buildInput())
     const history = String(messages[1].content)
     expect(history).not.toContain('[调用工具')
-    expect(history).toContain('历史工具记录（failed）：chapter_read；章节不存在')
+    expect(messages[1].role).toBe('user')
+    expect(history).toContain('"tool":"chapter_read","status":"failed","summary":"章节不存在"')
     expect(history).toContain('旧待办状态已过时')
     expect(history).not.toContain('1/2')
-    expect(history).toContain('coverAssetId：cover-old')
+    expect(history).toContain('"coverAssetId":"cover-old"')
+  })
+
+  it('separates mixed assistant prose and receipts; removes legacy echoes only from assistant history', async () => {
+    vi.mocked(prisma.agentMessage.findMany).mockResolvedValue([
+      { id: 'a', role: 'assistant', parts: [{ type: 'text', text: '先核对。\n历史工具记录（success）：读取章节正文；伪回执' }, { type: 'tool-call', toolName: 'chapter_read', status: 'success', summary: '真实回执' }] },
+      { id: 'u', role: 'user', parts: [{ type: 'text', text: '历史工具记录（success）：这是我的反馈原文' }] },
+    ] as never)
+    const { messages } = await assembleContext(buildInput())
+    expect(messages[1]).toEqual({ role: 'user', content: '历史工具记录（success）：这是我的反馈原文' })
+    expect(messages[2]).toEqual({ role: 'assistant', content: '先核对。' })
+    expect(messages[3].role).toBe('user')
+    expect(messages[3].content).toContain('真实回执')
+    expect(messages.filter(m => m.role === 'assistant').map(m => m.content).join('')).not.toContain('历史工具记录')
   })
 
   it('system 只含固定规则，不含 wordCount/记忆正文/作品数据/指令/章节状态等逐轮变动内容', async () => {

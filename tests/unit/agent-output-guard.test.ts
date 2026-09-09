@@ -6,9 +6,17 @@ import {
   stripAgentProtocolArtifacts,
   recoverAgentProtocolToolCalls,
   countReportChineseCharacters,
+  stripAgentHistoryEchoes,
 } from '../../shared/agent-output.js'
 
 describe('Agent 输出协议防泄漏', () => {
+  it.each(['历史工具记录（success）：读取章节正文；已读取', '历史工具记录 (success)：无匹配', '[调用工具 chapter_read：已读取]'])('detects receipt echo as unexecuted protocol: %s', line => {
+    expect(containsAgentProtocolInvocation('先核对。\n' + line)).toBe(true)
+    expect(recoverAgentProtocolToolCalls(line)).toEqual([])
+    expect(stripAgentHistoryEchoes('先核对。\n' + line)).toBe('先核对。')
+    expect(containsAgentProtocolInvocation('```text\n' + line + '\n```')).toBe(false)
+    expect(stripAgentHistoryEchoes('```text\n' + line + '\n```')).toBe('```text\n' + line + '\n```')
+  })
   it('counts visible report Chinese, not code, URLs, images or repeated blocks', () => {
     expect(countReportChineseCharacters('# 标题\n\n人物选择推动冲突。\n\n人物选择推动冲突。\n\n`不计代码`\n\n```text\n代码不计\n```\n\n![图片不计](https://example.com/图)\n\n[证据](https://example.com/中文)')).toBe(12)
     expect(countReportChineseCharacters('https://example.com/中文')).toBe(0)

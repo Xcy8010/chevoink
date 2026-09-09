@@ -233,6 +233,21 @@ export async function qualityCompilationScope(db: Prisma.TransactionClient, user
   return { runId }
 }
 
+/** Server-side next-chapter delivery evidence, including resumed task lineage. */
+export async function hasCommittedTaskChapter(db: Prisma.TransactionClient, userId: string, novelId: string, runId: string): Promise<boolean> {
+  const scope = await qualityCompilationScope(db, userId, novelId, runId)
+  const rows = await db.storyCompilation.findMany({
+    where: { userId, novelId, ...scope, status: { not: 'abandoned' } },
+    select: { status: true, stage: true, chapterId: true,
+      chapter: { select: { id: true, novelId: true, revision: true, wordCount: true } },
+      bridge: { select: { toChapterId: true, targetRevision: true, committedAt: true } } },
+  })
+  return rows.length > 0 && rows.every(row => row.status === 'completed' && row.stage === 'commit'
+    && row.chapter && row.chapter.novelId === novelId && row.chapter.wordCount > 0
+    && row.chapterId === row.chapter.id && row.bridge?.toChapterId === row.chapter.id
+    && row.bridge.committedAt !== null && row.bridge.targetRevision === row.chapter.revision)
+}
+
 /** Explicit targets win; omitted targets belong to the active task, not a stale editor tab. */
 export async function resolveQualityChapterTarget(
   input: { userId: string; novelId: string; runId?: string; chapterId?: string; compilationId?: string; fallbackChapterId?: string | null },
