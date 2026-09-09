@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { calculateTokenChargeMilli } from '../../api/lib/credits.js'
-import { calculateV2ChargeMilli, BillingCacheUsageRequired } from '../../api/lib/billing/pricing.js'
+import { calculateV2ChargeMilli, calculateV2UserChargeMilli, BillingCacheUsageRequired } from '../../api/lib/billing/pricing.js'
 
 const MAX_DB_INT = 2_147_483_647
 
 describe('V2 itemized integer pricing', () => {
   const rates = { inputNano: 100000, cacheNano: 20000, outputNano: 1000000 }
+  it('discounts unknown cache without changing reported-cache prices or bypassing validation', () => {
+    expect(calculateV2UserChargeMilli(10000, 1000, null, rates)).toBe(1200)
+    expect(calculateV2UserChargeMilli(10000, 1000, 0, rates)).toBe(2000)
+    expect(calculateV2UserChargeMilli(10000, 1000, 5000, rates)).toBe(1600)
+    expect(calculateV2UserChargeMilli(10000, 1000, null, rates, 10000)).toBeLessThanOrEqual(calculateTokenChargeMilli(10000, 1000))
+    expect(() => calculateV2UserChargeMilli(-1, 0, null, rates)).toThrow()
+    expect(() => calculateV2UserChargeMilli(10, 0, null, { ...rates, cacheNano: rates.inputNano + 1 })).toThrow()
+  })
   it('caps the discounted sum at the frozen V1 charge, including output-heavy requests', () => {
     const quarter = { inputNano: 110000, cacheNano: 27500, outputNano: 1100000 }
     expect(calculateV2ChargeMilli(10000, 1000, 0, quarter, 11000)).toBe(1100)

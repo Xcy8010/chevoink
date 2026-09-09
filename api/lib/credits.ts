@@ -17,7 +17,7 @@ import type {
 } from '../../shared/contracts/index.js'
 import { DataAccessError, prisma } from './prisma.js'
 import { decryptSecret } from './secret-box.js'
-import { assertCreditInteger, BillingInputError, calculateV1ChargeMilli, calculateV2ChargeMilli } from './billing/pricing.js'
+import { assertCreditInteger, BillingInputError, calculateV1ChargeMilli, calculateV2UserChargeMilli } from './billing/pricing.js'
 import { equalLegacyMetadata, prepareCreditRequest, readCreditFingerprint } from './billing/credit-request.js'
 import { getActiveTokenPrice, getActiveTokenPrices } from './billing/rate-cards.js'
 import { tokenPriceSchema, type TokenPrice } from './billing/token-price.js'
@@ -529,7 +529,10 @@ export async function assertCreditAccess(userId: string, tier: CreditModelTier =
   if (tier === 'custom') return
   const pending = await prisma.aiUsageLog.findFirst({ where: { userId, OR: [
     { billingStatus: 'pending_settlement' },
-    { billingStatus: 'pending_usage', billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
+    // Unknown historical usage remains auditable, but cannot permanently lock
+    // a newly granted daily window. Never turn this into a zero-usage invoice.
+    { billingStatus: 'pending_usage', createdAt: { gte: account.periodStartedAt },
+      billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
   ] }, select: { id: true } })
   if (pending) throw new DataAccessError(409, 'CREDITS_SETTLEMENT_PENDING', '前次模型调用的结果已保留，费用正在核实或结算；暂不发起新的付费调用，请稍后继续。')
   const remaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli
@@ -546,6 +549,18 @@ export async function assertCreditAccess(userId: string, tier: CreditModelTier =
     if (tier === 'speed' && configuredModels === 0) return
     throw new DataAccessError(409, 'MODEL_TIER_UNAVAILABLE', '该模型档位尚未开放。')
   }
+}
+
+/** Standalone text helpers have no run selector. Prefer the owner's most recently
+ * updated enabled BYOK model; never use another owner's model or fall back to a
+ * paid provider when that selected custom configuration is invalid. */
+export async function getAuxiliaryModelRuntime(userId: string) {
+  const custom = await prisma.aiModelConfig.findFirst({
+    where: { ownerUserId: userId, enabled: true },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    select: { id: true },
+  })
+  return getModelTierRuntime(custom ? 'custom' : 'basic', userId, custom?.id)
 }
 
 export async function getModelTierRuntime(tier: CreditModelTier = 'speed', userId?: string, customModelId?: string | null, requestedReasoningEffort?: ModelReasoningEffort): Promise<{
@@ -813,8 +828,11 @@ export async function reconcileCreditRefunds(input: { limit?: number; userId?: s
 export async function reconcileTokenSettlements(limit = 25) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DataAccessError(400, 'CREDIT_SETTLEMENT_BATCH_INVALID', '结算批次大小无效。')
   const pending = await prisma.aiUsageLog.findMany({ where: { providerType: 'text',
-    billingStatus: { in: ['observed', 'pending_settlement'] },
-    OR: [{ billingRetryAt: null }, { billingRetryAt: { lte: new Date() } }] },
+    AND: [{ OR: [
+      { billingStatus: { in: ['observed', 'pending_settlement'] } },
+      { billingStatus: 'pending_usage', usageSource: 'reported', requestTokens: { not: null }, responseTokens: { not: null },
+        billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
+    ] }, { OR: [{ billingRetryAt: null }, { billingRetryAt: { lte: new Date() } }] }] },
     orderBy: [{ billingRetryAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }], take: limit })
   for (const usage of pending) {
     try {
@@ -824,7 +842,7 @@ export async function reconcileTokenSettlements(limit = 25) {
         requestTokens: usage.requestTokens ?? 0, responseTokens: usage.responseTokens ?? 0,
         modelTier: tier as CreditModelTier, multiplierBps: usage.multiplierBps, referenceId: usage.targetId ?? usage.id })
     } catch {
-      await prisma.aiUsageLog.updateMany({ where: { id: usage.id, billingStatus: { in: ['observed', 'pending_settlement'] } },
+      await prisma.aiUsageLog.updateMany({ where: { id: usage.id, billingStatus: { in: ['observed', 'pending_settlement', 'pending_usage'] } },
         data: { billingStatus: 'pending_settlement', billingRetryAt: new Date(Date.now() + 60_000) } })
     }
   }
@@ -936,16 +954,25 @@ export async function consumeTokenCredits(input: {
     if (frozen?.version === 'credits-v2-itemized') {
       // Estimated/missing usage is not an invoice, nor is unknown cache a miss.
       // Keep the generated result and original observation for reconciliation.
-      if (usage.usageSource !== 'reported' || usage.requestTokens === null || usage.responseTokens === null
-        || (usage.requestTokens > 0 && usage.promptCacheHitTokens === null && frozen.rates.inputNano !== frozen.rates.cacheNano)) {
+      if (usage.usageSource !== 'reported' || usage.requestTokens === null || usage.responseTokens === null) {
         const { account } = await ensureAccountWithDb(tx, input.userId)
         await tx.aiUsageLog.update({ where: { id: usage.id }, data: { billingStatus: 'pending_usage', billingRetryAt: null } })
         return { chargedMilli: 0, remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
           exhausted: false, pendingUsage: true }
       }
-      amountMilli = validateBillingInput(() => calculateV2ChargeMilli(usage.requestTokens!, usage.responseTokens!, usage.promptCacheHitTokens, frozen.rates, frozen.v1CeilingBps))
+      // Later cache evidence must not claw back an already granted concession.
+      // Reuse its original metadata; the ledger's normal identity checks still
+      // validate owner, tokens, frozen rates and reference before replaying.
+      const original = usage.billingStatus === 'settled'
+        ? await tx.creditLedgerEntry.findUnique({ where: { idempotencyKey: request.idempotencyKey }, select: { userId: true, metadata: true } }) : null
+      const originalMetadata = original?.userId === input.userId && original.metadata && typeof original.metadata === 'object' && !Array.isArray(original.metadata)
+        ? original.metadata : null
+      const retainedDiscount = originalMetadata?.cachePricingPolicy === 'unknown-cache-discount-2026-09-09'
+      const cacheHitTokens = retainedDiscount ? null : usage.promptCacheHitTokens
+      amountMilli = validateBillingInput(() => calculateV2UserChargeMilli(usage.requestTokens!, usage.responseTokens!, cacheHitTokens, frozen.rates, frozen.v1CeilingBps))
       metadata = { pricingVersion: frozen.version, rateCardId: frozen.rateCardId, rates: frozen.rates,
-        cacheHitTokens: usage.promptCacheHitTokens, cacheMissTokens: usage.promptCacheMissTokens,
+        cacheHitTokens, cacheMissTokens: retainedDiscount ? originalMetadata!.cacheMissTokens : usage.promptCacheMissTokens,
+        ...(cacheHitTokens === null ? { cachePricingPolicy: 'unknown-cache-discount-2026-09-09', platformAbsorbsDifference: true } : {}),
         ...(frozen.v1CeilingBps !== undefined ? { v1CeilingBps: frozen.v1CeilingBps } : {}) }
     } else {
       if (frozen && frozen.multiplierBps !== multiplierBps) throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用倍率与用量记录不一致。')

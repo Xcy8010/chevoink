@@ -40,6 +40,15 @@ export function assertItemizedRates(rates: ItemizedTokenRates): void {
   if (rates.cacheNano > rates.inputNano) throw new BillingInputError()
 }
 
+/** Owner-approved missing-cache concession (2026-09-09). Counts must already
+ * be reported; discount unknown input without changing the original evidence. */
+export function calculateV2UserChargeMilli(promptTokens: number, completionTokens: number, cacheHitTokens: number | null, rates: ItemizedTokenRates, v1CeilingBps?: number): number {
+  assertItemizedRates(rates)
+  return cacheHitTokens === null
+    ? calculateV2ChargeMilli(promptTokens, completionTokens, null, { ...rates, inputNano: rates.cacheNano }, v1CeilingBps)
+    : calculateV2ChargeMilli(promptTokens, completionTokens, cacheHitTokens, rates, v1CeilingBps)
+}
+
 /** Plan30 §13.8.2/4: sum exact nano amounts, round once to wallet milli.
  * Missing cache is computable only for equal input/cache rates (d=1). */
 export function calculateV2ChargeMilli(promptTokens: number, completionTokens: number, cacheHitTokens: number | null, rates: ItemizedTokenRates, v1CeilingBps?: number): number {

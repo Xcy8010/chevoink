@@ -92,7 +92,11 @@ N = U × inputNano + H × cacheNano + O × outputNano
 wallet milli = ceil(N / 1,000,000)
 ```
 
-Rates are nano-Credits per token and **already include tier/calibration**. Do not multiply again. Unknown cache usage requires reconciliation when cache/input rates differ; equal rates permit calculation from total input. Rate-card lifecycle: draft → shadow → approved → active, with immutable hashes and events.
+Rates are nano-Credits per token and **already include tier/calibration**. Do not multiply again. Rate-card lifecycle: draft → shadow → approved → active, with immutable hashes and events.
+
+Owner-approved exception on 2026-09-09: default-path V2 calls with trustworthy reported input/output totals but unknown cache counts settle at `P × cacheNano + O × outputNano`, still capped by the frozen V1 price. Preserve null cache evidence and record `unknown-cache-discount-2026-09-09` in the ledger. The platform absorbs the difference; do not infer cache hits or retroactively bill the discount. Pending observations with trustworthy totals enter the existing settlement retry process. Entirely missing totals remain pending, never fabricated as zero usage. Prior daily-window unknown usage no longer locks fresh allowance; current-window reconciliation and actual exhaustion use distinct errors.
+
+BYOK Agent quality/continuity checks, repairs, research synthesis and session naming inherit the run's custom model. Standalone export advice and relationship graphs prefer the owner's most recently updated enabled custom model; invalid configuration must not silently fall back to a paid platform model. Custom text calls consume no platform Credits. Paid platform image/search tools retain quota checks, but their exhaustion does not terminate remaining BYOK text work. Account suspension and other security controls still apply.
 
 Offline replay: `npx tsx scripts/audit-credit-pricing.ts <replay.json>`. It consumes de-identified confirmed usage and a frozen candidate; it does not access wallets, charge, fit or approve rates.
 

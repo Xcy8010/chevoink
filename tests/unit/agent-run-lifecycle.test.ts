@@ -97,6 +97,23 @@ function context(): ToolContext {
   }
 }
 
+describe('BYOK paid-tool isolation', () => {
+  it.each(['web_search', 'research_dossier_build', 'cover_generate', 'view_image'])('keeps %s quota failure local to the paid tool', async name => {
+    const ctx = context()
+    const runtime = await (await import('../../api/lib/credits.js')).getModelTierRuntime()
+    ctx.modelRuntime = { ...runtime, tier: 'custom', multiplierBps: 0 }
+    const admitted = tool(name, async () => { throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '平台额度不足') })
+    const result = await handleToolCall(call('paid', name), [admitted], ctx, { emit: mocks.emit }, 'message', 'run')
+    expect(result.part.status).toBe('failed')
+    expect(result.observation).toContain('自定义文本模型')
+    expect(result.observation).toContain('不要重复调用')
+  })
+  it('does not swallow platform quota errors for a built-in model', async () => {
+    const admitted = tool('web_search', async () => { throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '平台额度不足') })
+    await expect(handleToolCall(call('paid', admitted.name), [admitted], context(), { emit: mocks.emit }, 'message', 'run')).rejects.toMatchObject({ code: 'CREDITS_EXHAUSTED' })
+  })
+})
+
 describe('original task context on resume', () => {
   it('announces parameter preparation before the model finishes, without admitting execution early', async () => {
     mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {

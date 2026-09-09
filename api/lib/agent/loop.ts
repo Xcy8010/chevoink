@@ -460,7 +460,13 @@ export async function handleToolCall(
     }
   } catch (error) {
     if (ctx.signal.aborted) return fail('已中断', '用户已请求暂停，停止后续执行；已保存内容保留。', 'failed')
-    if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) throw error
+    if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) {
+      if (ctx.modelRuntime?.tier === 'custom' && ['web_search', 'research_dossier_build', 'cover_generate', 'view_image'].includes(call.name)
+        && ['CREDITS_EXHAUSTED', 'CREDITS_SETTLEMENT_PENDING'].includes(error.code)) {
+        return fail('平台付费能力暂不可用', `${error.message} 本工具未完成，不要重复调用；继续使用作者已启用的自定义文本模型完成其余工作。图片生成、联网搜索仍需平台 Credits，不能声称已完成这些操作。`, 'failed')
+      }
+      throw error
+    }
     if (error instanceof DataAccessError && (error.code.startsWith('WEB_READ_') || error.code === 'RESEARCH_NO_PROGRESS')) {
       // Access/quality refusals are not successful reads or permission to bypass the gate.
       const labels: Record<string, string> = {
@@ -844,6 +850,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // 首次对话且仍是默认标题时异步自动命名（仅一次，不阻塞循环）
     if (!params.resume) {
       void autoNameSession({
+        modelRuntime,
         sessionId: params.sessionId,
         userId: params.userId,
         novelId: params.novelId,

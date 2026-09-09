@@ -72,7 +72,7 @@ export const researchDossierBuildTool = defineTool({
   permission: PLAN_BUILD_WRITE,
   readOnly: false,
   async execute(ctx, args) {
-    const dossier = await buildResearchDossier(ctx.userId, ctx.novelId, ctx.runId, args, ctx.signal)
+    const dossier = await buildResearchDossier(ctx.userId, ctx.novelId, ctx.runId, args, ctx.signal, { modelRuntime: ctx.modelRuntime })
     const items = [
       `读者承诺：${dossier.readerPromise}`,
       `弃书风险：${dossier.abandonmentRisks.slice(0, 3).join('；')}`,

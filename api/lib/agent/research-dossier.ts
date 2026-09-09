@@ -15,6 +15,7 @@ import {
   type ResearchWorkbenchPayload,
 } from '../../../shared/contracts/index.js'
 import { generateTextCompletion } from '../ai-service.js'
+import { assertCreditAccess } from '../credits.js'
 import { searchWeb, type WebSearchOutcome } from '../web-search-service.js'
 import { DataAccessError, prisma } from '../prisma.js'
 import { ensureWritingExperiment, recordWritingSignal } from './writing-experiments.js'
@@ -27,6 +28,7 @@ type SearchFn = (query: string, maxResults: number, signal?: AbortSignal) => Pro
 type SynthesizeFn = (systemPrompt: string, userPrompt: string) => Promise<string>
 
 type ResearchDependencies = {
+  modelRuntime?: import('./tools/types.js').ToolContext['modelRuntime']
   search?: SearchFn
   synthesize?: SynthesizeFn
 }
@@ -239,6 +241,7 @@ export async function buildResearchDossier(
   const sourceMap = new Map<string, ResearchSourceView>()
   let providerSearchCount = 0
   for (const query of input.queries.slice(0, RESEARCH_MAX_QUERIES)) {
+    if (!dependencies.search) await assertCreditAccess(userId, 'speed', false)
     const outcome = await search(query, 5, signal)
     providerSearchCount += 1
     for (const result of outcome.results) {
@@ -274,6 +277,7 @@ export async function buildResearchDossier(
     sourceText,
   ].join('\n')
   const synthesize = dependencies.synthesize ?? ((system, prompt) => generateTextCompletion(system, prompt, {
+    modelRuntime: dependencies.modelRuntime?.tier === 'custom' ? dependencies.modelRuntime : undefined,
     userId,
     action: 'agentResearchDossier',
     novelId,

@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import type { MemoryEvidence, MemoryGraph, MemorySearchHit } from '../../../shared/contracts/index.js'
 import { generateTextCompletion } from '../ai-service.js'
+import { getAuxiliaryModelRuntime } from '../credits.js'
 import { DataAccessError, prisma } from '../prisma.js'
 
 type EvidenceInput = {
@@ -578,6 +579,7 @@ async function buildMemoryGraphOnce(
   const novelContext = `作品：${novel.title}\n简介：${novel.summary || '无'}\n分类：${novel.categoryName || '未设置'}\n标签：${novel.tagNames.join('、') || '无'}`
   const sourceId = `ai-graph:${createHash('sha256').update(chapters.map((chapter) => `${chapter.id}:${chapter.revision}`).join('|')).digest('hex').slice(0, 24)}`
   const chunks = chunkChapters(chapters)
+  const modelRuntime = await getAuxiliaryModelRuntime(userId)
   const total = chunks.length
   let done = 0
   onProgress?.(done, total)
@@ -588,8 +590,7 @@ async function buildMemoryGraphOnce(
         const raw = await generateTextCompletion(
           system,
           user,
-          // 基础模型档：后台轻任务与用户侧体验档位解耦，未配置时自动回退极速
-          { userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low', modelTier: 'basic' },
+          { modelRuntime, userId, novelId, action: 'agentMemoryGraphBuild', targetType: 'novel', targetId: novelId, temperature: 0.1, reasoningEffort: 'low' },
         )
         return aiGraphEnvelopeSchema.parse(parseJsonObject(raw))
       } catch (error) {

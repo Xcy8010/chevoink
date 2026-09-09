@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { afterAll, describe, expect, it } from 'vitest'
-import { consumeCredits, consumeCreditsInTransaction, consumeTokenCredits, getCreditWindow, refundCreditCharge,
+import { assertCreditAccess, consumeCredits, consumeCreditsInTransaction, consumeTokenCredits, getCreditWindow, refundCreditCharge,
   recordSearchRefundIntent, recordImageRefundIntent, reconcileCreditRefunds, getSearchRefundState, getTaskCreditUsage, type ConsumeCreditInput } from '../../api/lib/credits.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { resetAdminUsersCredits } from '../../api/lib/admin-credit-model.js'
@@ -30,6 +30,24 @@ async function fixture(run: (userId: string, input: ConsumeCreditInput) => Promi
 }
 
 describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (isolated PG)', () => {
+  it('does not let a prior-window unknown receipt lock fresh allowance or exempt BYOK calls', async () => {
+    await fixture(async userId => {
+      const usage = await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture',
+        modelName: 'fixture', action: 'fixture', targetType: 'text', modelTier: 'speed', durationMs: 1,
+        createdAt: new Date(getCreditWindow().startedAt.getTime() - 1), usageSource: 'unknown', billingStatus: 'pending_usage',
+        billingSnapshot: { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 10000,
+          rateCardId: 'fixture', rates: { inputNano: 100000, cacheNano: 25000, outputNano: 1000000 } } } })
+      try {
+        await expect(assertCreditAccess(userId, 'speed')).resolves.toBeUndefined()
+        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { createdAt: new Date() } })
+        await expect(assertCreditAccess(userId, 'speed')).rejects.toMatchObject({ code: 'CREDITS_SETTLEMENT_PENDING' })
+        await expect(assertCreditAccess(userId, 'custom')).resolves.toBeUndefined()
+        expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(0)
+        expect(await prisma.aiUsageLog.findUniqueOrThrow({ where: { id: usage.id } }))
+          .toMatchObject({ requestTokens: null, responseTokens: null, billingStatus: 'pending_usage' })
+      } finally { await prisma.aiUsageLog.delete({ where: { id: usage.id } }) }
+    })
+  })
   it('settles and refunds capped V2 exactly once without repricing the frozen request', async () => {
     await fixture(async userId => {
       const price = { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 11000, v1CeilingBps: 11000,
@@ -63,9 +81,7 @@ describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (iso
         expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 0, pendingUsage: true })
         expect(await prisma.creditLedgerEntry.count({ where: { userId, sourceType: 'model_tokens' } })).toBe(0)
         await expect(prisma.aiUsageLog.update({ where: { id: usage.id }, data: { billingSnapshot: { ...price, rateCardId: 'changed' } } })).rejects.toThrow()
-        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { usageSource: 'reported' } })
-        expect(await consumeTokenCredits(input)).toMatchObject({ pendingUsage: true })
-        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { promptCacheHitTokens: 200, promptCacheMissTokens: 800 } })
+        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { usageSource: 'reported', promptCacheHitTokens: 200, promptCacheMissTokens: 800 } })
         expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 190 })
         expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 190 })
         expect(await prisma.creditLedgerEntry.count({ where: { userId, sourceType: 'model_tokens' } })).toBe(1)
@@ -76,6 +92,27 @@ describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (iso
         const refund = await prisma.creditLedgerEntry.findFirstOrThrow({ where: { userId, kind: 'refund' } })
         expect(refund).toMatchObject({ deltaMilli: 190, requestTokens: 1000, responseTokens: 100 })
         expect(refund.metadata).toMatchObject({ pricingVersion: price.version, rateCardId: price.rateCardId, rates: price.rates, originalEntryId: ledger.id })
+      } finally { await prisma.aiUsageLog.delete({ where: { id: usage.id } }) }
+    })
+  })
+  it('settles reported totals with unknown cache once at the approved discount, preserving null evidence', async () => {
+    await fixture(async userId => {
+      const usage = await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture',
+        modelName: 'fixture', action: 'fixture', targetType: 'text', modelTier: 'speed', multiplierBps: 10000,
+        requestTokens: 1000, responseTokens: 100, durationMs: 1, usageSource: 'reported', billingStatus: 'pending_usage',
+        billingSnapshot: { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 10000,
+          rateCardId: 'fixture-discount', rates: { inputNano: 100000, cacheNano: 25000, outputNano: 1000000 } } } })
+      try {
+        const input = { userId, usageLogId: usage.id, requestTokens: 1000, responseTokens: 100, modelTier: 'speed' as const, multiplierBps: 10000 }
+        expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 125 })
+        expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 125 })
+        expect(await prisma.creditLedgerEntry.count({ where: { userId, sourceType: 'model_tokens' } })).toBe(1)
+        expect(await prisma.aiUsageLog.findUniqueOrThrow({ where: { id: usage.id } })).toMatchObject({ promptCacheHitTokens: null, billingStatus: 'settled', creditChargeMilli: 125 })
+        expect((await prisma.creditLedgerEntry.findFirstOrThrow({ where: { userId, sourceType: 'model_tokens' } })).metadata)
+          .toMatchObject({ cacheHitTokens: null, cachePricingPolicy: 'unknown-cache-discount-2026-09-09', platformAbsorbsDifference: true })
+        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { promptCacheHitTokens: 0, promptCacheMissTokens: 1000 } })
+        expect(await consumeTokenCredits(input)).toMatchObject({ chargedMilli: 125 })
+        expect(await prisma.creditLedgerEntry.count({ where: { userId, sourceType: 'model_tokens' } })).toBe(1)
       } finally { await prisma.aiUsageLog.delete({ where: { id: usage.id } }) }
     })
   })

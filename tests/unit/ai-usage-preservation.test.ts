@@ -27,6 +27,20 @@ async function invoke(usages: Array<Record<string, unknown>>) {
 }
 
 describe('explicit zero provider usage is not missing usage', () => {
+  it('routes an internal BYOK completion to its own provider and never charges platform credits', async () => {
+    const modelRuntime = { tier: 'custom' as const, apiKey: 'fixture-custom', provider: 'openai',
+      baseUrl: 'https://custom.example/v1', modelName: 'custom-model', multiplierBps: 0,
+      reasoningEffort: 'high' as const, reasoningEfforts: ['high' as const], visionEnabled: false, contextWindowTokens: null }
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: '自定义质量报告' } }], usage: { prompt_tokens: 100, completion_tokens: 20 } })))
+    vi.stubGlobal('fetch', fetcher)
+    await expect(generateTextCompletion('system', 'chapter', { userId: 'owner', action: 'quality', modelRuntime, reasoningEffort: 'low' })).resolves.toBe('自定义质量报告')
+    expect(mocks.runtime).not.toHaveBeenCalled()
+    expect(mocks.access).toHaveBeenCalledWith('owner', 'custom', false)
+    expect(fetcher.mock.calls[0]?.[0]).toBe('https://custom.example/v1/chat/completions')
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ modelTier: 'custom', multiplierBps: 0, billingSnapshot: { version: 'byok-exempt' } }) }))
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ billingStatus: 'exempt' }) }))
+    expect(mocks.charge).not.toHaveBeenCalled()
+  })
   it('aborts auxiliary requests immediately without dispatching a retry or billing unknown usage as zero', async () => {
     const controller = new AbortController()
     const fetching = vi.fn(async (_url: unknown, init: RequestInit) => {

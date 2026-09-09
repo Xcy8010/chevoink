@@ -26,6 +26,7 @@ export async function autoNameSession(input: {
   userId: string
   novelId: string
   prompt: string
+  modelRuntime?: import('./tools/types.js').ToolContext['modelRuntime']
 }): Promise<void> {
   try {
     const session = await prisma.agentSession.findUnique({
@@ -44,6 +45,7 @@ export async function autoNameSession(input: {
         input.prompt.slice(0, 500),
         {
           userId: input.userId,
+          modelRuntime: input.modelRuntime?.tier === 'custom' ? input.modelRuntime : undefined,
           action: 'agentSessionAutoName',
           novelId: input.novelId,
           targetType: 'agentSession',

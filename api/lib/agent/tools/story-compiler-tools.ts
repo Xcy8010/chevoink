@@ -103,7 +103,7 @@ async function applyRigorousContinuityRepairs(
       response = await generateTextCompletion(
         '你是中文网文连续性修订编辑。只修复清单内可证实的事实错误，警告和审美建议不改写。保留作者原有词汇、句式、节奏、叙述视角和人物声口；禁止同义替换、扩写、润色或重写相邻段落。集中输出最小必要补丁，不改变章节目标和已成立事实。oldText 必须从正文逐字复制、连续且唯一；找不到可安全定位的项不要编造。严格只输出 JSON：{"patches":[{"oldText":"正文逐字片段","newText":"替换文本"}]}。',
         `章节：《${chapter.title}》@r${chapter.revision}\n问题：\n${findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；建议：${item.suggestion}`).join('\n')}\n\n正文：\n${chapter.content}`,
-        { signal: ctx.signal, userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
+        { modelRuntime: ctx.modelRuntime?.tier === 'custom' ? ctx.modelRuntime : undefined, signal: ctx.signal, userId: ctx.userId, novelId: ctx.novelId, chapterId: chapter.id, action: attempt === 0 ? 'agent3RigorousContinuityRepair' : 'agent3RigorousContinuityRepairRetry', targetType: 'chapter', targetId: chapter.id, temperature: 0.3, reasoningEffort: 'low' },
       )
     } catch (error) {
       ctx.signal.throwIfAborted()
@@ -606,7 +606,7 @@ export const continuityValidateTool = defineTool({
     const criticResponses = await Promise.all(criticPrompts.map((systemPrompt, index) => generateTextCompletion(
       systemPrompt,
       criticInput,
-      { signal: ctx.signal, userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
+      { modelRuntime: ctx.modelRuntime?.tier === 'custom' ? ctx.modelRuntime : undefined, signal: ctx.signal, userId: ctx.userId, action: index === 0 ? 'agent3ContinuityCritic' : 'agent3ContinuityCriticSecondPass', novelId: ctx.novelId, chapterId: chapter.id, targetType: 'story_compilation', targetId: compilation.id, temperature: 0.15, reasoningEffort: 'low' },
     )))
     ctx.signal.throwIfAborted()
     const parsedCriticResponses = criticResponses.map(parseIndependentContinuityResult)

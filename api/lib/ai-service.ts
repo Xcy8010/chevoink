@@ -18,7 +18,7 @@ import type {
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
 import { createCoverAssetsData, ensureNovelOwner } from './data-access.js'
-import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, IMAGE_CALL_MILLI, recordImageRefundIntent, reconcileCreditRefunds } from './credits.js'
+import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, getAuxiliaryModelRuntime, IMAGE_CALL_MILLI, recordImageRefundIntent, reconcileCreditRefunds } from './credits.js'
 import type { CreditModelTier } from '../../shared/contracts/index.js'
 import {
   FANQIE_ALL_CATEGORIES,
@@ -45,6 +45,8 @@ type TextCompletionOptions = {
   /** 思考强度按调用覆盖：简单分类/打标类任务用 low 提速，默认走 env 全局值 */
   reasoningEffort?: 'low' | 'high' | 'max'
   modelTier?: CreditModelTier
+  /** Server-resolved runtime only; never accept provider credentials from tool arguments. */
+  modelRuntime?: Awaited<ReturnType<typeof getModelTierRuntime>>
   multiplierBps?: number
 }
 
@@ -763,8 +765,10 @@ export async function generateTextCompletion(
 ) {
   options = { ...options }
   options.signal?.throwIfAborted()
-  const modelRuntime = await getModelTierRuntime(options.modelTier ?? 'speed')
-  const completionReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
+  const modelRuntime = options.modelRuntime ?? await getModelTierRuntime(options.modelTier ?? 'speed', options.userId)
+  const requestedReasoning = options.reasoningEffort ?? modelRuntime.reasoningEffort
+  const completionReasoning = modelRuntime.reasoningEfforts && !modelRuntime.reasoningEfforts.includes(requestedReasoning)
+    ? modelRuntime.reasoningEffort : requestedReasoning
   ensureTextProviderConfigured(modelRuntime.apiKey)
   await assertCreditAccess(options.userId, modelRuntime.tier, false)
 
@@ -1134,8 +1138,7 @@ export async function generatePublishAdviceData(
     targetType: 'publishAdvice',
     temperature: 0.3,
     reasoningEffort: 'low',
-    // 基础模型档：后台轻任务与用户侧体验档位解耦，未配置时自动回退极速
-    modelTier: 'basic',
+    modelRuntime: await getAuxiliaryModelRuntime(userId),
   })
 
   return sanitizePublishAdvice(extractJsonObject(content))

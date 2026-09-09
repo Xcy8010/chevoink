@@ -691,9 +691,11 @@ export function AgentPanel({
           throw error
         }
         setActionError(error instanceof Error ? error.message : '启动失败，请稍后再试。')
-        if (error instanceof AgentApiError && error.code?.startsWith('CREDITS_')) {
+        if (error instanceof AgentApiError && ['CREDITS_EXHAUSTED', 'CREDITS_GLOBALLY_PAUSED', 'CREDITS_ACCOUNT_SUSPENDED'].includes(error.code ?? '')) {
           setQuotaDialogOpen(true)
           void refetchCredits()
+        } else if (error instanceof AgentApiError && error.code === 'CREDITS_SETTLEMENT_PENDING') {
+          setQuotaDialogOpen(false)
         }
         // 抛回输入框：发送失败时保留草稿，避免用户输入丢失
         throw error
