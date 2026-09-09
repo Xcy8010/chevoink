@@ -21,6 +21,7 @@ import { assertCreditInteger, BillingInputError, calculateV1ChargeMilli, calcula
 import { equalLegacyMetadata, prepareCreditRequest, readCreditFingerprint } from './billing/credit-request.js'
 import { getActiveTokenPrice, getActiveTokenPrices } from './billing/rate-cards.js'
 import { tokenPriceSchema, type TokenPrice } from './billing/token-price.js'
+import { fallbackUsageEvidenceSchema, FALLBACK_USAGE_POLICY, RESERVATION_TTL_MS, tokenReservationMilli } from './billing/reservation-policy.js'
 import { presentLedgerPrice, readLedgerPriceMetadata } from './billing/ledger-presentation.js'
 
 export const CREDIT_MILLI = 1000
@@ -262,6 +263,7 @@ async function toCreditSummary(
 ): Promise<CreditAccountSummary> {
   const dailyRemainingMilli = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli)
   const totalRemainingMilli = dailyRemainingMilli + Math.max(0, account.bonusBalanceMilli)
+  const reservedMilli = await reservedTokenCredits(prisma, account.userId)
   const usedPercent = account.dailyAllowanceMilli > 0
     ? Math.min(100, Math.round((account.dailyUsedMilli / account.dailyAllowanceMilli) * 1000) / 10)
     : 100
@@ -272,7 +274,9 @@ async function toCreditSummary(
     dailyUsed: milliToCredits(account.dailyUsedMilli),
     dailyRemaining: milliToCredits(dailyRemainingMilli),
     bonusRemaining: milliToCredits(account.bonusBalanceMilli),
-    totalRemaining: milliToCredits(totalRemainingMilli),
+    totalRemaining: milliToCredits(Math.max(0, totalRemainingMilli - reservedMilli)),
+    reserved: milliToCredits(reservedMilli),
+    balance: milliToCredits(totalRemainingMilli),
     usedPercent,
     periodStartedAt: account.periodStartedAt.toISOString(),
     resetsAt: account.periodEndsAt.toISOString(),
@@ -338,6 +342,7 @@ async function presentCreditLedgerEntries(db: Prisma.TransactionClient, entries:
     requestTokens: entry.requestTokens,
     responseTokens: entry.responseTokens,
     pricing: originalPrice.pricing,
+    estimatedUsage: Boolean(entry.metadata && typeof entry.metadata === 'object' && !Array.isArray(entry.metadata) && entry.metadata.estimated === true),
     promptCacheHitTokens: originalPrice.hit ?? cacheByLogId.get(logId)?.hit ?? null,
     promptCacheMissTokens: originalPrice.miss ?? cacheByLogId.get(logId)?.miss ?? null,
     createdAt: entry.createdAt.toISOString(),
@@ -521,24 +526,51 @@ export async function getCreditActivity(userId: string, now = new Date()): Promi
   }
 }
 
+async function reservedTokenCredits(db: Pick<Prisma.TransactionClient, 'aiUsageLog'>, userId: string, excludeId?: string) {
+  const held = await db.aiUsageLog.aggregate({ where: { userId, reservedCreditMilli: { gt: 0 },
+    reservationExpiresAt: { gt: new Date() }, ...(excludeId ? { id: { not: excludeId } } : {}) }, _sum: { reservedCreditMilli: true } })
+  return held._sum.reservedCreditMilli ?? 0
+}
+
+/** Serializable admission prevents concurrent calls from reserving the same credit. */
+export async function reserveTokenCredits(userId: string, usageId: string, inputEstimate: number, maxOutput: number) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await prisma.$transaction(async tx => {
+        const usage = await tx.aiUsageLog.findFirstOrThrow({ where: { id: usageId, userId } })
+        if (usage.modelTier === 'custom' || usage.reservedCreditMilli > 0) return
+        if (usage.billingStatus !== 'prepared') throw new DataAccessError(409, 'CREDIT_USAGE_MISMATCH', '不能为已执行请求重复预留额度。')
+        const price = tokenPriceSchema.parse(usage.billingSnapshot)
+        const { account, setting } = await ensureAccountWithDb(tx, userId)
+        if (account.suspendedAt) throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', '当前模型服务已暂停。')
+        const balance = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli
+        const available = Math.max(0, balance - await reservedTokenCredits(tx, userId))
+        if (available <= 0) throw new DataAccessError(402, balance > 0 ? 'CREDITS_RESERVED' : 'CREDITS_EXHAUSTED', balance > 0 ? '可用额度暂被进行中或待核调用预留，请等待结算或预留释放。' : '今日额度已用尽。')
+        const unknown = await tx.aiUsageLog.count({ where: { userId, modelName: usage.modelName, modelTier: usage.modelTier,
+          billingStatus: 'pending_usage', usageSource: 'unknown', createdAt: { gte: new Date(Date.now() - RESERVATION_TTL_MS) } } })
+        if (unknown >= 3) throw new DataAccessError(429, 'CREDITS_PROVIDER_UNSTABLE', '此模型近期多次未返回用量，暂缓新调用；可切换其他模型或使用自定义模型，30分钟窗口过后可重试。')
+        const held = tokenReservationMilli(price, inputEstimate, maxOutput, balance, available)
+        await tx.aiUsageLog.update({ where: { id: usageId }, data: { reservedCreditMilli: held,
+          reservationExpiresAt: new Date(Math.min(Date.now() + RESERVATION_TTL_MS, account.periodEndsAt.getTime())) } })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2034' || error.code === 'P2002') && attempt < 2) continue
+      throw error
+    }
+  }
+}
+
 export async function assertCreditAccess(userId: string, tier: CreditModelTier = 'speed', requireSelectable = true): Promise<void> {
   const { account, setting } = await ensureCreditAccount(userId)
   if (account.suspendedAt) {
     throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
   }
   if (tier === 'custom') return
-  const pending = await prisma.aiUsageLog.findFirst({ where: { userId, OR: [
-    { billingStatus: 'pending_settlement' },
-    // Unknown historical usage remains auditable, but cannot permanently lock
-    // a newly granted daily window. Never turn this into a zero-usage invoice.
-    { billingStatus: 'pending_usage', createdAt: { gte: account.periodStartedAt },
-      billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
-  ] }, select: { id: true } })
-  if (pending) throw new DataAccessError(409, 'CREDITS_SETTLEMENT_PENDING', '前次模型调用的结果已保留，费用正在核实或结算；暂不发起新的付费调用，请稍后继续。')
   const remaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli
   if (remaining <= 0) {
     throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
   }
+  if (remaining <= await reservedTokenCredits(prisma, userId)) throw new DataAccessError(409, 'CREDITS_RESERVED', '额度暂被进行中或待核调用预留，请等待结算或预留释放。')
   const model = await prisma.aiModelConfig.findFirst({
     where: { ownerUserId: null, tier, enabled: true, ...(requireSelectable ? { selectable: true } : {}) },
     select: { tier: true, modelName: true, baseUrl: true, apiKeyCiphertext: true },
@@ -689,8 +721,13 @@ export async function consumeCreditsInTransaction(tx: Prisma.TransactionClient, 
   if (account.suspendedAt) throw new DataAccessError(423, setting.globallyPaused ? 'CREDITS_GLOBALLY_PAUSED' : 'CREDITS_ACCOUNT_SUSPENDED', setting.globallyPaused ? '公测模型服务已由管理员暂停，请稍后再试。' : '当前账户的模型使用权限已暂停。')
 
   const dailyRemaining = Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli)
-  const totalRemaining = dailyRemaining + account.bonusBalanceMilli
+  const ownUsageId = input.sourceType === 'model_tokens' && input.idempotencyKey.startsWith('usage:') ? input.idempotencyKey.slice(6) : undefined
+  const otherReservations = await reservedTokenCredits(tx, input.userId, ownUsageId)
+  const totalRemaining = Math.max(0, dailyRemaining + account.bonusBalanceMilli - otherReservations)
   if (totalRemaining < amountMilli && !input.allowPartialOnExhaustion) {
+    if (otherReservations > 0 && dailyRemaining + account.bonusBalanceMilli >= amountMilli) {
+      throw new DataAccessError(409, 'CREDITS_RESERVED', '可用额度暂被进行中或待核调用预留，请等待结算或预留释放。')
+    }
     throw new DataAccessError(402, 'CREDITS_EXHAUSTED', '今日额度已用尽，可邀请好友获得额外额度。')
   }
   const actualCharge = Math.min(totalRemaining, amountMilli)
@@ -828,10 +865,12 @@ export async function reconcileCreditRefunds(input: { limit?: number; userId?: s
 export async function reconcileTokenSettlements(limit = 25) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DataAccessError(400, 'CREDIT_SETTLEMENT_BATCH_INVALID', '结算批次大小无效。')
   const pending = await prisma.aiUsageLog.findMany({ where: { providerType: 'text',
-    AND: [{ OR: [
+    AND: [{ OR: [{ modelTier: null }, { modelTier: { not: 'custom' } }] }, { OR: [
       { billingStatus: { in: ['observed', 'pending_settlement'] } },
       { billingStatus: 'pending_usage', usageSource: 'reported', requestTokens: { not: null }, responseTokens: { not: null },
         billingSnapshot: { path: ['version'], equals: 'credits-v2-itemized' } },
+      { billingStatus: 'pending_usage', billingEvidence: { path: ['responseObserved'], equals: true } },
+      { billingStatus: 'prepared', reservationExpiresAt: { lte: new Date() }, billingEvidence: { path: ['responseObserved'], equals: true } },
     ] }, { OR: [{ billingRetryAt: null }, { billingRetryAt: { lte: new Date() } }] }] },
     orderBy: [{ billingRetryAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }], take: limit })
   for (const usage of pending) {
@@ -949,12 +988,16 @@ export async function consumeTokenCredits(input: {
       throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用的费率快照无效，未采用当前价格替代。')
     }
     const frozen = price?.success ? price.data : null
+    const evidence = fallbackUsageEvidenceSchema.safeParse(usage.billingEvidence)
+    const estimated = usage.usageSource !== 'reported' && evidence.success && evidence.data.responseObserved
+    const billedInput = estimated ? usage.requestTokens ?? evidence.data.inputEstimate : input.requestTokens
+    const billedOutput = estimated ? usage.responseTokens ?? evidence.data.outputEstimate : input.responseTokens
     let amountMilli: number
     let metadata: Prisma.InputJsonValue | undefined
     if (frozen?.version === 'credits-v2-itemized') {
       // Estimated/missing usage is not an invoice, nor is unknown cache a miss.
       // Keep the generated result and original observation for reconciliation.
-      if (usage.usageSource !== 'reported' || usage.requestTokens === null || usage.responseTokens === null) {
+      if (!estimated && (usage.usageSource !== 'reported' || usage.requestTokens === null || usage.responseTokens === null)) {
         const { account } = await ensureAccountWithDb(tx, input.userId)
         await tx.aiUsageLog.update({ where: { id: usage.id }, data: { billingStatus: 'pending_usage', billingRetryAt: null } })
         return { chargedMilli: 0, remainingMilli: Math.max(0, account.dailyAllowanceMilli - account.dailyUsedMilli) + account.bonusBalanceMilli,
@@ -969,20 +1012,22 @@ export async function consumeTokenCredits(input: {
         ? original.metadata : null
       const retainedDiscount = originalMetadata?.cachePricingPolicy === 'unknown-cache-discount-2026-09-09'
       const cacheHitTokens = retainedDiscount ? null : usage.promptCacheHitTokens
-      amountMilli = validateBillingInput(() => calculateV2UserChargeMilli(usage.requestTokens!, usage.responseTokens!, cacheHitTokens, frozen.rates, frozen.v1CeilingBps))
+      amountMilli = validateBillingInput(() => calculateV2UserChargeMilli(billedInput, billedOutput, cacheHitTokens, frozen.rates, frozen.v1CeilingBps))
       metadata = { pricingVersion: frozen.version, rateCardId: frozen.rateCardId, rates: frozen.rates,
         cacheHitTokens, cacheMissTokens: retainedDiscount ? originalMetadata!.cacheMissTokens : usage.promptCacheMissTokens,
         ...(cacheHitTokens === null ? { cachePricingPolicy: 'unknown-cache-discount-2026-09-09', platformAbsorbsDifference: true } : {}),
+        ...(estimated ? { usagePolicy: FALLBACK_USAGE_POLICY, estimated: true } : {}),
         ...(frozen.v1CeilingBps !== undefined ? { v1CeilingBps: frozen.v1CeilingBps } : {}) }
     } else {
       if (frozen && frozen.multiplierBps !== multiplierBps) throw new DataAccessError(409, 'CREDIT_PRICE_INVALID', '原调用倍率与用量记录不一致。')
-      amountMilli = calculateTokenChargeMilli(input.requestTokens, input.responseTokens, multiplierBps)
+      amountMilli = calculateTokenChargeMilli(billedInput, billedOutput, multiplierBps)
+      if (estimated) metadata = { usagePolicy: FALLBACK_USAGE_POLICY, estimated: true }
     }
-    const charged = await consumeCreditsInTransaction(tx, { ...request, amountMilli,
+    const charged = await consumeCreditsInTransaction(tx, { ...request, amountMilli, requestTokens: billedInput, responseTokens: billedOutput,
       multiplierBps: frozen?.multiplierBps ?? multiplierBps, metadata })
     // CR03: ledger, wallet and displayed charge commit together. The previously
     // saved usage observation survives rollback and keeps its stable retry key.
-    await tx.aiUsageLog.update({ where: { id: usage.id }, data: { creditChargeMilli: charged.chargedMilli, billingStatus: 'settled', billingRetryAt: null } })
+    await tx.aiUsageLog.update({ where: { id: usage.id }, data: { creditChargeMilli: charged.chargedMilli, billingStatus: 'settled', billingRetryAt: null, reservedCreditMilli: 0, reservationExpiresAt: null } })
     return charged
   }
   if (transaction) return settle(transaction)

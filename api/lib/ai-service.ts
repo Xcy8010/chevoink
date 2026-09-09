@@ -18,7 +18,8 @@ import type {
   GenerateOutlineRequest,
 } from '../../shared/contracts/index.js'
 import { createCoverAssetsData, ensureNovelOwner } from './data-access.js'
-import { assertCreditAccess, consumeCredits, consumeTokenCredits, getModelTierRuntime, getAuxiliaryModelRuntime, IMAGE_CALL_MILLI, recordImageRefundIntent, reconcileCreditRefunds } from './credits.js'
+import { assertCreditAccess, consumeCredits, consumeTokenCredits, reserveTokenCredits, getModelTierRuntime, getAuxiliaryModelRuntime, IMAGE_CALL_MILLI, recordImageRefundIntent, reconcileCreditRefunds } from './credits.js'
+import { FALLBACK_USAGE_POLICY } from './billing/reservation-policy.js'
 import type { CreditModelTier } from '../../shared/contracts/index.js'
 import {
   FANQIE_ALL_CATEGORIES,
@@ -167,21 +168,97 @@ async function prepareTextUsage(input: {
   userId: string; action: string; modelName: string; modelTier: CreditModelTier; multiplierBps: number;
   novelId?: string | null; chapterId?: string | null; targetType?: string; targetId?: string | null;
   agentRunId?: string | null; turn?: number | null; providerName?: string | null;
+  inputEstimate: number; maxOutput: number;
 }) {
+  const { inputEstimate, maxOutput, ...identity } = input
   const price = input.modelTier === 'custom' ? { version: 'byok-exempt' }
     : await resolveTokenPrice(input.modelTier, input.multiplierBps)
-  return prisma.aiUsageLog.create({ data: { ...input, targetType: input.targetType ?? 'text',
+  const prepared = await prisma.aiUsageLog.create({ data: { ...identity, targetType: input.targetType ?? 'text',
     providerType: 'text', providerMode: env.aiProviderMode, durationMs: 0,
+    billingEvidence: { policy: FALLBACK_USAGE_POLICY, inputEstimate, outputEstimate: 0, responseObserved: false },
     billingSnapshot: price, usageSource: 'prepared', billingStatus: 'prepared' } })
+  try {
+    if (input.modelTier !== 'custom') await reserveTokenCredits(input.userId, prepared.id, inputEstimate, maxOutput)
+  } catch (error) { await markUnobservedUsage(prepared.id, false); throw error }
+  return prepared
 }
 
 async function markUnobservedUsage(id: string | undefined, dispatched = true) {
   if (!id) return
   await prisma.aiUsageLog.updateMany({ where: { id, billingStatus: 'prepared' },
-    data: { usageSource: 'unknown', billingStatus: dispatched ? 'pending_usage' : 'not_dispatched' } }).catch(() => undefined)
+    data: { usageSource: 'unknown', billingStatus: dispatched ? 'pending_usage' : 'not_dispatched',
+      ...(!dispatched ? { reservedCreditMilli: 0, reservationExpiresAt: null } : {}) } }).catch(() => undefined)
+}
+
+async function saveOutputEvidence(id: string, inputEstimate: number, output: string) {
+  if (!output) return
+  await prisma.aiUsageLog.updateMany({ where: { id, billingStatus: 'prepared' }, data: {
+    billingEvidence: { policy: FALLBACK_USAGE_POLICY, inputEstimate, outputEstimate: estimateTokenCount(output), responseObserved: true },
+  } })
+}
+
+/** Accept SSE when supported and JSON from compatible non-streaming gateways.
+ * Persist only counts, never manuscript text or credentials, for interruption billing. */
+async function readAuxiliaryResponse(response: Response, usageId: string, inputEstimate: number, custom: boolean): Promise<JsonProviderPayload> {
+  if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) return { ...await parseJsonResponse(response), localOutputEstimate: undefined }
+  let content = '', reasoning = '', done = false, truncated = false, lastSaved = 0
+  let usage: JsonProviderPayload['usage']
+  const decoder = new TextDecoder()
+  const reader = response.body.getReader()
+  const frames = new SseDataDecoder(data => {
+    if (data.trim() === '[DONE]') { done = true; return }
+    if (!data.trim()) return
+    let frame
+    try { frame = JSON.parse(data) }
+    catch { throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型流式响应格式异常，未取得完整检查结果。') }
+    if (frame.error) throw new DataAccessError(502, 'AI_PROVIDER_ERROR', '模型服务返回错误。')
+    if (frame.usage) {
+      usage ??= {}
+      for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens'] as const) {
+        const count = frame.usage[key]
+        if (count == null) continue
+        if (!Number.isSafeInteger(count) || count < 0 || count > 2147483647) throw new DataAccessError(502, 'AI_USAGE_INVALID', '供应商用量无效。')
+        usage[key] = count
+      }
+      const cache = extractCacheTokens(frame.usage)
+      if (cache.hit !== null) usage.prompt_cache_hit_tokens = cache.hit
+      if (cache.miss !== null) usage.prompt_cache_miss_tokens = cache.miss
+    }
+    if (frame.choices?.[0]?.finish_reason === 'length') truncated = true
+    if (frame.choices?.[0]?.finish_reason === 'stop') done = true
+    const delta = frame.choices?.[0]?.delta
+    if (typeof delta?.content === 'string') content += delta.content
+    if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
+  })
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      frames.push(decoder.decode(chunk.value, { stream: true }))
+      if (Date.now() - lastSaved >= 1000) { await saveOutputEvidence(usageId, inputEstimate, reasoning + content); lastSaved = Date.now() }
+    }
+    frames.push(decoder.decode(), true)
+    if (!done || truncated) throw new DataAccessError(502, 'AI_PROVIDER_INCOMPLETE', '模型连接提前结束或输出被截断，未将部分检查结果当作完成。')
+    return { choices: [{ message: { content } }], usage, localOutputEstimate: estimateTokenCount(reasoning + content) }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    await saveOutputEvidence(usageId, inputEstimate, reasoning + content)
+    // A final usage frame received before interruption is stronger than estimates.
+    if (Number.isSafeInteger(usage?.prompt_tokens) && Number.isSafeInteger(usage?.completion_tokens)
+      && usage!.prompt_tokens! >= 0 && usage!.completion_tokens! >= 0 && usage!.prompt_tokens! <= 2147483647 && usage!.completion_tokens! <= 2147483647) {
+      const cache = extractCacheTokens(usage!)
+      await prisma.aiUsageLog.updateMany({ where: { id: usageId, billingStatus: 'prepared' }, data: {
+        requestTokens: usage!.prompt_tokens, responseTokens: usage!.completion_tokens, usageSource: 'reported',
+        promptCacheHitTokens: cache.hit, promptCacheMissTokens: cache.miss, billingStatus: custom ? 'exempt' : 'observed',
+      } })
+    }
+  }
 }
 
 type JsonProviderPayload = {
+  /** Server-only measurement; JSON gateways cannot supply this field. */
+  localOutputEstimate?: number
   error?: { message?: unknown }
   data?: unknown
   choices?: Array<{ message?: { content?: unknown } }>
@@ -205,6 +282,9 @@ async function parseJsonResponse(response: Response): Promise<JsonProviderPayloa
   try {
     return JSON.parse(text) as JsonProviderPayload
   } catch {
+    if (!response.ok) return { error: { message: [408, 504].includes(response.status)
+      ? `模型网关超时（HTTP ${response.status}），未取得完整结果。`
+      : `模型网关返回 HTTP ${response.status}，未取得有效响应。` } }
     throw new DataAccessError(502, 'AI_PROVIDER_INVALID_RESPONSE', '模型返回了无法解析的内容。')
   }
 }
@@ -494,6 +574,7 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
   if (durable?.replay) return durable.replay
   params.signal?.throwIfAborted()
   const prepared = durable ? undefined : await prepareTextUsage({ ...params.usageLog, modelName: model,
+    inputEstimate: estimateTokenCount(encodedBody), maxOutput: params.maxOutputTokens ?? env.aiTextMaxOutputTokens,
     modelTier: tier, multiplierBps: params.usageLog.multiplierBps ?? 10000,
     providerName: params.provider ?? env.aiTextProvider })
   if (params.signal?.aborted) {
@@ -519,7 +600,6 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
 
   if (!response.ok || !response.body) {
     await durable?.rejected(response.status)
-    await markUnobservedUsage(prepared?.id)
     const payload = await parseJsonResponse(response)
     const reportedPrompt = payload.usage?.prompt_tokens
     const reportedCompletion = payload.usage?.completion_tokens
@@ -535,6 +615,10 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
         promptCacheHitTokens: cache.hit, promptCacheMissTokens: cache.miss, durationMs: Date.now() - startedAt,
         usageSource: reportedPrompt != null && reportedCompletion != null ? 'reported' : 'unknown' })
     }
+    if (prepared && [400, 401, 403, 404, 422, 429].includes(response.status) && reportedPrompt == null && reportedCompletion == null) {
+      await prisma.aiUsageLog.updateMany({ where: { id: prepared.id, billingStatus: 'prepared' },
+        data: { billingStatus: 'provider_rejected', reservedCreditMilli: 0, reservationExpiresAt: null } })
+    } else await markUnobservedUsage(prepared?.id)
     throw new DataAccessError(
       502,
       'AI_PROVIDER_ERROR',
@@ -555,14 +639,22 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
     novelId: params.usageLog.novelId ?? null, chapterId: params.usageLog.chapterId ?? null,
     targetType: params.usageLog.targetType ?? 'agentRun', targetId: params.usageLog.targetId ?? null,
     agentRunId: params.usageLog.agentRunId ?? null, providerName: params.provider ?? env.aiTextProvider,
-    requestTokens: allowEstimates || promptUsageObserved ? usage.promptTokens : null,
-    responseTokens: allowEstimates || completionUsageObserved ? usage.completionTokens : null,
+    requestTokens: promptUsageObserved ? usage.promptTokens : null,
+    responseTokens: completionUsageObserved ? usage.completionTokens : null,
     turn: params.usageLog.turn ?? null, promptCacheHitTokens: usage.promptCacheHitTokens,
     promptCacheMissTokens: usage.promptCacheMissTokens, durationMs: Date.now() - startedAt,
     modelTier: params.usageLog.modelTier ?? 'speed', multiplierBps: params.usageLog.multiplierBps ?? 10000,
   })
-  const persistObservation = async () => {
-    if (!durable) return
+  let lastEvidenceSave = 0
+  const persistObservation = async (force = false) => {
+    if (!durable) {
+      if (prepared && (force || Date.now() - lastEvidenceSave >= 1000)) {
+        const output = content + reasoning + [...toolCallsByIndex.values()].map(call => call.arguments).join('')
+        await saveOutputEvidence(prepared.id, estimateTokenCount(encodedBody), output)
+        lastEvidenceSave = Date.now()
+      }
+      return
+    }
     await durable.observe({
       source: promptUsageObserved && completionUsageObserved ? 'reported' : 'unknown',
       promptTokens: promptUsageObserved ? usage.promptTokens : null,
@@ -708,10 +800,10 @@ async function chatWithToolsImpl(params: ChatWithToolsParams): Promise<ChatCompl
     }
     frames.push(decoder.decode(), true)
     if (!streamFinished) throw new Error('模型连接提前结束，未执行未确认完整的工具；请继续当前任务。')
-    await persistObservation()
+    await persistObservation(true)
   } catch (error) {
     // A bad later frame/read must not erase usage already parsed from this read.
-    await persistObservation()
+    await persistObservation(true)
     await durable?.interrupted(params.signal?.aborted ? 'aborted' : 'stream_error', { content, reasoning })
     if (!durable && (promptUsageObserved || completionUsageObserved)) {
       // Keep only provider-observed amounts on interruption, including explicit
@@ -775,12 +867,15 @@ export async function generateTextCompletion(
   const startedAt = Date.now()
   const endpoint = `${(modelRuntime.baseUrl ?? env.aiTextBaseUrl).replace(/\/$/, '')}/chat/completions`
   const prepared = await prepareTextUsage({ userId: options.userId, action: options.action,
+    inputEstimate: estimateTokenCount(`${systemPrompt}\n${userPrompt}`), maxOutput: env.aiTextMaxOutputTokens,
     modelName: modelRuntime.modelName ?? env.aiTextModel, modelTier: modelRuntime.tier,
     multiplierBps: options.multiplierBps ?? modelRuntime.multiplierBps,
     novelId: options.novelId, chapterId: options.chapterId, targetType: options.targetType, targetId: options.targetId,
     providerName: modelRuntime.provider })
+  let dispatched = false
   try {
   options.signal?.throwIfAborted()
+  dispatched = true
   const response = await fetch(endpoint, {
     signal: options.signal,
     method: 'POST',
@@ -791,6 +886,8 @@ export async function generateTextCompletion(
     body: JSON.stringify({
       model: modelRuntime.modelName ?? env.aiTextModel,
       temperature: options.temperature ?? 0.7,
+      stream: true,
+      stream_options: { include_usage: true },
       ...buildProviderReasoningPayload({
         provider: modelRuntime.provider,
         providerBaseUrl: modelRuntime.baseUrl,
@@ -804,10 +901,11 @@ export async function generateTextCompletion(
     }),
   })
 
-  const payload = await parseJsonResponse(response)
+  const payload = await readAuxiliaryResponse(response, prepared.id, estimateTokenCount(`${systemPrompt}\n${userPrompt}`), modelRuntime.tier === 'custom')
 
   const content = payload.choices?.[0]?.message?.content
   const validContent = response.ok && typeof content === 'string' && Boolean(content.trim())
+  if (validContent && payload.localOutputEstimate === undefined) await saveOutputEvidence(prepared.id, estimateTokenCount(`${systemPrompt}\n${userPrompt}`), content as string)
   const reportedPrompt = payload.usage?.prompt_tokens
   const reportedCompletion = payload.usage?.completion_tokens
   for (const count of [reportedPrompt, reportedCompletion]) {
@@ -830,8 +928,8 @@ export async function generateTextCompletion(
     targetType: options.targetType ?? 'text',
     targetId: options.targetId ?? null,
     providerName: modelRuntime.provider,
-    requestTokens: reportedPrompt ?? (validContent ? estimateTokenCount(`${systemPrompt}\n${userPrompt}`) : null),
-    responseTokens: reportedCompletion ?? (validContent && typeof content === 'string' ? estimateTokenCount(content) : null),
+    requestTokens: reportedPrompt ?? null,
+    responseTokens: reportedCompletion ?? null,
     promptCacheHitTokens: completionCache.hit,
     promptCacheMissTokens: completionCache.miss,
     durationMs: Date.now() - startedAt,
@@ -840,14 +938,21 @@ export async function generateTextCompletion(
   })
 
   if (!response.ok) {
-    throw new DataAccessError(502, 'AI_PROVIDER_ERROR', typeof payload.error?.message === 'string' ? payload.error.message : '模型服务暂时不可用。')
+    if ([400, 401, 403, 404, 422, 429].includes(response.status) && reportedPrompt == null && reportedCompletion == null) {
+      await prisma.aiUsageLog.updateMany({ where: { id: prepared.id, billingStatus: 'prepared' },
+        data: { billingStatus: 'provider_rejected', reservedCreditMilli: 0, reservationExpiresAt: null } })
+    }
+    throw new DataAccessError(502, [408, 504].includes(response.status) ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_ERROR', typeof payload.error?.message === 'string' ? payload.error.message : '模型服务暂时不可用。')
   }
   if (typeof content !== 'string' || !content.trim()) {
     throw new DataAccessError(502, 'AI_PROVIDER_EMPTY_RESPONSE', '模型未返回有效内容。')
   }
   return content.trim()
   } catch (error) {
-    await markUnobservedUsage(prepared.id)
+    await markUnobservedUsage(prepared.id, dispatched)
+    if (!options.signal?.aborted && error instanceof TypeError && /fetch|network|terminated/i.test(error.message)) {
+      throw new DataAccessError(502, 'AI_PROVIDER_TRANSPORT', '模型连接中断，未取得完整结果；已保存用量证据。')
+    }
     throw error
   }
 }

@@ -34,6 +34,9 @@ export type CreditAccountSummary = {
   dailyRemaining: number
   bonusRemaining: number
   totalRemaining: number
+  /** Available balance excludes temporary reservations; reservations are not charges. */
+  reserved?: number
+  balance?: number
   usedPercent: number
   periodStartedAt: string
   resetsAt: string
@@ -44,6 +47,7 @@ export type CreditAccountSummary = {
 }
 
 export type CreditLedgerItem = {
+  estimatedUsage?: boolean
   /** Original settled price; never today's model configuration. */
   pricing?: { version: 'credits-v2-itemized'; rateCardId: string; inputPerMillion: number; cachePerMillion: number; outputPerMillion: number; v1CeilingMultiplier?: number } | null
   id: string

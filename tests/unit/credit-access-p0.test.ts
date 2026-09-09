@@ -6,7 +6,7 @@ vi.mock('../../api/lib/prisma.js', () => ({
   prisma: {
     creditSystemSetting: { upsert: vi.fn(async () => ({ dailyAllowanceMilli: 450000, globallyPaused: false, resetHourUtc8: 15 })) },
     creditAccount: { upsert: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: mocks.account },
-    aiUsageLog: { findFirst: mocks.pending },
+    aiUsageLog: { aggregate: mocks.pending },
     aiModelConfig: { findFirst: mocks.model },
   },
 }))
@@ -17,27 +17,25 @@ const start = new Date('2026-09-09T07:00:00Z')
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.account.mockResolvedValue({ dailyAllowanceMilli: 450000, dailyUsedMilli: 0, bonusBalanceMilli: 0, periodStartedAt: start, suspendedAt: null })
-  mocks.pending.mockResolvedValue(null)
+  mocks.pending.mockResolvedValue({ _sum: { reservedCreditMilli: 0 } })
   mocks.model.mockResolvedValue({ tier: 'speed', modelName: 'fixture', baseUrl: 'https://fixture.example/v1', apiKeyCiphertext: 'fixture' })
 })
 
 describe('P0 credit admission and auxiliary model ownership', () => {
-  it('only blocks unknown usage from the current credit window', async () => {
+  it('counts only unexpired reservations instead of locking on unknown usage', async () => {
     await assertCreditAccess('owner', 'speed')
-    expect(mocks.pending).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ userId: 'owner', OR: expect.arrayContaining([
-      expect.objectContaining({ billingStatus: 'pending_usage', createdAt: { gte: start } }),
-    ]) }) }))
+    expect(mocks.pending).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ userId: 'owner', reservationExpiresAt: { gt: expect.any(Date) } }) }))
   })
-  it('preserves pending settlement as a distinct error', async () => {
-    mocks.pending.mockResolvedValue({ id: 'pending' })
-    await expect(assertCreditAccess('owner', 'speed')).rejects.toMatchObject({ code: 'CREDITS_SETTLEMENT_PENDING' })
+  it('preserves reservation exhaustion as a distinct error', async () => {
+    mocks.pending.mockResolvedValue({ _sum: { reservedCreditMilli: 450000 } })
+    await expect(assertCreditAccess('owner', 'speed')).rejects.toMatchObject({ code: 'CREDITS_RESERVED' })
   })
   it('permits BYOK with zero balance and pending platform usage', async () => {
     mocks.account.mockResolvedValue({ dailyAllowanceMilli: 450000, dailyUsedMilli: 450000, bonusBalanceMilli: 0, periodStartedAt: start, suspendedAt: null })
-    mocks.pending.mockResolvedValue({ id: 'pending' })
+    mocks.pending.mockResolvedValue({ _sum: { reservedCreditMilli: 1000 } })
     await expect(assertCreditAccess('owner', 'custom')).resolves.toBeUndefined()
     expect(mocks.pending).not.toHaveBeenCalled()
-    await expect(assertCreditAccess('owner', 'speed')).rejects.toMatchObject({ code: 'CREDITS_SETTLEMENT_PENDING' })
+    await expect(assertCreditAccess('owner', 'speed')).rejects.toMatchObject({ code: 'CREDITS_EXHAUSTED' })
   })
   it('still rejects suspended BYOK accounts', async () => {
     mocks.account.mockResolvedValue({ suspendedAt: new Date() })

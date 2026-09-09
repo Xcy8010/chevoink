@@ -91,6 +91,7 @@ export default function StudioMoreMenu(props: Props) {
           <div className="flex items-end justify-between">
             <div>
               <p className="text-[var(--text-tertiary)]">当前可用</p>
+              {(summary?.reserved ?? 0) > 0 && <p className="text-[10px] text-[var(--text-tertiary)]">另有 {formatCreditAmount(summary?.reserved ?? 0)} Credits 待结算预留</p>}
               <p className="mt-0.5 text-base font-semibold tabular-nums">{summary ? formatCreditAmount(summary.totalRemaining) : '—'} <span className="text-[10px] font-normal">Credits</span></p>
             </div>
             <span className="text-[10px] text-[var(--text-tertiary)]">{remainingPercent}%</span>

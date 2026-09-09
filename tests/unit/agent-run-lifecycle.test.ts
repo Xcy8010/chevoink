@@ -115,6 +115,15 @@ describe('BYOK paid-tool isolation', () => {
 })
 
 describe('original task context on resume', () => {
+  it('stops repeated quality provider failures even when compilation parameters change within a batch', async () => {
+    const failing = tool('quality_analyze', async () => { throw new DataAccessError(502, 'AI_PROVIDER_TIMEOUT', 'gateway timeout') })
+    mocks.tools = [failing]
+    queue(response('', [call('q1', 'quality_analyze', '{"compilationId":"first"}'), call('q2', 'quality_analyze', '{"compilationId":"second"}'), call('q3', 'quality_analyze', '{}')]), response('检查未完成，正文保留。'))
+    await run()
+    expect(failing.execute).toHaveBeenCalledTimes(2)
+    expect(events().filter(event => event.type === 'tool.result')).toEqual(expect.arrayContaining([expect.objectContaining({ summary: '模型网关超时', ok: false })]))
+    expect(events()).toContainEqual(expect.objectContaining({ type: 'run.finished', status: 'failed' }))
+  })
   it('announces parameter preparation before the model finishes, without admitting execution early', async () => {
     mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
       input.onChunk?.({ type: 'tool-call-start', id: 'preparing-read', name: 'chapter_read' })

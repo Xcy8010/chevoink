@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { afterAll, describe, expect, it } from 'vitest'
-import { assertCreditAccess, consumeCredits, consumeCreditsInTransaction, consumeTokenCredits, getCreditWindow, refundCreditCharge,
+import { reserveTokenCredits, getCreditSummary, assertCreditAccess, consumeCredits, consumeCreditsInTransaction, consumeTokenCredits, getCreditWindow, refundCreditCharge,
   recordSearchRefundIntent, recordImageRefundIntent, reconcileCreditRefunds, getSearchRefundState, getTaskCreditUsage, type ConsumeCreditInput } from '../../api/lib/credits.js'
 import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 import { resetAdminUsersCredits } from '../../api/lib/admin-credit-model.js'
@@ -30,6 +30,56 @@ async function fixture(run: (userId: string, input: ConsumeCreditInput) => Promi
 }
 
 describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (isolated PG)', () => {
+  it('never overbooks concurrent reservations or lets another paid tool spend reserved funds', async () => {
+    await fixture(async (userId, payment) => {
+      const ids: string[] = []
+      try {
+        for (let i = 0; i < 5; i++) ids.push((await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture',
+          modelName: 'fixture', action: 'fixture', targetType: 'text', modelTier: 'speed', durationMs: 0, billingStatus: 'prepared',
+          billingSnapshot: { version: 'credits-v1-exact', modelTier: 'speed', multiplierBps: 10000 } } })).id)
+        const results = await Promise.allSettled(ids.map(id => reserveTokenCredits(userId, id, 100000, 10000)))
+        expect(results.some(result => result.status === 'fulfilled')).toBe(true)
+        const held = (await prisma.aiUsageLog.aggregate({ where: { userId }, _sum: { reservedCreditMilli: true } }))._sum.reservedCreditMilli ?? 0
+        expect(held).toBeGreaterThan(0)
+        expect(held).toBeLessThanOrEqual(10000)
+        await expect(consumeCredits({ ...payment, amountMilli: 10001 - held })).rejects.toMatchObject({ code: 'CREDITS_RESERVED' })
+        expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(0)
+      } finally { await prisma.aiUsageLog.deleteMany({ where: { id: { in: ids }, userId } }) }
+    })
+  })
+  it.each(['reported', 'partial', 'unknown', 'expired'] as const)('isolates a %s call reservation and preserves settlement identity', async scenario => {
+    await fixture(async userId => {
+      const evidence = { policy: 'observed-output-estimate-2026-09-09', inputEstimate: 1000, outputEstimate: 40, responseObserved: scenario === 'partial' }
+      const usage = await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture', modelName: 'fixture',
+        action: 'fixture', targetType: 'text', modelTier: 'speed', durationMs: 0, billingStatus: 'prepared', usageSource: 'prepared', billingEvidence: evidence,
+        billingSnapshot: { version: 'credits-v2-itemized', modelTier: 'speed', multiplierBps: 10000, rateCardId: 'fixture-reserve',
+          rates: { inputNano: 100000, cacheNano: 25000, outputNano: 1000000 } } } })
+      try {
+        await Promise.all([reserveTokenCredits(userId, usage.id, 1000, 10000), reserveTokenCredits(userId, usage.id, 1000, 10000)])
+        expect(await getCreditSummary(userId)).toMatchObject({ balance: 10, reserved: 2.5, totalRemaining: 7.5 })
+        expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(0)
+        await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { billingStatus: 'pending_usage', usageSource: scenario === 'reported' ? 'reported' : 'unknown',
+          ...(scenario === 'reported' ? { requestTokens: 1000, responseTokens: 100 } : {}),
+          ...(scenario === 'expired' ? { reservationExpiresAt: new Date(Date.now() - 1000) } : {}) } })
+        await expect(assertCreditAccess(userId, 'speed')).resolves.toBeUndefined()
+        if (scenario === 'reported' || scenario === 'partial') {
+          const input = { userId, usageLogId: usage.id, requestTokens: scenario === 'reported' ? 1000 : 0, responseTokens: scenario === 'reported' ? 100 : 0, modelTier: 'speed' as const }
+          const charge = scenario === 'reported' ? 125 : 65
+          const results = await Promise.all([consumeTokenCredits(input), consumeTokenCredits(input)])
+          expect(results.map(item => item.chargedMilli)).toEqual([charge, charge])
+          expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(1)
+          expect(await getCreditSummary(userId)).toMatchObject({ reserved: 0, totalRemaining: (10000 - charge) / 1000 })
+          if (scenario === 'partial') {
+            expect((await prisma.creditLedgerEntry.findFirstOrThrow({ where: { userId } })).metadata).toMatchObject({ estimated: true })
+            expect(await prisma.aiUsageLog.findUniqueOrThrow({ where: { id: usage.id } })).toMatchObject({ requestTokens: null, responseTokens: null })
+          }
+        } else {
+          expect(await getCreditSummary(userId)).toMatchObject({ reserved: scenario === 'expired' ? 0 : 2.5 })
+          expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(0)
+        }
+      } finally { await prisma.aiUsageLog.delete({ where: { id: usage.id } }) }
+    })
+  })
   it('does not let a prior-window unknown receipt lock fresh allowance or exempt BYOK calls', async () => {
     await fixture(async userId => {
       const usage = await prisma.aiUsageLog.create({ data: { userId, providerType: 'text', providerMode: 'fixture',
@@ -40,7 +90,7 @@ describe.skipIf(!dbAvailable)('credit request identity and wallet integrity (iso
       try {
         await expect(assertCreditAccess(userId, 'speed')).resolves.toBeUndefined()
         await prisma.aiUsageLog.update({ where: { id: usage.id }, data: { createdAt: new Date() } })
-        await expect(assertCreditAccess(userId, 'speed')).rejects.toMatchObject({ code: 'CREDITS_SETTLEMENT_PENDING' })
+        await expect(assertCreditAccess(userId, 'speed')).resolves.toBeUndefined()
         await expect(assertCreditAccess(userId, 'custom')).resolves.toBeUndefined()
         expect(await prisma.creditLedgerEntry.count({ where: { userId } })).toBe(0)
         expect(await prisma.aiUsageLog.findUniqueOrThrow({ where: { id: usage.id } }))

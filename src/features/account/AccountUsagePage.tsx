@@ -33,6 +33,7 @@ function LedgerRow({ item, onTask }: { item: CreditLedgerItem; onTask?: (runId: 
           {formatDateTime(item.createdAt)}
           {item.requestTokens !== null || item.responseTokens !== null ? ` · 输入 ${new Intl.NumberFormat('zh-CN').format(item.requestTokens ?? 0)} / 输出 ${new Intl.NumberFormat('zh-CN').format(item.responseTokens ?? 0)}` : ''}
           {cacheLabel}
+          {item.estimatedUsage && ' · 异常估算结算（非供应商实测）'}
         </p>
         {item.pricing && <p className="mt-1 break-words text-xs leading-5 text-[var(--text-tertiary)]">
           分项计费 · 输入 {item.pricing.inputPerMillion} / 缓存 {item.pricing.cachePerMillion} / 输出 {item.pricing.outputPerMillion} Credits/百万 Token
@@ -142,7 +143,7 @@ export default function AccountUsagePage() {
           {summary.models.some(model => model.pricing) && <section className="mt-6 rounded-[16px] border border-[var(--border-subtle)] p-5" aria-label="当前分项费率">
             <h2 className="text-sm font-semibold">当前分项费率</h2>
             <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">单位为 Credits / 百万 Token，已含档位倍率。按非缓存输入、缓存输入和输出分别计算，每次调用合计后向上取整至 0.001 Credit；历史调用按原费率结算。</p>
-            {summary.models.some(model => model.pricing?.v1CeilingMultiplier !== undefined) && <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">缓存折扣档位：缓存输入按普通输入的25%计价，单次费用不超过该次调用冻结的原V1价格。供应商未返回完整用量时暂不结算，待核实后按原快照处理；联网搜索仍为每次2 Credits，缓存复用不重复收费。</p>}
+            {summary.models.some(model => model.pricing?.v1CeilingMultiplier !== undefined) && <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">缓存输入按普通输入的25%计价，单次不超过冻结的原V1价格。调用前临时预留，实际结算后释放余量；单笔预留不超过25 Credits及余额的25%，最长30分钟。缺少最终用量但已收到输出时，按已发送输入与已收到输出估算并标注：ASCII字符约4个/Token，其他字符约1个/Token，向上取整；不计未收到的内部思考，未知缓存按优惠价。没有执行证据的记录保留待核，不按预留全额扣费。联网搜索每次2 Credits，缓存复用不重复收费。</p>}
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-xs tabular-nums">
                 <thead><tr>{['档位', '输入', '缓存输入', '输出'].map(label => <th key={label} className="px-2 py-2 font-medium">{label}</th>)}</tr></thead>
@@ -178,6 +179,7 @@ export default function AccountUsagePage() {
                 <span className="text-sm text-[var(--text-secondary)]">剩余 <strong className="text-[var(--text-primary)]">{formatCreditAmount(summary.bonusRemaining)}</strong></span>
               </div>
               <p className="mt-7 text-xl font-semibold tabular-nums">当前总可用 {formatCreditAmount(summary.totalRemaining)} Credits</p>
+              {(summary.reserved ?? 0) > 0 && <p className="mt-2 text-xs text-[var(--text-secondary)]">余额 {formatCreditAmount(summary.balance ?? summary.totalRemaining)} · 待结算预留 {formatCreditAmount(summary.reserved ?? 0)} Credits（非最终扣费）</p>}
               <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#f0f0ee] dark:bg-[var(--border-subtle)]">
                 <div className="h-full w-full rounded-full bg-emerald-500/75" />
               </div>

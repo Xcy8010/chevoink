@@ -998,6 +998,9 @@ model AiUsageLog {
   usageSource      String?        @map("usage_source") @db.VarChar(24)
   billingStatus    String?        @map("billing_status") @db.VarChar(24)
   billingRetryAt   DateTime?      @map("billing_retry_at")
+  reservedCreditMilli Int         @default(0) @map("reserved_credit_milli")
+  reservationExpiresAt DateTime?  @map("reservation_expires_at")
+  billingEvidence Json?          @map("billing_evidence")
   durationMs        Int            @map("duration_ms")
   createdAt         DateTime       @default(now()) @map("created_at")
   user              User           @relation(fields: [userId], references: [id])
@@ -1010,6 +1013,7 @@ model AiUsageLog {
   @@index([agentRunId, createdAt])
   @@index([providerName, modelName, createdAt])
   @@index([billingStatus, billingRetryAt])
+  @@index([userId, reservationExpiresAt])
   @@map("ai_usage_logs")
 }
 

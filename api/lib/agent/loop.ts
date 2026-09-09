@@ -209,6 +209,7 @@ const REPEATABLE_TOOLS = new Set(['task_wait', 'task_get', 'task_list', 'ask_use
 const CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS = 8
 
 type ToolCallOutcome = {
+  providerFailure?: boolean
   observation: string
   part: Extract<AgentMessagePart, { type: 'tool-call' }>
   /** 附属分部：子 Agent 内嵌执行产生的内部工具调用卡片，随父消息一并落库与直播 */
@@ -462,7 +463,7 @@ export async function handleToolCall(
     if (ctx.signal.aborted) return fail('已中断', '用户已请求暂停，停止后续执行；已保存内容保留。', 'failed')
     if (error instanceof DataAccessError && error.code.startsWith('CREDITS_')) {
       if (ctx.modelRuntime?.tier === 'custom' && ['web_search', 'research_dossier_build', 'cover_generate', 'view_image'].includes(call.name)
-        && ['CREDITS_EXHAUSTED', 'CREDITS_SETTLEMENT_PENDING'].includes(error.code)) {
+        && ['CREDITS_EXHAUSTED', 'CREDITS_SETTLEMENT_PENDING', 'CREDITS_RESERVED', 'CREDITS_PROVIDER_UNSTABLE'].includes(error.code)) {
         return fail('平台付费能力暂不可用', `${error.message} 本工具未完成，不要重复调用；继续使用作者已启用的自定义文本模型完成其余工作。图片生成、联网搜索仍需平台 Credits，不能声称已完成这些操作。`, 'failed')
       }
       throw error
@@ -478,6 +479,13 @@ export async function handleToolCall(
       return fail(labels[error.code] ?? '网页读取未完成', error.message, 'failed')
     }
     // 错误即观察：不中断 run，把错误回填给模型自行重试或换路
+    if (error instanceof DataAccessError && error.code.startsWith('AI_')) {
+      const label = error.code === 'AI_PROVIDER_TIMEOUT' ? '模型网关超时'
+        : error.code === 'AI_PROVIDER_INCOMPLETE' ? '模型输出中断，检查未完成'
+        : error.code === 'AI_PROVIDER_INVALID_RESPONSE' ? '模型响应格式异常' : '模型服务异常'
+      console.warn('[agent-tool-provider]', { runId, tool: call.name, code: error.code, durationMs: Date.now() - startedAt })
+      return { ...fail(label, `工具 ${call.name} 未完成：${label}（${error.code}）。这是模型响应故障，不是正文质量结论；不要修改正文或重建编译来绕过。最多重试一次，仍失败则保留进度并报告阻塞。`, 'failed'), providerFailure: true }
+    }
     const message = error instanceof Error ? error.message : String(error)
     return fail('执行失败', `工具 ${call.name} 执行失败：${message}。可以调整参数重试，或换用其他工具。`, 'failed')
   }
@@ -592,6 +600,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const progressSignatures = new Set<string>()
   let blockedRepeat = 0
   const argumentFailures = new Map<string, number>()
+  const qualityProviderFailures = new Map<string, number>()
   // 非空时本轮工具执行完立即走 wrap-up（P0 第 4 次同签名 / P1 干预模式二次命中）
   let forceWrapUpReason: string | null = null
   // P1 信道重复检测：正文+思考共用一个检测器，观察/干预由 env.agentRepeatGuardMode 决定
@@ -1479,6 +1488,14 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           continue
         }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
+        if (['quality_analyze', 'continuity_validate'].includes(call.name)) {
+          if (outcome.part.status === 'success') qualityProviderFailures.delete(call.name)
+          else if (outcome.providerFailure) {
+            const failures = (qualityProviderFailures.get(call.name) ?? 0) + 1
+            qualityProviderFailures.set(call.name, failures)
+            if (failures >= 2) forceWrapUpReason = `${outcome.part.title}连续两次模型响应失败，已停止重复请求。正文与进度保留，检查尚未通过；请稍后继续或检查自定义模型服务。`
+          }
+        }
         if (outcome.part.status === 'success') argumentFailures.delete(call.name)
         else if (outcome.part.summary === '参数解析失败' || outcome.part.summary === '参数校验失败') {
           const failures = (argumentFailures.get(call.name) ?? 0) + 1
@@ -1527,7 +1544,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         // 子 Agent 内嵌执行产生的内部工具卡片随父消息一并直播与落库，刷新后仍可展开查看
         if (outcome.extraParts?.length) parts.push(...outcome.extraParts)
         messages.push({ role: 'tool', toolCallId: call.id, content: outcome.observation })
-        if (structureCircuitTripped) {
+        if (structureCircuitTripped || forceWrapUpReason) {
           break
         }
       }

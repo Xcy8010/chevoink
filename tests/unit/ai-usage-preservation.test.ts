@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), charge: vi.fn(), access: vi.fn(), update: vi.fn(), updateMany: vi.fn(), runtime: vi.fn(), imageCharge: vi.fn(), owner: vi.fn() }))
-vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: mocks.access, consumeTokenCredits: mocks.charge, consumeCredits: mocks.imageCharge, getModelTierRuntime: mocks.runtime }))
+vi.mock('../../api/lib/credits.js', () => ({ assertCreditAccess: mocks.access, consumeTokenCredits: mocks.charge, reserveTokenCredits: vi.fn(), consumeCredits: mocks.imageCharge, getModelTierRuntime: mocks.runtime }))
 vi.mock('../../api/lib/data-access.js', () => ({ ensureNovelOwner: mocks.owner, createCoverAssetsData: vi.fn() }))
-vi.mock('../../api/lib/prisma.js', () => ({ DataAccessError: class extends Error {}, prisma: { aiUsageLog: { create: mocks.create, update: mocks.update, updateMany: mocks.updateMany } } }))
+vi.mock('../../api/lib/prisma.js', () => ({ DataAccessError: class extends Error { constructor(readonly status: number, readonly code: string, message: string) { super(message) } }, prisma: { aiUsageLog: { create: mocks.create, update: mocks.update, updateMany: mocks.updateMany } } }))
 vi.mock('../../api/lib/billing/resolve-token-price.js', async original => ({ ...await original<object>(),
   resolveTokenPrice: async () => ({ version: 'credits-v1-exact', modelTier: 'speed', multiplierBps: 10000 }) }))
 import { chatWithTools, generateTextCompletion, generateCoverImageData } from '../../api/lib/ai-service.js'
@@ -27,6 +27,47 @@ async function invoke(usages: Array<Record<string, unknown>>) {
 }
 
 describe('explicit zero provider usage is not missing usage', () => {
+  it('classifies gateway HTML timeouts without reporting a malformed quality report or redispatching', async () => {
+    const fetcher = vi.fn(async () => new Response('<html>Gateway Timeout</html>', { status: 504 }))
+    vi.stubGlobal('fetch', fetcher)
+    await expect(generateTextCompletion('system', 'chapter', { userId: 'test', action: 'quality' })).rejects.toMatchObject({ code: 'AI_PROVIDER_TIMEOUT' })
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(mocks.charge).not.toHaveBeenCalled()
+    const body = JSON.parse((fetcher.mock.calls as unknown as Array<[string, RequestInit]>)[0][1].body as string)
+    expect(body).toMatchObject({ stream: true, stream_options: { include_usage: true } })
+    expect(body).not.toHaveProperty('max_tokens') // Do not introduce a new quality/output limit to estimate a deposit.
+  })
+  it('keeps estimated evidence separate from absent provider usage on successful output', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '完整报告' } }] }))))
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test' })).resolves.toBe('完整报告')
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ requestTokens: null, responseTokens: null, usageSource: 'estimated' }) }))
+    expect(mocks.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ billingEvidence: expect.objectContaining({ responseObserved: true, outputEstimate: 4 }) }) }))
+    expect(mocks.charge).toHaveBeenCalledWith(expect.objectContaining({ requestTokens: 0, responseTokens: 0 })) // Settlement reads the saved evidence, not fabricated provider totals.
+  })
+  it('preserves partial auxiliary output counts on a broken SSE stream without returning a completed report', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('data: {"choices":[{"delta":{"content":"已收到的片段"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } })))
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test' })).rejects.toThrow('连接提前结束')
+    expect(mocks.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ billingEvidence: expect.objectContaining({ responseObserved: true, outputEstimate: 6 }) }) }))
+    expect(mocks.charge).not.toHaveBeenCalled()
+  })
+  it('settles a complete SSE auxiliary response using reported usage', async () => {
+    const frames = 'data: {"choices":[{"delta":{"content":"完整报告"}}]}\n\ndata: {"usage":{"prompt_tokens":100,"completion_tokens":20},"choices":[]}\n\ndata: [DONE]\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(frames, { headers: { 'content-type': 'text/event-stream' } })))
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test' })).resolves.toBe('完整报告')
+    expect(mocks.charge).toHaveBeenCalledWith(expect.objectContaining({ requestTokens: 100, responseTokens: 20 }))
+  })
+  it('accepts a provider-confirmed stop without a DONE marker, but keeps missing usage separate', async () => {
+    const frames = 'data: {"choices":[{"delta":{"content":"完整报告"},"finish_reason":"stop"}]}\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(frames, { headers: { 'content-type': 'text/event-stream' } })))
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test' })).resolves.toBe('完整报告')
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ requestTokens: null, responseTokens: null }) }))
+  })
+  it('releases a provider-rejected auxiliary request rather than holding the account', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"message":"rate limited"}}', { status: 429 })))
+    await expect(generateTextCompletion('system', 'user', { userId: 'test', action: 'test' })).rejects.toThrow('rate limited')
+    expect(mocks.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { billingStatus: 'provider_rejected', reservedCreditMilli: 0, reservationExpiresAt: null } }))
+    expect(mocks.charge).not.toHaveBeenCalled()
+  })
   it('routes an internal BYOK completion to its own provider and never charges platform credits', async () => {
     const modelRuntime = { tier: 'custom' as const, apiKey: 'fixture-custom', provider: 'openai',
       baseUrl: 'https://custom.example/v1', modelName: 'custom-model', multiplierBps: 0,
