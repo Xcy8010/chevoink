@@ -138,19 +138,25 @@ html.dark {
 }
 
 html.dark .studio-workspace {
-  --app-bg: #0f1115;
-  --surface-default: #15181e;
-  --surface-solid: #15181e;
-  --surface-muted: #1d2129;
-  --surface-elevated: #21262f;
+  --app-bg: #2b2b2b;
+  --surface-default: #161616;
+  --surface-solid: #161616;
+  --surface-muted: #2b2b2b;
+  --surface-elevated: #303030;
+  --studio-composer-bg: #2b2b2b;
   --surface-contrast: #eef1f5;
   --surface-contrast-hover: #ffffff;
   --text-primary: #edf0f4;
   --text-secondary: #abb3bf;
   --text-tertiary: #7f8998;
   --text-contrast: #111318;
-  --border-subtle: rgba(148, 163, 184, 0.12);
-  --border-strong: rgba(148, 163, 184, 0.2);
+  --border-subtle: #383838;
+  --border-strong: #505050;
+}
+
+/* Navigation needs visible selection above its raised gray background. */
+html.dark .studio-workspace .studio-sidebar-surface {
+  --surface-muted: #3a3a3a;
 }
 
 /*

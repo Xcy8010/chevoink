@@ -489,7 +489,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   }
 
   function body() {
-    return <div className="relative flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
+    return <div className="studio-sidebar-surface relative flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
       <div className="flex h-12 shrink-0 items-center gap-1.5 px-3">
         <div className="relative min-w-0 flex-1">
           <button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={() => setProductMenu((value) => !value)} className="flex h-8 max-w-full items-center gap-2 rounded-[9px] px-2 text-sm font-semibold text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><ChevoinkAgentMark className="h-5 w-5 shrink-0" /><span key={props.perspective} className="truncate motion-safe:animate-[mode-label-in_180ms_cubic-bezier(.22,1,.36,1)]">{props.perspective === 'work' ? 'Work' : 'IDE'}</span><ChevronDown className={cn('h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform', productMenu && 'rotate-180')} /></button>
