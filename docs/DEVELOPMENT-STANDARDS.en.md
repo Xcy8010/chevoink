@@ -43,6 +43,9 @@ Version 2.0 · 2026-09-08. Applies to fixes, optimization, refactoring and new f
 
 ## 4. Agent execution, recovery and cancellation
 
+- Distinguish actual failures from no-match/no-change results, user cancellation and protective refusals. Never reduce failure rates by hiding errors, fabricating completion or unbounded retries. Keep generic waiting feedback during silent reasoning and missing argument frames.
+- Legacy continuation, quality checks and compiler commit must share the validated task-contract scope, not just a run ID or the entire session. Omit only schema-optional blank identifiers; preserve required IDs and business text. Test cross-task rejection, no-side-effect results and omitted arguments.
+
 - Persist task root, original request, authorization, targets, configuration and budget. Resume restores the original task; summaries and old subtasks are not new authority.
 - Attempts may change; logical operation identity and receipts must not. Concurrent resume and duplicate delivery must be idempotent.
 - Validate owner/epoch/lease at write and settlement boundaries. Expired owners cannot commit text, terminal state or charges.

@@ -357,7 +357,7 @@ export function AgentPanel({
     [skillsQuery.data],
   )
   // 参数生成、工具间等待等阶段也需要动态反馈；不能因已经输出过正文而永久隐藏。
-  const awaiting = shouldShowProcessingHint(messages, runId, phase, finalizedTextIds, Boolean(pendingApproval || pendingQuestion))
+  const awaiting = shouldShowProcessingHint(messages, runId, phase, Boolean(pendingApproval || pendingQuestion))
 
   // AgentPanel stays mounted while authors switch works. Re-hydrate the per-work
   // freedom setting instead of carrying the previous work's value into the new one.

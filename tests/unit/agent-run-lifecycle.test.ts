@@ -115,10 +115,10 @@ describe('BYOK paid-tool isolation', () => {
 })
 
 describe('original task context on resume', () => {
-  it('stops repeated quality provider failures even when compilation parameters change within a batch', async () => {
-    const failing = tool('quality_analyze', async () => { throw new DataAccessError(502, 'AI_PROVIDER_TIMEOUT', 'gateway timeout') })
+  it.each(['quality_analyze', 'continuity_validate', 'creative_critique', 'cover_generate'])('stops repeated %s provider failures even when parameters change within a batch', async name => {
+    const failing = tool(name, async () => { throw new DataAccessError(502, 'AI_PROVIDER_TIMEOUT', 'gateway timeout') })
     mocks.tools = [failing]
-    queue(response('', [call('q1', 'quality_analyze', '{"compilationId":"first"}'), call('q2', 'quality_analyze', '{"compilationId":"second"}'), call('q3', 'quality_analyze', '{}')]), response('检查未完成，正文保留。'))
+    queue(response('', [call('q1', name, '{"compilationId":"first"}'), call('q2', name, '{"compilationId":"second"}'), call('q3', name, '{}')]), response('操作未完成，正文保留。'))
     await run()
     expect(failing.execute).toHaveBeenCalledTimes(2)
     expect(events().filter(event => event.type === 'tool.result')).toEqual(expect.arrayContaining([expect.objectContaining({ summary: '模型网关超时', ok: false })]))

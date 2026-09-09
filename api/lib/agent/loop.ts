@@ -486,6 +486,7 @@ export async function handleToolCall(
       console.warn('[agent-tool-provider]', { runId, tool: call.name, code: error.code, durationMs: Date.now() - startedAt })
       return { ...fail(label, `工具 ${call.name} 未完成：${label}（${error.code}）。这是模型响应故障，不是正文质量结论；不要修改正文或重建编译来绕过。最多重试一次，仍失败则保留进度并报告阻塞。`, 'failed'), providerFailure: true }
     }
+    console.warn('[agent-tool-failure]', { runId, tool: call.name, code: error instanceof DataAccessError ? error.code : 'UNEXPECTED_TOOL_ERROR', durationMs: Date.now() - startedAt })
     const message = error instanceof Error ? error.message : String(error)
     return fail('执行失败', `工具 ${call.name} 执行失败：${message}。可以调整参数重试，或换用其他工具。`, 'failed')
   }
@@ -600,7 +601,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
   const progressSignatures = new Set<string>()
   let blockedRepeat = 0
   const argumentFailures = new Map<string, number>()
-  const qualityProviderFailures = new Map<string, number>()
+  const toolProviderFailures = new Map<string, number>()
   // 非空时本轮工具执行完立即走 wrap-up（P0 第 4 次同签名 / P1 干预模式二次命中）
   let forceWrapUpReason: string | null = null
   // P1 信道重复检测：正文+思考共用一个检测器，观察/干预由 env.agentRepeatGuardMode 决定
@@ -1488,12 +1489,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           continue
         }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
-        if (['quality_analyze', 'continuity_validate'].includes(call.name)) {
-          if (outcome.part.status === 'success') qualityProviderFailures.delete(call.name)
+        {
+          if (outcome.part.status === 'success') toolProviderFailures.delete(call.name)
           else if (outcome.providerFailure) {
-            const failures = (qualityProviderFailures.get(call.name) ?? 0) + 1
-            qualityProviderFailures.set(call.name, failures)
-            if (failures >= 2) forceWrapUpReason = `${outcome.part.title}连续两次模型响应失败，已停止重复请求。正文与进度保留，检查尚未通过；请稍后继续或检查自定义模型服务。`
+            const failures = (toolProviderFailures.get(call.name) ?? 0) + 1
+            toolProviderFailures.set(call.name, failures)
+            if (failures >= 2) forceWrapUpReason = `${outcome.part.title}连续两次模型响应失败，已停止重复请求。已保存内容与进度保留，该操作尚未完成；请稍后继续或检查模型服务。`
           }
         }
         if (outcome.part.status === 'success') argumentFailures.delete(call.name)

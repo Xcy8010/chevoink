@@ -15,6 +15,7 @@ import type {
   HumanityQualitySignal,
 } from '../../../shared/contracts/index.js'
 import { DataAccessError, prisma } from '../prisma.js'
+import { taskSpecSchema } from '../../../shared/contracts/index.js'
 import { isAgent2FeatureEnabled } from '../agent2-feature-flags.js'
 import { assertCraftOutputSafe } from './craft-library.js'
 import { recalcNovelStats } from './tools/novel-tools.js'
@@ -217,11 +218,41 @@ export async function getOwnedQualityChapter(userId: string, novelId: string, ch
   return chapter
 }
 
-async function qualityCompilationScope(db: Prisma.TransactionClient, userId: string, novelId: string, runId?: string | null): Promise<Prisma.StoryCompilationWhereInput> {
+export async function qualityCompilationScope(db: Prisma.TransactionClient, userId: string, novelId: string, runId?: string | null): Promise<Prisma.StoryCompilationWhereInput> {
   if (!runId) return {}
-  const run = await db.agentRun.findFirst({ where: { id: runId, userId, novelId }, select: { taskRootId: true } })
+  const run = await db.agentRun.findFirst({ where: { id: runId, userId, novelId }, select: { taskRootId: true, taskSpec: true, sessionId: true, runtimeProtocolVersion: true } })
   if (!run) throw new DataAccessError(409, 'QUALITY_RUN_SCOPE_INVALID', '质量检查不属于当前作品任务。')
-  return run.taskRootId ? { run: { taskRootId: run.taskRootId } } : { runId }
+  if (run.taskRootId) return { run: { taskRootId: run.taskRootId } }
+  // Typed continuation has a new run ID but retains the server-validated task
+  // contract. Match that contract, never every historical run in the session.
+  const spec = taskSpecSchema.safeParse(run.taskSpec)
+  if (run.runtimeProtocolVersion === 0 && spec.success && spec.data.runId === runId && spec.data.scope.novelId === novelId) {
+    return { run: { userId, novelId, sessionId: run.sessionId, runtimeProtocolVersion: 0, taskRootId: null,
+      taskSpec: { path: ['id'], equals: spec.data.id } } }
+  }
+  return { runId }
+}
+
+/** Explicit targets win; omitted targets belong to the active task, not a stale editor tab. */
+export async function resolveQualityChapterTarget(
+  input: { userId: string; novelId: string; runId?: string; chapterId?: string; compilationId?: string; fallbackChapterId?: string | null },
+  db: Prisma.TransactionClient = prisma,
+) {
+  if (input.chapterId) return input.chapterId
+  if (!input.runId) {
+    if (input.compilationId) throw new DataAccessError(409, 'QUALITY_RUN_SCOPE_INVALID', '请在当前任务中指定质量检查的章节。')
+    return input.fallbackChapterId
+  }
+  const scope = await qualityCompilationScope(db, input.userId, input.novelId, input.runId)
+  const candidates = await db.storyCompilation.findMany({
+    where: { userId: input.userId, novelId: input.novelId, status: 'active', ...scope, ...(input.compilationId ? { id: input.compilationId } : {}) },
+    select: { chapterId: true }, take: 2,
+  })
+  if (candidates.length === 1 && candidates[0].chapterId) return candidates[0].chapterId
+  if (candidates.length > 0 || input.compilationId) {
+    throw new DataAccessError(409, 'QUALITY_TARGET_AMBIGUOUS', '当前编译的质量检查目标未确定，请明确传入章节与编译编号；本次未调用模型。')
+  }
+  return input.fallbackChapterId
 }
 
 export async function buildHumanityQualityContext(userId: string, novelId: string, chapterId: string, runId?: string, db: Prisma.TransactionClient = prisma) {

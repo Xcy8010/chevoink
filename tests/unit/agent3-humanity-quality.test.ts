@@ -1,13 +1,65 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Prisma } from '@prisma/client'
 
 import {
   humanityQualitySignalSchema,
   qualityFindingDispositionSchema,
   qualityFindingFeedbackSchema,
 } from '../../shared/contracts/index.js'
-import { analyzeDeterministicQuality, calibrateCriticFindings } from '../../api/lib/agent/humanity-quality.js'
+import { analyzeDeterministicQuality, calibrateCriticFindings, resolveQualityChapterTarget } from '../../api/lib/agent/humanity-quality.js'
 import { allTools } from '../../api/lib/agent/tools/registry.js'
 import { AGENT_TOOL_GOVERNANCE } from '../../api/lib/agent/tools/governance.js'
+import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
+
+describe('质量检查默认目标', () => {
+  const input = { userId: 'u', novelId: 'n', runId: 'r', fallbackChapterId: 'old-editor' }
+  function database(chapters: Array<string | null>, taskRootId: string | null = 'root') {
+    const run = vi.fn().mockResolvedValue({ taskRootId })
+    const compilations = vi.fn().mockResolvedValue(chapters.map(chapterId => ({ chapterId })))
+    return { run, compilations, db: { agentRun: { findFirst: run }, storyCompilation: { findMany: compilations } } as unknown as Prisma.TransactionClient }
+  }
+  it('无参数检查当前任务章节而非旧编辑页，并限制用户、作品及恢复任务根', async () => {
+    const { db, run, compilations } = database(['new-chapter'])
+    expect(await resolveQualityChapterTarget(input, db)).toBe('new-chapter')
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'r', userId: 'u', novelId: 'n' } }))
+    expect(compilations).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'u', novelId: 'n', status: 'active', run: { taskRootId: 'root' } }, take: 2 }))
+  })
+  it('显式章节保持优先，无编译的普通审阅继续使用当前编辑章节', async () => {
+    const { db, compilations } = database([])
+    expect(await resolveQualityChapterTarget({ ...input, chapterId: 'explicit' }, db)).toBe('explicit')
+    expect(compilations).not.toHaveBeenCalled()
+    expect(await resolveQualityChapterTarget(input, db)).toBe('old-editor')
+  })
+  it('传统续跑按合同ID关联，只接受同会话同作品同用户的原任务', async () => {
+    const { db, run, compilations } = database(['target'], null)
+    const taskSpec = buildTaskSpec({ runId: 'r', novelId: 'n', prompt: '写下一章' })
+    run.mockResolvedValue({ taskRootId: null, runtimeProtocolVersion: 0, sessionId: 's', taskSpec })
+    expect(await resolveQualityChapterTarget(input, db)).toBe('target')
+    expect(compilations).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ run: {
+      userId: 'u', novelId: 'n', sessionId: 's', runtimeProtocolVersion: 0, taskRootId: null, taskSpec: { path: ['id'], equals: taskSpec.id },
+    } }) }))
+    run.mockResolvedValue({ taskRootId: null, runtimeProtocolVersion: 0, sessionId: 's', taskSpec: { ...taskSpec, runId: 'foreign' } })
+    await resolveQualityChapterTarget(input, db)
+    expect(compilations).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ runId: 'r' }) }))
+  })
+  it('指定编译必须在当前运行作用域，不能失败后回退旧章节', async () => {
+    const { db, compilations } = database([], null)
+    await expect(resolveQualityChapterTarget({ ...input, compilationId: 'foreign' }, db)).rejects.toMatchObject({ code: 'QUALITY_TARGET_AMBIGUOUS' })
+    expect(compilations).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'u', novelId: 'n', status: 'active', runId: 'r', id: 'foreign' } }))
+  })
+  it.each([[null], ['a', 'b']])('未绑定或多个活跃章节要求明确目标，不猜测', async (...chapters) => {
+    const { db } = database(chapters)
+    await expect(resolveQualityChapterTarget(input, db)).rejects.toMatchObject({ code: 'QUALITY_TARGET_AMBIGUOUS' })
+  })
+  it('无效运行不得跨任务找编译，无运行只允许普通章节审阅', async () => {
+    const { db, run, compilations } = database([])
+    run.mockResolvedValue(null)
+    await expect(resolveQualityChapterTarget(input, db)).rejects.toMatchObject({ code: 'QUALITY_RUN_SCOPE_INVALID' })
+    expect(compilations).not.toHaveBeenCalled()
+    expect(await resolveQualityChapterTarget({ ...input, runId: undefined }, db)).toBe('old-editor')
+    await expect(resolveQualityChapterTarget({ ...input, runId: undefined, compilationId: 'c' }, db)).rejects.toMatchObject({ code: 'QUALITY_RUN_SCOPE_INVALID' })
+  })
+})
 
 describe('Agent 3.0 人类感质量契约与确定性检查', () => {
   it('冻结十三类信号并把作者反馈与修订生命周期分离', () => {

@@ -4,6 +4,13 @@ English | [简体中文](./ENGINEERING.md) · [Development standards](./DEVELOPM
 
 Verified on 2026-09-08 against code and production revision `71f7adc`; [CI passed](https://github.com/Xcy8010/chevoink/actions/runs/34240086273). Implementation, automated evidence and unverified product outcomes are deliberately distinguished.
 
+### 2026-09-09 targeted tool-failure fixes
+
+- Generic waiting feedback no longer depends on reasoning finalization: keep the existing processing animation until a rendered execution card takes over; hide it while awaiting the user, paused or terminated. No additional model requests.
+- Omitted quality-check targets resolve to the task's unique active compilation instead of a stale editor tab. Legacy continuations share a validated contract ID plus user/novel/session scope; unrelated tasks remain isolated. Continuity checks and bridge commits use the same scope.
+- Shared normalization omits blank `*Id` values only when the schema allows omission. Required identifiers, body text, empty replacements and search whitespace stay unchanged. Explicitly truncated provider arguments remain rejected rather than being completed into a fabricated write.
+- Verified no-match/no-change previews return an explicit no-op without creating a changeset. Authorization/persistence failures remain failures. All tools share a per-tool stop after two consecutive model-response failures; diagnostic logs retain codes and durations, not manuscripts or credentials.
+
 ## 1. Architecture and entry points
 
 React SPA + Express + PostgreSQL monolith for writing, reading, community and administration; Android uses a Capacitor shell. Production runs one PM2 instance. Independent workers and multi-instance disaster recovery are **not fully delivered**.

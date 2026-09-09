@@ -10,7 +10,7 @@ import {
 import { generateTextCompletion } from '../../ai-service.js'
 import { DataAccessError, prisma } from '../../prisma.js'
 import { isAgent2FeatureEnabled } from '../../agent2-feature-flags.js'
-import { getLatestQualityReport } from '../humanity-quality.js'
+import { getLatestQualityReport, qualityCompilationScope } from '../humanity-quality.js'
 import { recordChapterBaseline } from '../baseline.js'
 import { enqueueChapterMemoryExtraction, processMemoryExtractionJob } from '../story-memory.js'
 import {
@@ -542,9 +542,8 @@ export const continuityValidateTool = defineTool({
         userId: ctx.userId,
         novelId: ctx.novelId,
         status: 'active',
-        ...(args.compilationId
-          ? { id: args.compilationId }
-          : { OR: [{ runId: ctx.runId }, ...(ctx.chapterId ? [{ chapterId: ctx.chapterId }] : [])] }),
+        ...await qualityCompilationScope(prisma, ctx.userId, ctx.novelId, ctx.runId),
+        ...(args.compilationId ? { id: args.compilationId } : {}),
       },
       include: { bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } }, chapter: { select: { id: true, title: true, revision: true, content: true, orderIndex: true } } },
       orderBy: { updatedAt: 'desc' },
@@ -675,14 +674,14 @@ export const chapterBridgeCommitTool = defineTool({
   readOnly: false,
   async execute(ctx, args) {
     const db = ctx.transaction ?? prisma
-    const run = await db.agentRun.findFirst({ where: { id: ctx.runId, userId: ctx.userId, novelId: ctx.novelId }, select: { taskRootId: true } })
+    const scope = await qualityCompilationScope(db, ctx.userId, ctx.novelId, ctx.runId)
     const targetId = ctx.durableCompiler?.baseline?.id ?? args.compilationId
     const candidates = await db.storyCompilation.findMany({
       where: {
         userId: ctx.userId,
         novelId: ctx.novelId,
         status: { in: ['active', 'completed'] },
-        ...(run?.taskRootId ? { run: { taskRootId: run.taskRootId } } : { runId: ctx.runId }),
+        ...scope,
         ...(targetId ? { id: targetId } : {}),
       },
       include: { chapter: true, bridge: true, sceneTasks: { orderBy: { ordinal: 'asc' } } },
@@ -690,7 +689,7 @@ export const chapterBridgeCommitTool = defineTool({
       take: 2,
     })
     const compilation: (typeof candidates)[number] | undefined = candidates.find((item) => item.status === 'active') ?? candidates[0]
-    if (!compilation?.chapter || !compilation.bridge) return { outcome: 'failed' as const, output: '没有找到当前任务指定的章节编译状态；请核对章节桥，不会替换为同作品其他任务或章节的编译。', summary: '未找到章节编译状态' }
+    if (!compilation?.chapter || !compilation.bridge) return { outcome: 'failed' as const, output: '没有找到当前任务指定的章节编译状态。历史章节桥可读不代表当前任务可提交它；不要反复增删 compilationId 重试。若本轮已获准继续该章节，请用 story_compiler_prepare(chapterId=目标已有章节ID) 建立本任务编译并完成检查；不要重写正文或接管其他任务。', summary: '未找到章节编译状态' }
     if (compilation.status === 'completed') {
       if (compilation.bridge.targetRevision !== compilation.chapter.revision) return { outcome: 'failed' as const,
         output: '已提交的章节桥对应旧正文版本，当前正文已变化；请为当前任务重新准备并检查，不能把旧提交当作当前版本完成。', summary: '章节桥版本已过期' }

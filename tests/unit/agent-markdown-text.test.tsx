@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AgentMarkdownText } from '../../src/features/studio/agent/components/AgentMarkdownText'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
+// These assertions cover rendering/security, not Vite's cold dependency transform
+// speed. Await the real lazy dependencies before the default 1s DOM deadline.
+beforeAll(async () => {
+  await Promise.all([import('react-markdown'), import('remark-gfm'), import('../../shared/agent-output.js')])
+}, 30_000)
 
 describe('J4 assistant Markdown', () => {
   it('removes hidden tool-status line boxes and empty paragraphs without flattening prose or code', async () => {

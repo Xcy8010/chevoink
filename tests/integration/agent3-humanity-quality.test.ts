@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto'
+import { Prisma } from '@prisma/client'
 
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -12,9 +13,12 @@ import {
   saveCharacterVoiceProfile,
   saveExperienceAnchor,
   selectQualityFindings,
+  resolveQualityChapterTarget,
+  qualityCompilationScope,
 } from '../../api/lib/agent/humanity-quality.js'
 import { prisma } from '../../api/lib/prisma.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
+import { buildTaskSpec } from '../../api/lib/agent/task-spec.js'
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(handleTestDatabaseUnavailable)
 
@@ -46,6 +50,26 @@ describe.skipIf(!dbAvailable)('Agent 3.0 人类感质量门（需 DB）', () => 
     await prisma.chapter.create({ data: { id: chapterId, novelId, authorId: userId, volumeId, orderIndex: 1, orderInVolume: 1, title: '第一章 钥匙', content, wordCount: content.length, revision: 1, status: 'draft', visibility: 'private' } })
     const session = await prisma.agentSession.create({ data: { userId, novelId, title: 'P3 质量测试' } })
     runId = (await prisma.agentRun.create({ data: { sessionId: session.id, userId, novelId, chapterId, mode: 'act', action: 'workspaceAgent', agentType: 'writingOrchestrator', status: 'running', engine: 'loop' } })).id
+  })
+
+  it('原合同续跑可读取编译；同会话的新任务不能继承编译权限', async () => {
+    const source = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const originalSpec = buildTaskSpec({ runId, novelId, chapterId, prompt: '完成本章写作' })
+    const resumeId = randomUUID()
+    await prisma.agentRun.update({ where: { id: runId }, data: { taskSpec: originalSpec } })
+    const compilation = await prisma.storyCompilation.create({ data: { userId, novelId, runId, chapterId, targetOrderIndex: 1, sourcePromptHash: 'scope-test', preparedContext: {} } })
+    try {
+      await prisma.agentRun.create({ data: { id: resumeId, userId, novelId, sessionId: source.sessionId, mode: 'act', action: 'workspaceAgent', agentType: 'writingOrchestrator', taskSpec: { ...originalSpec, runId: resumeId } } })
+      expect(await resolveQualityChapterTarget({ userId, novelId, runId: resumeId, compilationId: compilation.id, fallbackChapterId: 'old-editor' })).toBe(chapterId)
+      const scope = await qualityCompilationScope(prisma, userId, novelId, resumeId)
+      expect(await prisma.storyCompilation.count({ where: { id: compilation.id, userId, novelId, ...scope } })).toBe(1)
+      await prisma.agentRun.update({ where: { id: resumeId }, data: { taskSpec: buildTaskSpec({ runId: resumeId, novelId, prompt: '分析另一章' }) } })
+      await expect(resolveQualityChapterTarget({ userId, novelId, runId: resumeId, compilationId: compilation.id })).rejects.toMatchObject({ code: 'QUALITY_TARGET_AMBIGUOUS' })
+    } finally {
+      await prisma.storyCompilation.delete({ where: { id: compilation.id } })
+      await prisma.agentRun.deleteMany({ where: { id: resumeId } })
+      await prisma.agentRun.update({ where: { id: runId }, data: { taskSpec: source.taskSpec ?? Prisma.DbNull } })
+    }
   })
 
   it('确认版 Voice DNA 与 Experience Anchor 必须绑定逐字章节证据', async () => {

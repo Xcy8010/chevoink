@@ -22,6 +22,7 @@ import {
   locateCriticFindings,
   persistHumanityQualityReport,
   recordQualityFindingFeedback,
+  resolveQualityChapterTarget,
   renderQualityLearning,
   renderVoiceAndAnchorContext,
   saveCharacterVoiceProfile,
@@ -188,7 +189,10 @@ export const qualityAnalyzeTool = defineTool({
     }
   },
   async execute(ctx, args) {
-    const chapterId = args.chapterId ?? ctx.chapterId
+    const chapterId = await resolveQualityChapterTarget({
+      userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
+      chapterId: args.chapterId, compilationId: args.compilationId, fallbackChapterId: ctx.chapterId,
+    })
     if (!chapterId) return { output: '请先指定要检查的章节，或在章节查看器中打开目标章节。' }
     const bundle = await buildHumanityQualityContext(ctx.userId, ctx.novelId, chapterId, ctx.runId)
     if (args.compilationId && args.compilationId !== bundle.compilation?.id) return {

@@ -8,7 +8,7 @@ import {
   searchProjectData,
 } from '../../data-access.js'
 import type { ChangeSet } from '../../../../shared/contracts/index.js'
-import { prisma } from '../../prisma.js'
+import { DataAccessError, prisma } from '../../prisma.js'
 import { defineTool } from './types.js'
 
 const READ_PERMISSION = { plan: 'allow', build: 'allow', review: 'allow' } as const
@@ -146,7 +146,16 @@ function definePreviewTool(name: 'bulk_replace_preview' | 'entity_rename_preview
     permission: PREVIEW_PERMISSION,
     readOnly: true,
     async execute(ctx, args) {
-      const changeSet = await previewBulkReplaceData(ctx.userId, ctx.novelId, args)
+      let changeSet: ChangeSet
+      try {
+        changeSet = await previewBulkReplaceData(ctx.userId, ctx.novelId, args)
+      } catch (error) {
+        if (error instanceof DataAccessError && ['NO_SEARCH_MATCH', 'NO_CHANGE'].includes(error.code)) {
+          const detail = error.code === 'NO_CHANGE' ? '替换前后相同，无需扫描。' : '已按指定字段、排除章节及引文保护条件核对。'
+          return { summary: '预览完成 · 无需变更', output: `${error.message} ${detail}未创建变更集、未写入正文。无需调用 changeset_apply；不要重复相同预览。若与预期不符，请先用 project_search 核对范围。` }
+        }
+        throw error
+      }
       return {
         output: `已生成 ChangeSet ${changeSet.id}：${changeSet.patches.length} 个字段补丁，尚未写入正文。请检查预览与警告；确认后调用 changeset_apply(changeSetId=${changeSet.id})。`,
         summary: `生成变更预览 · ${changeSet.patches.length} 项`,
