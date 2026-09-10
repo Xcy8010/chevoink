@@ -132,7 +132,7 @@ export default function SettingsPage() {
     const controller = new AbortController()
     void getWindowsDownload(controller.signal).then((download) => {
       if (!controller.signal.aborted) setWindowsDownload(download)
-    }).catch(() => { /* No public stable package: do not advertise a broken download. */ })
+    }).catch(() => { /* No verified download manifest: do not advertise a broken download. */ })
     return () => controller.abort()
   }, [mobileClient])
 
@@ -677,6 +677,9 @@ export default function SettingsPage() {
                 <div className="space-y-2">
                   <h3 className="text-lg font-semibold text-[var(--text-primary)]">安装启创墨域客户端</h3>
                   <p className="text-sm leading-6 text-[var(--text-secondary)]">{mobileClient ? '请选择你要下载的版本' : '适用于 Windows x64'}</p>
+                  {!mobileClient && windowsDownload?.channel === 'preview' ? (
+                    <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">未签名测试版，暂不支持自动更新。Windows 可能提示未知发布者；请核对官网来源，不要关闭系统安全防护。</p>
+                  ) : null}
                 </div>
                 <Button
                   onClick={() => setClientDialogOpen(false)}

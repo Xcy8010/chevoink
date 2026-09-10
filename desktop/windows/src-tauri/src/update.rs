@@ -22,6 +22,9 @@ impl UpdateState {
 }
 
 pub fn schedule_check(app: &AppHandle) {
+    if option_env!("CHEVOINK_UPDATER_PUBLIC_KEY").is_none_or(|key| key.trim().is_empty()) {
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
@@ -30,6 +33,15 @@ pub fn schedule_check(app: &AppHandle) {
 }
 
 pub fn check(app: &AppHandle, manual: bool) {
+    if option_env!("CHEVOINK_UPDATER_PUBLIC_KEY").is_none_or(|key| key.trim().is_empty()) {
+        if manual {
+            crate::window::notice(
+                "手动更新客户端",
+                "当前测试版暂不支持自动更新。请从官网设置中的下载客户端入口或 GitHub Windows 发布页手动下载安装新版本。现有资料不受影响。",
+            );
+        }
+        return;
+    }
     // Development profiles never discover or install packages from the production channel.
     if app.config().identifier != "com.chevoink.desktop" {
         if manual {

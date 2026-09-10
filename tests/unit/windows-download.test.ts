@@ -45,5 +45,16 @@ it('does not retry failed requests or carry cookies to the download service', as
   const fetch = vi.fn().mockResolvedValue(new Response('', { status: 404 }))
   vi.stubGlobal('fetch', fetch)
   await expect(getWindowsDownload()).rejects.toThrow('暂不可下载')
-  expect(fetch).toHaveBeenCalledExactlyOnceWith('/download/windows/stable/latest.json', expect.objectContaining({ credentials: 'omit', redirect: 'error', cache: 'no-store' }))
+  expect(fetch).toHaveBeenCalledExactlyOnceWith('/download/windows/manual/latest.json', expect.objectContaining({ credentials: 'omit', redirect: 'error', cache: 'no-store' }))
+})
+
+it('allows explicitly labelled manual previews without inventing an updater signature', () => {
+  const value = manifest()
+  const preview = { ...value, channel: 'preview', signed: false, platforms: { 'windows-x86_64': { url: value.platforms['windows-x86_64'].url, sha256: 'a'.repeat(64) } } }
+  expect(parseWindowsDownload(preview)).toEqual({ version: '1.0.0', url: value.platforms['windows-x86_64'].url, channel: 'preview', signed: false, sha256: 'a'.repeat(64) })
+  for (const invalid of [
+    { ...preview, channel: 'stable' }, { ...preview, channel: undefined },
+    { ...preview, signed: true }, { ...preview, signed: undefined },
+    { ...preview, platforms: { 'windows-x86_64': { url: value.platforms['windows-x86_64'].url, sha256: 'invalid' } } },
+  ]) expect(() => parseWindowsDownload(invalid)).toThrow()
 })

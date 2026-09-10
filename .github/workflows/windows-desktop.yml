@@ -85,6 +85,7 @@ jobs:
           path: |
             desktop/windows/test-results/installers/standard/*.exe
             desktop/windows/test-results/windows-dependencies.json
+            desktop/windows/test-results/windows-sbom.cdx.json
           if-no-files-found: error
           retention-days: 7
       - name: Build internal installer with offline WebView2 runtime

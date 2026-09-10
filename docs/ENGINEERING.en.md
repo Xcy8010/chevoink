@@ -201,3 +201,5 @@ Use forward-compatible migrations; code rollback must not down-migrate away comm
 - Product blind reviews, retention and complete paid/payment flows; describe the product as beta, not a verified commercial release.
 
 Historical plans remain unchanged. Documentation edits and green CI do not automatically complete these items.
+
+2026-09-10 Windows 1.0.3 release preparation: the owner authorized an unsigned preview with signing and automatic updates deferred. Manual web downloads use a separate manifest from the native stable updater, display the unsigned warning, and never supply placeholder signatures. No background check starts without a public key. Added installed-WebView2 CI regressions and a scoped CycloneDX BOM for the Rust Windows target. User-confirmed 1.0.2 Win11 core acceptance is recorded in [Windows status](./WINDOWS_DESKTOP.md); Win10, multi-monitor and complete security/endurance validation remain unverified. This is not a stable-release certification.

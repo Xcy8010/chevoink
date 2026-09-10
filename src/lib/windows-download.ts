@@ -1,7 +1,11 @@
-export const WINDOWS_MANIFEST_URL = '/download/windows/stable/latest.json'
+// Manual downloads are deliberately separate from the signed native updater channel.
+export const WINDOWS_MANIFEST_URL = '/download/windows/manual/latest.json'
 export const WINDOWS_RELEASES_URL = 'https://github.com/Xcy8010/chevoink/releases'
 
-export type WindowsDownload = { version: string; url: string; signature: string }
+export type WindowsDownload = { version: string; url: string } & (
+  | { channel: 'preview'; signed: false; sha256: string }
+  | { channel: 'stable'; signature: string }
+)
 
 export function parseWindowsDownload(value: unknown): WindowsDownload {
   if (!value || typeof value !== 'object') throw new Error('Windows 下载信息不可用')
@@ -12,7 +16,7 @@ export function parseWindowsDownload(value: unknown): WindowsDownload {
   }
   const platforms = manifest.platforms as Record<string, unknown> | undefined
   const asset = platforms?.['windows-x86_64'] as Record<string, unknown> | undefined
-  if (!asset || typeof asset.url !== 'string' || typeof asset.signature !== 'string' || !asset.signature.trim()) {
+  if (!asset || typeof asset.url !== 'string') {
     throw new Error('Windows x64 安装包尚未就绪')
   }
   const url = new URL(asset.url)
@@ -20,7 +24,15 @@ export function parseWindowsDownload(value: unknown): WindowsDownload {
   const allowed = (url.origin === 'https://chevoink.chevolink.com' && url.pathname === `/download/windows/${version}/${name}`)
     || (url.origin === 'https://github.com' && url.pathname === `/Xcy8010/chevoink/releases/download/windows-v${version}/${name}`)
   if (!allowed || url.username || url.password || url.search || url.hash) throw new Error('Windows 下载地址未通过校验')
-  return { version, url: url.href, signature: asset.signature }
+  if (manifest.channel === 'preview') {
+    if (manifest.signed !== false || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)) {
+      throw new Error('Windows 测试版下载信息无效')
+    }
+    return { version, url: url.href, channel: 'preview', signed: false, sha256: asset.sha256 }
+  }
+  if ((manifest.channel !== undefined && manifest.channel !== 'stable') || manifest.signed === false
+    || typeof asset.signature !== 'string' || !asset.signature.trim()) throw new Error('Windows x64 安装包尚未就绪')
+  return { version, url: url.href, channel: 'stable', signature: asset.signature }
 }
 
 /** No retry loop or global GitHub latest: failure must leave the old release usable. */

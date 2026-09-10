@@ -1,6 +1,12 @@
 # Chevoink Windows 客户端
 
-当前为 **1.0.1 开发候选版**，不是已完成正式签名与真机验收的稳定版。内部 CI 安装包不能替代公开 Release。发布状态与验收边界见 [Windows 工程说明](../../docs/WINDOWS_DESKTOP.md)。
+## 当前发布候选：1.0.3 未签名测试版
+
+用户已明确允许暂不签名、暂不启用自动更新。1.0.3 使用手动下载安装，网页下载弹窗明确提示未签名；不会要求关闭 Windows 安全防护。发布门禁通过后以 `windows-v1.0.3` 预发布（非全仓 Latest）分发普通和内嵌 WebView2 安装器两包。下方签名约束适用于未来正式稳定版，不代表此测试版已签名。
+
+手动网页清单为 `/download/windows/manual/latest.json`，原生更新稳定清单不写入未签名包。原版草稿/审查/登录存储不变；本轮不增加自动更新或离线创作。具体验收和未覆盖项见工程说明。
+
+当前为 **1.0.2 未签名候选版**。2026-09-10 用户确认 Win11 新图标、启动、空闲退出、重开状态保留通过，写作/上传导出/语音/听书无异常；这不是完整故障矩阵、Win10 或正式签名验收。内部 CI 安装包不能替代公开 Release。发布状态与剩余工作见 [Windows 工程说明](../../docs/WINDOWS_DESKTOP.md)。
 
 1.0.0 在本机发现 updater 配置缺失导致启动退出，已撤回公开测试包。1.0.1 补充配置反序列化回归、实际 EXE 启动检查和启动失败提示。没有签名公钥时仍禁止检查/安装更新，空配置不是占位签名。安装器遇到 Codex 包缓存内的旧安装位置时改用当前用户的 `AppData/Local/Programs/Chevoink`，不删除旧数据。
 
@@ -45,6 +51,8 @@ npm run build:offline -- --ci
 Windows 标签为 `windows-v<version>`，安装包为 `Chevoink_<version>_x64-setup.exe`。Windows Release 必须设置 `latest=false`，不得抢占 Android 使用的全仓 Latest。
 
 正式分发必须先完成 Authenticode 签名，再对最终安装包生成 Tauri updater 签名与 SHA256。编译时的 `CHEVOINK_UPDATER_PUBLIC_KEY` 仅放公钥；私钥不得进入仓库、普通构建或日志。未配置公钥时不安装更新。
+
+目前候选包未内置更新公钥，首次迁移到签名更新链路需要手动安装带正确公钥的新版本，不能仅发布清单让旧包自动升级。`verify-installer.ps1` 提供只读发布预检（版本/摘要/预期发布者/Authenticode/时间戳），仍须另验 updater 签名、嵌入应用签名及真实跨版本安装。
 
 版本目录：`/download/windows/<version>/`；稳定清单：`/download/windows/stable/latest.json`。先发布并核验不可变安装包，最后更新稳定清单。电脑网页设置仅在合法 Windows 稳定清单可读取时显示入口；手机 APK 通道不变。
 

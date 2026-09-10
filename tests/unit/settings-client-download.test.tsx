@@ -26,6 +26,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks() })
 async function show() { await act(async () => { render(<MemoryRouter><SettingsPage /></MemoryRouter>) }) }
 
+it('labels unsigned manual downloads before the user downloads', async () => {
+  mocks.download.mockResolvedValue({ version: '1.0.3', channel: 'preview', signed: false, sha256: 'a'.repeat(64), url: 'https://chevoink.chevolink.com/download/windows/1.0.3/Chevoink_1.0.3_x64-setup.exe' })
+  await show()
+  fireEvent.click(screen.getByText('下载客户端'))
+  expect(within(screen.getByRole('dialog')).getByText(/未签名测试版，暂不支持自动更新/)).toBeTruthy()
+})
+
 it('offers only Windows on a narrow desktop, and clears selection when reopened', async () => {
   vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(375)
   await show()
