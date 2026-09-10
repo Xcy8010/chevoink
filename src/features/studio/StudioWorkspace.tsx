@@ -68,7 +68,7 @@ import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/w
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
 import { reconcilePlanSelection, stablePlanId } from './components/work-plan-selection'
-import { initialTaskWindows, selectInitialTask } from './lib/initial-task-selection'
+import { initialTaskWindows, selectInitialTask, selectTaskFallback } from './lib/initial-task-selection'
 import { createCatalogActions } from './components/catalog-actions'
 import { useChapterPersistence } from './components/use-chapter-persistence'
 import { useWorkspaceLayout } from './components/use-workspace-layout'
@@ -514,15 +514,12 @@ export default function StudioWorkspace() {
   }, [activeAgentArtifactId, activeAgentTaskWindowId, agentArtifacts, agentPrompt, agentSessionId])
 
   useEffect(() => {
-    if (activeAgentTaskWindowId) {
-      return
-    }
-
-    const fallbackTaskWindow = agentTaskWindows[0] ?? null
+    const fallbackTaskWindow = selectTaskFallback(agentTaskWindows, activeAgentTaskWindowId,
+      searchParams.get('session'), agentSessionsResolving || Boolean(sessionResolutionError), agentStateNovelId === activeNovelId)
     if (fallbackTaskWindow) {
       applyAgentTaskWindowState(fallbackTaskWindow)
     }
-  }, [activeAgentTaskWindowId, agentTaskWindows])
+  }, [activeAgentTaskWindowId, agentTaskWindows, searchParams, agentSessionsResolving, sessionResolutionError, agentStateNovelId, activeNovelId])
 
   useEffect(() => {
     const requestedPanel = searchParams.get('panel')

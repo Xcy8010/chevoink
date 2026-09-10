@@ -4,6 +4,11 @@ export function initialTaskWindows<T>(tasks: T[], requestedId: string | null, cr
   return tasks.length || requestedId ? tasks : [create()]
 }
 
+/** Automatic fallback must not claim focus while an explicit navigation is resolving. */
+export function selectTaskFallback<T>(tasks: T[], activeId: string | null, requestedId: string | null, restoring: boolean, sameNovel: boolean): T | null {
+  return activeId || requestedId || restoring || !sameNovel ? null : tasks[0] ?? null
+}
+
 export function selectInitialTask<T extends { id: string; sessionId: string | null }>(
   tasks: T[], activeId: string | null | undefined, requestedId: string | null,
 ): T | null {
