@@ -8,24 +8,31 @@ type RequireAuthRouteProps = {
   children: ReactNode
   title?: string
   description?: string
+  centered?: boolean
 }
 
 export default function RequireAuthRoute({
   children,
   title = '登录后即可继续查看这里的内容',
   description = '登录后，你的书架、草稿和个人记录都会继续保留。',
+  centered = false,
 }: RequireAuthRouteProps) {
   const location = useLocation()
   const authStatus = useShellStore((state) => state.authStatus)
   const isAuthenticated = useShellStore((state) => state.authStatus === 'authenticated' && !!state.sessionUser)
+  const stateClassName = centered ? 'flex-1 shrink-0' : undefined
+  const renderState = (state: ReactNode) => centered
+    ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{state}</div>
+    : state
 
   if (authStatus === 'checking') {
-    return <AppState tone="loading" title="正在核对账户状态" description="很快就好。" />
+    return renderState(<AppState className={stateClassName} tone="loading" title="正在核对账户状态" description="很快就好。" />)
   }
 
   if (authStatus === 'unavailable') {
-    return (
+    return renderState(
       <AppState
+        className={stateClassName}
         tone="error"
         title="暂时无法打开这里"
         description="账户状态还没有准备好，请稍后再试，或先回到首页继续浏览。"
@@ -38,8 +45,10 @@ export default function RequireAuthRoute({
   if (!isAuthenticated) {
     const redirect = encodeURIComponent(`${location.pathname}${location.search}`)
 
-    return (
+    return renderState(
       <AppState
+        className={stateClassName}
+        icon={centered ? <img src="/favicon.png" alt="Chevoink" width={72} height={72} className="h-[72px] w-[72px] rounded-2xl object-contain" /> : undefined}
         title={title}
         description={description}
         primaryAction={{ label: '去登录', href: `/login?redirect=${redirect}` }}

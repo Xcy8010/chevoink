@@ -21,6 +21,7 @@ type AppStateProps = {
   primaryAction?: AppStateAction
   secondaryAction?: AppStateAction
   className?: string
+  icon?: ReactNode
 }
 
 const toneIconMap = {
@@ -38,6 +39,7 @@ export default function AppState({
   primaryAction,
   secondaryAction,
   className,
+  icon,
 }: AppStateProps) {
   const Icon = toneIconMap[tone]
 
@@ -47,9 +49,9 @@ export default function AppState({
       className={cn('flex min-h-[220px] items-center justify-center p-4 text-center md:min-h-[280px] md:p-5', className)}
     >
       <div className="mx-auto flex max-w-xl flex-col items-center">
-        <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-tertiary)]">
+        {icon ?? <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-tertiary)]">
           <Icon className={cn('h-5 w-5', tone === 'loading' && 'animate-spin')} />
-        </span>
+        </span>}
         {eyebrow ? (
           <p className="mt-4 text-xs font-medium text-[var(--text-tertiary)]">{eyebrow}</p>
         ) : null}

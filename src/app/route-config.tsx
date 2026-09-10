@@ -141,6 +141,7 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <RequireAuthRoute
         title="登录后即可进入创作中心"
+        centered
         description="登录后，你就可以继续整理灵感、编辑章节并管理自己的作品。"
       >
         <StudioPage />
@@ -155,6 +156,7 @@ export const appRoutes: AppRouteDefinition[] = [
     element: (
       <RequireAuthRoute
         title="登录后即可继续这部作品的创作"
+        centered
         description="登录后，你可以回到当前作品，继续编辑章节、整理内容并准备发布。"
       >
         <StudioPage />
@@ -180,7 +182,11 @@ export const appRoutes: AppRouteDefinition[] = [
     path: '/messages',
     title: '消息中心',
     description: '在这里查看私聊、互动提醒和更新通知，不错过与你有关的内容。',
-    element: <MessagesPage />,
+    element: (
+      <RequireAuthRoute centered title="登录后即可查看消息" description="登录后，即可查看私聊、互动提醒和更新通知。">
+        <MessagesPage />
+      </RequireAuthRoute>
+    ),
     fallback: <ConversationSkeleton />,
   },
   {
