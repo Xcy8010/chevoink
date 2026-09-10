@@ -64,7 +64,7 @@ describe('Agent 运行中上下文预算与压缩', () => {
     expect(estimateToolDefinitionTokens(tools)).toBeGreaterThan(0)
   })
 
-  it('只压缩久远工具参数与输出，保留最近工具对且参数仍为合法 JSON', () => {
+  it('旧轮次变为不可执行回执，不生成可被模仿的压缩参数，最近工具对原样保留', () => {
     const oldArguments = JSON.stringify({ chapterId: 'chapter-1', content: '旧正文'.repeat(1_000), expectedRevision: 3 })
     const recentArguments = JSON.stringify({ chapterId: 'chapter-2', content: '新正文'.repeat(1_000), expectedRevision: 4 })
     const recentOutput = '最新写入结果'.repeat(500)
@@ -76,14 +76,13 @@ describe('Agent 运行中上下文预算与压缩', () => {
 
     const result = compactEarlyToolPayloads(messages, 1)
     const oldAssistant = messages[1] as Extract<ChatMessage, { role: 'assistant' }>
-    const oldTool = messages[2] as Extract<ChatMessage, { role: 'tool' }>
-    const recentAssistant = messages[3] as Extract<ChatMessage, { role: 'assistant' }>
-    const recentTool = messages[4] as Extract<ChatMessage, { role: 'tool' }>
+    const recentAssistant = messages[2] as Extract<ChatMessage, { role: 'assistant' }>
+    const recentTool = messages[3] as Extract<ChatMessage, { role: 'tool' }>
 
-    expect(result.compactedToolArguments).toBe(1)
-    expect(result.compactedToolOutputs).toBe(1)
-    expect(JSON.parse(oldAssistant.toolCalls![0].arguments)).toMatchObject({ _contextCompacted: true })
-    expect(oldTool.content).toContain('[工具输出已压缩]')
+    expect(result.collapsedToolRounds).toBe(1)
+    expect(oldAssistant.toolCalls).toBeUndefined()
+    expect(oldAssistant.content).toContain('旧写入结果')
+    expect(JSON.stringify(messages)).not.toContain('_contextCompacted')
     expect(recentAssistant.toolCalls![0].arguments).toBe(recentArguments)
     expect(recentTool.content).toBe(recentOutput)
     expect(result.afterTokens).toBeLessThan(result.beforeTokens)

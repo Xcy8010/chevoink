@@ -163,4 +163,23 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P1 卷章结构（需 DB）', () => {
     expect(novelsWithoutVolumes).toBe(0)
     expect(Number(orphanChapters[0].count)).toBe(0)
   })
+
+  it('第二卷连续建章不与新章占用的临时负序号冲突', async () => {
+    const created = await request(app).post('/api/novels').set('Cookie', cookie)
+      .send({ title: '临时序号隔离回归', summary: '只用于隔离数据库验证', tags: [] })
+    expect(created.status).toBe(201)
+    const target = created.body.data.novel.id as string
+    expect((await request(app).post(`/api/novels/${target}/chapters`).set('Cookie', cookie)
+      .send({ title: '前卷章', content: '前卷正文', status: 'draft', visibility: 'private' })).status).toBe(201)
+    const volume = await request(app).post(`/api/novels/${target}/volumes`).set('Cookie', cookie).send({ title: '第二卷' })
+    expect(volume.status).toBe(201)
+    for (let index = 1; index <= 4; index++) {
+      const chapter = await request(app).post(`/api/novels/${target}/chapters`).set('Cookie', cookie)
+        .send({ title: `后卷章${index}`, content: `正文${index}`, volumeId: volume.body.data.volume.id, status: 'draft', visibility: 'private' })
+      expect(chapter.status).toBe(201)
+      expect(chapter.body.data.chapter).toMatchObject({ orderIndex: index + 1, orderInVolume: index })
+    }
+    const report = await request(app).get(`/api/novels/${target}/structure`).set('Cookie', cookie)
+    expect(report.body.data.report).toMatchObject({ valid: true, chapterCount: 5, issues: [] })
+  })
 })

@@ -300,7 +300,7 @@ ${bundle.chapter.content}
         const repaired = await applySelectedQualityRepairs(ctx, report, selected)
         if (repaired) {
           return {
-            output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次检查或选择。`,
+            output: `严谨创作质量检查完成：一次融合审查定位 ${report.findings.length} 项证据，已自动原子修订 ${repaired.patchCount} 处${repaired.missingCount ? `，另有 ${repaired.missingCount} 项因无法安全定位保留待审` : ''}。质量报告已绑定修订后的 r${repaired.result.updated.revision}，无需再次质量检查或选择；正文已变化，提交章节终态前必须调用 continuity_validate 只读复核当前版本，不能沿用旧连续性报告。`,
             summary: `人类感质量检查 · 自动修订 ${repaired.patchCount} 处`,
             display: reportDisplay(repaired.report),
             snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },
@@ -367,7 +367,7 @@ export const qualityRevisionApplyTool = defineTool({
     const repaired = await applySelectedQualityRepairs(ctx, report, selected)
     if (!repaired) return { output: '局部修订器本次未返回可验证补丁，正文保持不变，可稍后重试。', summary: '局部质量修订 · 正文未改动', display: reportDisplay(report) }
     return {
-      output: `已原子应用 ${repaired.patchCount} 个局部修订并绑定 r${repaired.result.updated.revision}，无需再次质量检查。`,
+      output: `已原子应用 ${repaired.patchCount} 个局部修订并绑定 r${repaired.result.updated.revision}，无需再次质量检查；正文已变化，提交章节终态前必须调用 continuity_validate 只读复核当前版本。`,
       summary: `局部质量修订 · ${repaired.patchCount} 处`,
       display: { kind: 'chapterDiff', chapterId: repaired.result.updated.id, chapterTitle: repaired.result.updated.title, before: repaired.result.before, after: repaired.result.after, appliedDirectly: true, revision: repaired.result.updated.revision },
       snapshot: { target: 'chapter', targetId: repaired.result.updated.id, field: 'content', previousValue: repaired.result.before },

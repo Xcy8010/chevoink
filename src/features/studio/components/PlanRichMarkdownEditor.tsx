@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { CrepeBuilder } from '@milkdown/crepe/builder'
 import { placeholder } from '@milkdown/crepe/feature/placeholder'
 import { replaceAll } from '@milkdown/kit/utils'
+import { editorViewCtx, parserCtx } from '@milkdown/kit/core'
 
 import '@milkdown/crepe/theme/common/prosemirror.css'
 import '@milkdown/crepe/theme/common/reset.css'
@@ -26,6 +27,8 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
   const editorRef = useRef<CrepeBuilder | null>(null)
   const currentMarkdownRef = useRef(markdown)
   const desiredMarkdownRef = useRef(markdown)
+  const editableRef = useRef(editable)
+  editableRef.current = editable
   const suppressedMarkdownRef = useRef<string | null>(null)
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
@@ -53,6 +56,7 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
     editor.setReadonly(!editable)
     editor.on((listener) => {
       listener.markdownUpdated((_ctx, nextMarkdown, previousMarkdown) => {
+        if (disposed) return
         currentMarkdownRef.current = nextMarkdown
         if (!acceptingUpdates) return
         if (suppressedMarkdownRef.current === nextMarkdown) {
@@ -61,7 +65,7 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
         }
         if (nextMarkdown !== previousMarkdown) onChangeRef.current?.(nextMarkdown)
       })
-      listener.blur(() => onBlurRef.current?.())
+      listener.blur(() => { if (!disposed) onBlurRef.current?.() })
     })
 
     void editor.create().then(() => {
@@ -71,12 +75,13 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
         return
       }
       editorRef.current = editor
+      editor.setReadonly(!editableRef.current)
       acceptingUpdates = true
       const desiredMarkdown = desiredMarkdownRef.current
       if (desiredMarkdown !== currentMarkdownRef.current) {
         suppressedMarkdownRef.current = desiredMarkdown
         currentMarkdownRef.current = desiredMarkdown
-        editor.editor.action(replaceAll(desiredMarkdown))
+        synchronizeMarkdown(editor, desiredMarkdown)
       }
     })
 
@@ -94,7 +99,7 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
     if (!editor || markdown === currentMarkdownRef.current) return
     suppressedMarkdownRef.current = markdown
     currentMarkdownRef.current = markdown
-    editor.editor.action(replaceAll(markdown))
+    synchronizeMarkdown(editor, markdown)
   }, [markdown])
 
   useEffect(() => {
@@ -130,4 +135,13 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
       data-mobile={mobile ? 'true' : 'false'}
     />
   )
+}
+
+/** Equivalent serialized markdown must not replace the document and map the cursor. */
+function synchronizeMarkdown(editor: CrepeBuilder, markdown: string) {
+  editor.editor.action(ctx => {
+    const next = ctx.get(parserCtx)(markdown)
+    if (!next || ctx.get(editorViewCtx).state.doc.eq(next)) return
+    replaceAll(markdown)(ctx)
+  })
 }

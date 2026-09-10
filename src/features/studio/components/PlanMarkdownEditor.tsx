@@ -46,7 +46,12 @@ function PlanEditorModeSwitch({ mode, onChange }: { mode: PlanEditorMode; onChan
   )
 }
 
-export default function PlanMarkdownEditor({
+export default function PlanMarkdownEditor(props: Props) {
+  // The debounce buffer and callbacks belong to the document, not only Milkdown.
+  return <PlanMarkdownEditorDocument key={props.documentId} {...props} />
+}
+
+function PlanMarkdownEditorDocument({
   documentId,
   markdown,
   editable = true,

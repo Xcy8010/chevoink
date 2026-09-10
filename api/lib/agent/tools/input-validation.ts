@@ -4,7 +4,15 @@ import { coerceToolArgumentEnvelope } from './argument-coercion.js'
 
 /** Shared by live dispatch and durable pre-execution rejection. Pure only. */
 export function normalizeToolInput(tool: Pick<AgentTool, 'coerceArgs'> & Partial<Pick<AgentTool, 'parameters'>>, raw: unknown): unknown {
+  // Old context receipts are not executable arguments, even if a wrapper or
+  // permissive schema could otherwise turn an excerpt into a valid write.
+  if (raw && typeof raw === 'object' && '_contextCompacted' in raw && raw._contextCompacted === true) {
+    throw new Error('Historical context excerpt cannot be executed')
+  }
   const envelope = coerceToolArgumentEnvelope(raw)
+  if (envelope && typeof envelope === 'object' && '_contextCompacted' in envelope && envelope._contextCompacted === true) {
+    throw new Error('Historical context excerpt cannot be executed')
+  }
   const normalized = tool.coerceArgs ? tool.coerceArgs(envelope) : envelope
   if (!(tool.parameters instanceof z.ZodObject) || !normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return normalized
   const result = { ...normalized } as Record<string, unknown>

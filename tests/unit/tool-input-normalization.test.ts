@@ -3,6 +3,14 @@ import { z } from 'zod'
 import { normalizeToolInput } from '../../api/lib/agent/tools/input-validation.js'
 
 describe('shared optional identifier normalization', () => {
+  it('never unwraps a historical excerpt into executable write content', () => {
+    const write = { parameters: z.object({ content: z.string() }) }
+    const excerpt = { _contextCompacted: true, originalChars: 4000, arguments: { content: 'abbreviated' } }
+    for (const raw of [excerpt, { arguments: excerpt }, JSON.stringify(excerpt)]) {
+      expect(() => normalizeToolInput(write, raw)).toThrow('Historical context excerpt')
+    }
+    expect(normalizeToolInput(write, { content: 'Author text mentioning _contextCompacted' })).toEqual({ content: 'Author text mentioning _contextCompacted' })
+  })
   const tool = { parameters: z.object({ compilationId: z.string().min(1).optional(), chapterId: z.string().min(1), replacement: z.string(), query: z.string() }) }
   it.each(['', '  ', '\n'])('omits empty optional IDs (%j) without changing content or required IDs', compilationId => {
     const raw = { compilationId, chapterId: '', replacement: '', query: ' ' }

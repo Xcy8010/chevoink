@@ -79,10 +79,13 @@ async function rewriteChapterLayout(
   byVolume: Map<string, ChapterPlacement[]>,
 ) {
   const flattened = volumes.flatMap((volume) => byVolume.get(volume.id) ?? [])
+  // A newly created chapter already occupies a negative slot. Reordering must
+  // use a disjoint range, including BOTH global and per-volume unique indexes.
+  const temporaryFloor = flattened.reduce((minimum, chapter) => Math.min(minimum, chapter.orderIndex, chapter.orderInVolume), 0)
   for (let index = 0; index < flattened.length; index += 1) {
     await tx.chapter.update({
       where: { id: flattened[index].id },
-      data: { orderIndex: -(index + 1), orderInVolume: -(index + 1) },
+      data: { orderIndex: temporaryFloor - index - 1, orderInVolume: temporaryFloor - index - 1 },
     })
   }
 
@@ -108,8 +111,9 @@ async function rewriteChapterLayout(
 }
 
 async function rewriteVolumeOrder(tx: StructureTx, volumes: PrismaVolume[]) {
+  const temporaryFloor = volumes.reduce((minimum, volume) => Math.min(minimum, volume.orderIndex), 0)
   for (let index = 0; index < volumes.length; index += 1) {
-    await tx.volume.update({ where: { id: volumes[index].id }, data: { orderIndex: -(index + 1) } })
+    await tx.volume.update({ where: { id: volumes[index].id }, data: { orderIndex: temporaryFloor - index - 1 } })
   }
   for (let index = 0; index < volumes.length; index += 1) {
     const volume = volumes[index]

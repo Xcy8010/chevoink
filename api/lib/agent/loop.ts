@@ -302,6 +302,8 @@ export async function handleToolCall(
   } catch {
     const correction = call.name === 'scene_task_build'
       ? '使用原生 scene_task_build：顶层 tasks 数组包含本章完整的 1–4 个场景；每项 purpose/goal/obstacle/choice/cost/turn 各一句短句，entryState/exitState 只填变化字段，可省略 compilationId/styleBudget/alternatives。不要写正文或重复整章设定。'
+      : call.incomplete && ['chapter_write', 'chapter_append'].includes(call.name)
+        ? '本次正文没有写入。先核对目标章节已保存内容；可将完整写作目标拆为完整段落逐次写入/追加，每次参数必须完整闭合，累计内容仍须满足原目标。不得重复覆盖已保存正文、补括号执行残文或缩短目标冒充完成。'
       : '使用该工具公布的 JSON Schema；字符串换行写成 \\n，键名与字符串使用双引号，不要输出 Markdown 或另一层工具调用信封。'
     const observation = `工具 ${call.name} 未执行。${call.incomplete ? '供应商明确返回 length，参数生成未完成，不能补齐括号后冒充完整操作。' : 'JSON 语法无法安全解析；不能仅凭格式错误推断网络截断。'}接收参数共 ${call.arguments.length} 字符。${correction}请修正后重试，不重复发送相同损坏参数。`
     console.warn('[agent-tool-arguments]', { runId, tool: call.name, chars: call.arguments.length, incomplete: Boolean(call.incomplete) })
@@ -357,7 +359,7 @@ export async function handleToolCall(
   const permission = tool.permission[ctx.mode]
 
   if (coercionFailed) {
-    return fail('参数归一化失败', `工具 ${call.name} 的参数无法安全归一化，本次未执行。请按已公布的参数结构修正，不要重复发送同一参数。`, 'failed')
+    return fail('参数归一化失败', `工具 ${call.name} 的参数无法安全归一化，本次未执行。历史摘要、_contextCompacted 与嵌套对象占位符不是可执行参数，不要解包或重发摘要；请回读真实目标并按已公布的参数结构重新构建完整参数。`, 'failed')
   }
 
   if (permission === 'deny') {
@@ -1002,6 +1004,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         const firstStage = compactEarlyToolPayloads(messages, CONTEXT_SLIM_KEEP_RECENT_TOOL_OUTPUTS)
         compactedToolArguments += firstStage.compactedToolArguments
         compactedToolOutputs += firstStage.compactedToolOutputs
+        collapsedToolRounds += firstStage.collapsedToolRounds
         afterTokens = firstStage.afterTokens + toolDefinitionTokens
       }
       if (afterTokens > contextBudget.hardRequestTokens) {
@@ -1160,6 +1163,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     }
 
     /** 29 R08：未结束且有新写入/读取证据时才刷新预算片；保留次数、时间和总量硬顶。 */
+    let checkpointDeniedReason = ''
+    const checkpointStopMessage = () => `自动检查点未续跑：${checkpointDeniedReason || '运行预算边界未满足'}。任务累计消耗 ${taskTokens()} tokens，当前预算片上限 ${runTokenBudget}，总上限 ${env.agentRunTokenBudgetCeiling}；已续跑 ${resumeCount} 次。已保存内容保留，未完成工作不会标记完成；点击继续不会重置同一任务的预算或时间限制。`
     const tryCheckpointResume = async (trigger: 'budget' | 'turns'): Promise<boolean> => {
       const checkpoint = evaluateCheckpoint({
         todoLeft: todoItems.filter((item) => item.status !== 'completed').length,
@@ -1177,7 +1182,13 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         usedTokens: taskTokens(),
         tokenCeiling: env.agentRunTokenBudgetCeiling,
       })
-      if (!checkpoint.ok) return false
+      if (!checkpoint.ok) {
+        checkpointDeniedReason = checkpoint.reason
+        console.warn('[agent-checkpoint-denied]', JSON.stringify({ runId, trigger, reason: checkpoint.reason,
+          usedTokens: taskTokens(), sliceLimit: runTokenBudget, tokenCeiling: env.agentRunTokenBudgetCeiling,
+          resumeCount, compactionCount, writeProgressCount, checkpointWriteBaseline, readProgressCount, checkpointReadBaseline }))
+        return false
+      }
       resumeCount += 1
       compactionCount += 1
       checkpointWriteBaseline = writeProgressCount
@@ -1208,7 +1219,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       if (controller.signal.aborted) throw new DOMException('run aborted', 'AbortError')
       // Every request path, including no-tool/protocol retries, passes this budget gate.
       if (taskTokens() >= runTokenBudget && !(await tryCheckpointResume('budget'))) {
-        await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
+        const reason = checkpointStopMessage()
+        await finalizeRun(runId, bus, 'failed', usage, turn, reason, reason, false)
         return
       }
       turn += 1
@@ -1596,7 +1608,8 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       if (taskTokens() >= runTokenBudget) {
         // 预算片耗尽先检查任务进展，不能用是否建过待办来决定自动续跑。
         if (await tryCheckpointResume('budget')) continue
-        await wrapUpAndFinish('本次运行的 token 预算（含自动续跑切片）已用尽。')
+        const reason = checkpointStopMessage()
+        await finalizeRun(runId, bus, 'failed', usage, turn, reason, reason, false)
         return
       }
     }

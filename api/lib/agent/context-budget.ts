@@ -2,8 +2,6 @@ import type { ChatMessage, OpenAIToolDefinition } from '../ai-service.js'
 
 const IMAGE_INPUT_ESTIMATE_TOKENS = 1_024
 const MESSAGE_OVERHEAD_TOKENS = 4
-const LONG_TOOL_PAYLOAD_CHARS = 600
-const TOOL_OUTPUT_EXCERPT_CHARS = 300
 
 /**
  * OpenAI-compatible providers tokenize Chinese and ASCII very differently. This
@@ -79,38 +77,6 @@ export function resolveDurableInputLimit(contextWindowTokens: number, maxOutputT
     contextWindowTokens - maxOutputTokens - Math.max(2048, contextWindowTokens * 0.05))))
 }
 
-function summarizeArgumentValue(value: unknown, depth = 0): unknown {
-  if (depth >= 2) {
-    if (Array.isArray(value)) return `[数组 ${value.length} 项]`
-    if (value && typeof value === 'object') return '[嵌套对象已压缩]'
-  }
-  if (typeof value === 'string') {
-    return value.length > 160 ? `${value.slice(0, 120)}…（原 ${value.length} 字）` : value
-  }
-  if (Array.isArray(value)) return value.slice(0, 8).map((item) => summarizeArgumentValue(item, depth + 1))
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 24).map(([key, item]) => [key, summarizeArgumentValue(item, depth + 1)]))
-  }
-  return value
-}
-
-function compactToolArguments(argumentsText: string): string {
-  try {
-    const parsed = JSON.parse(argumentsText) as unknown
-    return JSON.stringify({
-      _contextCompacted: true,
-      originalChars: argumentsText.length,
-      arguments: summarizeArgumentValue(parsed),
-    })
-  } catch {
-    return JSON.stringify({
-      _contextCompacted: true,
-      originalChars: argumentsText.length,
-      excerpt: `${argumentsText.slice(0, 160)}${argumentsText.length > 160 ? '…' : ''}`,
-    })
-  }
-}
-
 export type InRunCompactionResult = {
   beforeTokens: number
   afterTokens: number
@@ -145,38 +111,11 @@ function completedToolRounds(messages: ChatMessage[], keepRecent: number) {
   return rounds
 }
 
-/**
- * First-stage, protocol-preserving compaction. Old tool-call arguments remain
- * valid JSON and call IDs are untouched; matching tool outputs become bounded
- * receipts. Recent tool pairs remain byte-for-byte intact.
- */
+/** Compact only completed old rounds into non-executable receipts. Never put
+ * truncated arguments back into native tool-call history: models copy them.
+ * Recent and incomplete rounds remain byte-for-byte intact. */
 export function compactEarlyToolPayloads(messages: ChatMessage[], keepRecentToolOutputs = 8): InRunCompactionResult {
-  const beforeTokens = estimateChatMessagesTokens(messages)
-  const rounds = completedToolRounds(messages, keepRecentToolOutputs)
-  let compactedToolArguments = 0
-  let compactedToolOutputs = 0
-
-  for (const message of rounds.flatMap(round => round.outputs)) {
-    if (message.content.length <= LONG_TOOL_PAYLOAD_CHARS || message.content.startsWith('[工具输出已压缩]')) continue
-    message.content = `[工具输出已压缩] ${message.content.slice(0, TOOL_OUTPUT_EXCERPT_CHARS)}…（原 ${message.content.length} 字；仅为历史观察片段，不代表执行成功，需要细节时读取原记录或核验当前内容）`
-    compactedToolOutputs += 1
-  }
-
-  for (const { assistant } of rounds) {
-    for (const call of assistant.toolCalls!) {
-      if (call.arguments.length <= LONG_TOOL_PAYLOAD_CHARS || call.arguments.includes('"_contextCompacted":true')) continue
-      call.arguments = compactToolArguments(call.arguments)
-      compactedToolArguments += 1
-    }
-  }
-
-  return {
-    beforeTokens,
-    afterTokens: estimateChatMessagesTokens(messages),
-    compactedToolArguments,
-    compactedToolOutputs,
-    collapsedToolRounds: 0,
-  }
+  return collapseEarlyToolRounds(messages, keepRecentToolOutputs)
 }
 
 /**

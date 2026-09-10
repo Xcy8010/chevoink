@@ -636,7 +636,7 @@ export const continuityValidateTool = defineTool({
     return {
       output: (continuityRepairRounds(compilation.validation) >= MAX_CONTINUITY_AUTO_REPAIRS ? '自动修订已完成一次，本次仅复核，不再自动改写。不要重复调用检查来追求零警告；有错误时保留正文并明确报告未解决证据，禁止带错提交。\n' : '') + (result.errorCount > 0
         ? `CHECK 发现 ${result.errorCount} 个错误、${result.warningCount} 个警告。${verificationOnly ? '质量修订后的最终复核仍有错误，保留证据并报告阻塞，不再循环自动改写或带错提交。' : '只修有证据的失败项，完成后必须重新调用 continuity_validate；禁止带错提交桥。'}\n${result.findings.map((item, index) => `${index + 1}. [${item.severity}/${item.signal}] ${item.evidence}；最小修法：${item.suggestion}`).join('\n')}`
-        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。可以调用 chapter_bridge_commit 提交本章终态。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`),
+        : `CHECK 通过：0 个错误、${result.warningCount} 个警告。这仅证明当前正文连续性通过，不代表质量检查已完成。若当前 revision 尚无有效质量报告，下一步调用 quality_analyze；若质量修订改变正文，须再只读复核 continuity_validate。两项均绑定当前 revision 后才调用 chapter_bridge_commit，禁止为追求零警告重复修订。${result.warningCount ? `\n${result.findings.map((item, index) => `${index + 1}. [警告/${item.signal}] ${item.evidence}`).join('\n')}` : ''}`),
       summary: `连续性检查${criticFallback ? '（确定性兜底）' : ''} · ${result.errorCount} 错误 ${result.warningCount} 警告`,
       display: {
         kind: 'storyCompiler', compilationId: compilation.id, phase, title: '连续性检查',
