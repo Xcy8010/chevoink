@@ -68,7 +68,7 @@ import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/w
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
 import { reconcilePlanSelection, stablePlanId } from './components/work-plan-selection'
-import { initialTaskWindows, selectInitialTask, selectTaskFallback } from './lib/initial-task-selection'
+import { consumeSessionDeepLink, initialTaskWindows, selectInitialTask, selectTaskFallback } from './lib/initial-task-selection'
 import { createCatalogActions } from './components/catalog-actions'
 import { useChapterPersistence } from './components/use-chapter-persistence'
 import { useWorkspaceLayout } from './components/use-workspace-layout'
@@ -691,14 +691,13 @@ export default function StudioWorkspace() {
         // 历史工件（计划/大纲等）在后台补载，不再串行阻塞对话上下文首屏
         applyAgentTaskWindowState(nextTaskWindow)
         resolvingTaskId = nextTaskWindow.id
-        // Keep the deep link stable, including retries after a history request fails.
-        // A later explicit selection replaces it through the selection handler.
+        // Keep the deep link until history succeeds so retry resolves the same target.
+        // Consume only the matching parameter, never a newer navigation or panel choice.
         if (requestNewTask) {
-          const nextParams = new URLSearchParams(searchParams)
-          nextParams.delete('session')
-          setSearchParams(nextParams, { replace: true })
+          setSearchParams(current => consumeSessionDeepLink(current, requestedSessionId), { replace: true })
         }
         if (nextTaskWindow.loaded || !nextTaskWindow.sessionId) {
+          if (requestedSessionId && !requestNewTask) setSearchParams(current => consumeSessionDeepLink(current, requestedSessionId), { replace: true })
           return
         }
 
@@ -722,7 +721,10 @@ export default function StudioWorkspace() {
         setAgentTaskWindows((current) =>
           current.map((taskWindow) => (taskWindow.id === loadedTaskWindow.id ? loadedTaskWindow : taskWindow)),
         )
-        if (appliedAgentTaskWindowIdRef.current === nextTaskWindow.id) applyAgentTaskWindowState(loadedTaskWindow)
+        if (appliedAgentTaskWindowIdRef.current === nextTaskWindow.id) {
+          applyAgentTaskWindowState(loadedTaskWindow)
+          if (requestedSessionId && !requestNewTask) setSearchParams(current => consumeSessionDeepLink(current, requestedSessionId), { replace: true })
+        }
       } catch {
         if (!cancelled && appliedAgentTaskWindowIdRef.current === resolvingTaskId) setSessionResolutionError('任务读取失败，请重试。已保存的对话保留，不会自动创建新任务。')
       } finally {

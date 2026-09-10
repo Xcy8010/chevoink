@@ -9,6 +9,13 @@ export function selectTaskFallback<T>(tasks: T[], activeId: string | null, reque
   return activeId || requestedId || restoring || !sameNovel ? null : tasks[0] ?? null
 }
 
+export function consumeSessionDeepLink(params: URLSearchParams, requestedId: string | null): URLSearchParams {
+  if (!requestedId || params.get('session') !== requestedId) return params
+  const next = new URLSearchParams(params)
+  next.delete('session')
+  return next
+}
+
 export function selectInitialTask<T extends { id: string; sessionId: string | null }>(
   tasks: T[], activeId: string | null | undefined, requestedId: string | null,
 ): T | null {

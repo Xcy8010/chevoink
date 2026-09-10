@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { initialTaskWindows, selectInitialTask, selectTaskFallback } from '../../src/features/studio/lib/initial-task-selection'
+import { consumeSessionDeepLink, initialTaskWindows, selectInitialTask, selectTaskFallback } from '../../src/features/studio/lib/initial-task-selection'
 
 it('never creates a blank task for an uncached existing deep link', () => {
   const create = vi.fn(() => ({ id: 'blank', sessionId: null }))
@@ -37,4 +37,12 @@ it('limits fallback to settled same-novel navigation without an explicit target'
   expect(selectTaskFallback(tasks, null, null, false, false)).toBeNull()
   expect(selectTaskFallback(tasks, 'chosen', null, false, true)).toBeNull()
   expect(selectTaskFallback(tasks, null, null, false, true)).toBe(tasks[0])
+})
+
+it('consumes only the completed deep link while preserving newer navigation and unrelated parameters', () => {
+  const params = new URLSearchParams('session=target-b&panel=meta')
+  expect(consumeSessionDeepLink(params, 'target-b').toString()).toBe('panel=meta')
+  expect(params.get('session')).toBe('target-b')
+  expect(consumeSessionDeepLink(params, 'old-a')).toBe(params)
+  expect(consumeSessionDeepLink(params, null)).toBe(params)
 })
