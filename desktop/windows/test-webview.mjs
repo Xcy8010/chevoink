@@ -49,7 +49,7 @@ try {
   await call('Page.navigate', { url: 'http://tauri.localhost/#tls' })
   await ready('#tls')
   assert.match(await evaluate('document.body.innerText'), /安全证书/)
-  assert.match(await evaluate('navigator.userAgent'), /ChevoinkDesktop\/1\.0\.3/)
+  assert.match(await evaluate('navigator.userAgent'), /ChevoinkDesktop\/1\.0\.4/)
   for (const [reason, text] of [['dns', 'DNS'], ['timeout', '超时'], ['engine', 'WebView2']]) {
     await call('Page.navigate', { url: `http://tauri.localhost/#${reason}` })
     await ready(`#${reason}`)

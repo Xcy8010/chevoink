@@ -58,6 +58,7 @@ import {
 } from './settings/privacy'
 import { SectionTitle, SettingsRow } from './settings/settings-row'
 import CustomModelSettingsDialog from '@/features/account/CustomModelSettingsDialog'
+import DesktopSettings from './settings/desktop-settings'
 
 /** 等待指定毫秒（检测更新动画至少展示 1.5 秒，哪怕请求提前返回） */
 function delay(ms: number): Promise<void> {
@@ -595,7 +596,7 @@ export default function SettingsPage() {
 
   /** 关于分组：仅 APP 壳内展示，提供手动检测更新入口；登录/未登录都可用。
    * 发现新版本不再在行下方内联展开，而是弹出版本弹窗（openDialog.kind === 'update'） */
-  const aboutSection = isNativeApp() ? (
+  const aboutSection = isWindowsDesktopApp() ? <DesktopSettings /> : isNativeApp() ? (
     <section>
       <SectionTitle>关于</SectionTitle>
       <div className="divide-y divide-[var(--border-subtle)]">

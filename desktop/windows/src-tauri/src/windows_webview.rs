@@ -117,7 +117,12 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
                 }
                 Ok(())
             })), &mut token)?;
-            webview.Navigate(&HSTRING::from(APP_ORIGIN))?;
+            // Let the packaged brand page paint before remote navigation replaces it.
+            let initial_window = owned.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                let _ = initial_window.navigate(APP_ORIGIN.parse().unwrap());
+            });
             Ok(())
         }};
         if install().is_err() {

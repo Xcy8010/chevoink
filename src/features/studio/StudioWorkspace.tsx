@@ -68,7 +68,7 @@ import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/w
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
 import { reconcilePlanSelection, stablePlanId } from './components/work-plan-selection'
-import { selectInitialTask } from './lib/initial-task-selection'
+import { initialTaskWindows, selectInitialTask } from './lib/initial-task-selection'
 import { createCatalogActions } from './components/catalog-actions'
 import { useChapterPersistence } from './components/use-chapter-persistence'
 import { useWorkspaceLayout } from './components/use-workspace-layout'
@@ -185,11 +185,13 @@ export default function StudioWorkspace() {
   // 会话解析中：切换作品/首载时任务窗口的 sessionId 需等服务端会话列表合并后才能定案，
   // 这段中间态禁止 AgentPanel 渲染空态欢迎页（否则欢迎页会显示整个网络请求时长）
   const [agentSessionsResolving, setAgentSessionsResolving] = useState(false)
+  const [sessionResolutionError, setSessionResolutionError] = useState<string | null>(null)
+  const [sessionResolutionAttempt, setSessionResolutionAttempt] = useState(0)
   // 任务窗口同样从快照惰性恢复：挂载即落在该作品上次活跃的任务窗口，
   // 避免初始空窗口先触发快照写入效应清掉存档、或界面闪现「新任务」
   const [agentTaskWindows, setAgentTaskWindows] = useState<AgentTaskWindowState[]>(() => {
     const snapshot = readStoredAgentWorkspace(activeNovelId)
-    return snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
+    return initialTaskWindows(snapshot?.tasks ?? [], searchParams.get('session'), createLocalAgentTaskWindow)
   })
   const [activeAgentTaskWindowId, setActiveAgentTaskWindowId] = useState<string | null>(() => {
     const snapshot = readStoredAgentWorkspace(activeNovelId)
@@ -386,6 +388,7 @@ export default function StudioWorkspace() {
   const appliedAgentTaskWindowIdRef = useRef<string | null>(null)
 
   function applyAgentTaskWindowState(taskWindow: AgentTaskWindowState | null) {
+    setSessionResolutionError(null)
     appliedAgentTaskWindowIdRef.current = taskWindow?.id ?? null
     if (!taskWindow) {
       setActiveAgentTaskWindowId(null)
@@ -601,13 +604,14 @@ export default function StudioWorkspace() {
     agentRunAbortControllerRef.current?.abort()
     resetAgentWorkspace()
     setAgentSessionsResolving(true)
+    setSessionResolutionError(null)
     setAgentStateNovelId(activeNovelId)
 
     const requestedSessionId = searchParams.get('session')
     // 侧栏在其它作品点「新建对话/新建任务」会带 ?session=new 跳过来：置顶一个干净的新对话窗口
     const requestNewTask = requestedSessionId === 'new'
     const snapshot = readStoredAgentWorkspace(activeNovelId)
-    const storedTasks = snapshot?.tasks.length ? snapshot.tasks : [createLocalAgentTaskWindow()]
+    const storedTasks = initialTaskWindows(snapshot?.tasks ?? [], requestedSessionId, createLocalAgentTaskWindow)
     const freshTaskWindow = requestNewTask ? createLocalAgentTaskWindow() : null
     const snapshotTasks = freshTaskWindow ? [freshTaskWindow, ...storedTasks] : storedTasks
     setAgentTaskWindows(snapshotTasks)
@@ -619,6 +623,7 @@ export default function StudioWorkspace() {
     applyAgentTaskWindowState(initialTaskWindow)
 
     let cancelled = false
+    let resolvingTaskId = initialTaskWindow?.id ?? null
 
     void (async () => {
       try {
@@ -635,6 +640,7 @@ export default function StudioWorkspace() {
         )
 
         if (sessions.length === 0) {
+          if (requestedSessionId && !requestNewTask && !selectInitialTask(aliveSnapshotTasks, null, requestedSessionId)) throw new Error('目标任务暂不可用，请重试。不会自动创建新任务。')
           if (aliveSnapshotTasks.length === snapshotTasks.length) {
             return
           }
@@ -649,7 +655,7 @@ export default function StudioWorkspace() {
             (taskWindow) => taskWindow.sessionId === session.id || taskWindow.id === session.id,
           )
 
-          if (!shouldDisplayListedAgentSession(session, Boolean(existingTask))) {
+          if (session.id !== requestedSessionId && !shouldDisplayListedAgentSession(session, Boolean(existingTask))) {
             return current
           }
 
@@ -675,9 +681,9 @@ export default function StudioWorkspace() {
         const nextTaskWindow =
           (freshTaskWindow ? mergedTasks.find((taskWindow) => taskWindow.id === freshTaskWindow.id) : null) ??
           (requestedSessionId ? mergedTasks.find((taskWindow) => taskWindow.sessionId === requestedSessionId || taskWindow.id === requestedSessionId) : null) ??
-          mergedTasks.find((taskWindow) => taskWindow.id === (snapshot?.activeTaskId ?? initialTaskWindow?.id)) ??
-          mergedTasks[0] ??
-          null
+          (requestedSessionId && !requestNewTask ? null : selectInitialTask(mergedTasks, snapshot?.activeTaskId ?? initialTaskWindow?.id, null))
+
+        if (!nextTaskWindow && requestedSessionId && !requestNewTask) throw new Error('目标任务暂不可用，请重试。不会自动切换到其它任务。')
 
         setAgentTaskWindows(mergedTasks)
         if (!nextTaskWindow || appliedAgentTaskWindowIdRef.current !== (initialTaskWindow?.id ?? null)) {
@@ -687,7 +693,10 @@ export default function StudioWorkspace() {
         // 先激活任务窗口：sessionId 立即生效，Agent 面板并行拉取会话消息；
         // 历史工件（计划/大纲等）在后台补载，不再串行阻塞对话上下文首屏
         applyAgentTaskWindowState(nextTaskWindow)
-        if (requestedSessionId) {
+        resolvingTaskId = nextTaskWindow.id
+        // Keep the deep link stable, including retries after a history request fails.
+        // A later explicit selection replaces it through the selection handler.
+        if (requestNewTask) {
           const nextParams = new URLSearchParams(searchParams)
           nextParams.delete('session')
           setSearchParams(nextParams, { replace: true })
@@ -718,7 +727,7 @@ export default function StudioWorkspace() {
         )
         if (appliedAgentTaskWindowIdRef.current === nextTaskWindow.id) applyAgentTaskWindowState(loadedTaskWindow)
       } catch {
-        // 保留本地快照作为回退，不在这里打断创作流程
+        if (!cancelled && appliedAgentTaskWindowIdRef.current === resolvingTaskId) setSessionResolutionError('任务读取失败，请重试。已保存的对话保留，不会自动创建新任务。')
       } finally {
         // 会话解析结束（命中会话或确认为空）后解除占位，空态欢迎页才能正常出现
         if (!cancelled) {
@@ -734,7 +743,7 @@ export default function StudioWorkspace() {
     // 任务深链只在作品切换/首载时消费一次；把 searchParams 加入依赖会在删除
     // `session` 参数后再次重置工作区，反而覆盖刚恢复的目标任务。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeNovelId])
+  }, [activeNovelId, sessionResolutionAttempt])
 
   useEffect(() => {
     return () => {
@@ -787,7 +796,7 @@ export default function StudioWorkspace() {
     }
 
     // 任务窗口状态尚未水合到当前作品（切换后残留旧作品状态）：跳过写入，避免污染/误删当前作品快照
-    if (agentStateNovelId !== activeNovelId) {
+    if (agentStateNovelId !== activeNovelId || agentSessionsResolving || sessionResolutionError) {
       return
     }
 
@@ -825,7 +834,7 @@ export default function StudioWorkspace() {
       catalogDocument,
     }
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot))
-  }, [activeAgentTaskWindowId, activeNovelId, agentStateNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId, taskScopeOwner])
+  }, [activeAgentTaskWindowId, activeNovelId, agentStateNovelId, agentTaskWindows, catalogDocument, selectedTreeItemId, taskScopeOwner, agentSessionsResolving, sessionResolutionError])
 
   async function handleWorkspaceDialogConfirm() {
     if (!workspaceDialog) {
@@ -1611,7 +1620,6 @@ export default function StudioWorkspace() {
   const activeAgentTaskWindow = useMemo(
     () =>
       agentTaskWindows.find((taskWindow) => taskWindow.id === activeAgentTaskWindowId) ??
-      agentTaskWindows[0] ??
       null,
     [activeAgentTaskWindowId, agentTaskWindows],
   )
@@ -3059,6 +3067,11 @@ export default function StudioWorkspace() {
       return
     }
 
+    if (searchParams.has('session')) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('session')
+      setSearchParams(nextParams, { replace: true })
+    }
     const nextTaskWindow = createLocalAgentTaskWindow()
     pruneTemporaryTaskWindows(nextTaskWindow.id)
     setAgentTaskWindows((current) => [nextTaskWindow, ...current])
@@ -3159,6 +3172,7 @@ export default function StudioWorkspace() {
       return
     }
 
+    setSessionResolutionError(null)
     // A newer explicit selection supersedes a still-resolving cross-novel deep link.
     if (searchParams.has('session')) {
       const nextParams = new URLSearchParams(searchParams)
@@ -3456,6 +3470,7 @@ export default function StudioWorkspace() {
     mobileIntegratedHeader = false,
     showCreditWarning = false,
   ) {
+    if (sessionResolutionError) return <div role="alert" className="flex h-full flex-col items-center justify-center gap-4 p-6 text-sm text-[var(--text-secondary)]"><p>{sessionResolutionError}</p><button type="button" className="rounded-lg border border-[var(--border-subtle)] px-4 py-2" onClick={() => setSessionResolutionAttempt(value => value + 1)}>重新读取任务</button></div>
     return (
       <AgentPanel
           voiceScopeKey={taskUiScope}
@@ -3487,14 +3502,7 @@ export default function StudioWorkspace() {
             handleAgentTaskDeleted(deletedSessionId)
           }}
           onTaskForked={handleAgentTaskForked}
-          onNewSession={() => {
-            // 新建任务对话：建本地任务窗口并激活（sessionId 为 null，首次发送时懒创建）；
-            // 不能只清空 activeAgentTaskWindowId，否则会被兜底 effect 回选第一个窗口覆盖
-            const nextTaskWindow = createLocalAgentTaskWindow()
-            pruneTemporaryTaskWindows(nextTaskWindow.id)
-            setAgentTaskWindows((current) => [nextTaskWindow, ...current])
-            applyAgentTaskWindowState(nextTaskWindow)
-          }}
+          onNewSession={handleCreateAgentTaskWindow}
           onWorkspaceRollback={() => void refreshWorkspaceAfterAgentWrite()}
           onClose={showCloseAction ? close : undefined}
           activityPresentation={activityPresentation}

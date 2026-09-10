@@ -32,6 +32,7 @@ it('does not render arbitrary hash markup or inherited object properties', () =>
   expect(document.querySelector('h1')?.textContent).toBe('正在连接 Chevoink')
   window.location.hash = '#<img src=x onerror=alert(1)>'
   window.dispatchEvent(new Event('hashchange'))
-  expect(document.querySelector('img')).toBeNull()
+  expect(document.querySelectorAll('img')).toHaveLength(1)
+  expect(document.querySelector('img')?.getAttribute('src')).toBe('logo.png')
   expect(document.body.textContent).not.toContain('onerror')
 })

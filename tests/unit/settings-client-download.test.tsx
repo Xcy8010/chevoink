@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import SettingsPage from '../../src/app/routes/SettingsPage'
 import { ANDROID_APK_URL } from '../../src/app/routes/settings/client-os'
 
-const mocks = vi.hoisted(() => ({ download: vi.fn(), external: vi.fn(), error: vi.fn(), info: vi.fn() }))
+const mocks = vi.hoisted(() => ({ download: vi.fn(), external: vi.fn(), error: vi.fn(), info: vi.fn(), invoke: vi.fn() }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
 vi.mock('../../src/lib/windows-download', async (original) => ({
   ...await original<typeof import('../../src/lib/windows-download')>(), getWindowsDownload: mocks.download,
 }))
@@ -20,11 +21,39 @@ vi.mock('../../src/store/useShellStore', () => ({ useShellStore: (select: (state
 }) }))
 
 beforeEach(() => {
+  mocks.invoke.mockResolvedValue({ version: '1.0.4', settingsActions: 1 })
   vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 Windows NT 10.0')
   mocks.download.mockResolvedValue({ version: '1.0.0', url: 'https://chevoink.chevolink.com/download/windows/1.0.0/Chevoink_1.0.0_x64-setup.exe', signature: 'fixture' })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks() })
 async function show() { await act(async () => { render(<MemoryRouter><SettingsPage /></MemoryRouter>) }) }
+
+it('offers narrow native actions only in Windows settings', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Windows NT 10.0 ChevoinkDesktop/1.0.4')
+  await show()
+  expect(screen.getByText('Windows x64 · 1.0.4')).toBeTruthy()
+  await act(async () => { fireEvent.click(screen.getByText('在浏览器打开官网')) })
+  expect(mocks.invoke).toHaveBeenCalledWith('desktop_settings_action', { action: 'browser' })
+  await act(async () => { fireEvent.click(screen.getByText('检查客户端更新')) })
+  expect(mocks.invoke).toHaveBeenCalledWith('desktop_settings_action', { action: 'update' })
+})
+
+it('retains compatibility with older Windows hosts without the new command', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Windows NT 10.0 ChevoinkDesktop/1.0.3')
+  mocks.invoke.mockResolvedValue({ version: '1.0.3' })
+  await show()
+  await act(async () => { fireEvent.click(screen.getByText('检查客户端更新')) })
+  expect(mocks.info).toHaveBeenCalled()
+  expect(mocks.invoke).toHaveBeenCalledTimes(1)
+})
+
+it.each(['Windows NT 10.0', 'Android ChevoinkApp/1.0.7'])('hides Windows-only controls in %s', async (agent) => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent)
+  await show()
+  expect(screen.queryByText('Windows 客户端')).toBeNull()
+  expect(screen.queryByText('在浏览器打开官网')).toBeNull()
+  expect(mocks.invoke).not.toHaveBeenCalled()
+})
 
 it('labels unsigned manual downloads before the user downloads', async () => {
   mocks.download.mockResolvedValue({ version: '1.0.3', channel: 'preview', signed: false, sha256: 'a'.repeat(64), url: 'https://chevoink.chevolink.com/download/windows/1.0.3/Chevoink_1.0.3_x64-setup.exe' })

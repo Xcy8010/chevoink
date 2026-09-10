@@ -5,17 +5,45 @@ mod window;
 mod windows_webview;
 
 use navigation::{is_app_url, is_fallback_url, APP_ORIGIN};
-use tauri::{
-    menu::{Menu, MenuItem},
-    webview::NewWindowResponse,
-    Manager, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{webview::NewWindowResponse, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 fn desktop_get_info(window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
     authorize(&window)?;
-    Ok(serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "saveHandshake": 1}))
+    Ok(
+        serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "saveHandshake": 1, "settingsActions": 1}),
+    )
+}
+
+#[derive(Debug, PartialEq)]
+enum SettingsAction {
+    Update,
+    Browser,
+}
+
+fn settings_action(value: &str) -> Result<SettingsAction, String> {
+    match value {
+        "update" => Ok(SettingsAction::Update),
+        "browser" => Ok(SettingsAction::Browser),
+        _ => Err("Unsupported desktop settings action".into()),
+    }
+}
+
+#[tauri::command]
+fn desktop_settings_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    authorize(&window)?;
+    match settings_action(&action)? {
+        SettingsAction::Update => update::check(window.app_handle(), true),
+        SettingsAction::Browser => {
+            window
+                .app_handle()
+                .opener()
+                .open_url(APP_ORIGIN, None::<&str>)
+                .map_err(|_| "Unable to open official website")?;
+        }
+    }
+    Ok(())
 }
 
 fn authorize(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -50,7 +78,8 @@ pub fn run() {
         .manage(update::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_get_info,
-            desktop_report_state
+            desktop_report_state,
+            desktop_settings_action
         ])
         .setup(|app| {
             let data = app.path().app_local_data_dir()?.join("WebView2");
@@ -65,6 +94,7 @@ pub fn run() {
                             .unwrap_or_else(|| "Chevoink".into()),
                     )
                     .inner_size(1280.0, 800.0)
+                    .background_color(tauri::window::Color(21, 21, 21, 255))
                     .min_inner_size(640.0, 480.0)
                     .data_directory(data)
                     .disable_drag_drop_handler()
@@ -74,29 +104,8 @@ pub fn run() {
             window::install(&window)?;
             #[cfg(windows)]
             windows_webview::install(&window)?;
-            let check =
-                MenuItem::with_id(app, "check-update", "检查客户端更新", true, None::<&str>)?;
-            let browser =
-                MenuItem::with_id(app, "browser", "在浏览器打开官网", true, None::<&str>)?;
-            let about = MenuItem::with_id(app, "about", "版本信息", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&check, &browser, &about])?;
-            app.set_menu(menu)?;
             update::schedule_check(app.handle());
             Ok(())
-        })
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "check-update" => update::check(app, true),
-            "browser" => {
-                let _ = app.opener().open_url(APP_ORIGIN, None::<&str>);
-            }
-            "about" => window::notice(
-                "Chevoink",
-                &format!(
-                    "Windows x64 · {}\n远程同源创作客户端\n应用数据保存在当前 Windows 用户目录。",
-                    env!("CARGO_PKG_VERSION")
-                ),
-            ),
-            _ => {}
         })
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| {
@@ -112,6 +121,23 @@ pub fn run() {
 
 #[cfg(test)]
 mod startup_tests {
+    #[test]
+    fn settings_actions_are_a_closed_whitelist() {
+        use super::{settings_action, SettingsAction};
+        assert_eq!(settings_action("browser").unwrap(), SettingsAction::Browser);
+        assert_eq!(settings_action("update").unwrap(), SettingsAction::Update);
+        for value in [
+            "https://example.com",
+            "file:///C:/",
+            "cmd.exe",
+            "browser;shutdown",
+            "",
+            "UPDATE",
+        ] {
+            assert!(settings_action(value).is_err());
+        }
+    }
+
     #[test]
     fn packaged_updater_configuration_can_initialize_without_a_signing_key() {
         let config: serde_json::Value =
