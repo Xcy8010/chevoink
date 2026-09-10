@@ -1522,7 +1522,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           }
         }
         if (outcome.part.status === 'success') argumentFailures.delete(call.name)
-        else if (outcome.part.summary === '参数解析失败' || outcome.part.summary === '参数校验失败') {
+        else if (['参数解析失败', '参数校验失败', '参数归一化失败'].includes(outcome.part.summary ?? '')) {
           const failures = (argumentFailures.get(call.name) ?? 0) + 1
           argumentFailures.set(call.name, failures)
           if (failures >= 3) forceWrapUpReason = `工具 ${call.name} 连续三次参数无效，已停止重复消耗；已成功保存的内容保留，该工具未完成。`

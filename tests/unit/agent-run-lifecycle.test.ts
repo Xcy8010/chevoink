@@ -514,8 +514,8 @@ describe('Agent run admission and completion lifecycle (real loop, mocked provid
     expect(mocks.chat).toHaveBeenCalledTimes(3)
     expect(events().at(-1)).toMatchObject({ type: 'run.finished', status: 'succeeded' })
   })
-  it('bounds repeated invalid arguments instead of spending the entire long-task budget', async () => {
-    queue(...['bad1', 'bad2', 'bad3'].map(id => response('', [call(id, 'chapter_read', '{')])), response('参数仍无效，已保存进度。'))
+  it.each(['{', JSON.stringify({ _contextCompacted: true, originalChars: 4000, arguments: { content: 'excerpt' } })])('bounds repeated invalid arguments (%s) instead of spending the entire long-task budget', async args => {
+    queue(...['bad1', 'bad2', 'bad3'].map(id => response('', [call(id, 'chapter_read', args)])), response('参数仍无效，已保存进度。'))
     await run()
     expect(mocks.tools[0].execute).not.toHaveBeenCalled()
     expect(mocks.chat).toHaveBeenCalledTimes(4)
