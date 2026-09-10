@@ -2,6 +2,14 @@
 
 ## 1.0.3 未签名测试版发布范围（2026-09-10）
 
+**已公开并部署**：[Windows 1.0.3 Release](https://github.com/Xcy8010/chevoink/releases/tag/windows-v1.0.3)，含普通/增强 EXE、SHA256SUMS、依赖许可证清单及目标范围 SBOM。标签与两包构建来源均为 `820334074b638ce54638b911d8ca37b850f1f424`，不是下方历史 1.0.2 构建。
+
+- [根 CI](https://github.com/Xcy8010/chevoink/actions/runs/34466772785)：174 文件、2074 项全部通过，零跳过；[Windows CI](https://github.com/Xcy8010/chevoink/actions/runs/34466772814)：fmt/clippy、8 项 Rust 测试、审计、双包构建、已安装 WebView2 回归与正常关闭通过。RustSec 无漏洞条目，仍保留维护性/跨平台健全性警告。
+- 普通包：2,607,427 字节，SHA256 `17e34f8e6dc2eaec5988e6e37d7987ba1508a49dd0d36623a433963e301eba45`；增强包：264,615,440 字节，SHA256 `a3efd2c4485114695d1bff304e8d2768c57853eb6adcae2473e056321803739f`。两者真实签名状态均为 NotSigned。
+- Release 五份资产回下载逐字节核验一致；官网镜像在服务器再次逐份核对摘要。普通包另经匿名 GitHub 和官网全量下载核对；增强包官网匿名 HTTP 200、长度/MIME 正确，未把 HEAD 当作第二次全量下载。
+- 电脑网页手动清单已部署并匿名核验为 JSON、HTTP 200；源清单与公开响应摘要一致。前端为同一 `8203340` 提交，仅更新前端与静态下载目录，API 未重启，生产健康检查通过。
+- Release 为公开 prerelease；全仓 Latest 仍是 v1.51，Android 未修改。签名与自动更新仍暂缓；以下未测边界继续成立。
+
 用户明确暂缓 SignPath、签名和自动更新，授权公开未签名安装包并部署手动下载入口。这是对下方原正式签名交付合同的阶段调整，不是签名验收通过。
 
 - 手动下载使用 `/download/windows/manual/latest.json`，预发布清单必须显式 `channel: preview`、`signed: false`，每个安装资产附真实 SHA256。与 `/download/windows/stable/latest.json` 原生签名更新通道隔离，不发布占位签名。
