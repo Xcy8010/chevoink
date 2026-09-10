@@ -68,6 +68,7 @@ import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/w
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
 import { reconcilePlanSelection, stablePlanId } from './components/work-plan-selection'
+import { selectInitialTask } from './lib/initial-task-selection'
 import { createCatalogActions } from './components/catalog-actions'
 import { useChapterPersistence } from './components/use-chapter-persistence'
 import { useWorkspaceLayout } from './components/use-workspace-layout'
@@ -178,8 +179,7 @@ export default function StudioWorkspace() {
   // 惰性初始化：从快照同步恢复当前会话 id，避免跨路由返回时 AgentPanel 先以 null 挂载冲掉进行中的任务直播
   const [agentSessionId, setAgentSessionId] = useState<string | null>(() => {
     const snapshot = readStoredAgentWorkspace(activeNovelId)
-    const initialTask =
-      snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
+    const initialTask = selectInitialTask(snapshot?.tasks ?? [], snapshot?.activeTaskId, searchParams.get('session'))
     return initialTask?.sessionId ?? null
   })
   // 会话解析中：切换作品/首载时任务窗口的 sessionId 需等服务端会话列表合并后才能定案，
@@ -193,8 +193,7 @@ export default function StudioWorkspace() {
   })
   const [activeAgentTaskWindowId, setActiveAgentTaskWindowId] = useState<string | null>(() => {
     const snapshot = readStoredAgentWorkspace(activeNovelId)
-    const initialTask =
-      snapshot?.tasks.find((taskWindow) => taskWindow.id === snapshot.activeTaskId) ?? snapshot?.tasks[0] ?? null
+    const initialTask = selectInitialTask(snapshot?.tasks ?? [], snapshot?.activeTaskId, searchParams.get('session'))
     return initialTask?.id ?? null
   })
   // 作者回到任务窗口即清除该窗口的未读信号（绿/黄/红点），无论从同作品还是跨作品路径切入
@@ -616,7 +615,7 @@ export default function StudioWorkspace() {
 
     const initialTaskWindow =
       freshTaskWindow ??
-      snapshotTasks.find((taskWindow) => taskWindow.id === snapshot?.activeTaskId) ?? snapshotTasks[0] ?? null
+      selectInitialTask(snapshotTasks, snapshot?.activeTaskId, requestedSessionId)
     applyAgentTaskWindowState(initialTaskWindow)
 
     let cancelled = false
@@ -681,7 +680,7 @@ export default function StudioWorkspace() {
           null
 
         setAgentTaskWindows(mergedTasks)
-        if (!nextTaskWindow || appliedAgentTaskWindowIdRef.current !== initialTaskWindow?.id) {
+        if (!nextTaskWindow || appliedAgentTaskWindowIdRef.current !== (initialTaskWindow?.id ?? null)) {
           return
         }
 
@@ -3160,6 +3159,12 @@ export default function StudioWorkspace() {
       return
     }
 
+    // A newer explicit selection supersedes a still-resolving cross-novel deep link.
+    if (searchParams.has('session')) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('session')
+      setSearchParams(nextParams, { replace: true })
+    }
     if (taskWindowId === activeAgentTaskWindowId) {
       return
     }
@@ -3941,7 +3946,9 @@ export default function StudioWorkspace() {
             novelsLoading={myNovelsQuery.isLoading}
             switchingNovel={createNovelMutation.isPending}
             currentTasks={agentTaskSidebarItems}
-            activeTaskId={activeAgentTaskWindowId}
+            currentTasksNovelId={agentStateNovelId}
+            activeTaskId={searchParams.get('session') && searchParams.get('session') !== 'new'
+              ? searchParams.get('session') : agentStateNovelId === activeNovelId ? activeAgentTaskWindowId : null}
             taskSwitchLocked={agentRunState.active}
             onSelectNovel={handleSelectWorkspaceNovel}
             onCreateNovel={handleCreateWorkspaceNovel}

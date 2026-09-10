@@ -4,7 +4,7 @@ import {
   Gauge, Gift, GitBranch, Home, Lightbulb, LoaderCircle, MoreHorizontal, PencilLine, Pin, PinOff, Plus, RotateCcw,
   Search, Settings2, Trash2, Upload, X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useToast } from '@/components/ui/toast-context'
@@ -40,6 +40,8 @@ type Props = {
   novelsLoading?: boolean
   switchingNovel?: boolean
   currentTasks: AgentTaskSidebarItem[]
+  /** Local tasks retain their owner while the destination novel is hydrating. */
+  currentTasksNovelId: string
   activeTaskId: string | null
   taskSwitchLocked: boolean
   onSelectNovel: (novelId: string) => void
@@ -178,11 +180,11 @@ export default function StudioWorkspaceSidebar(props: Props) {
   }, [])
   // 作品列表滚动位置记忆：折叠/展开或切换作品重挂载后恢复，不再回到顶部
   const listScrollTopRef = useRef(0)
-  const restoreListScroll = (element: HTMLDivElement | null) => {
+  const restoreListScroll = useCallback((element: HTMLDivElement | null) => {
     if (element && listScrollTopRef.current > 0) {
       element.scrollTop = listScrollTopRef.current
     }
-  }
+  }, [])
 
   const novels = useMemo(
     () => sortWorkspaceItemsByLatest(props.novels.filter((item) => item.status !== 'archived')),
@@ -210,9 +212,9 @@ export default function StudioWorkspaceSidebar(props: Props) {
     return result
   }, [sessions])
   const localTasks = useMemo<SidebarTask[]>(() => props.currentTasks.map((task) => ({
-    id: task.id, novelId: props.currentNovelId, title: task.title, updatedAt: task.updatedAt,
+    id: task.id, novelId: props.currentTasksNovelId, title: task.title, updatedAt: task.updatedAt,
     pinnedAt: null, temporary: task.temporary, isBranch: false, lastActiveAt: task.updatedAt, createdAt: null,
-  })), [props.currentNovelId, props.currentTasks])
+  })), [props.currentTasksNovelId, props.currentTasks])
   // 任务状态信号：本地 SSE 实时层（agentStore）+ 服务端 run-status 轮询兑底，
   // 覆盖切走窗口/跨作品/折叠期间的任务完成、待确认、异常中止与运行中提示
   const sessionSignals = useAgentStore((state) => state.sessionSignals)
@@ -244,7 +246,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   // 用真实余额而不是取整百分比判耗尽：0.4% 会四舍五入成 0%，但额度还能用
   const creditsExhausted = summary ? summary.totalRemaining <= 0 : false
 
-  useEffect(() => setExpandedProjects((current) => new Set(current).add(props.currentNovelId)), [props.currentNovelId])
+  useLayoutEffect(() => setExpandedProjects((current) => new Set(current).add(props.currentNovelId)), [props.currentNovelId])
   useEffect(() => {
     const key = summary?.resetsAt && warningThreshold ? `chevoink:credit-warning:${summary.resetsAt}:${warningThreshold}` : null
     setWarningDismissed(Boolean(key && window.localStorage.getItem(key) === 'dismissed'))
@@ -451,7 +453,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
 
   const projectTasks = (novelId: string): SidebarTask[] => {
     const remote = (sessionsByNovel.get(novelId) ?? []).map(toSidebarTask)
-    if (novelId !== props.currentNovelId) return sortWorkspaceItemsByLatest(remote)
+    if (novelId !== props.currentTasksNovelId) return sortWorkspaceItemsByLatest(remote)
     // 同 id 任务以服务端为准（快照只补服务端尚没有的本地临时任务）：
     // 快照→服务端合并时 updatedAt 不再漂移，切换作品后任务列表不重排跳动
     const remoteIds = new Set(remote.map((task) => task.id))
@@ -461,7 +463,7 @@ export default function StudioWorkspaceSidebar(props: Props) {
   const pinnedSessions = sortWorkspaceItemsByLatest(sessions.filter((item) => item.pinnedAt))
 
   function taskRow(task: SidebarTask, compact = false) {
-    const active = task.id === props.activeTaskId
+    const active = task.novelId === props.currentNovelId && task.id === props.activeTaskId
     const signal = sessionSignals[task.id]
     const remoteStatus = remoteRunStatuses[task.id]?.status
     // 正在直播的任务窗口以本地 phase 为唯一真相：run-status 轮询最多滞后 10s，
