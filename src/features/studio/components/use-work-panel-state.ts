@@ -42,13 +42,13 @@ export function useWorkPanelState(scope: string | undefined, state: WorkPanelUiS
   const { rightOpen, viewer, inspectorTab, selectedTreeItemId, selectedChapterId } = state
   const { setRightOpen, setViewer, setInspectorTab, setSelectedTreeItemId, setSelectedChapterId } = setters
   useLayoutEffect(() => {
-    if (!scope) return
+    if (!scope) { setHydratedScope(undefined); return }
     const restored = readWorkPanelUi(scope)
     setRightOpen(restored?.rightOpen ?? false)
     setViewer(restored?.viewer ?? null)
     setInspectorTab(restored?.inspectorTab ?? 'work')
-    if (restored?.selectedTreeItemId !== undefined) setSelectedTreeItemId(restored.selectedTreeItemId)
-    if (restored?.selectedChapterId !== undefined) setSelectedChapterId(restored.selectedChapterId)
+    setSelectedTreeItemId(restored?.selectedTreeItemId ?? null)
+    setSelectedChapterId(restored?.selectedChapterId ?? null)
     setHydratedScope(scope)
   }, [scope, setRightOpen, setViewer, setInspectorTab, setSelectedTreeItemId, setSelectedChapterId])
   useLayoutEffect(() => {

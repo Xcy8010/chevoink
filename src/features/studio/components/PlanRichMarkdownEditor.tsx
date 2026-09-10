@@ -10,6 +10,7 @@ import '@milkdown/crepe/theme/common/placeholder.css'
 
 import type { EditorSelectionState } from '../types'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
+import { readPlanPosition, savePlanPosition } from './plan-view-position'
 
 type Props = {
   markdown: string
@@ -19,9 +20,10 @@ type Props = {
   onBlur?: () => void
   onSelectionChange?: (selection: EditorSelectionState) => void
   streaming?: boolean
+  positionKey?: string
 }
 
-export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onChange, onBlur, onSelectionChange, streaming = false }: Props) {
+export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onChange, onBlur, onSelectionChange, streaming = false, positionKey }: Props) {
   const streamingScroll = useStreamingAutoFollow<HTMLDivElement>(streaming, markdown)
   const rootRef = streamingScroll.nodeRef
   const editorRef = useRef<CrepeBuilder | null>(null)
@@ -83,6 +85,8 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
         currentMarkdownRef.current = desiredMarkdown
         synchronizeMarkdown(editor, desiredMarkdown)
       }
+      // Restore only once, after the async editor has laid out its real document.
+      root.scrollTop = readPlanPosition(positionKey)
     })
 
     return () => {
@@ -131,7 +135,7 @@ export default function PlanRichMarkdownEditor({ markdown, editable, mobile, onC
       className={`plan-rich-markdown min-h-0 flex-1 ${mobile ? 'min-h-[60vh]' : 'overflow-y-auto'}`}
       onMouseUp={emitVisualSelection}
       onKeyUp={emitVisualSelection}
-      onScroll={streamingScroll.onScroll}
+      onScroll={() => { streamingScroll.onScroll(); if (editorRef.current) savePlanPosition(positionKey, rootRef.current) }}
       data-mobile={mobile ? 'true' : 'false'}
     />
   )

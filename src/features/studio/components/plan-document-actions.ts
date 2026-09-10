@@ -29,10 +29,11 @@ export function createPlanDocumentActions({
   activeNovelId, savedPlanFiles, agentArtifacts, selectedTreeItemId, catalogPreview, setSelectedTreeItemId, setWorkViewer, setMobileView, setActiveAgentArtifactId, setAgentArtifacts, setServerPlanFiles, setChapterSaveState, setChapterSaveMessage, setAgentRunState, setWorkspaceDialog, setCatalogDocument, updateAgentArtifact, schedulePlanServerSync,
 }: PlanDocumentActions) {
   function handleSelectPlanFromTree(planId: string) {
+    const artifactId = savedPlanFiles.find(plan => plan.id === planId)?.artifactId ?? planId
     setSelectedTreeItemId(`plan:${planId}`)
     setWorkViewer('document')
-    if (agentArtifacts.some((artifact) => artifact.id === planId)) {
-      setActiveAgentArtifactId(planId)
+    if (agentArtifacts.some((artifact) => artifact.id === artifactId)) {
+      setActiveAgentArtifactId(artifactId)
     }
     setMobileView('editor')
   }
@@ -45,7 +46,7 @@ export function createPlanDocumentActions({
     }
 
     const targetArtifact =
-      agentArtifacts.find((artifact) => artifact.id === planId && artifact.savedAsPlan) ?? null
+      agentArtifacts.find((artifact) => artifact.id === targetPlan.artifactId && artifact.savedAsPlan) ?? null
     const planTitle = targetPlan.title.trim() || '这份计划'
     if (targetArtifact) {
       setActiveAgentArtifactId(targetArtifact.id)
@@ -61,7 +62,7 @@ export function createPlanDocumentActions({
         if (targetArtifact) {
           setAgentArtifacts((current) =>
             current.map((artifact) =>
-              artifact.id === planId
+              artifact.id === targetArtifact.id
                 ? {
                     ...artifact,
                     savedAsPlan: false,
@@ -135,7 +136,7 @@ export function createPlanDocumentActions({
       return
     }
 
-    updateAgentArtifact(planId, (current) => ({
+    updateAgentArtifact(targetPlan.artifactId, (current) => ({
       ...current,
       title: nextTitle.trim() || current.title,
     }))
@@ -180,7 +181,7 @@ export function createPlanDocumentActions({
     if (selectedTreeItemId?.startsWith('plan:')) {
       const artifactId = selectedTreeItemId.slice('plan:'.length)
       const targetPlan = savedPlanFiles.find((plan) => plan.id === artifactId)
-      updateAgentArtifact(artifactId, (current) => ({
+      updateAgentArtifact(targetPlan?.artifactId ?? artifactId, (current) => ({
         ...current,
         title: next.title.trim() || current.title,
         content: next.content,

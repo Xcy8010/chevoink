@@ -67,3 +67,15 @@ it('queues the full current plan text without changing chapter state', () => {
   expect(options.schedulePlanServerSync).toHaveBeenCalledWith('server', 'Title', 'New body')
   expect(options.setCatalogDocument).not.toHaveBeenCalled()
 })
+
+it('writes and renames a canonical plan through its original local artifact id', () => {
+  const {options, actions} = fixture({
+    selectedTreeItemId: 'plan:server-backend',
+    savedPlanFiles: [{id: 'server-backend', artifactId: 'history-local', backendArtifactId: 'backend', title: 'Title', content: 'Body', createdAt: ''}],
+  })
+  actions.handleWorkspaceDocumentChange({title: 'Title', content: 'Edited'})
+  actions.handleRenamePlan('server-backend', 'Renamed')
+  expect(options.updateAgentArtifact).toHaveBeenCalledWith('history-local', expect.any(Function))
+  expect(options.updateAgentArtifact).not.toHaveBeenCalledWith('server-backend', expect.any(Function))
+  expect(options.schedulePlanServerSync).toHaveBeenCalledWith('backend', 'Title', 'Edited')
+})

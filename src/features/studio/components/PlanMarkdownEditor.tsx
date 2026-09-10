@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { EditorSelectionState } from '../types'
 import LocalFirstTextarea from './LocalFirstTextarea'
 import { useStreamingAutoFollow } from './useStreamingAutoFollow'
+import { readPlanPosition, savePlanPosition } from './plan-view-position'
 
 const PlanRichMarkdownEditor = lazy(() => import('./PlanRichMarkdownEditor'))
 
@@ -18,6 +19,7 @@ type Props = {
   onBlur?: () => void
   onSelectionChange?: (selection: EditorSelectionState) => void
   streaming?: boolean
+  positionScope?: string
 }
 
 function PlanEditorModeSwitch({ mode, onChange }: { mode: PlanEditorMode; onChange: (mode: PlanEditorMode) => void }) {
@@ -48,7 +50,7 @@ function PlanEditorModeSwitch({ mode, onChange }: { mode: PlanEditorMode; onChan
 
 export default function PlanMarkdownEditor(props: Props) {
   // The debounce buffer and callbacks belong to the document, not only Milkdown.
-  return <PlanMarkdownEditorDocument key={props.documentId} {...props} />
+  return <PlanMarkdownEditorDocument key={`${props.positionScope ?? ''}:${props.documentId}`} {...props} />
 }
 
 function PlanMarkdownEditorDocument({
@@ -61,9 +63,16 @@ function PlanMarkdownEditorDocument({
   onBlur,
   onSelectionChange,
   streaming = false,
+  positionScope,
 }: Props) {
+  const positionKey = positionScope ? `${positionScope}:${documentId}` : undefined
   const [mode, setMode] = useState<PlanEditorMode>('preview')
   const markdownScroll = useStreamingAutoFollow<HTMLTextAreaElement>(streaming, markdown)
+  const markdownRef = markdownScroll.ref
+  const restoreMarkdownScroll = useCallback((node: HTMLTextAreaElement | null) => {
+    markdownRef(node)
+    if (node) node.scrollTop = readPlanPosition(positionKey ? `${positionKey}:markdown` : undefined)
+  }, [markdownRef, positionKey])
 
   // Milkdown 富文本每次击键都会同步上报 markdown，直接透传会让 StudioWorkspace 整树
   // 每字重渲染一遍（与章节正文同样的“打字断一下”问题）；这里先缓冲，停顿后一次性上报。
@@ -140,12 +149,13 @@ function PlanMarkdownEditorDocument({
             onBlur={handleRichEditorBlur}
             onSelectionChange={onSelectionChange}
             streaming={streaming}
+            positionKey={positionKey ? `${positionKey}:preview` : undefined}
           />
         </Suspense>
       ) : (
         <LocalFirstTextarea
-          ref={markdownScroll.ref}
-          onScroll={markdownScroll.onScroll}
+          ref={restoreMarkdownScroll}
+          onScroll={() => { markdownScroll.onScroll(); savePlanPosition(positionKey ? `${positionKey}:markdown` : undefined, markdownScroll.nodeRef.current) }}
           value={markdown}
           readOnly={!editable}
           resetKey={documentId}

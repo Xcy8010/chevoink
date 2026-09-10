@@ -67,6 +67,7 @@ import { usePendingReviewStorage } from './components/use-pending-review-storage
 import type { AgentTaskWindowState, StoredAgentWorkspaceSnapshot } from './lib/workspace-types.js'
 import { getPlatformCapabilities, subscribePlatformLifecycle } from './platform-capabilities.js'
 import { useWorkPanelState, writeWorkPanelUi } from './components/use-work-panel-state'
+import { reconcilePlanSelection, stablePlanId } from './components/work-plan-selection'
 import { createCatalogActions } from './components/catalog-actions'
 import { useChapterPersistence } from './components/use-chapter-persistence'
 import { useWorkspaceLayout } from './components/use-workspace-layout'
@@ -217,6 +218,7 @@ export default function StudioWorkspace() {
   const [activeAgentArtifactId, setActiveAgentArtifactId] = useState<string | null>(null)
   // 计划文件夹云端副本：覆盖非活跃任务窗口/历史会话的计划，刷新后不丢失
   const [serverPlanFiles, setServerPlanFiles] = useState<WorkspacePlanFile[]>([])
+  const [plansLoadedNovelId, setPlansLoadedNovelId] = useState<string | null>(null)
   const { flushPlanServerSync, schedulePlanServerSync } = usePlanSync()
   const agentRunAbortControllerRef = useRef<AbortController | null>(null)
   const coverGenerationWasActiveRef = useRef(false)
@@ -555,8 +557,7 @@ export default function StudioWorkspace() {
     setSelectedCoverId(null)
     setChapters([])
     setVolumes([])
-    setSelectedChapterId(null)
-    setSelectedTreeItemId(null)
+    // Selection is restored by the task-scoped panel hook, not by novel resets.
     setCatalogDocument(null)
     setChapterDraft(null)
     setChapterDirty(false)
@@ -571,7 +572,7 @@ export default function StudioWorkspace() {
   }, [activeNovelId])
 
   useEffect(() => {
-    if (!studioQuery.data) {
+    if (!studioQuery.data || studioQuery.isPlaceholderData || studioQuery.data.novel.id !== activeNovelId) {
       return
     }
 
@@ -593,8 +594,9 @@ export default function StudioWorkspace() {
     setSelectedCoverId(payload.novel.coverAssetId ?? payload.coverAssets[0]?.id ?? null)
     setChapters(payload.chapters)
     setVolumes(payload.volumes)
-    setSelectedChapterId(payload.draftChapter?.id ?? payload.chapters[0]?.id ?? null)
-  }, [studioQuery.data])
+    setSelectedChapterId(current => current && payload.chapters.some(chapter => chapter.id === current)
+      ? current : payload.draftChapter?.id ?? payload.chapters[0]?.id ?? null)
+  }, [studioQuery.data, studioQuery.isPlaceholderData, activeNovelId])
 
   useEffect(() => {
     agentRunAbortControllerRef.current?.abort()
@@ -610,7 +612,6 @@ export default function StudioWorkspace() {
     const freshTaskWindow = requestNewTask ? createLocalAgentTaskWindow() : null
     const snapshotTasks = freshTaskWindow ? [freshTaskWindow, ...storedTasks] : storedTasks
     setAgentTaskWindows(snapshotTasks)
-    setSelectedTreeItemId(snapshot?.selectedTreeItemId ?? null)
     setCatalogDocument(snapshot?.catalogDocument ?? null)
 
     const initialTaskWindow =
@@ -680,7 +681,7 @@ export default function StudioWorkspace() {
           null
 
         setAgentTaskWindows(mergedTasks)
-        if (!nextTaskWindow) {
+        if (!nextTaskWindow || appliedAgentTaskWindowIdRef.current !== initialTaskWindow?.id) {
           return
         }
 
@@ -716,7 +717,7 @@ export default function StudioWorkspace() {
         setAgentTaskWindows((current) =>
           current.map((taskWindow) => (taskWindow.id === loadedTaskWindow.id ? loadedTaskWindow : taskWindow)),
         )
-        applyAgentTaskWindowState(loadedTaskWindow)
+        if (appliedAgentTaskWindowIdRef.current === nextTaskWindow.id) applyAgentTaskWindowState(loadedTaskWindow)
       } catch {
         // 保留本地快照作为回退，不在这里打断创作流程
       } finally {
@@ -750,11 +751,13 @@ export default function StudioWorkspace() {
     let cancelled = false
     flushPlanServerSync()
     setServerPlanFiles([])
+    setPlansLoadedNovelId(null)
 
     void listNovelPlanFiles(activeNovelId)
       .then((items) => {
         if (!cancelled) {
           setServerPlanFiles(items.map(buildServerPlanFile))
+          setPlansLoadedNovelId(activeNovelId)
         }
       })
       .catch(() => {
@@ -842,7 +845,7 @@ export default function StudioWorkspace() {
   const chapterQuery = useQuery({
     queryKey: ['studio-chapter', activeNovelId, selectedChapterId],
     queryFn: () => getChapterContent(activeNovelId, selectedChapterId as string),
-    enabled: Boolean(selectedChapterId && !selectedChapterId.startsWith('local-')),
+    enabled: Boolean(taskUiScope && workPanelScope === taskUiScope && currentNovel?.id === activeNovelId && selectedChapterId && !selectedChapterId.startsWith('local-')),
     refetchOnWindowFocus: false,
     retry: 1,
   })
@@ -1379,6 +1382,8 @@ export default function StudioWorkspace() {
     )
     const orderedLocalPlans = localPlans.map((plan) => ({
       ...plan,
+      // The same persisted plan must keep its identity when session history arrives.
+      id: stablePlanId(plan),
       orderIndex: plan.backendArtifactId ? serverByBackendId.get(plan.backendArtifactId)?.orderIndex ?? null : null,
     }))
     const localBackendIds = new Set(
@@ -1644,12 +1649,16 @@ export default function StudioWorkspace() {
   }, [agentMessages])
 
   useEffect(() => {
+    if (!taskUiScope || workPanelScope !== taskUiScope || currentNovel?.id !== activeNovelId) return
+    if (workViewer === 'document') return
     if (!selectedTreeItemId && selectedChapterId) {
       setSelectedTreeItemId(`chapter:${selectedChapterId}`)
     }
-  }, [selectedChapterId, selectedTreeItemId])
+  }, [selectedChapterId, selectedTreeItemId, taskUiScope, workPanelScope, currentNovel?.id, activeNovelId, workViewer])
 
   useEffect(() => {
+    // Empty lists during cross-novel/task hydration are not deletion evidence.
+    if (!taskUiScope || workPanelScope !== taskUiScope || currentNovel?.id !== activeNovelId || agentSessionsResolving) return
     if (!selectedTreeItemId) {
       return
     }
@@ -1671,12 +1680,11 @@ export default function StudioWorkspace() {
     }
 
     if (selectedTreeItemId.startsWith('plan:')) {
-      const planId = selectedTreeItemId.slice('plan:'.length)
-      if (!savedPlanFiles.some((plan) => plan.id === planId)) {
-        setSelectedTreeItemId(selectedChapterId ? `chapter:${selectedChapterId}` : 'catalog')
-      }
+      const next = reconcilePlanSelection(selectedTreeItemId, savedPlanFiles,
+        plansLoadedNovelId === activeNovelId && Boolean(activeAgentTaskWindow?.loaded || !activeAgentTaskWindow?.sessionId))
+      if (next !== selectedTreeItemId) setSelectedTreeItemId(next)
     }
-  }, [chapters, savedPlanFiles, selectedChapterId, selectedTreeItemId])
+  }, [chapters, savedPlanFiles, selectedChapterId, selectedTreeItemId, taskUiScope, workPanelScope, currentNovel?.id, activeNovelId, agentSessionsResolving, plansLoadedNovelId, activeAgentTaskWindow?.loaded, activeAgentTaskWindow?.sessionId])
 
   function handleSelectWorkspaceNovel(novelId: string) {
     if (novelId === activeNovelId) {
@@ -4040,9 +4048,10 @@ export default function StudioWorkspace() {
                   contextPanel={<AgentMemoryCenter sessionId={agentSessionId} novelId={currentNovel.id} active={agentRunState.active} onOpenDetail={() => setContextDetailOpen(true)} />}
                 />}
                 viewer={workViewer ? <StudioChapterViewer
+                  positionScope={taskUiScope}
                   draft={workViewer === 'chapter' ? chapterDraft : null}
                   workspaceDocument={workViewer === 'document' ? activeWorkspaceDocument : null}
-                  loading={workViewer === 'chapter' && chapterQuery.isLoading} selection={editorSelection}
+                  loading={workViewer === 'chapter' ? chapterQuery.isLoading : plansLoadedNovelId !== activeNovelId || agentSessionsResolving} selection={editorSelection}
                   onChange={handleChapterDraftChange} onSelectionChange={setEditorSelection}
                   onWorkspaceDocumentChange={handleWorkspaceDocumentChange}
                   onAddSelection={handleAddViewerSelectionToAgent}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ replace: vi.fn(), update: null as null | ((ctx:unknown,next:string,prev:string)=>void), blur:null as null | (()=>void) }))
 vi.mock('@milkdown/kit/core', () => ({editorViewCtx:'view',parserCtx:'parser'}))
@@ -12,7 +12,22 @@ vi.mock('@milkdown/crepe/builder', () => ({ CrepeBuilder: class {
   create(){return Promise.resolve()}
 } }))
 import PlanRichMarkdownEditor from '../../src/features/studio/components/PlanRichMarkdownEditor'
+import { readPlanPosition, savePlanPosition } from '../../src/features/studio/components/plan-view-position'
 afterEach(()=>{cleanup();vi.clearAllMocks()})
+it('restores per-task scroll after async editor creation without resetting it on subsequent input', async () => {
+  sessionStorage.clear()
+  const seed = document.createElement('div'); seed.scrollTop = 620
+  savePlanPosition('user:a:task:plan:preview', seed)
+  const view = render(<PlanRichMarkdownEditor positionKey="user:a:task:plan:preview" markdown="same" editable mobile={false} />)
+  await act(async () => {})
+  const node = view.container.firstElementChild as HTMLElement
+  expect(node.scrollTop).toBe(620)
+  node.scrollTop = 840; fireEvent.scroll(node)
+  view.rerender(<PlanRichMarkdownEditor positionKey="user:a:task:plan:preview" markdown={'same\n'} editable mobile={false} />)
+  expect(node.scrollTop).toBe(840)
+  expect(readPlanPosition('user:a:task:plan:preview')).toBe(840)
+  expect(readPlanPosition('user:b:task:plan:preview')).toBe(0)
+})
 it('does not replace an equivalent normalized document but still applies a real external update', async()=>{
   const view=render(<PlanRichMarkdownEditor markdown="same" editable mobile={false}/> )
   await act(async()=>{})
