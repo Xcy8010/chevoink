@@ -2,13 +2,13 @@ import { useAgentStore } from './agentStore'
 import { registerDesktopSave } from '@/lib/desktop-lifecycle'
 
 type State = ReturnType<typeof useAgentStore.getState>
-type Draft = Pick<State, 'composerDraft' | 'composerAttachments' | 'composerReferences' | 'composerSkillIds' | 'composerUploading'>
+type Draft = Pick<State, 'composerDraft' | 'composerAttachments' | 'composerReferences' | 'composerSkillIds' | 'composerSubagent' | 'composerUploading'>
 const prefix = 'chevoink:task-draft:v1:'
 const cache = new Map<string, Draft>()
 const aliases = new Map<string, string>()
 let active: string | undefined
-const empty = (): Draft => ({ composerDraft: '', composerAttachments: [], composerReferences: [], composerSkillIds: [], composerUploading: 0 })
-const pick = (state: State): Draft => ({ composerDraft: state.composerDraft, composerAttachments: state.composerAttachments, composerReferences: state.composerReferences, composerSkillIds: state.composerSkillIds, composerUploading: state.composerUploading })
+const empty = (): Draft => ({ composerDraft: '', composerAttachments: [], composerReferences: [], composerSkillIds: [], composerSubagent: null, composerUploading: 0 })
+const pick = (state: State): Draft => ({ composerDraft: state.composerDraft, composerAttachments: state.composerAttachments, composerReferences: state.composerReferences, composerSkillIds: state.composerSkillIds, composerSubagent: state.composerSubagent, composerUploading: state.composerUploading })
 const resolve = (scope: string): string => aliases.get(scope) ?? scope
 
 registerDesktopSave(() => {
@@ -26,7 +26,7 @@ export function hasComposerDraft(scope: string): boolean {
   const key = resolve(scope)
   const draft = active === key ? pick(useAgentStore.getState()) : read(key)
   return Boolean(draft.composerDraft.trim()) || draft.composerAttachments.length > 0
-    || draft.composerReferences.length > 0 || draft.composerSkillIds.length > 0 || draft.composerUploading > 0
+    || draft.composerReferences.length > 0 || draft.composerSkillIds.length > 0 || Boolean(draft.composerSubagent) || draft.composerUploading > 0
 }
 
 function read(scope: string): Draft {
@@ -34,7 +34,10 @@ function read(scope: string): Draft {
   try {
     const value = JSON.parse(localStorage.getItem(prefix + scope) || 'null')
     if (value && typeof value.composerDraft === 'string' && Array.isArray(value.composerReferences) && Array.isArray(value.composerAttachments) && Array.isArray(value.composerSkillIds)) {
-      return { ...empty(), ...value, composerUploading: 0 }
+      const pin = value.composerSubagent
+      const composerSubagent = pin && typeof pin.id === 'string' && typeof pin.name === 'string' && typeof pin.novelId === 'string'
+        ? { id: pin.id, name: pin.name, novelId: pin.novelId } : null
+      return { ...empty(), ...value, composerSubagent, composerUploading: 0 }
     }
   } catch { /* Unavailable/corrupt storage must not prevent typing. */ }
   return empty()

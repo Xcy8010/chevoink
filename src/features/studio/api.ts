@@ -91,7 +91,7 @@ function normalizeResponseError(status: number, message?: string): string {
   return message || '请求失败，请稍后再试。'
 }
 
-async function requestData<T>(path: string, options?: RequestDataOptions): Promise<T> {
+export async function requestData<T>(path: string, options?: RequestDataOptions): Promise<T> {
   const controller = new AbortController()
   const timeoutMs = options?.timeoutMs ?? 30000
   const timeoutId =

@@ -167,7 +167,7 @@ function buildReportDisplay(args: {
 export const subAgentRunTool = defineTool({
   name: 'subagent_run',
   title: '调用子 Agent',
-  description: '把边界清晰、可独立完成的任务同步交给一个已定义的子 Agent 内嵌执行（不新开任务窗口）。子 Agent 会自主使用工具完成任务并返回工作报告；你收到报告后必须审查核验，再向作者汇报。仅当任务命中某个子 Agent 的触发条件时调用；简单任务不要拆分，也不要为同一任务重复调用。',
+  description: '把边界清晰、可独立完成的任务同步交给一个已定义的子 Agent 内嵌执行（不新开任务窗口）。子 Agent 会自主使用工具完成任务并返回工作报告；你收到报告后必须审查核验，再向作者汇报。任务命中触发条件，或作者本轮手动指定该子 Agent 且职责适用时调用；没有作者指定的简单任务不要拆分，也不要为同一任务重复调用。',
   parameters: subagentRunSchema,
   permission: { plan: 'ask', build: 'ask', review: 'ask' },
   readOnly: false,

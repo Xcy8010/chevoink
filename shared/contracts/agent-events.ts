@@ -414,6 +414,8 @@ export interface StartAgentLoopRunRequest {
   reasoningEffort?: import('./credits.js').ModelReasoningEffort
   /** 作者在输入框里手动指定本轮要用的技能 id；后端只接受当前作品已启用的技能。 */
   pinnedSkillIds?: EntityId[]
+  /** 本轮指定的已启用子 Agent；不绕过权限或审批。 */
+  pinnedSubagentId?: EntityId
   /** 服务端子 Agent 调度使用；普通创作请求保持 orchestrator。 */
   agentProfile?: 'orchestrator' | 'research' | 'continuity' | 'quality' | 'lore'
   /** 单次子任务硬预算；服务端还会与全局预算取较小值。 */

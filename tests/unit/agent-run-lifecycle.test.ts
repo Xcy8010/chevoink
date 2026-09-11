@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   original: vi.fn<() => Promise<{ parts: Array<{ type: string; text: string }> } | null>>(async () => ({ parts: [{ type: 'text', text: '核对原任务的剩余工作。' }] })),
   tools: [] as AgentTool[],
   hiddenTools: [] as AgentTool[],
+  skillReceipt: vi.fn(async () => ({})), skillLoads: vi.fn(async (...args: unknown[]) => { void args }),
 }))
 vi.mock('../../api/lib/ai-service.js', () => ({ chatWithTools: mocks.chat }))
 vi.mock('../../api/lib/prisma.js', () => ({
@@ -23,6 +24,7 @@ vi.mock('../../api/lib/prisma.js', () => ({
     agentRun: { update: mocks.update, findFirst: mocks.previous, findMany: mocks.priorRuns },
     agentSession: { update: vi.fn(async () => ({})), findUnique: vi.fn(async () => null) },
     agentMessage: { upsert: mocks.persist, findUnique: vi.fn(async () => null), findFirst: mocks.original },
+    agentSkillRun: { upsert: mocks.skillReceipt },
   },
 }))
 vi.mock('../../api/lib/credits.js', () => ({ getModelTierRuntime: vi.fn(async () => ({ tier: 'speed', contextWindowTokens: 128000 })) }))
@@ -35,6 +37,8 @@ vi.mock('../../api/lib/agent/tools/registry.js', () => ({ allTools: [], getToolB
 vi.mock('../../api/lib/agent/active-runs.js', () => ({ registerActiveRun: vi.fn(), deregisterActiveRun: vi.fn() }))
 vi.mock('../../api/lib/agent/baseline.js', () => ({ clearRunBaselines: vi.fn() }))
 vi.mock('../../api/lib/agent/context.js', () => ({ assembleContext: vi.fn(async () => ({ messages: [] })), insertSubagentCatalog: vi.fn() }))
+vi.mock('../../api/lib/agent/skills/receipts.js', () => ({ recordSkillLoads: mocks.skillLoads }))
+vi.mock('../../api/lib/agent/skills/service.js', async () => ({ resolveEnabledRuntimeSkills: vi.fn(async () => (await import('../../api/lib/agent/skills/index.js')).skillCatalog) }))
 vi.mock('../../api/lib/agent/context-engine.js', () => ({ captureUserDirectives: vi.fn(), compactSessionContext: vi.fn(async () => null) }))
 vi.mock('../../api/lib/agent/story-memory.js', () => ({ syncNovelMemoryProjection: vi.fn(async () => null) }))
 vi.mock('../../api/lib/agent/research-sources.js', () => ({ readResearchReportForDelivery: mocks.report }))
@@ -96,6 +100,30 @@ function context(): ToolContext {
     signal: new AbortController().signal, emit: mocks.emit,
   }
 }
+
+describe('phase skills in the real execution loop', () => {
+  it('loads the new phase once between complete tool batches without extra model requests', async () => {
+    const { routeSkills } = await import('../../api/lib/agent/skills/index.js')
+    vi.mocked(assembleContext).mockResolvedValueOnce({ messages: [], skillRoute: routeSkills({ mode: 'build', intent: 'plan', prompt: '规划大纲', freedom: 'balanced' }) })
+    mocks.tools = [tool('scene_task_build', async () => ({ output: '场景已建立' }))]
+    queue(response('', [call('s1', 'scene_task_build')]), response('', [call('s2', 'scene_task_build', '{"chapter":2}')]), response('已完成。'))
+    await run('规划并续写正文')
+    expect(mocks.chat).toHaveBeenCalledTimes(3)
+    expect(events().filter(event => event.type === 'skill.route' && event.phase === 'draft')).toHaveLength(1)
+    const messages = mocks.chat.mock.calls[1][0].messages as Array<{ role: string; content?: string; toolCallId?: string }>
+    const digestAt = messages.findIndex(message => message.content?.includes('系统·创作阶段工作方法'))
+    expect(digestAt).toBeGreaterThan(messages.findIndex(message => message.role === 'tool' && message.toolCallId === 's1'))
+    expect(mocks.skillLoads.mock.calls.some(args => args[3] === 'phase')).toBe(true)
+  })
+  it('does not load a stage for a failed tool', async () => {
+    const { routeSkills } = await import('../../api/lib/agent/skills/index.js')
+    vi.mocked(assembleContext).mockResolvedValueOnce({ messages: [], skillRoute: routeSkills({ mode: 'build', intent: 'plan', prompt: '规划大纲', freedom: 'balanced' }) })
+    mocks.tools = [tool('scene_task_build', async () => { throw new Error('fixture failure') })]
+    queue(response('', [call('s1', 'scene_task_build')]), response('场景未完成。'))
+    await run('规划并续写正文')
+    expect(events().filter(event => event.type === 'skill.route')).toHaveLength(1)
+  })
+})
 
 describe('BYOK paid-tool isolation', () => {
   it.each(['web_search', 'research_dossier_build', 'cover_generate', 'view_image'])('keeps %s quota failure local to the paid tool', async name => {

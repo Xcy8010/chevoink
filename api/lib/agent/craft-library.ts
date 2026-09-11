@@ -159,6 +159,9 @@ export async function extractAuthorStyleProfile(input: {
     throw new DataAccessError(400, 'STYLE_SAMPLE_TOO_SHORT', `作者样章至少需要 ${AUTHOR_SAMPLE_MIN_CHARS} 个有效字符。`)
   }
   const stats = extractStyleStats(samples)
+  if (samples.reduce((sum, sample) => sum + sample.length, 0) > 120_000) {
+    throw new DataAccessError(400, 'STYLE_SAMPLE_TOO_LARGE', '一次保存的样章合计不能超过 12 万字符。')
+  }
   const contentHash = sha256([
     ...chapters.map((chapter) => `${chapter.id}:${chapter.revision}:${sha256(chapter.content)}`),
     ...(input.uploadedFile ? [`upload:${input.uploadedFile.name}:${input.uploadedFile.size}:${sha256(uploadedSample)}`] : []),
@@ -197,6 +200,10 @@ export async function extractAuthorStyleProfile(input: {
         indexAllowed: true,
         status: 'indexed',
         metadata: {
+          privateSamples: [
+            ...chapters.filter(chapter => chapter.content.trim()).map(chapter => ({ name: chapter.title, content: chapter.content.trim() })),
+            ...(input.uploadedFile ? [{ name: input.uploadedFile.name, content: uploadedSample }] : []),
+          ],
           chapters: chapters.map((chapter) => ({ id: chapter.id, revision: chapter.revision, title: chapter.title })),
           uploadedFile: input.uploadedFile ? { name: input.uploadedFile.name, size: input.uploadedFile.size } : null,
         },
@@ -668,7 +675,7 @@ export async function revokeCorpusSource(input: { actorUserId: string; sourceId:
     await tx.corpusPassage.deleteMany({ where: { document: { sourceId: source.id } } })
     await tx.techniqueCard.deleteMany({ where: { sourceId: source.id } })
     await tx.styleProfile.deleteMany({ where: { sourceId: source.id } })
-    await tx.corpusDocument.updateMany({ where: { sourceId: source.id }, data: { status: 'revoked', revokedAt: new Date(), indexAllowed: false } })
+    await tx.corpusDocument.updateMany({ where: { sourceId: source.id }, data: { status: 'revoked', revokedAt: new Date(), indexAllowed: false, metadata: {} } })
     await tx.corpusSource.update({ where: { id: source.id }, data: { rightsStatus: 'revoked', revokedAt: new Date(), indexAllowed: false } })
     const deletedCounts = { documents, passages, techniqueCards: cards, styleProfiles: profiles, caches: 0 }
     const receiptHash = sha256(`${source.id}:${Date.now()}:${JSON.stringify(deletedCounts)}:${input.reason}`)

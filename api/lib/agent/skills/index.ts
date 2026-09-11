@@ -55,7 +55,7 @@ export type SkillRouteCandidate = {
 }
 
 export type SkillRouteDecision = {
-  routerVersion: '3.0.0'
+  routerVersion: '3.1.0'
   phase: SkillPhase
   candidates: SkillRouteCandidate[]
   selected: AgentSkill[]
@@ -69,6 +69,29 @@ const MINOR_EDIT_PATTERN = /(?:只|仅)?(?:改|修改|修正|检查)?(?:一个|�
 const NON_CREATIVE_PATTERN = /(?:发布|下架|删除|导出|移动.{0,12}(?:章|卷)|(?:章|卷).{0,12}移动|创建.{0,8}(?:章|卷)|(?:章|卷).{0,8}创建|字数统计|查询字数|打开|关闭|折叠|排序)/i
 const noNegativeTriggers = [MINOR_EDIT_PATTERN, NON_CREATIVE_PATTERN]
 const PRESERVE_INTENTIONAL_STYLE_PATTERN = /(?:不要|无需|不应|不能|别).{0,24}(?:仅因|因为|直接|强行).{0,24}(?:判断为?AI味|判错|润色|改成白话|删掉术语)/i
+
+/** Router policy, not a rewrite of immutable skill resources. Mixed requests may
+ * include UI/format operations; those words alone do not negate creative work. */
+export function isMechanicalOnly(prompt: string): boolean {
+  const withoutNegatedCreation = prompt.replace(/(?:不要|无需|不必|禁止|别)(?:再)?(?:润色|改写|续写|扩写|创作|写正文|修改内容)/g, '')
+  const creative = /(?:润色|改写|续写|扩写|补写|创作|写(?:一|下|第|正文|场景|对白|对话|大纲)|规划|设计.{0,8}(?:人物|情节)|调整.{0,8}(?:节奏|情绪)|修改.{0,8}(?:对白|情节))/u.test(withoutNegatedCreation)
+  return !creative && (MINOR_EDIT_PATTERN.test(prompt) || NON_CREATIVE_PATTERN.test(prompt))
+}
+
+function modeMatches(skill: AgentSkill, mode: AgentExecutionMode, phase: SkillPhase): boolean {
+  // Work executes in build mode, including its planning stage. This grants no
+  // tools/permissions and does not widen author-defined mode restrictions.
+  return skill.modes.includes(mode) || (mode === 'build' && phase === 'plan' && skill.owner === 'chevoink'
+    && ['cn-project-positioning.v3', 'cn-long-outline.v3'].includes(skill.id))
+}
+
+function blockedByNegative(skill: AgentSkill, prompt: string): boolean {
+  return skill.negativeTriggers.some(pattern => {
+    if (!pattern.test(prompt)) return false
+    if (skill.owner !== 'chevoink' || pattern === PRESERVE_INTENTIONAL_STYLE_PATTERN) return true
+    return isMechanicalOnly(prompt)
+  })
+}
 
 /**
  * Agent 3.0 首批内置中文网文 Skill Pack。
@@ -338,20 +361,20 @@ export function routeSkills(input: {
     : []
   const pinnedIds = new Set(pinnedCandidates.map((candidate) => candidate.skill.id))
 
-  const skipMinorEdit = input.intent === 'revise' && MINOR_EDIT_PATTERN.test(normalizedPrompt)
-  const skipOperation = ['global_transform', 'structure'].includes(input.intent) && NON_CREATIVE_PATTERN.test(normalizedPrompt)
+  const skipMinorEdit = input.intent === 'revise' && isMechanicalOnly(normalizedPrompt)
+  const skipOperation = ['global_transform', 'structure'].includes(input.intent) && isMechanicalOnly(normalizedPrompt)
 
   // 手动指定是作者的明确指令，优先于“非创作操作”早退。
   if (pinnedCandidates.length === 0 && (skipMinorEdit || skipOperation)) {
     return {
-      routerVersion: '3.0.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
+      routerVersion: '3.1.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
       estimatedTokens: 0, skippedReason: 'NON_CREATIVE_OPERATION',
     }
   }
 
   const scored = catalog
-    .filter((skill) => !pinnedIds.has(skill.id) && isEnabled(skill) && skill.status === 'active' && skill.intents.includes(input.intent) && skill.modes.includes(input.mode) &&
-      skill.phases.includes(phase) && !skill.negativeTriggers.some((pattern) => pattern.test(normalizedPrompt)))
+    .filter((skill) => !pinnedIds.has(skill.id) && isEnabled(skill) && skill.status === 'active' && skill.intents.includes(input.intent) && modeMatches(skill, input.mode, phase) &&
+      skill.phases.includes(phase) && !blockedByNegative(skill, normalizedPrompt))
     .map((skill) => {
       const matchedTriggers = skill.triggers.filter((trigger) => trigger.pattern.test(normalizedPrompt))
       const reasonCodes = [...new Set(matchedTriggers.map((trigger) => trigger.reasonCode))]
@@ -370,7 +393,7 @@ export function routeSkills(input: {
 
   if (candidates.length === 0) {
     return {
-      routerVersion: '3.0.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
+      routerVersion: '3.1.0', phase, candidates: [], selected: [], reasonCodes: [], confidence: 1,
       estimatedTokens: 0, skippedReason: 'NO_MATCH',
     }
   }
@@ -386,9 +409,11 @@ export function routeSkills(input: {
   }
   const explicitlyMatchedSpecialists = input.intent === 'write'
     ? primaryCandidates
-        .filter((candidate) => candidate.reasonCodes.length > 0 && candidate.score >= 40 && !foundationIds.has(candidate.skill.id))
+        .filter((candidate) => candidate.reasonCodes.length > 0 && candidate.score >= 30 && !foundationIds.has(candidate.skill.id))
         .sort((left, right) => specialistReasonPriority(right) - specialistReasonPriority(left) || right.score - left.score)
-        .slice(0, maxLoaded - 1)
+        // A weak contextual hint gets one slot, preserving the writing foundation.
+        // Strong explicit specialist requests may reserve two slots as before.
+        .slice(0, Math.min(maxLoaded - 1, Math.max(1, primaryCandidates.filter(candidate => candidate.reasonCodes.length > 0 && candidate.score >= 40 && !foundationIds.has(candidate.skill.id)).length)))
     : []
   // 内置基础技法基准分高达 46~52，不给作者技能保底槽位的话它们会被永远挤出。
   const authorPool = [...primaryCandidates, ...authorFallbackCandidates].filter((candidate) => isAuthorSkill(candidate.skill))
@@ -415,7 +440,7 @@ export function routeSkills(input: {
   const confidence = Math.min(0.99, Math.max(0.55, 0.62 + topScore / 220 + (topScore - secondScore) / 400))
 
   return {
-    routerVersion: '3.0.0', phase, candidates, selected,
+    routerVersion: '3.1.0', phase, candidates, selected,
     reasonCodes: uniqueReasonCodes(selectedCandidates),
     confidence: Math.round(confidence * 100) / 100,
     estimatedTokens: estimateLoadedTokens(selected, phase),

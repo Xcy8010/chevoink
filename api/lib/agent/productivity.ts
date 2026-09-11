@@ -259,12 +259,16 @@ export async function cancelAgentSubtask(userId: string, subtaskId: string) {
 }
 
 /** 主 run 的服务端执行目录：尾部注入，主控据此按触发条件用 subagent_run 内嵌调用。 */
-export async function renderSubagentCatalog(userId: string, novelId: string): Promise<string> {
+export async function renderSubagentCatalog(userId: string, novelId: string, pinnedSubagentId?: string): Promise<string> {
+  const { requireSelectedSubagent, selectedSubagentGuidance } = await import('./subagent-selection.js')
+  const pinned = pinnedSubagentId ? await requireSelectedSubagent(userId, novelId, pinnedSubagentId) : null
   const items = await prisma.agentSubtask.findMany({ where: { userId, novelId, enabled: true }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, name: true, role: true, triggerCondition: true, prompt: true } })
-  if (!items.length) return ''
+  const listed = pinned ? [pinned, ...items.filter(item => item.id !== pinned.id)].slice(0, 20) : items
+  if (!listed.length) return ''
   return [
     '[子 Agent 目录] 你可以像调用工具一样，用 subagent_run 把命中触发条件的任务交给以下具名子 Agent 内嵌执行（不新开任务窗口；它会自主使用工具完成任务并返回报告，你必须审查其报告后再向作者汇报；调用时传 subagentId 与自包含的 task）：',
-    ...items.map((item) => `- 「${item.name}」（subagentId=${item.id}，角色=${item.role}）\n  触发条件：${item.triggerCondition}\n  职责：${item.prompt}`),
+    ...(pinned ? [selectedSubagentGuidance(pinned.id)] : []),
+    ...listed.map((item) => `- 「${item.name}」（subagentId=${item.id}，角色=${item.role}）\n  触发条件：${item.triggerCondition}\n  职责：${item.prompt}`),
   ].join('\n')
 }
 

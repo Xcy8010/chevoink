@@ -34,7 +34,7 @@ export const craftSearchTool = defineTool({
       output: [
         `检索记录 traceId=${result.traceId}。仅把以下卡片当作高层创作判断，不得复写任何来源措辞：`,
         ...lines,
-        result.profile ? `作者 Style DNA 已参与排序（profileId=${result.profile.id}），作者自身风格优先于平台通用卡。` : '当前作品尚无作者 Style DNA；通用卡只作底线参考，不要统一腔。',
+        result.profile ? `已保存作者统计画像（profileId=${result.profile.id}）；画像不代表模型已学习，已确认启用的风格规则以当前任务上下文为准。` : '当前作品尚无作者 Style DNA；通用卡只作底线参考，不要统一腔。',
       ].join('\n'),
       summary: `检索写作技法 · ${result.cards.length} 张`,
     }
@@ -71,7 +71,7 @@ export const styleProfileGetTool = defineTool({
   permission: ALLOW_ALL,
   readOnly: true,
   async execute(ctx) {
-    const profile = await getAuthorStyleProfile(ctx.userId, ctx.novelId, false, ctx.transaction)
+    const profile = await getAuthorStyleProfile(ctx.userId, ctx.novelId, true, ctx.transaction)
     if (!profile) return { output: '当前作品尚无已确认的作者 Style DNA。不要凭空推断作者文风。', summary: '未找到 Style DNA' }
     return {
       output: `Style DNA profileId=${profile.id}，样本 ${profile.sampleCount} 章/${profile.sampleChars} 字符，统计画像：${JSON.stringify(profile.stats)}。这些是柔性风格参照，不是逐句模板。`,

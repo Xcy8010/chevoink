@@ -129,6 +129,8 @@ export async function initializePersistedLoopRun(userId: string, runId: string, 
     run.reasoningEffort as import('../../../shared/contracts/index.js').ModelReasoningEffort)
   if (runtime.tier !== run.modelTier || run.customModelId) throw new DataAccessError(409, 'RUNTIME_MODEL_ADAPTER_REQUIRED', '原模型模式尚未接入持久执行，不能替换模型。')
   const agent = getAgentDefinition(input.agentProfile ?? 'orchestrator')
+  // The gated durable runtime has no inline-subagent adapter yet; never silently discard an explicit selection.
+  if (input.pinnedSubagentId) throw new DataAccessError(409, 'RUNTIME_SUBAGENT_ADAPTER_REQUIRED', '当前持久执行协议暂未接入手动子 Agent，请使用普通任务执行。')
   const session = await prisma.agentSession.findFirstOrThrow({ where: { id: run.sessionId, userId } })
   const scoped = getToolsForAgent(agent, input.mode, resolveAgent2FeatureFlags(userId))
     .filter(tool => !session.spawnedFromSessionId || !ORCHESTRATION_TOOL_NAMES.has(tool.name))
@@ -282,6 +284,12 @@ export async function startLoopRunLocked(
   await assertManagedAttachmentsAccess(input.attachments, userId)
 
   const modelTier = input.modelTier ?? 'speed'
+  if (input.pinnedSubagentId) {
+    if (input.agentProfile && input.agentProfile !== 'orchestrator') throw new DataAccessError(400, 'SUBAGENT_NESTING_DENIED', '只有主 Agent 可以调用子 Agent。')
+    if (session.sandboxMode === 'read_only') throw new DataAccessError(409, 'SUBAGENT_UNAVAILABLE', '当前只读模式不允许调用子 Agent，请先调整任务权限。')
+    const { requireSelectedSubagent } = await import('./subagent-selection.js')
+    await requireSelectedSubagent(userId, session.novelId, input.pinnedSubagentId)
+  }
   await assertCreditAccess(userId, modelTier)
   const modelRuntime = await getModelTierRuntime(modelTier, userId, input.customModelId, input.reasoningEffort)
 
@@ -393,6 +401,7 @@ export async function startLoopRunLocked(
     agentType: input.agentProfile ?? 'orchestrator',
     tokenBudget: input.tokenBudget,
     pinnedSkillIds: input.pinnedSkillIds ?? [],
+    pinnedSubagentId: input.pinnedSubagentId,
   })
 
   return {
@@ -781,6 +790,7 @@ async function continueLoopRunLocked(
     creativeFreedom: queuedInput?.creativeFreedom,
     qualityMode: queuedInput?.qualityMode,
     pinnedSkillIds: queuedInput?.pinnedSkillIds,
+    pinnedSubagentId: queuedInput?.pinnedSubagentId,
     agentType: queuedInput?.agentProfile ?? 'orchestrator',
     tokenBudget: queuedInput?.tokenBudget,
     resume: true,

@@ -231,6 +231,7 @@ type AgentStoreState = {
   composerUploading: number
   /** 输入框里手动指定的技能 id；同草稿提升全局，面板重挂载不丢 */
   composerSkillIds: string[]
+  composerSubagent: { id: string; name: string; novelId: string } | null
   /** 本轮技能路由：仅 live 事件写入，给作者一个“何时调用了哪些技能”的可见答案 */
   skillRoute: AgentSkillRouteState | null
   /** 正文已定稿（text.final 已到达）的消息 id：定稿后正文尾部不再画流式光标，
@@ -531,6 +532,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   composerReferences: [],
   composerUploading: 0,
   composerSkillIds: [],
+  composerSubagent: null,
   skillRoute: null,
   finalizedTextIds: [],
   autoFollow: readStoredAutoFollow(),

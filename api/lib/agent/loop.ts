@@ -60,6 +60,10 @@ import {
 } from './checkpoint.js'
 import { autoNameSession } from './session-title.js'
 import { buildTaskSpec, narrowLegacyResearchTask } from './task-spec.js'
+import { buildSkillExecutionDigest, routeSkills, type SkillPhase } from './skills/index.js'
+import { resolveEnabledRuntimeSkills } from './skills/service.js'
+import { nextSkillPhase, phaseIntent, phaseSignals } from './skills/lifecycle.js'
+import { recordSkillLoads } from './skills/receipts.js'
 import { taskSpecSchema, type TaskSpec } from '../../../shared/contracts/index.js'
 import {
   collapseEarlyToolRounds,
@@ -104,6 +108,7 @@ export type ExecuteAgentRunParams = {
   tokenBudget?: number
   /** 作者在输入框里手动指定本轮要用的技能 id。 */
   pinnedSkillIds?: string[]
+  pinnedSubagentId?: string
 }
 
 const emptyUsage = (): AgentTokenUsage => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
@@ -897,7 +902,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
     // 子 Agent 目录注入：主控据此按触发条件用 subagent_run 像调工具一样内嵌调用子 Agent（codex/Zcode 模式）
     if (agent.type === 'orchestrator') {
       const { renderSubagentCatalog } = await import('./productivity.js')
-      const catalog = await renderSubagentCatalog(params.userId, params.novelId)
+      const catalog = await renderSubagentCatalog(params.userId, params.novelId, params.pinnedSubagentId)
       insertSubagentCatalog(messages, catalog)
     }
     // 仅恢复指定任务的协作关系，禁止把同会话中旧任务的窗口重新激活。
@@ -952,12 +957,12 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           routerVersion: skillRoute.routerVersion,
           candidates,
           selected,
-          loaded: selected,
           reasonCodes: skillRoute.reasonCodes,
           confidence: skillRoute.confidence,
           estimatedTokens: skillRoute.estimatedTokens,
         },
       })
+      await recordSkillLoads({ runId, userId: params.userId, novelId: params.novelId }, skillRoute.selected, skillRoute.phase, 'route')
       bus.emit({
         type: 'skill.route',
         phase: skillRoute.phase,
@@ -968,6 +973,29 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
         estimatedTokens: skillRoute.estimatedTokens,
         skippedReason: skillRoute.skippedReason,
       })
+    }
+
+    // At most one additional digest per phase in this execution slice. Rebuild on
+    // resume because checkpoint compaction may have removed old instructions.
+    const routedPhases = new Set<SkillPhase>(assembledContext.skillRoute ? [assembledContext.skillRoute.phase] : [])
+    let pendingSkillPhase: SkillPhase | null = null
+    const refreshPhaseSkills = async () => {
+      const phase = pendingSkillPhase
+      pendingSkillPhase = null
+      if (!assembledContext.skillRoute || !phase || routedPhases.has(phase) || controller.signal.aborted) return
+      const catalog = await resolveEnabledRuntimeSkills(params.userId, params.novelId)
+      if (controller.signal.aborted) throw new DOMException('run aborted', 'AbortError')
+      const decision = routeSkills({ mode: params.mode, intent: phaseIntent(phase), phase,
+        prompt: `${params.prompt}\n当前已验证工作阶段：${phaseSignals[phase] ?? phase}`,
+        freedom: taskSpec.creativeFreedom, catalog, pinnedSkillIds: new Set(params.pinnedSkillIds ?? []) })
+      routedPhases.add(phase)
+      if (!decision.selected.length) return
+      // Appended only between complete tool batches, never inside call/result pairs.
+      messages.push({ role: 'user', content: `[系统·创作阶段工作方法] 仅辅助既定任务，不新增任务或权限。\n${buildSkillExecutionDigest(decision, taskSpec.creativeFreedom)}` })
+      await recordSkillLoads({ runId, userId: params.userId, novelId: params.novelId }, decision.selected, phase, 'phase')
+      bus.emit({ type: 'skill.route', phase, candidates: decision.candidates.map(({ skill }) => ({ id: skill.id, name: skill.name, version: skill.version })),
+        selected: decision.selected.map(({ id, name, version }) => ({ id, name, version })), reasonCodes: decision.reasonCodes,
+        confidence: decision.confidence, estimatedTokens: decision.estimatedTokens })
     }
 
     const featureFlags = resolveAgent2FeatureFlags(params.userId)
@@ -1241,6 +1269,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       }
       lastActivityAt = Date.now()
 
+      await refreshPhaseSkills()
       // A4 长上下文防稀释：超过阈值后每轮把提醒刷新到队尾，拉回系统约束注意力
       const reminderIndex = messages.indexOf(contextReminder)
       if (reminderIndex >= 0) {
@@ -1513,6 +1542,7 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
           continue
         }
         const outcome = await handleToolCall(call, tools, { ...toolContext, callId: call.id, messageId }, bus, messageId, runId)
+        pendingSkillPhase = nextSkillPhase(call.name, outcome.part, taskSpec.intent, params.prompt) ?? pendingSkillPhase
         {
           if (outcome.part.status === 'success') toolProviderFailures.delete(call.name)
           else if (outcome.providerFailure) {

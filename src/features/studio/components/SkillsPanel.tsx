@@ -4,18 +4,18 @@ import { BookOpenCheck, Check, Fingerprint, History, Import, Inbox, LoaderCircle
 
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast-context'
-import type { AgentSkillListItem, StudioPayload, StyleSampleRequest } from '../../../../shared/contracts/index.js'
-import { acceptSkillShareInviteApi, createSkillShareInviteApi, declineSkillShareInviteApi, extractAuthorStyleProfileApi, getAuthorStyleProfileApi, getNovelSkills, getResearchWorkbenchApi, listSkillShareInvitesApi, revokeAuthorStyleSourceApi, updateAgentDataControlApi, updateNovelSkill } from '../api'
+import type { AgentSkillListItem, StudioPayload } from '../../../../shared/contracts/index.js'
+import { acceptSkillShareInviteApi, createSkillShareInviteApi, declineSkillShareInviteApi, getAuthorStyleProfileApi, getNovelSkills, getResearchWorkbenchApi, listSkillShareInvitesApi, revokeAuthorStyleSourceApi, updateAgentDataControlApi, updateNovelSkill } from '../api'
 import SkillManagerDialog from './SkillManagerDialog'
-import StyleDnaDialog from './StyleDnaDialog'
+import StyleLearningDialog from './StyleLearningDialog'
 
 const phaseNames: Record<string, string> = {
   research: '调研', plan: '规划', scene: '场景', draft: '正文', critique: '审阅', revision: '修订', commit: '落库',
 }
 
 function lastUsedLabel(value: string | null): string {
-  if (!value) return '尚未调用'
-  return `最近调用 ${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(value))}`
+  if (!value) return '暂无加载记录'
+  return `最近加载任务 ${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(value))}`
 }
 
 export default function SkillsPanel({ novelId, chapters, className }: { novelId: string; chapters: StudioPayload['chapters']; className?: string }) {
@@ -52,15 +52,6 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
     mutationFn: ({ skillId, enabled }: { skillId: string; enabled: boolean }) => updateNovelSkill(novelId, skillId, { enabled }),
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
     onError: (error) => toast.error(error instanceof Error ? error.message : '技能状态更新失败。'),
-  })
-  const extractStyleMutation = useMutation({
-    mutationFn: (input: StyleSampleRequest) => extractAuthorStyleProfileApi(novelId, input),
-    onSuccess: async () => {
-      await styleQuery.refetch()
-      setStyleSetupOpen(false)
-      toast.success('作者 Style DNA 已更新，仅限当前作品使用。')
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : 'Style DNA 提取失败。'),
   })
   const revokeStyleMutation = useMutation({
     mutationFn: (sourceId: string) => revokeAuthorStyleSourceApi(novelId, sourceId, '作者在技能区主动撤回私有样章授权。'),
@@ -142,7 +133,7 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
           {[
             ['productAnalyticsEnabled', '匿名产品指标', '仅记录完成率、修订轮数和发布等统计，不记录小说正文。'],
             ['qualityTelemetryEnabled', '质量反馈关联', '把建议接受/拒绝与匿名质量结果关联，用于改进质量门。'],
-            ['privateStyleEnabled', '本作品 Style DNA', '允许当前作品使用作者私有统计画像，不跨作者。'],
+            ['privateStyleEnabled', '本作品 Style DNA', '允许样章学习及已确认风格规则在本作品使用；学习发送原文仍须单独授权。'],
             ['publicCorpusOptIn', '共建公共技法库', '默认关闭；开启也不自动导入正文，仍需另行明确授权。'],
           ].map(([key, title, detail]) => <label key={key} className="flex cursor-pointer items-start gap-2 rounded-[7px] px-1 py-1 hover:bg-[var(--surface-muted)]"><input className="mt-0.5" type="checkbox" checked={Boolean(researchQuery.data?.dataControl[key as keyof typeof researchQuery.data.dataControl])} disabled={dataControlMutation.isPending} onChange={(event) => dataControlMutation.mutate({ [key]: event.target.checked })} /><span><strong className="font-medium text-[var(--text-primary)]">{title}</strong><br />{detail}</span></label>)}
         </div></details> : null}
@@ -152,7 +143,7 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
           <Fingerprint className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><h3 className="text-xs font-medium text-[var(--text-primary)]">作者 Style DNA</h3><span className="rounded-[5px] bg-[var(--surface-muted)] px-1.5 py-0.5 text-[9px] text-[var(--text-tertiary)]">仅本作品</span></div>
-            {styleQuery.isLoading ? <p className="mt-1 text-[11px] text-[var(--text-secondary)]">正在读取风格画像…</p> : styleQuery.data ? <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">{styleQuery.data.name} · {styleQuery.data.sampleCount} 份样章 / {styleQuery.data.sampleChars.toLocaleString()} 字符。Agent 只使用统计画像，不向其他作者召回样章。</p> : <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">选择自己拥有的章节或上传文本样章建立私有统计画像，让作者风格优先于平台通用技法卡。</p>}
+            {styleQuery.isLoading ? <p className="mt-1 text-[11px] text-[var(--text-secondary)]">正在读取风格画像…</p> : <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">{styleQuery.data ? `${styleQuery.data.name} · ${styleQuery.data.sampleCount} 份样章。` : ''}查看样章、让 Agent 分段学习；确认启用规则后，本作品后续写作自动使用。保存统计不等于完成学习。</p>}
           </div>
           <button type="button" onClick={() => setStyleSetupOpen(true)} className="shrink-0 text-[10px] text-[var(--text-secondary)] underline underline-offset-4">{styleQuery.data ? '更新' : '建立'}</button>
         </div>
@@ -197,7 +188,7 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-[var(--text-tertiary)]">
               <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3 w-3" />{skill.source === 'builtin' ? 'Chevoink 内置' : '自定义'} · {skill.license}</span>
-              <span className="inline-flex items-center gap-1"><History className="h-3 w-3" />{lastUsedLabel(skill.lastUsedAt)}{skill.usageCount > 0 ? ` · ${skill.usageCount} 次` : ''}</span>
+              <span className="inline-flex items-center gap-1" title="当前作品保留的全部技能加载记录，按任务去重；含自动、阶段及工具加载。不代表模型执行效果，历史未记录的调用无法追溯。"><History className="h-3 w-3" />{lastUsedLabel(skill.lastUsedAt)}{skill.usageCount > 0 ? ` · ${skill.usageCount} 个任务` : ''}</span>
               <div className="ml-auto flex items-center gap-2">{skill.canEdit && skill.status === 'active' ? <button type="button" onClick={() => setShareSkillId((current) => current === skill.id ? null : skill.id)} className="inline-flex items-center gap-1 text-[var(--text-secondary)] underline underline-offset-4"><Share2 className="h-3 w-3" />邀请</button> : null}<button type="button" onClick={() => setDialog(skill)} className="text-[var(--text-secondary)] underline underline-offset-4">详情 / 测试</button></div>
             </div>
             {shareSkillId === skill.id ? <div className="mt-3 rounded-[9px] border border-[var(--border-subtle)] bg-[var(--surface-default)] p-2.5"><div className="flex items-center gap-2"><p className="text-[10px] font-medium text-[var(--text-primary)]">邀请账号使用 v{skill.activeVersion}</p><button type="button" className="ml-auto text-[var(--text-tertiary)]" onClick={() => setShareSkillId(null)} aria-label="关闭邀请"><X className="h-3.5 w-3.5" /></button></div><input value={shareRecipient} onChange={(event) => setShareRecipient(event.target.value)} placeholder="对方用户 ID、邮箱或手机号" className="mt-2 h-8 w-full rounded-[7px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2.5 text-[10px] outline-none focus:border-[var(--border-strong)]" /><input value={shareMessage} maxLength={500} onChange={(event) => setShareMessage(event.target.value)} placeholder="附言（可选）" className="mt-2 h-8 w-full rounded-[7px] border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2.5 text-[10px] outline-none focus:border-[var(--border-strong)]" /><button type="button" disabled={!shareRecipient.trim() || createShareMutation.isPending} onClick={() => createShareMutation.mutate({ skillId: skill.id, recipientAccount: shareRecipient.trim(), message: shareMessage.trim() })} className="mt-2 inline-flex h-8 items-center rounded-[7px] bg-[var(--surface-contrast)] px-3 text-[10px] text-[var(--text-contrast)] disabled:opacity-40">{createShareMutation.isPending ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : null}发送 7 天邀请</button></div> : null}
@@ -210,6 +201,6 @@ export default function SkillsPanel({ novelId, chapters, className }: { novelId:
       queryClient.setQueryData(queryKey, next)
       if (typeof dialog === 'object') setDialog(next.items.find((item) => item.id === dialog.id) ?? null)
     }} /> : null}
-    {styleSetupOpen ? <StyleDnaDialog chapters={chapters} profile={styleQuery.data ?? null} busy={extractStyleMutation.isPending} onClose={() => setStyleSetupOpen(false)} onSubmit={(input) => extractStyleMutation.mutate(input)} /> : null}
+    {styleSetupOpen ? <StyleLearningDialog key={novelId} novelId={novelId} chapters={chapters} onClose={() => setStyleSetupOpen(false)} /> : null}
   </section>
 }

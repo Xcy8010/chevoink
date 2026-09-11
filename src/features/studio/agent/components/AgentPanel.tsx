@@ -616,7 +616,7 @@ export function AgentPanel({
 
 
   const handleSend = useCallback(
-    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => {
+    async (prompt: string, attachments: AgentAttachmentMeta[], freedom: CreativeFreedom, selectedQualityMode: StoryCompilerMode, pinnedSkillIds: string[], pinnedSubagentId?: string) => {
       setActionError(null)
       // 用户主动发言视为回到对话最新处，重新开启自动跟随
       pinnedToBottomRef.current = true
@@ -643,6 +643,7 @@ export function AgentPanel({
             reasoningEffort: selectedReasoningEffort,
             // 作者在「+」菜单里点选的技能：本轮绕过评分门槛必定装载
             pinnedSkillIds: pinnedSkillIds.length > 0 ? pinnedSkillIds : undefined,
+            pinnedSubagentId,
           }
           const enqueue = async () => {
             const signature = JSON.stringify(input)
@@ -1394,7 +1395,7 @@ export function AgentPanel({
           running={active}
           onContinue={canContinue ? handleContinue : undefined}
           disabled={conversationLoading}
-          onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds) => handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds)}
+          onSend={(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds, pinnedSubagentId) => handleSend(prompt, attachments, freedom, selectedQualityMode, pinnedSkillIds, pinnedSubagentId)}
           creativeFreedom={creativeFreedom}
           onCreativeFreedomChange={setCreativeFreedom}
           qualityMode={qualityMode}

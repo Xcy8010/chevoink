@@ -16,6 +16,7 @@ import type {
 import { DataAccessError, prisma } from '../../prisma.js'
 import { customSkillToRuntime, buildCustomSkillArtifacts } from './custom.js'
 import { routeSkills, skillCatalog, type AgentSkill } from './index.js'
+import { getSkillUsage } from './receipts.js'
 
 const BUILTIN_SOURCE = 'builtin'
 const NOVEL_SCOPE = 'novel'
@@ -137,7 +138,7 @@ export async function listNovelSkills(userId: string, novelId: string): Promise<
   await assertOwnedNovel(userId, novelId)
   await ensureNovelInstallations(userId, novelId)
 
-  const [definitions, installations, runs] = await Promise.all([
+  const [definitions, installations, runs, usageBySkill] = await Promise.all([
     prisma.agentSkillDefinition.findMany({
       where: { OR: [{ source: BUILTIN_SOURCE, status: 'active' }, { ownerUserId: userId }, { installations: { some: { userId, scope: NOVEL_SCOPE, scopeId: novelId } } }] },
       include: {
@@ -154,20 +155,11 @@ export async function listNovelSkills(userId: string, novelId: string): Promise<
       orderBy: { createdAt: 'desc' },
       take: 30,
     }),
+    getSkillUsage(userId, novelId),
   ])
 
   const installationBySkill = new Map(installations.map((installation) => [installation.skillId, installation]))
   const runtimeById = new Map(skillCatalog.map((skill) => [skill.id, skill]))
-  const usageBySkill = new Map<string, { count: number; lastUsedAt: Date }>()
-  for (const run of runs) {
-    for (const selected of readSelected(run.selected)) {
-      const current = usageBySkill.get(selected.id)
-      usageBySkill.set(selected.id, {
-        count: (current?.count ?? 0) + 1,
-        lastUsedAt: current?.lastUsedAt ?? run.createdAt,
-      })
-    }
-  }
 
   const items: AgentSkillListItem[] = definitions.map((definition) => {
     const installation = installationBySkill.get(definition.id)

@@ -21,6 +21,7 @@ vi.mock('../../api/lib/prisma.js', () => ({
 vi.mock('../../api/lib/agent2-feature-flags.js', () => ({
   isAgent2FeatureEnabled: vi.fn(() => false),
 }))
+vi.mock('../../api/lib/agent/style-learning.js', () => ({ getLearnedStyleDigest: vi.fn(async () => '') }))
 
 vi.mock('../../api/lib/agent/context-engine.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/lib/agent/context-engine.js')>()
@@ -51,6 +52,7 @@ vi.mock('../../api/lib/agent/tools/todo-tools.js', async (importOriginal) => {
 const { prisma } = await import('../../api/lib/prisma.js')
 const { searchStoryMemory } = await import('../../api/lib/agent/story-memory.js')
 const { assembleContext, insertSubagentCatalog } = await import('../../api/lib/agent/context.js')
+const { getLearnedStyleDigest } = await import('../../api/lib/agent/style-learning.js')
 
 type AssembleInput = Parameters<typeof assembleContext>[0]
 
@@ -135,6 +137,15 @@ describe('assembleContext 缓存友好布局（阶段二：动态上下文后移
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('automatically adds the approved scoped style before the first model request, without changing stable system', async () => {
+    vi.mocked(getLearnedStyleDigest).mockResolvedValueOnce('本作品风格 v4：用短对白推动行动。')
+    const { messages } = await assembleContext(buildInput())
+    expect(getLearnedStyleDigest).toHaveBeenCalledWith('user-1', 'novel-1')
+    expect(String(messages[0].content)).not.toContain('本作品风格 v4')
+    const snapshot = messages.find(message => String(message.content).startsWith('[当前作品上下文快照]'))
+    expect(String(snapshot?.content)).toContain('【作者确认的写作风格】\n本作品风格 v4')
   })
 
   it('history is factual status data, not pseudo-call examples; failed calls and cover IDs survive', async () => {

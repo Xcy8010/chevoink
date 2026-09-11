@@ -1,4 +1,5 @@
 import app from './app.js'
+import { dispatchStyleLearning } from './lib/agent/style-learning.js'
 import { env } from './config/env.js'
 import { recoverOrphanLoopRuns, recoverDurableLoopRuns } from './lib/agent/run-service.js'
 import { runDueAgentSchedules } from './lib/agent/productivity.js'
@@ -39,8 +40,13 @@ const scheduleTimer = setInterval(() => {
 scheduleTimer.unref()
 const queueTimer = setInterval(() => void dispatchQueuedRequests(), 2000)
 queueTimer.unref()
+const styleTimer = setInterval(() => {
+  void dispatchStyleLearning().catch(() => console.error('[style-learning] 学习队列暂时不可用，未重发模型请求'))
+}, 2000)
+styleTimer.unref()
 
 process.on('SIGTERM', () => {
+  clearInterval(styleTimer)
   clearInterval(queueTimer)
   clearInterval(scheduleTimer)
   console.log('SIGTERM signal received')
@@ -51,6 +57,7 @@ process.on('SIGTERM', () => {
 })
 
 process.on('SIGINT', () => {
+  clearInterval(styleTimer)
   clearInterval(queueTimer)
   clearInterval(scheduleTimer)
   console.log('SIGINT signal received')

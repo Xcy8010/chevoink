@@ -11,6 +11,8 @@ import {
 } from 'react'
 import { ArrowUp, BookOpenText, Check, ChevronDown, ChevronRight, Feather, FileText, Image, LoaderCircle, Mic, Pencil, Play, Plus, Rocket, Scale, Settings2, Square, Wrench, X } from 'lucide-react'
 import { ReasoningSlider } from './ReasoningSlider'
+import StyleLearningDialog from '../../components/StyleLearningDialog'
+import { SubagentPicker } from './SubagentPicker'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast-context'
 import { AgentMobileModelSheet } from './AgentMobileModelSheet'
@@ -69,7 +71,7 @@ type AgentComposerProps = {
   stopping?: boolean
   disabled?: boolean
   /** 可返回 Promise：启动失败时抛错，输入框保留草稿与附件 */
-  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode, pinnedSkillIds: string[]) => Promise<void> | void
+  onSend: (prompt: string, attachments: AgentAttachmentMeta[], creativeFreedom: CreativeFreedom, qualityMode: StoryCompilerMode, pinnedSkillIds: string[], pinnedSubagentId?: string) => Promise<void> | void
   onStop: () => void
   onContinue?: () => Promise<void>
   creativeFreedom: CreativeFreedom
@@ -273,6 +275,7 @@ export function AgentComposer({
   const bumpUploading = useAgentStore((state) => state.bumpComposerUploading)
   // 手动指定的技能同样提升到全局：面板重挂载后选中态不丢
   const pinnedSkillIds = useAgentStore((state) => state.composerSkillIds)
+  const pinnedSubagent = useAgentStore((state) => state.composerSubagent)
   const toggleComposerSkill = useAgentStore((state) => state.toggleComposerSkill)
   const setComposerSkillIds = useAgentStore((state) => state.setComposerSkillIds)
   // 启动中（建会话 + 启动 run 的网络往返）：成功后才清空草稿，避免内容“瞬间消失”观感
@@ -377,6 +380,7 @@ export function AgentComposer({
   const activeModelKey = modelTier === 'custom' && activeCustomModel ? `custom:${activeCustomModel.id}` : `tier:${modelTier}`
   const activeModelLabel = activeCustomModel?.displayName ?? activeBuiltInModel?.label ?? '极速'
   const activeReasoningEfforts = orderedReasoningEfforts(activeCustomModel?.reasoningEfforts ?? activeBuiltInModel?.reasoningEfforts ?? ['high'])
+  const [styleLearningOpen, setStyleLearningOpen] = useState(false)
   const storedActiveEffort = reasoningSelections[activeModelKey]
   const activeReasoningEffort = storedActiveEffort && activeReasoningEfforts.includes(storedActiveEffort)
     ? storedActiveEffort
@@ -569,18 +573,24 @@ export function AgentComposer({
       return
     }
     const effectivePrompt = buildComposerPrompt(current.draft, current.references)
+    if (pinnedSubagent && pinnedSubagent.novelId !== novelId) {
+      setAttachError('指定的子 Agent 不属于当前作品，请取消后重新选择。')
+      return
+    }
     const pending = attachments
     const pinned = pinnedSkills.map((skill) => skill.id)
     const sendingScope = scope
     sendLock.current = true
     setSending(true)
     try {
-      await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned)
-      if (sendingScope) updateComposerDraft(sendingScope, draft => draft.composerDraft === current.draft ? { ...draft, composerDraft: '', composerReferences: [], composerAttachments: [], composerSkillIds: [] } : draft)
+      if (pinnedSubagent) await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned, pinnedSubagent.id)
+      else await onSend(effectivePrompt, pending, creativeFreedom, qualityMode, pinned)
+      if (sendingScope) updateComposerDraft(sendingScope, draft => draft.composerDraft === current.draft ? { ...draft, composerDraft: '', composerReferences: [], composerAttachments: [], composerSkillIds: [], composerSubagent: draft.composerSubagent?.id === pinnedSubagent?.id ? null : draft.composerSubagent } : draft)
       if (currentScope.current !== sendingScope) return
       setComposerContent('', [])
       setAttachments([])
       setComposerSkillIds([])
+      if (useAgentStore.getState().composerSubagent?.id === pinnedSubagent?.id) useAgentStore.setState({ composerSubagent: null })
       setAttachError(null)
     } catch {
       // 面板已展示错误提示；保留草稿与附件供用户重试
@@ -638,6 +648,7 @@ export function AgentComposer({
       className={`agent-composer-glass relative z-[80] rounded-[20px] border bg-[var(--studio-composer-bg,var(--surface-default))] p-2.5 shadow-sm transition-colors ${dragActive ? 'border-[var(--text-primary)]' : 'border-[var(--border-subtle)]'}`}
     >
       {dragActive ? <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-[16px] bg-[var(--surface-default)]/95 text-xs font-medium text-[var(--text-primary)]">松开即可添加引用、图片或文件</div> : null}
+      {pinnedSubagent ? <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-[var(--text-primary)]"><span className="min-w-0 truncate">本轮子 Agent：{pinnedSubagent.name}</span><button type="button" disabled={sending || voiceActive} onClick={() => useAgentStore.setState({ composerSubagent: null })} aria-label="取消指定子 Agent" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-muted)]"><X className="h-3.5 w-3.5" /></button></div> : null}
       {pinnedSkills.length > 0 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
           {pinnedSkills.map((skill) => (
@@ -738,6 +749,7 @@ export function AgentComposer({
       </div>
       {pendingVoice?.scope === scope ? <div className="px-1.5 py-2 text-xs text-[var(--text-secondary)]" role="status">草稿已变化，转写文字尚未插入。<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{pendingVoice.text}</div><button type="button" disabled={disabled || running || sending || voiceActive} className="mr-3 min-h-11 underline disabled:opacity-50" onClick={() => { if (!disabled && !running && !sending && !voiceActive) applyVoiceText(pendingVoice.text) }}>插入到末尾</button><button type="button" className="min-h-11" onClick={() => setPendingVoice(null)}>放弃</button></div> : null}
       {voiceActive ? <AgentVoiceInputBar voice={voice} /> : null}
+      {styleLearningOpen ? <StyleLearningDialog key={novelId} novelId={novelId} initialModel={modelTier === 'basic' ? undefined : { modelTier, customModelId, reasoningEffort: activeReasoningEffort }} onClose={() => setStyleLearningOpen(false)} /> : null}
       {mobileModelSheetOpen && !disabled && !voiceActive ? <AgentMobileModelSheet
         modelOptions={modelOptions} customModels={customModels} modelTier={modelTier} customModelId={customModelId}
         activeModelLabel={activeModelLabel} activeReasoningEffort={activeReasoningEffort} activeReasoningEfforts={activeReasoningEfforts}
@@ -768,11 +780,11 @@ export function AgentComposer({
               onClick={(event) => { if (disabled) event.preventDefault() }}
               className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] group-data-[disabled=true]/attach:pointer-events-none group-data-[disabled=true]/attach:opacity-40 [&::-webkit-details-marker]:hidden"
               aria-label="添加内容"
-              title="添加图片、文件、作品引用，或指定本轮技能"
+              title="添加图片、文件、作品引用，或指定本轮技能与子 Agent"
             >
               <Plus className="h-4 w-4 transition-transform group-open/attach:rotate-45" />
             </summary>
-            <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
+            <div className="absolute bottom-full left-0 z-50 mb-2 max-h-[min(32rem,60dvh)] w-64 overflow-y-auto overscroll-contain rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_14px_34px_rgba(15,23,42,0.16)]">
               <button
                 type="button"
                 disabled={imageFull}
@@ -791,6 +803,7 @@ export function AgentComposer({
                 <FileText className="h-4 w-4 text-[var(--text-tertiary)]" />
                 <span><span className="block font-medium">上传文件</span><span className="mt-0.5 block text-[10px] text-[var(--text-tertiary)]">PDF、DOCX、TXT、Markdown</span></span>
               </button>
+              <button type="button" onClick={() => { attachmentMenuRef.current?.removeAttribute('open'); setStyleLearningOpen(true) }} className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--surface-muted)]"><BookOpenText className="h-4 w-4 text-[var(--text-tertiary)]" /><span><span className="block font-medium">样章学习与写作风格</span><span className="mt-0.5 block text-[10px] text-[var(--text-tertiary)]">查看文件、学习依据和自动使用的规则</span></span></button>
               <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />
               {voice.modelReady ? <button type="button" onClick={() => { attachmentMenuRef.current?.removeAttribute('open'); void voice.removeModel() }} className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]"><Mic className="h-4 w-4 shrink-0" /><span><span className="block">删除本机语音包</span><span className="mt-0.5 block text-[10px] text-[var(--text-tertiary)]">释放存储空间，下次使用可重新下载</span></span></button> : null}
               <button
@@ -833,6 +846,11 @@ export function AgentComposer({
                 </div>
               ) : null}
               {/* 技能分组：不选时服务端自动路由，选了就是作者明确指令，本轮必定加载 */}
+              <SubagentPicker key={novelId} novelId={novelId} selectedId={pinnedSubagent?.id} disabled={disabled || sending || voiceActive} onSelect={item => {
+                useAgentStore.setState({ composerSubagent: { id: item.id, name: item.name, novelId } })
+                attachmentMenuRef.current?.removeAttribute('open')
+                editorRef.current?.focus()
+              }} />
               {(skills.length > 0 || onOpenSkillManager) ? (
                 <>
                   <div className="mx-3 my-1 border-t border-[var(--border-subtle)]" />

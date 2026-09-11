@@ -2637,6 +2637,7 @@ model TechniqueCard {
 }
 
 model StyleProfile {
+  learningJobs StyleLearningJob[]
   id          String           @id @default(cuid()) @db.VarChar(64)
   userId      String?          @map("user_id") @db.VarChar(64)
   novelId     String?          @map("novel_id") @db.VarChar(64)
@@ -2659,6 +2660,33 @@ model StyleProfile {
   @@index([userId, novelId, confirmed, updatedAt])
   @@index([sourceId, kind])
   @@map("style_profiles")
+}
+
+model StyleLearningJob {
+  id             String       @id @default(cuid()) @db.VarChar(64)
+  requestId      String       @unique @map("request_id") @db.VarChar(64)
+  profileId      String       @map("profile_id") @db.VarChar(64)
+  status         String       @default("queued") @db.VarChar(32)
+  revision       Int          @default(0)
+  enabled        Boolean      @default(false)
+  pauseRequested Boolean      @default(false) @map("pause_requested")
+  selection      Json
+  modelIdentity  Json         @map("model_identity")
+  chunks         Json
+  reports        Json         @default("[]")
+  rules          Json         @default("[]")
+  processed      Int          @default(0)
+  response       String?
+  error          String?
+  leaseUntil     DateTime?    @map("lease_until")
+  claimToken     String?      @map("claim_token") @db.VarChar(64)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  profile        StyleProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([status, leaseUntil])
+  @@index([profileId, createdAt])
+  @@map("style_learning_jobs")
 }
 
 model RetrievalTrace {

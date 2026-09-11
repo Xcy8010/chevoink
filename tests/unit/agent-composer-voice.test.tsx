@@ -22,11 +22,32 @@ beforeEach(() => {
   voice.state = 'idle'
   vi.clearAllMocks()
   activateComposerDraft('u:n1:t1')
-  useAgentStore.setState({ composerDraft: '已有草稿', composerReferences: [], composerAttachments: [], composerUploading: 0, composerSkillIds: [] })
+  useAgentStore.setState({ composerDraft: '已有草稿', composerReferences: [], composerAttachments: [], composerUploading: 0, composerSkillIds: [], composerSubagent: null })
 })
 afterEach(cleanup)
 
 describe('Agent voice draft integration', () => {
+  it('sends the selected helper with the request, preserves on failure and clears on success', async () => {
+    useAgentStore.setState({ composerSubagent: { id: 'helper', name: '资料助手', novelId: 'n1' } })
+    const input = { ...props(), onSend: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined) }
+    render(<AgentComposer {...input} />)
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })))
+    expect(input.onSend).toHaveBeenCalledWith('已有草稿', [], 'balanced', 'premium', [], 'helper')
+    expect(useAgentStore.getState().composerSubagent?.id).toBe('helper')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })))
+    expect(useAgentStore.getState().composerSubagent).toBeNull()
+  })
+  it('restores the helper per task across A→B→A without leaking selection', () => {
+    useAgentStore.setState({ composerSubagent: { id: 'helper', name: '资料助手', novelId: 'n1' } })
+    const input = props()
+    const { rerender } = render(<AgentComposer {...input} />)
+    rerender(<AgentComposer {...input} novelId="n2" voiceScopeKey="u:n2:other" />)
+    expect(screen.queryByText('本轮子 Agent：资料助手')).toBeNull()
+    rerender(<AgentComposer {...input} />)
+    expect(screen.getByText('本轮子 Agent：资料助手')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消指定子 Agent' }))
+    expect(useAgentStore.getState().composerSubagent).toBeNull()
+  })
   it('renders an animated preparation card before execution and settles in place', () => {
     const part = { type: 'tool-call' as const, callId: 'preview', toolName: 'chapter_write', title: '写入章节正文', args: null, status: 'running' as const, preparing: true, progressChars: 80 }
     const { container, rerender } = render(<AgentMessageParts parts={[part]} streaming runActive />)

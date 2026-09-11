@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { generateTextCompletion } from '../../ai-service.js'
 import { prisma } from '../../prisma.js'
 import { loadSkill, type CreativeFreedom, type SkillPhase } from '../skills/index.js'
+import { recordSkillLoads } from '../skills/receipts.js'
 import {
   createNovelSkillDraft,
   listNovelSkills,
@@ -34,12 +35,14 @@ export const skillCatalogTool = defineTool({
 
 export const skillLoadTool = defineTool({
   name: 'skill_load', title: '加载创作能力',
-  description: '按阶段加载一个 Skill 的完整主工作流。自动路由已加载的 Skill 无需重复调用；仅在任务阶段变化或作者明确指定时使用。',
+  description: '按阶段加载一个 Skill 的完整工作流。作者指定、任务进入新阶段、或技能描述与当前子任务明确吻合且尚未加载时使用；已经加载的同版本同阶段无需重复，也不要批量加载无关技能。',
   parameters: z.object({ skillId: z.string().min(1), phase: PHASE, creativeFreedom: FREEDOM }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: true,
   async execute(ctx, args) {
     const runtime = await resolveEnabledRuntimeSkills(ctx.userId, ctx.novelId)
     const content = loadSkill(args.skillId, args.phase, args.creativeFreedom, runtime)
+    const loaded = content ? runtime.filter(skill => content.startsWith(`[Skill ${skill.id}@${skill.version} /`)) : []
+    if (ctx.runId && loaded.length) await recordSkillLoads(ctx as typeof ctx & { runId: string }, loaded, args.phase, 'tool')
     return content
       ? { output: content, summary: `加载 ${args.skillId} · ${args.phase}` }
       : { output: `Skill ${args.skillId} 不存在或不支持 ${args.phase} 阶段。` }

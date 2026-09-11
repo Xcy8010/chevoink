@@ -1,0 +1,15 @@
+# Creative skills, sample learning and subagents
+
+Skills are instructions loaded into context, not model training or proof of compliance. Absence of a `skill_load` call does not imply absence of automatic skill loading.
+
+Router 3.1.0 permits the two built-in planning skills during Work/build planning. Pure formatting/export/navigation requests remain excluded; mixed creative requests are no longer rejected by a single operational keyword. Author-defined modes and negative triggers remain unchanged. Usually 2–3 skills are selected per phase, with an absolute cap of six including manual/author skills. Weak contextual specialist signals can reserve one slot without removing the writing foundation.
+
+The eleven built-ins cover project positioning, long outlines, scene tasks, natural prose, character voice/knowledge boundaries, grounded emotion, concrete language, style continuity, chapter bridging, evidence-based continuity review and recent structural repetition. Exact metadata lives in `api/lib/agent/skills/index.ts`; the Chinese companion documents scenario examples.
+
+Successful tool receipts advance phase instructions: prepare → scene, scene task → draft, chapter write → critique, continuity errors → revision. Only one additional digest per phase per execution slice is inserted between complete tool batches. Failed/denied tools and mechanical work do not advance phases. No additional model request, permission or budget is granted. Resumed execution rebuilds context without erasing historical load receipts.
+
+Usage aggregates retained records for the current novel, counts each run once per skill, and includes initial, phase and explicit tool loads. Missing historical receipts cannot be reconstructed. Loading is not evidence of literary quality or model compliance.
+
+The skills panel and composer “+” open the sample-learning manager. Authors can inspect saved files, exact source text, progress, dimensions and quoted evidence. Saving a sample does not call a model. Analysis requires separate provider/data-transfer/billing consent. Reviewed and enabled rules apply to subsequent tasks in this novel, not to model weights or already-running contexts. Legacy profiles without full samples require re-upload. One rule set is enabled per novel; revocation fences future use and late writes but cannot recall dispatched provider requests. Interrupted paid calls require explicit retry acknowledgement.
+
+The orchestrator can use `subagent_run` for an enabled helper or `subagent_delegate` to create and execute a genuinely needed helper. Research, continuity, quality and lore are roles, not automatically installed assistants. Selection is model-decided and remains subject to approvals, tool scope, concurrency and budgets. Composer “+” pins one enabled helper to the task draft without execution until sending. Invalid/cross-novel/disabled selections fail explicitly; no silent substitution. Child agents cannot recursively delegate. Unadapted durable protocols reject manual selection rather than ignoring it.

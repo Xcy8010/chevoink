@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FileText, Fingerprint, LoaderCircle, Upload, X } from 'lucide-react'
 
@@ -7,19 +7,29 @@ import { STYLE_SAMPLE_UPLOAD_MAX_BYTES, STYLE_SAMPLE_UPLOAD_MAX_CHARS } from '..
 
 type UploadedSample = NonNullable<StyleSampleRequest['uploadedFile']>
 
-export default function StyleDnaDialog({ chapters, profile, busy, onClose, onSubmit }: {
+export default function StyleDnaDialog({ chapters, profile, busy, onClose, onSubmit, error }: {
   chapters: StudioPayload['chapters']
   profile: AuthorStyleProfileView | null
   busy: boolean
+  error?: string
   onClose: () => void
   onSubmit: (input: StyleSampleRequest) => void
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const dialogRef = useRef<HTMLDialogElement | null>(null)
   const [title, setTitle] = useState(profile?.name ?? '我的写作样章')
   const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
   const [uploadedFile, setUploadedFile] = useState<UploadedSample | undefined>()
   const [consent, setConsent] = useState(false)
   const [fileError, setFileError] = useState('')
+  useEffect(() => {
+    const node = dialogRef.current
+    const previous = document.activeElement as HTMLElement | null
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    node?.showModal()
+    return () => { node?.close(); document.body.style.overflow = overflow; previous?.focus({ preventScroll: true }) }
+  }, [])
 
   if (typeof document === 'undefined') return null
 
@@ -34,7 +44,8 @@ export default function StyleDnaDialog({ chapters, profile, busy, onClose, onSub
       setFileError('文件不能超过 512 KB。')
       return
     }
-    const content = (await file.text()).trim()
+    let content: string
+    try { content = (await file.text()).trim() } catch { setFileError('文件读取失败，请重新选择文件。'); return }
     if (content.length < 200) {
       setFileError('样章文件至少需要 200 个有效字符。')
       return
@@ -48,14 +59,15 @@ export default function StyleDnaDialog({ chapters, profile, busy, onClose, onSub
 
   const valid = Boolean(title.trim() && (selectedChapterIds.length > 0 || uploadedFile) && consent && !fileError)
   return createPortal(
-    <div className="fixed inset-0 z-[145] flex items-stretch justify-center bg-black/45 md:items-center md:p-6" role="dialog" aria-modal="true" aria-label="作者 Style DNA">
+    <dialog ref={dialogRef} data-native-back-dismiss onCancel={event => { event.preventDefault(); if (!busy) onClose() }} className="studio-workspace m-auto max-h-[94dvh] w-[min(760px,96vw)] overflow-hidden rounded-2xl border-0 bg-transparent p-0 text-[var(--text-primary)] backdrop:bg-black/45" aria-label="添加写作样章">
       <section className="flex h-full w-full flex-col bg-[var(--surface-default)] md:h-auto md:max-h-[86vh] md:w-[min(760px,calc(100vw-48px))] md:rounded-[14px] md:border md:border-[var(--border-default)]">
         <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3 md:px-5">
           <Fingerprint className="h-4 w-4 text-[var(--text-secondary)]" />
-          <div><h2 className="text-sm font-semibold text-[var(--text-primary)]">作者 Style DNA</h2><p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">仅当前作品使用 · 支持章节或 TXT/Markdown 样章</p></div>
+          <div><h2 className="text-sm font-semibold text-[var(--text-primary)]">添加写作样章</h2><p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">保存后可查看原文，再选择模型开始学习；保存本身不调用模型。</p></div>
           <button type="button" onClick={onClose} className="ml-auto flex h-9 w-9 items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)]" aria-label="关闭"><X className="h-4 w-4" /></button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+          {error ? <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p> : null}
           {profile ? <div className="grid grid-cols-2 gap-x-6 gap-y-2 border-b border-[var(--border-subtle)] pb-4 text-[10px] text-[var(--text-secondary)] sm:grid-cols-4">
             <span>对白 {Math.round(profile.stats.dialogueRatio * 100)}%</span><span>句中位 {profile.stats.medianSentenceChars} 字</span><span>段中位 {profile.stats.medianParagraphChars} 字</span><span>修辞 {Math.round(profile.stats.imageryDensity * 100)}%</span>
           </div> : null}
@@ -86,10 +98,10 @@ export default function StyleDnaDialog({ chapters, profile, busy, onClose, onSub
         </div>
         <footer className="flex shrink-0 justify-end gap-3 border-t border-[var(--border-subtle)] px-4 py-3 md:px-5">
           <button type="button" onClick={onClose} className="h-9 px-3 text-xs text-[var(--text-secondary)]">取消</button>
-          <button type="button" disabled={!valid || busy} onClick={() => onSubmit({ title: title.trim(), chapterIds: selectedChapterIds, uploadedFile, consent: true })} className="inline-flex h-9 items-center bg-[var(--surface-contrast)] px-4 text-xs text-[var(--text-contrast)] disabled:opacity-40">{busy ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}生成私有画像</button>
+          <button type="button" disabled={!valid || busy} onClick={() => onSubmit({ title: title.trim(), chapterIds: selectedChapterIds, uploadedFile, consent: true })} className="inline-flex h-9 items-center bg-[var(--surface-contrast)] px-4 text-xs text-[var(--text-contrast)] disabled:opacity-40">{busy ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}保存样章</button>
         </footer>
       </section>
-    </div>,
+    </dialog>,
     document.body,
   )
 }

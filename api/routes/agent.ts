@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express'
+import styleLearningRouter from './style-learning.js'
 import { z } from 'zod'
 
 import {
@@ -74,6 +75,7 @@ import {
 } from '../lib/agent/productivity.js'
 
 const router = Router()
+router.use(styleLearningRouter)
 import { actOnQueuedRequest, enqueueRequest, listQueuedRequests } from '../lib/agent/request-queue.js'
 
 router.get('/sessions/:sessionId/queue', async (req, res) => {
@@ -843,6 +845,7 @@ router.post('/runs', async (req: Request, res: Response): Promise<void> => {
       customModelId: body.customModelId,
       reasoningEffort: body.reasoningEffort,
       pinnedSkillIds: body.pinnedSkillIds,
+      pinnedSubagentId: body.pinnedSubagentId,
     })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
