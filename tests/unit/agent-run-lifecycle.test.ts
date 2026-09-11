@@ -102,6 +102,37 @@ function context(): ToolContext {
 }
 
 describe('phase skills in the real execution loop', () => {
+  it('restores cached phases across chapters and after the active hint is compacted away', async () => {
+    const { routeSkills } = await import('../../api/lib/agent/skills/index.js')
+    vi.mocked(assembleContext).mockResolvedValueOnce({ messages: [], skillRoute: routeSkills({ mode: 'build', intent: 'write', prompt: '续写正文', freedom: 'balanced' }) })
+    mocks.tools = ['story_compiler_prepare', 'scene_task_build', 'chapter_write'].map(name => tool(name, async () => ({ output: '已完成阶段' })))
+    const stages: Array<{ name: string; expected: string | null }> = [
+      { name: 'story_compiler_prepare', expected: null },
+      { name: 'scene_task_build', expected: '/ scene /' },
+      { name: 'chapter_write', expected: '/ draft /' },
+      { name: 'story_compiler_prepare', expected: '/ critique /' },
+      { name: 'scene_task_build', expected: '/ scene /' },
+      { name: 'chapter_write', expected: '/ draft /' },
+    ]
+    for (const [index, stage] of stages.entries()) mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      const hints = input.messages.filter(message => typeof message.content === 'string' && message.content.includes('系统·创作阶段工作方法'))
+      if (stage.expected) { expect(hints).toHaveLength(1); expect(hints[0].content).toContain(stage.expected) }
+      return response('', [call(`stage${index}`, stage.name, JSON.stringify({ chapter: index }))])
+    })
+    mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      const index = input.messages.findIndex(message => typeof message.content === 'string' && message.content.includes('系统·创作阶段工作方法'))
+      expect(index).toBeGreaterThanOrEqual(0)
+      input.messages.splice(index, 1) // emulate the existing checkpoint compactor
+      return response('', [call('read-after-compaction', 'chapter_write', '{"chapter":7}')])
+    })
+    mocks.chat.mockImplementationOnce(async (input: Parameters<typeof chatType>[0]) => {
+      expect(input.messages.filter(message => typeof message.content === 'string' && message.content.includes('系统·创作阶段工作方法'))).toHaveLength(1)
+      return response('已完成。')
+    })
+    await run('续写正文')
+    expect(mocks.chat).toHaveBeenCalledTimes(8)
+    expect(events().filter(event => event.type === 'skill.route' && event.phase === 'scene')).toHaveLength(1)
+  })
   it('loads the new phase once between complete tool batches without extra model requests', async () => {
     const { routeSkills } = await import('../../api/lib/agent/skills/index.js')
     vi.mocked(assembleContext).mockResolvedValueOnce({ messages: [], skillRoute: routeSkills({ mode: 'build', intent: 'plan', prompt: '规划大纲', freedom: 'balanced' }) })

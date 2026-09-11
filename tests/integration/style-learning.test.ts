@@ -25,7 +25,13 @@ describe.skipIf(!dbAvailable)('Style learning ownership, durable progress and ap
     const profile = await extractAuthorStyleProfile({ userId, novelId, title: '剧本样章', chapterIds: [], uploadedFile: { name: 'sample.md', size: Buffer.byteLength(content), content } })
     profileId = profile.profileId; sourceId = profile.sourceId
   })
-  afterAll(async () => { if (userId) await prisma.user.delete({ where: { id: userId } }); await prisma.$disconnect() })
+  afterAll(async () => {
+    if (userId) {
+      await prisma.novel.deleteMany({ where: { authorId: userId } })
+      await prisma.user.delete({ where: { id: userId } })
+    }
+    await prisma.$disconnect()
+  })
   it('lists sources without raw text, previews exact full source only within owned novel', async () => {
     expect(JSON.stringify(await getStyleLearningWorkspace(userId, novelId))).not.toContain('甲：走')
     expect((await previewStyleSamples(userId, novelId, profileId)).files[0].content).toBe(content.trim())

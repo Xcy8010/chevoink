@@ -6,7 +6,7 @@ Router 3.1.0 permits the two built-in planning skills during Work/build planning
 
 The eleven built-ins cover project positioning, long outlines, scene tasks, natural prose, character voice/knowledge boundaries, grounded emotion, concrete language, style continuity, chapter bridging, evidence-based continuity review and recent structural repetition. Exact metadata lives in `api/lib/agent/skills/index.ts`; the Chinese companion documents scenario examples.
 
-Successful tool receipts advance phase instructions: prepare → scene, scene task → draft, chapter write → critique, continuity errors → revision. Only one additional digest per phase per execution slice is inserted between complete tool batches. Failed/denied tools and mechanical work do not advance phases. No additional model request, permission or budget is granted. Resumed execution rebuilds context without erasing historical load receipts.
+Successful tool receipts advance phase instructions: prepare → scene, scene task → draft, chapter write → critique, continuity errors → revision. Each phase is resolved once per execution slice; multi-chapter cycles reuse cached instructions, retaining only the active phase hint and restoring it after compaction. Changes occur between complete tool batches. Failed/denied tools and mechanical work do not advance phases. No additional model request, permission or budget is granted. Resumed execution rebuilds context without erasing historical load receipts.
 
 Usage aggregates retained records for the current novel, counts each run once per skill, and includes initial, phase and explicit tool loads. Missing historical receipts cannot be reconstructed. Loading is not evidence of literary quality or model compliance.
 

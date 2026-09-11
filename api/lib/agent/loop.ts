@@ -975,23 +975,39 @@ export async function executeAgentRun(params: ExecuteAgentRunParams): Promise<vo
       })
     }
 
-    // At most one additional digest per phase in this execution slice. Rebuild on
-    // resume because checkpoint compaction may have removed old instructions.
-    const routedPhases = new Set<SkillPhase>(assembledContext.skillRoute ? [assembledContext.skillRoute.phase] : [])
+    // Resolve each phase once per execution; keep only its active hint at the tail.
+    // Multi-chapter cycles reuse it, and compaction must not silently lose it.
+    const phaseDigests = new Map<SkillPhase, string>(assembledContext.skillRoute
+      ? [[assembledContext.skillRoute.phase, buildSkillExecutionDigest(assembledContext.skillRoute, taskSpec.creativeFreedom)]] : [])
+    let activeSkillHint: ChatMessage | null = null
     let pendingSkillPhase: SkillPhase | null = null
+    const activateSkillDigest = (digest?: string) => {
+      if (digest !== undefined) {
+        if (activeSkillHint) {
+          const index = messages.indexOf(activeSkillHint)
+          if (index >= 0) messages.splice(index, 1)
+        }
+        activeSkillHint = digest ? { role: 'user', content: `[系统·创作阶段工作方法] 仅辅助既定任务，不新增任务或权限。\n${digest}` } : null
+      }
+      if (activeSkillHint && !messages.includes(activeSkillHint)) messages.push(activeSkillHint)
+    }
     const refreshPhaseSkills = async () => {
       const phase = pendingSkillPhase
       pendingSkillPhase = null
-      if (!assembledContext.skillRoute || !phase || routedPhases.has(phase) || controller.signal.aborted) return
+      if (!assembledContext.skillRoute || controller.signal.aborted) return
+      if (!phase) { activateSkillDigest(); return }
+      const cached = phaseDigests.get(phase)
+      if (cached !== undefined) { activateSkillDigest(cached); return }
       const catalog = await resolveEnabledRuntimeSkills(params.userId, params.novelId)
       if (controller.signal.aborted) throw new DOMException('run aborted', 'AbortError')
       const decision = routeSkills({ mode: params.mode, intent: phaseIntent(phase), phase,
         prompt: `${params.prompt}\n当前已验证工作阶段：${phaseSignals[phase] ?? phase}`,
         freedom: taskSpec.creativeFreedom, catalog, pinnedSkillIds: new Set(params.pinnedSkillIds ?? []) })
-      routedPhases.add(phase)
-      if (!decision.selected.length) return
+      const digest = decision.selected.length ? buildSkillExecutionDigest(decision, taskSpec.creativeFreedom) : ''
+      phaseDigests.set(phase, digest)
       // Appended only between complete tool batches, never inside call/result pairs.
-      messages.push({ role: 'user', content: `[系统·创作阶段工作方法] 仅辅助既定任务，不新增任务或权限。\n${buildSkillExecutionDigest(decision, taskSpec.creativeFreedom)}` })
+      activateSkillDigest(digest)
+      if (!decision.selected.length) return
       await recordSkillLoads({ runId, userId: params.userId, novelId: params.novelId }, decision.selected, phase, 'phase')
       bus.emit({ type: 'skill.route', phase, candidates: decision.candidates.map(({ skill }) => ({ id: skill.id, name: skill.name, version: skill.version })),
         selected: decision.selected.map(({ id, name, version }) => ({ id, name, version })), reasonCodes: decision.reasonCodes,
