@@ -1,5 +1,7 @@
 # Chevoink Engineering Documentation
 
+2026-09-11 floating Agent composer: messages and composer share a 920px content cap and shrink with narrow panels. Composer and activity capsules overlay the message stream; transparent gaps do not intercept scrolling. ResizeObserver reserves a scrollable tail matching the actual footer height and follows only while already pinned, preserving history reading. Subtle high-opacity glass has opaque/reduced-transparency fallbacks; compact restoration and skeleton widths stay aligned. 27 targeted regressions passed. A local real-AgentPanel fixture with synthetic content covers 1440/768/390px widths, wheel scrolling, tall drafts and compact mode; this is not production-account or physical-phone acceptance.
+
 ### 2026-09-10 tool failures and plan editing
 
 - In-run compaction converts completed old tool rounds into non-executable receipts instead of `_contextCompacted` argument examples. Recent and incomplete calls remain intact. Shared input normalization rejects old excerpts rather than unwrapping abbreviated content into writes. Main and inline sub-agents share this behavior.

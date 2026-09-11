@@ -400,7 +400,7 @@ export function StudioSkeleton() {
         ) : (
         <div className="studio-skeleton-work flex min-h-0 flex-1 overflow-hidden">
           <main className="flex min-w-0 flex-1 justify-center overflow-hidden" data-studio-region="desktop-conversation">
-            <div className="flex h-full min-h-0 w-full max-w-[960px] flex-col px-8">
+            <div className="agent-conversation-width flex h-full min-h-0 flex-col px-4">
               <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-[var(--border-subtle)]">
                 <Skeleton className="h-6 w-6 rounded-full" />
                 <Skeleton className="h-4 w-36" />
@@ -408,7 +408,7 @@ export function StudioSkeleton() {
                 <Skeleton className="h-7 w-7 rounded-[8px]" />
               </div>
 
-              <div className="min-h-0 flex-1 space-y-8 overflow-hidden px-5 py-8">
+              <div className="min-h-0 flex-1 space-y-8 overflow-hidden py-8">
                 <StudioMessageLines />
                 <div className="ml-auto w-2/5 rounded-[22px] bg-[var(--surface-muted)] p-5">
                   <Skeleton className="h-3.5 w-4/5" />

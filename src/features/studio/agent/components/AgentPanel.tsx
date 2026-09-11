@@ -62,6 +62,7 @@ import { useProcessingHint } from '../useProcessingHint'
 import { useAgentStream } from '../useAgentStream'
 import { projectMessages } from '../lib/message-projection'
 import { useMessageScroll } from './use-message-scroll'
+import { useComposerInset } from './use-composer-inset'
 import { useRunControls } from './use-run-controls'
 import { AgentActivityBar } from './AgentActivityBar'
 import { MessageTime, UserMessageActions } from './MessageActions'
@@ -938,8 +939,10 @@ export function AgentPanel({
     if (workConversation.collapsed && (pendingApproval || pendingQuestion || combinedError || quotaDialogOpen)) workConversation.expand()
   }, [workConversation, pendingApproval, pendingQuestion, combinedError, quotaDialogOpen])
 
+  const floatingFooterRef = useComposerInset(scrollRef, pinnedToBottomRef, lastScrollTopRef, workConversation.collapsed)
+
   return (
-    <div className={cn('relative flex h-full min-h-0 flex-col', workConversation.collapsed && 'work-agent-compact', className)}>
+    <div className={cn('agent-conversation-panel relative flex h-full min-h-0 flex-col', workConversation.collapsed && 'work-agent-compact', className)}>
       {/* 状态栏 */}
       {!hideHeader ? <div className={cn(
         'relative flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5',
@@ -1118,7 +1121,9 @@ export function AgentPanel({
       </div> : null}
 
       {/* 消息流 */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div data-agent-body className="agent-conversation-body">
+      <div ref={scrollRef} onScroll={handleMessagesScroll} className="agent-conversation-scroll min-h-0 overflow-y-auto">
+      <div className="agent-conversation-width">
         {conversationLoading ? (
           /* 任何「归属不明」的中间态都走 Codex 式 Agent 图标流光（居中）：图标形状作 mask、渐变光带扫过。
              必须排在内容分支之前：否则请求一返回就被 conversationReady 短路掉，1.5s 保底窗口形同虚设 */
@@ -1307,7 +1312,10 @@ export function AgentPanel({
           />
         )}
       </div>
+      </div>
 
+      <div ref={floatingFooterRef} data-agent-floating-footer className="agent-floating-footer">
+      <div className="agent-conversation-width">
       {/* 任务停靠区：待办清单 + 工作区变更（默认折叠，被触发时自动展开） */}
       {workspaceActivities.length > 0 || todos.length > 0 || pendingReviewCount > 0 ? (
         <div data-agent-activity className={cn('px-4 pb-2', activityPresentation === 'responsive' && 'agent-activity-responsive')}>
@@ -1411,6 +1419,9 @@ export function AgentPanel({
           onStop={() => void handleStop()}
           stopping={stoppingRunId === runId && runId !== null}
         />
+      </div>
+      </div>
+      </div>
       </div>
       {attachmentPreview && (
         <ImageLightbox
