@@ -1,12 +1,16 @@
 # README banner generation record
 
-- Tool: built-in image generation (`image_gen`), not the API/CLI fallback.
-- Output: [chevoink-readme-banner.png](./chevoink-readme-banner.png), 2171 × 724 PNG.
+- Original artwork: built-in image generation (`image_gen`), not the API/CLI fallback. Latest padding adjustment: deterministic crop with Sharp, as requested by the user; no regeneration.
+- Output: [chevoink-readme-banner.png](./chevoink-readme-banner.png), 2171 × 420 PNG.
 - Brand reference: [current project icon](../../public/favicon.png).
 - Layout reference: user-provided DeterminFlow README screenshot, layout only.
 - Revision: plain dark background, icon on the left, only “Chevoink” on the right. No Chinese subtitle, decorative curves or glow. Application icons are unchanged.
 
-## Latest optical-centering edit
+## Vertical padding crop
+
+Cropped the existing 2171 × 724 artwork to the rectangle x=0, y=141, width=2171, height=420. Removed only dark top/bottom padding, retaining 58px above and below the visible artwork. No scaling, horizontal movement, or content changes; decoded pixels were checked against the same region of the original. The rejected regenerated crop attempt was not used.
+
+## Previous optical-centering edit
 
 Built-in image generation moved the icon/wordmark group left for optical balance. The README layout and text were not changed. The requested pixel offset below is an editing target, not a pixel-exact translation guarantee.
 
