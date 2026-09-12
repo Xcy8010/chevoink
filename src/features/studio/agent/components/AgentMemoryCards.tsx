@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom'
 import {
   BookMarked, BookOpen, ChevronLeft, ChevronRight, Clapperboard, Feather, Globe, HeartHandshake,
   History, Library, LoaderCircle, PenLine, PencilLine, Quote, Route, ScrollText, ShieldCheck,
-  Telescope, UserRound, X,
+  Telescope, Trash2, UserRound, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { fetchStoryMemories, fetchStoryMemorySets, updateStoryMemory } from '../agentApi'
+import { fetchStoryMemories, fetchStoryMemorySets } from '../agentApi'
+import MemoryCardEditor, { MemoryCardDeleteDialog } from './MemoryCardEditor'
 import { useAgentStore } from '../agentStore'
+import { useShellStore } from '@/store/useShellStore'
 import type { StoryMemoryCard, StoryMemorySet } from '../../../../../shared/contracts/index.js'
 
 type Props = {
@@ -70,6 +72,7 @@ type SetCardsState = {
  * 单卡保留右键编辑/引用入口。
  */
 export default function AgentMemoryCards({ novelId }: Props) {
+  const userId = useShellStore(state => state.sessionUser?.id ?? 'anonymous')
   const [sets, setSets] = useState<StoryMemorySet[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,11 +81,11 @@ export default function AgentMemoryCards({ novelId }: Props) {
   const [menu, setMenu] = useState<MenuState>(null)
   const [detail, setDetail] = useState<StoryMemoryCard | null>(null)
   const [editing, setEditing] = useState<StoryMemoryCard | null>(null)
+  const [deleting, setDeleting] = useState<StoryMemoryCard | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [fanSpotlight, setFanSpotlight] = useState<{ index: number; nonce: number } | null>(null)
   const sectionRef = useRef<HTMLElement | null>(null)
   const lastSpotlightNonceRef = useRef(0)
-  const pendingSpotlightRef = useRef<{ nonce: number; memoryType: string; title: string } | null>(null)
   const novelIdRef = useRef(novelId)
   novelIdRef.current = novelId
   const toastTimerRef = useRef<number | null>(null)
@@ -110,8 +113,12 @@ export default function AgentMemoryCards({ novelId }: Props) {
     setSets([])
     setOverlayType(null)
     setSetCards({})
+    setEditing(null)
+    setDetail(null)
+    setMenu(null)
+    setDeleting(null)
     void loadSets()
-  }, [novelId, loadSets])
+  }, [novelId, loadSets, userId])
 
   useEffect(() => () => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
@@ -120,7 +127,10 @@ export default function AgentMemoryCards({ novelId }: Props) {
   // 右键菜单：任意点击 / Esc / 滚动即关闭，避免菜单悬在过期位置上
   useEffect(() => {
     if (!menu) return
-    const close = () => setMenu(null)
+    const close = (event?: Event) => {
+      if (event?.target instanceof Element && event.target.closest('[data-memory-menu]')) return
+      setMenu(null)
+    }
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('keydown', onKey)
@@ -164,30 +174,28 @@ export default function AgentMemoryCards({ novelId }: Props) {
     setOverlayType(memoryType)
     if (!setCards[memoryType]) void loadSetCards(memoryType, 1)
   }
-  const openSetRef = useRef(openSet)
-  openSetRef.current = openSet
-
-  // 记忆沉淀卡点击：仅当前可见实例响应（隐藏实例 offsetParent 为 null），开对应卡片集等待定位
+  // Resolve against the whole owned collection, not the cached first page. Do not flash another card while loading.
   useEffect(() => {
     if (!memorySpotlight) return
     if (memorySpotlight.nonce === lastSpotlightNonceRef.current) return
     if (Date.now() - memorySpotlight.nonce > 8000) return
     if (!sectionRef.current || sectionRef.current.offsetParent === null) return
     lastSpotlightNonceRef.current = memorySpotlight.nonce
-    pendingSpotlightRef.current = memorySpotlight
-    openSetRef.current(memorySpotlight.memoryType)
-  }, [memorySpotlight])
-
-  // 卡片集首页回来后定位沉淀卡：标题精确匹配优先，否则取最近更新一张（沉淀动作刚刷新 updatedAt）
-  useEffect(() => {
-    const pending = pendingSpotlightRef.current
-    if (!pending || overlayType !== pending.memoryType) return
-    const state = setCards[pending.memoryType]
-    if (!state || state.loading || state.items.length === 0) return
-    const matched = state.items.findIndex((item) => item.title === pending.title)
-    pendingSpotlightRef.current = null
-    setFanSpotlight({ index: matched >= 0 ? matched : 0, nonce: pending.nonce })
-  }, [overlayType, setCards])
+    let cancelled = false
+    setOverlayType(null)
+    setDetail(null)
+    const unavailable = () => {
+      if (cancelled) return
+      setToast('未能唯一定位该记忆（可能已修订、删除或存在同名候选），请从记忆卡片集中核对；未跳转到其他卡片。')
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = window.setTimeout(() => setToast(null), 5000)
+    }
+    if (!memorySpotlight.title.trim()) unavailable()
+    else void fetchStoryMemories(novelId, { memoryType: memorySpotlight.memoryType, title: memorySpotlight.title, page: 1, pageSize: 2 })
+      .then(result => { if (cancelled) return; if (result.total === 1 && result.items.length === 1) setDetail(result.items[0]); else unavailable() })
+      .catch(unavailable)
+    return () => { cancelled = true }
+  }, [memorySpotlight, novelId])
 
   const applyToComposer = (card: StoryMemoryCard) => {
     addComposerReference({
@@ -213,7 +221,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
   const handleContextMenu = (event: React.MouseEvent, card: StoryMemoryCard) => {
     event.preventDefault()
     const width = 168
-    const height = 116
+    const height = 180
     setMenu({
       x: Math.min(event.clientX, window.innerWidth - width - 12),
       y: Math.min(event.clientY, window.innerHeight - height - 12),
@@ -223,7 +231,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
 
   const totalCards = sets.reduce((sum, set) => sum + set.count, 0)
   const overlaySet = overlayType ? sets.find((set) => set.memoryType === overlayType) ?? null : null
-  const overlaySuspended = Boolean(menu) || Boolean(detail) || Boolean(editing)
+  const overlaySuspended = Boolean(menu) || Boolean(detail) || Boolean(editing) || Boolean(deleting)
 
   return (
     <section ref={sectionRef} className="px-4 pb-6 pt-1">
@@ -277,7 +285,7 @@ export default function AgentMemoryCards({ novelId }: Props) {
           创作记忆
           {totalCards > 0 ? <span className="text-[10px] font-normal tabular-nums text-[var(--text-tertiary)]">{sets.length} 集 · {totalCards} 张</span> : null}
         </h3>
-        <p className="shrink-0 text-[9px] text-[var(--text-tertiary)]">点封面进入手牌审阅 · 点击翻面 · Esc 收叠</p>
+        <p className="text-right text-[9px] text-[var(--text-tertiary)]">点封面审阅 · 待审核候选不参与事实召回</p>
       </div>
 
       {loading ? (
@@ -335,16 +343,19 @@ export default function AgentMemoryCards({ novelId }: Props) {
           onMenu={handleContextMenu}
           onQuote={quoteAndClose}
           onEdit={(card) => { setEditing(card); setMenu(null) }}
+          onDelete={setDeleting}
         />
       ) : null}
 
       {menu ? createPortal(
         <div
+          data-memory-menu
           className="fixed z-[170] w-[168px] rounded-[12px] border border-[var(--border-subtle)] bg-[var(--surface-default)] py-1 shadow-[0_18px_48px_rgba(15,23,42,0.22)]"
           style={{ left: menu.x, top: menu.y, animation: 'memory-pop-in 160ms cubic-bezier(0.16,1,0.3,1)' }}
           onPointerDown={(event) => event.stopPropagation()}
         >
           <p className="truncate px-3 pb-1 pt-0.5 text-[9px] text-[var(--text-tertiary)]">{menu.card.title}</p>
+          <button type="button" onClick={() => { setDeleting(menu.card); setMenu(null) }} className="min-h-11 w-full px-3 text-left text-xs text-rose-500 hover:bg-[var(--surface-muted)]">删除卡片</button>
           <button
             type="button"
             onClick={() => { setDetail(menu.card); setMenu(null) }}
@@ -369,12 +380,26 @@ export default function AgentMemoryCards({ novelId }: Props) {
         onClose={() => setDetail(null)}
         onEdit={() => { setEditing(detail); setDetail(null) }}
         onQuote={() => quoteAndClose(detail)}
+        onDelete={() => { setDeleting(detail); setDetail(null) }}
       /> : null}
 
-      {editing ? <MemoryCardEditDialog
+      {deleting ? <MemoryCardDeleteDialog key={deleting.id} card={deleting} onClose={() => setDeleting(null)} onDeleted={() => {
+        if (novelIdRef.current !== novelId) return
+        const type = deleting.memoryType
+        setDeleting(null); setDetail(null); setMenu(null)
+        setSetCards(current => { const next = { ...current }; delete next[type]; return next })
+        void loadSetCards(type, 1)
+        void loadSets()
+        showToast('卡片已删除，不再参与后续记忆召回')
+      }} /> : null}
+
+      {editing ? <MemoryCardEditor
+        key={`${userId}:${novelId}:${editing.id}`}
+        novelId={novelId}
         card={editing}
         onClose={() => setEditing(null)}
         onSaved={(updated) => {
+          if (novelIdRef.current !== novelId) return
           setSetCards((current) => {
             const state = current[updated.memoryType]
             if (!state) return current
@@ -409,10 +434,18 @@ type FanOverlayProps = {
   onMenu: (event: React.MouseEvent, card: StoryMemoryCard) => void
   onQuote: (card: StoryMemoryCard) => void
   onEdit: (card: StoryMemoryCard) => void
+  onDelete: (card: StoryMemoryCard) => void
 }
 
 /** 覆层手牌模式：整叠牌扇形摊在模糊覆层中央，← → 拨牌、点击翻面读全文、Esc 收叠回封面墙 */
-function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMore, onMenu, onQuote, onEdit }: FanOverlayProps) {
+function MemoryCardActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+  return <div role="group" aria-label="卡片操作" className="flex shrink-0 items-center gap-1">
+    <button type="button" aria-label="编辑卡片" title="编辑卡片" onClick={onEdit} className="inline-flex h-11 w-11 items-center justify-center rounded-[9px] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"><PencilLine aria-hidden="true" className="h-4 w-4" /></button>
+    <button type="button" aria-label="删除卡片" title="删除卡片" onClick={onDelete} className="inline-flex h-11 w-11 items-center justify-center rounded-[9px] text-[var(--text-secondary)] hover:bg-rose-500/10 hover:text-rose-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>
+  </div>
+}
+
+function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMore, onMenu, onQuote, onEdit, onDelete }: FanOverlayProps) {
   const meta = typeMeta(set.memoryType)
   const Icon = meta.icon
   const items = state?.items ?? []
@@ -467,7 +500,6 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
     <div
       className="fixed inset-0 z-[165] flex flex-col bg-[rgba(15,23,42,0.5)] backdrop-blur-md"
       style={{ animation: 'memory-fade-in 200ms ease-out' }}
-      onClick={onClose}
     >
       <header className="flex shrink-0 items-center gap-2.5 px-5 pb-1 pt-4" onClick={(event) => event.stopPropagation()}>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/25 text-white/85">
@@ -484,7 +516,7 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
         ><X className="h-4 w-4" /></button>
       </header>
 
-      <div className="relative min-h-0 flex-1" onClick={(event) => event.stopPropagation()}>
+      <div className="relative min-h-0 flex-1 overflow-hidden" onClick={(event) => event.stopPropagation()}>
         {!state || state.loading ? (
           <div className="flex h-full items-center justify-center gap-2 text-xs text-white/70"><LoaderCircle className="h-4 w-4 animate-spin" />摊开手牌…</div>
         ) : state.error ? (
@@ -510,44 +542,42 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
                     key={isFlash ? `${card.id}-f${flash?.nonce}` : card.id}
                     className="fan-card absolute cursor-pointer"
                     style={isFlash ? { ...style, animation: 'fan-flash 1.6s cubic-bezier(0.22,1,0.36,1)' } : style}
-                    onClick={() => {
-                      if (offset === 0) setFlipped((current) => !current)
-                      else { setFlipped(false); setFocus(index) }
-                    }}
                     onContextMenu={(event) => onMenu(event, card)}
                   >
-                    <div className={`fan-flip relative h-[380px] w-[300px] [transform-style:preserve-3d] ${flipped && offset === 0 ? 'fan-flipped' : ''}`}>
-                      <article className="fan-face flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-5 pb-4 pt-4 shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
-                        <div className="flex items-center gap-1.5">
+                    <div className={`fan-flip relative h-[min(440px,68dvh)] w-[min(300px,calc(100vw-40px))] [transform-style:preserve-3d] ${flipped && offset === 0 ? 'fan-flipped' : ''}`}>
+                      <article ref={el => { if (el) el.inert = offset !== 0 || flipped }} className="fan-face flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-5 pb-4 pt-4 shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
+                        <div className="flex min-h-11 items-center gap-1.5 pr-24">
                           <span className="truncate text-[9px] tracking-wide text-[var(--text-tertiary)]">{cardMeta.label}</span>
                           {card.version > 1 ? <span className="shrink-0 text-[9px] tabular-nums text-[var(--text-tertiary)]">v{card.version}</span> : null}
-                          <span className="ml-auto shrink-0 text-[9px] text-[var(--text-tertiary)]">点击翻面</span>
                         </div>
                         <h4 className="mt-2.5 line-clamp-2 break-words text-sm font-semibold leading-6 text-[var(--text-primary)]">{card.title}</h4>
+                        <span className="text-[10px] text-[var(--text-tertiary)]">{card.reviewStatus === 'pending' ? '待作者审核 · 未生效' : card.status === 'inferred' ? '推断/摘录 · 需核对原文' : '已确认'}</span>
                         <p className="mt-2 line-clamp-[11] text-xs leading-6 text-[var(--text-secondary)]">{card.content}</p>
-                        <div className="mt-auto flex items-center justify-between pt-3 text-[9px] text-[var(--text-tertiary)]">
+                        <button type="button" className="mt-auto min-h-11 shrink-0 px-2 text-xs" onClick={() => { setFocus(index); setFlipped(true) }}>查看全文</button>
+                        <div className="flex items-center justify-between pt-3 text-[9px] text-[var(--text-tertiary)]">
                           <span>重要性 {card.importance}</span>
                           <span>{formatMemoryDate(card.updatedAt)}</span>
                         </div>
                       </article>
-                      <article className="fan-face fan-back flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
+                      <article ref={el => { if (el) el.inert = offset !== 0 || !flipped }} className="fan-face fan-back flex flex-col overflow-hidden rounded-[16px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_24px_64px_rgba(15,23,42,0.35)]">
                         <header className="shrink-0 px-5 pb-2.5 pt-4">
-                          <p className="flex items-center gap-2 text-[9px] tracking-wide text-[var(--text-tertiary)]">
+                          <p className="flex min-h-11 flex-wrap items-center gap-2 pr-24 text-[9px] tracking-wide text-[var(--text-tertiary)]">
                             {cardMeta.label}
                             {card.version > 1 ? <span className="tabular-nums">v{card.version}</span> : null}
                             <span>重要性 {card.importance}</span>
                           </p>
                           <h4 className="mt-1.5 line-clamp-2 break-words text-sm font-semibold leading-6 text-[var(--text-primary)]">{card.title}</h4>
                         </header>
-                        <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-subtle)] px-5 py-3.5">
+                        <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] px-5 py-3.5">
                           <p className="whitespace-pre-wrap break-words text-xs leading-6 text-[var(--text-secondary)]">{card.content}</p>
                         </div>
-                        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-2.5">
+                        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1 border-t border-[var(--border-subtle)] px-3 py-2">
+                          <button type="button" className="min-h-11 px-2 text-xs text-[var(--text-secondary)]" onClick={() => setFlipped(false)}>返回摘要</button>
                           <button type="button" onClick={() => onQuote(card)} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Quote className="h-3.5 w-3.5" />引用到对话</button>
-                          <button type="button" onClick={() => onEdit(card)} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><PencilLine className="h-3.5 w-3.5" />编辑卡片</button>
                         </footer>
                       </article>
                     </div>
+                    {offset === 0 ? <div className="absolute right-3 top-4 z-50"><MemoryCardActions onEdit={() => onEdit(card)} onDelete={() => onDelete(card)} /></div> : null}
                   </div>
                 )
               })}
@@ -571,22 +601,22 @@ function MemoryFanOverlay({ set, state, spotlight, suspended, onClose, onLoadMor
       </div>
 
       <footer className="flex shrink-0 flex-col items-center gap-1.5 px-5 pb-5 pt-1" onClick={(event) => event.stopPropagation()}>
-        <p className="text-[10px] text-white/50">← → 拨牌翻阅 · 点击卡片翻面读全文 · 右键编辑/引用 · Esc 收叠</p>
+        <p className="text-[10px] text-white/50">← → 翻阅 · 右上角编辑/删除 · 滚动不翻面</p>
       </footer>
     </div>,
     document.body,
   )
 }
-
 type DetailDialogProps = {
   card: StoryMemoryCard
   onClose: () => void
   onEdit: () => void
   onQuote: () => void
+  onDelete: () => void
 }
 
 /** 卡片详情弹窗：完整正文 + 引用/编辑入口，正文过长时弹窗内滚动 */
-function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote }: DetailDialogProps) {
+function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote, onDelete }: DetailDialogProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -607,8 +637,8 @@ function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote }: DetailDialog
         style={{ animation: 'memory-pop-in 220ms cubic-bezier(0.16,1,0.3,1)' }}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex shrink-0 items-start justify-between gap-3 px-5 pb-3 pt-4">
-          <div className="min-w-0">
+        <header className="flex shrink-0 flex-wrap items-start justify-between gap-2 px-5 pb-3 pt-4">
+          <div className="order-2 min-w-0 w-full">
             <p className="flex items-center gap-2 text-[9px] tracking-wide text-[var(--text-tertiary)]">
               {typeMeta(card.memoryType).label}
               {card.version > 1 ? <span className="tabular-nums">v{card.version}</span> : null}
@@ -616,123 +646,19 @@ function MemoryCardDetailDialog({ card, onClose, onEdit, onQuote }: DetailDialog
             </p>
             <h3 className="mt-1.5 break-words text-sm font-semibold leading-6 text-[var(--text-primary)]">{card.title}</h3>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭卡片详情" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
+          <div className="ml-auto flex items-center gap-1">
+            <MemoryCardActions onEdit={onEdit} onDelete={onDelete} />
+            <button type="button" onClick={onClose} aria-label="关闭卡片详情" title="关闭卡片详情" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
+          </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-subtle)] px-5 py-4">
           <p className="whitespace-pre-wrap break-words text-xs leading-6 text-[var(--text-secondary)]">{card.content}</p>
         </div>
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
           <span className="text-[9px] text-[var(--text-tertiary)]">更新于 {formatMemoryDate(card.updatedAt)}</span>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onQuote} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-3 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]"><Quote className="h-3.5 w-3.5" />引用到对话</button>
-            <button type="button" onClick={onEdit} className="inline-flex h-8 items-center gap-1.5 rounded-[9px] bg-[var(--surface-contrast)] px-3 text-[11px] font-medium text-[var(--text-contrast)] transition-opacity hover:opacity-85"><PencilLine className="h-3.5 w-3.5" />编辑卡片</button>
           </div>
-        </footer>
-      </section>
-    </div>,
-    document.body,
-  )
-}
-
-type EditDialogProps = {
-  card: StoryMemoryCard
-  onClose: () => void
-  onSaved: (updated: StoryMemoryCard) => void
-}
-
-/** 就地编辑弹窗：保存后后端记录修订历史并重算检索向量，Agent 之后按最新设定写作 */
-function MemoryCardEditDialog({ card, onClose, onSaved }: EditDialogProps) {
-  const [title, setTitle] = useState(card.title)
-  const [content, setContent] = useState(card.content)
-  const [importance, setImportance] = useState(card.importance)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, saving])
-
-  const save = async () => {
-    if (saving) return
-    if (!title.trim() || !content.trim()) {
-      setError('标题与内容不能为空。')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    try {
-      const result = await updateStoryMemory(card.id, { title: title.trim(), content: content.trim(), importance })
-      onSaved(result.memory)
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : '保存失败，请稍后再试。')
-      setSaving(false)
-    }
-  }
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[175] flex items-center justify-center bg-[rgba(15,23,42,0.32)] px-4 backdrop-blur-[3px]"
-      style={{ animation: 'memory-fade-in 180ms ease-out' }}
-      onClick={() => { if (!saving) onClose() }}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={`编辑记忆卡片 ${card.title}`}
-        className="flex max-h-[86dvh] w-full max-w-lg flex-col rounded-[18px] border border-[var(--border-subtle)] bg-[var(--surface-default)] shadow-[0_28px_80px_rgba(15,23,42,0.28)]"
-        style={{ animation: 'memory-pop-in 220ms cubic-bezier(0.16,1,0.3,1)' }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="flex shrink-0 items-center justify-between gap-3 px-5 pb-3 pt-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">编辑记忆卡片</h3>
-            <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">{typeMeta(card.memoryType).label}</span>
-          </div>
-          <button type="button" onClick={onClose} disabled={saving} aria-label="关闭编辑弹窗" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-40"><X className="h-4 w-4" /></button>
-        </header>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-4">
-          <label className="block">
-            <span className="text-[10px] text-[var(--text-tertiary)]">标题</span>
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              maxLength={160}
-              className="mt-1 h-9 w-full rounded-[10px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 text-xs text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-tertiary)]"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] text-[var(--text-tertiary)]">内容（保存后 Agent 按这份最新设定写作）</span>
-            <textarea
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              rows={10}
-              maxLength={8000}
-              className="mt-1 w-full resize-y rounded-[10px] border border-[var(--border-subtle)] bg-[var(--surface-default)] px-3 py-2 text-xs leading-6 text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-tertiary)]"
-            />
-          </label>
-          <label className="block">
-            <span className="flex items-baseline justify-between text-[10px] text-[var(--text-tertiary)]">重要性<span className="tabular-nums text-[var(--text-secondary)]">{importance}</span></span>
-            <input
-              type="range"
-              min={1}
-              max={100}
-              value={importance}
-              onChange={(event) => setImportance(Number(event.target.value))}
-              className="mt-1.5 w-full accent-[var(--text-primary)]"
-            />
-          </label>
-          {error ? <p className="rounded-[9px] bg-rose-500/8 px-3 py-2 text-[10px] leading-5 text-rose-500">{error}</p> : null}
-        </div>
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3.5">
-          <button type="button" onClick={onClose} disabled={saving} className="h-9 rounded-[10px] px-4 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)] disabled:opacity-40">取消</button>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="inline-flex h-9 items-center gap-2 rounded-[10px] bg-[var(--surface-contrast)] px-4 text-xs font-medium text-[var(--text-contrast)] transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
-          >{saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? '保存中…' : '保存修订'}</button>
         </footer>
       </section>
     </div>,

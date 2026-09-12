@@ -6,6 +6,7 @@ import { prisma } from '../../prisma.js'
 import { saveStoryMemory } from '../story-memory.js'
 import { defineTool, type ToolResult } from './types.js'
 import { executeDurablePlanSave } from './durable-plan.js'
+import { resolveMemorySource } from './memory-source.js'
 
 /**
  * 记忆与计划写工具集。
@@ -17,7 +18,7 @@ export const memorySaveTool = defineTool({
   name: 'memory_save',
   title: '沉淀创作记忆',
   description:
-    '把重要的设定、角色卡、章节摘要、伏笔或时间线事件保存为长期记忆，供后续 memory_search 检索。只沉淀已被确认的事实，试写内容不沉淀。作者要求修改/覆盖既有设定或角色卡时：先 memory_search 找到原卡片 id，再传 memoryId 就地覆盖（或传 overwrite=true 按同名覆盖），严禁新建同名卡片、严禁把作者明确的修订丢进冲突审核箱。',
+    '提交创作记忆候选，作者确认前不参与事实召回。禁止把试写、猜测或待定计划当既成事实；优先提供来源章节、revision和逐字sourceQuote。修订先检索原卡片并传memoryId，不能直接覆盖作者设定。审核完成前不得声称记忆已生效。',
   parameters: z.object({
     memoryType: z
       .enum([
@@ -41,8 +42,10 @@ export const memorySaveTool = defineTool({
     content: z.string().min(1).max(4000).describe('记忆内容，事实化、结构化表述'),
     importance: z.number().int().min(1).max(100).describe('重要性 1-100：核心主角/主线设定 80+，一般设定 50-70'),
     sourceChapterId: z.string().optional().describe('来源章节 ID（章节摘要必填）'),
-    memoryId: z.string().optional().describe('要就地修订的既有记忆卡片 id（来自 memory_search 命中或记忆中心）；作者改设定时必传，禁止另建新卡'),
-    overwrite: z.boolean().optional().describe('作者确认式覆盖：同名旧卡直接就地替换，不进冲突审核箱；仅当作者明确要求改设定且拿不到 memoryId 时使用'),
+    revision: z.number().int().positive().optional().describe('读取到的来源章节版本'),
+    sourceQuote: z.string().trim().min(1).max(4000).optional().describe('支持记忆的逐字原文，禁止改写引用'),
+    memoryId: z.string().optional().describe('要修订的既有记忆卡片id；提交关联候选，作者确认前保留旧卡'),
+    overwrite: z.boolean().optional().describe('旧客户端兼容参数，不授予自动覆盖或作者确认权限'),
   }),
   coerceArgs(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
@@ -77,7 +80,7 @@ export const memorySaveTool = defineTool({
         result.title = (firstSentence || firstLine).slice(0, 40)
       }
     }
-    if (typeof result.content === 'string') result.content = result.content.trim().slice(0, 4000)
+    if (typeof result.content === 'string') result.content = result.content.trim()
     const importance = Number(result.importance)
     result.importance = Number.isFinite(importance) ? Math.min(100, Math.max(1, Math.round(importance))) : 70
     if (typeof result.sourceChapterId !== 'string' || !result.sourceChapterId.trim()) delete result.sourceChapterId
@@ -86,24 +89,21 @@ export const memorySaveTool = defineTool({
   permission: { plan: 'allow', build: 'allow', review: 'allow' },
   readOnly: false,
   async execute(ctx, args) {
+    const evidence = await resolveMemorySource(ctx, args)
     const result = await saveStoryMemory({
       userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
       sourceChapterId: args.sourceChapterId ?? null, memoryType: args.memoryType,
       layer: ['novelSummary', 'storyBible', 'authorProfile', 'continuityRule'].includes(args.memoryType) ? 'L3' : ['chapterSummary', 'volumeSummary', 'storyArc', 'sceneState', 'relationshipState'].includes(args.memoryType) ? 'L2' : 'L1',
       title: args.title, content: args.content, importance: args.importance,
-      confidence: 1, status: 'confirmed',
+      confidence: evidence.confidence, status: 'inferred', agentGenerated: true,
       memoryId: args.memoryId ?? null,
       overwrite: args.overwrite === true,
-      evidence: {
-        sourceType: args.sourceChapterId ? 'chapter' : 'author_input',
-        sourceId: args.sourceChapterId ?? ctx.runId,
-        confidence: 1,
-      },
+      evidence,
     }, ctx.transaction)
     return {
       savedMemoryId: result.id,
       output: result.action === 'conflict'
-        ? `检测到记忆冲突：[${args.memoryType}] ${args.title} 未覆盖旧事实，候选 ${result.id} 已进入作者审核箱。`
+        ? `记忆候选：[${args.memoryType}] ${args.title} 未覆盖旧事实，候选 ${result.id} 等待作者审核，尚未参与事实召回。`
         : `已${result.action === 'created' ? '保存' : '在原卡片上更新'}记忆 [${args.memoryType}] ${args.title}（重要性 ${args.importance}，含来源证据）。`,
       summary: result.action === 'conflict' ? `记忆冲突「${args.title}」` : `沉淀记忆「${args.title}」`,
     }

@@ -132,7 +132,7 @@ async function buildNovelRuleBundle(
   }
 
   const rules = await prisma.projectMemoryEntry.findMany({
-    where: { novelId, memoryType: { in: ['stylePreference', 'continuityRule'] } },
+    where: { novelId, status: { in: ['confirmed', 'inferred'] }, reviewStatus: { in: ['none', 'accepted'] }, memoryType: { in: ['stylePreference', 'continuityRule'] } },
     orderBy: { importance: 'desc' },
     take: 6,
     select: { memoryType: true, title: true, content: true },
@@ -168,7 +168,7 @@ async function buildStoryMemoryDigest(userId: string, novelId: string, query: st
       .join('\n')}`
   }
   const entries = await prisma.projectMemoryEntry.findMany({
-    where: { novelId, status: { in: ['confirmed', 'inferred'] }, memoryType: { in: ['characterCard', 'timelineEvent', 'foreshadowing', 'worldbuilding', 'storyBible', 'volumeSummary', 'sceneState', 'relationshipState'] } },
+    where: { novelId, status: { in: ['confirmed', 'inferred'] }, reviewStatus: { in: ['none', 'accepted'] }, memoryType: { in: ['characterCard', 'timelineEvent', 'foreshadowing', 'worldbuilding', 'storyBible', 'volumeSummary', 'sceneState', 'relationshipState'] } },
     orderBy: { importance: 'desc' },
     take: 12,
     select: { memoryType: true, title: true, content: true },

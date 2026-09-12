@@ -12,6 +12,7 @@ import {
   saveStoryMemory,
   searchStoryMemory,
   syncNovelMemoryProjection,
+  updateStoryMemoryEntry, deleteStoryMemoryEntry, resolveMemoryReview, listStoryMemories,
 } from '../../api/lib/agent/story-memory.js'
 import { prisma } from '../../api/lib/prisma.js'
 import { handleTestDatabaseUnavailable } from '../support/database-availability.js'
@@ -145,5 +146,83 @@ describe.skipIf(!dbAvailable)('Agent 2.0 P4 故事记忆与混合召回（需 DB
     expect(graph.nodes.map((node) => node.label)).toEqual(expect.arrayContaining(['林舟', '顾棠']))
     expect(graph.nodes.map((node) => node.label)).not.toContain('林舟知')
     expect(repeatedRelationCount).toBe(relationCount)
+  })
+
+  it('model proposals cannot self-confirm or overwrite even with ID/overwrite; only author review activates them', async () => {
+    const input = { userId, novelId, memoryType: 'worldbuilding' as const, layer: 'L1' as const, title: '审核保护样例', content: '旧设定', importance: 80,
+      confidence: 1, status: 'confirmed' as const, evidence: { sourceType: 'artifact' as const, sourceId: 'test-source', confidence: 1 } }
+    const original = await saveStoryMemory(input)
+    const proposal = await saveStoryMemory({ ...input, content: '新候选设定', memoryId: original.id, overwrite: true, agentGenerated: true })
+    expect(proposal.id).not.toBe(original.id)
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: original.id } })).toMatchObject({ content: '旧设定' })
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: proposal.id } })).toMatchObject({ status: 'inferred', reviewStatus: 'pending' })
+    expect((await searchStoryMemory({ userId, novelId, query: '新候选设定', limit: 50 })).some(item => item.id === proposal.id)).toBe(false)
+    const repeat = await saveStoryMemory({ ...input, content: '新候选设定', memoryId: original.id, agentGenerated: true })
+    expect(repeat.id).toBe(proposal.id)
+    await resolveMemoryReview(userId, proposal.id, true)
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: original.id } })).toMatchObject({ status: 'superseded' })
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: proposal.id } })).toMatchObject({ status: 'confirmed', reviewStatus: 'accepted' })
+    await expect(resolveMemoryReview(userId, proposal.id, true)).rejects.toMatchObject({ code: 'MEMORY_REVIEW_STALE' })
+  })
+
+  it('author edit/delete uses optimistic versions, preserves audit, scopes owners and blocks resurrection', async () => {
+    const input = { userId, novelId, memoryType: 'worldbuilding' as const, layer: 'L1' as const, title: '删除保护样例', content: '旧内容', importance: 70,
+      confidence: 1, status: 'confirmed' as const, evidence: { sourceType: 'artifact' as const, sourceId: 'delete-source', confidence: 1 } }
+    const saved = await saveStoryMemory(input)
+    const updated = await updateStoryMemoryEntry(userId, saved.id, { content: '作者修订', expectedVersion: 1 })
+    expect(updated.version).toBe(2)
+    await expect(updateStoryMemoryEntry(userId, saved.id, { content: '旧窗口覆盖', expectedVersion: 1 })).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' })
+    await expect(deleteStoryMemoryEntry('another-user', saved.id, 2)).rejects.toMatchObject({ code: 'MEMORY_NOT_FOUND' })
+    await expect(deleteStoryMemoryEntry(userId, saved.id, 1)).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' })
+    const concurrent = await Promise.allSettled([
+      updateStoryMemoryEntry(userId, saved.id, { content: '并发修订', expectedVersion: 2 }),
+      deleteStoryMemoryEntry(userId, saved.id, 2),
+    ])
+    expect(concurrent.filter(item => item.status === 'fulfilled')).toHaveLength(1)
+    const current = await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: saved.id } })
+    await deleteStoryMemoryEntry(userId, saved.id, current.version)
+    expect(await deleteStoryMemoryEntry(userId, saved.id, 1)).toMatchObject({ deleted: true })
+    expect((await listStoryMemories(userId, novelId, { page: 1, pageSize: 1000 })).items.some(item => item.id === saved.id)).toBe(false)
+    await expect(saveStoryMemory({ ...input, agentGenerated: true })).rejects.toMatchObject({ code: 'MEMORY_DELETED' })
+    await expect(saveStoryMemory({ ...input, title: '改名绕过', memoryId: saved.id, agentGenerated: true })).rejects.toMatchObject({ code: 'MEMORY_TARGET_MISSING' })
+    await expect(saveStoryMemory({ ...input, title: '新名', memoryId: 'absent-id', agentGenerated: true })).rejects.toMatchObject({ code: 'MEMORY_TARGET_MISSING' })
+    await expect(updateStoryMemoryEntry(userId, saved.id, { content: '复活', expectedVersion: current.version })).rejects.toMatchObject({ code: 'MEMORY_NOT_FOUND' })
+    expect(await prisma.memoryRevision.count({ where: { memoryId: saved.id, reason: 'author_delete' } })).toBe(1)
+  })
+
+  it('same source identifier is not overwrite authority; source projections never overwrite an author edit', async () => {
+    const input = { userId, novelId, memoryType: 'chapterSummary' as const, layer: 'L2' as const, title: '来源保护样例', content: '原始摘录', importance: 60,
+      confidence: 0.8, status: 'inferred' as const, evidence: { sourceType: 'chapter' as const, sourceId: chapterIds[5], revision: 1, confidence: 0.8 } }
+    const original = await saveStoryMemory(input)
+    const sameRevision = await saveStoryMemory({ ...input, content: '同版冲突' })
+    expect(sameRevision.action).toBe('conflict')
+    await updateStoryMemoryEntry(userId, original.id, { content: '作者权威修订', expectedVersion: 1 })
+    await saveStoryMemory({ ...input, content: '新投影', systemDerived: true, evidence: { ...input.evidence, revision: 2 } })
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: original.id } })).toMatchObject({ content: '作者权威修订' })
+  })
+
+  it('late proposals cannot replace a newer author edit or a changed chapter source', async () => {
+    const input = { userId, novelId, memoryType: 'worldbuilding' as const, layer: 'L1' as const, title: '过期候选样例', content: '原设定', importance: 70,
+      confidence: 1, status: 'confirmed' as const, evidence: { sourceType: 'artifact' as const, sourceId: 'late-source', confidence: 1 } }
+    const original = await saveStoryMemory(input)
+    const proposal = await saveStoryMemory({ ...input, content: '旧候选', memoryId: original.id, agentGenerated: true })
+    await updateStoryMemoryEntry(userId, original.id, { content: '后来确认的新版', expectedVersion: 1 })
+    await expect(resolveMemoryReview(userId, proposal.id, true)).rejects.toMatchObject({ code: 'MEMORY_PROPOSAL_STALE' })
+    const chapter = await prisma.chapter.findUniqueOrThrow({ where: { id: chapterIds[9] } })
+    const sourced = await saveStoryMemory({ ...input, title: '过期来源样例', agentGenerated: true,
+      evidence: { sourceType: 'chapter', sourceId: chapter.id, confidence: 0.8, revision: chapter.revision } })
+    await prisma.chapter.update({ where: { id: chapter.id }, data: { revision: { increment: 1 } } })
+    await expect(resolveMemoryReview(userId, sourced.id, true)).rejects.toMatchObject({ code: 'MEMORY_SOURCE_REQUIRED' })
+  })
+
+  it('title lookup searches the full owned set and deleting source cards invalidates system aggregates', async () => {
+    const input = { userId, novelId, memoryType: 'worldbuilding' as const, layer: 'L1' as const, title: '聚合源样例', content: '即将删除的事实', importance: 70,
+      confidence: 1, status: 'confirmed' as const, evidence: { sourceType: 'artifact' as const, sourceId: 'aggregate-source', confidence: 1 } }
+    const original = await saveStoryMemory(input)
+    const derived = await saveStoryMemory({ ...input, memoryType: 'storyBible', title: '故事圣经（系统增量）', systemDerived: true })
+    expect((await listStoryMemories(userId, novelId, { title: input.title, page: 1, pageSize: 2 })).items.map(item => item.id)).toEqual([original.id])
+    await deleteStoryMemoryEntry(userId, original.id, 1)
+    expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: derived.id } })).toMatchObject({ status: 'superseded' })
+    expect((await searchStoryMemory({ userId, novelId, query: '即将删除的事实', limit: 50 })).some(item => item.id === derived.id)).toBe(false)
   })
 })

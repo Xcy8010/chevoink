@@ -215,6 +215,7 @@ export async function prepareStoryCompilation(input: {
     where: {
       novelId: input.novelId,
       status: { in: ['confirmed', 'inferred'] },
+      reviewStatus: { in: ['none', 'accepted'] },
       memoryType: { in: ['sceneState', 'relationshipState', 'timelineEvent', 'foreshadowing'] },
     },
     orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],

@@ -968,8 +968,11 @@ describe.runIf(available)('durable explicit memory save', () => {
         expect(result).toMatchObject({ kind: 'tool', result: ['unread', 'stale', 'missing'].includes(scenario) ? { outcome: 'failed' } : { savedMemoryId: expect.any(String) } })
       }
       const cards = await prisma.projectMemoryEntry.findMany({ where: { novelId: f.novelId, title } })
-      expect(cards).toHaveLength(scenario === 'missing' ? 0 : 1)
-      if (cards.length) expect(cards[0].content).toBe(['create', 'update'].includes(scenario) ? '新的角色事实' : scenario === 'stale' ? '作者刚更新' : '原角色事实')
+      expect(cards).toHaveLength(scenario === 'missing' ? 0 : scenario === 'update' ? 2 : 1)
+      if (scenario === 'create' || scenario === 'update') {
+        expect(cards).toEqual(expect.arrayContaining([expect.objectContaining({ content: '新的角色事实', status: 'inferred', reviewStatus: 'pending' })]))
+        if (scenario === 'update') expect(cards).toEqual(expect.arrayContaining([expect.objectContaining({ id: seeded!.id, content: '原角色事实' })]))
+      } else if (cards.length) expect(cards[0].content).toBe(scenario === 'stale' ? '作者刚更新' : '原角色事实')
     })
   })
 })

@@ -196,10 +196,11 @@ export function fetchAgentContextDetail(
 /** 记忆中心：分页拉取 Agent 沉淀的创作记忆卡片 */
 export function fetchStoryMemories(
   novelId: string,
-  options?: { memoryType?: string; page?: number; pageSize?: number },
+  options?: { memoryType?: string; title?: string; page?: number; pageSize?: number },
 ): Promise<StoryMemoryList> {
   const query = new URLSearchParams()
   if (options?.memoryType) query.set('memoryType', options.memoryType)
+  if (options?.title !== undefined) query.set('title', options.title)
   query.set('page', String(options?.page ?? 1))
   query.set('pageSize', String(options?.pageSize ?? 12))
   return requestData<StoryMemoryList>(`/api/agent/novels/${novelId}/memories?${query.toString()}`)
@@ -213,12 +214,16 @@ export function fetchStoryMemorySets(novelId: string): Promise<StoryMemorySets> 
 /** 记忆中心：作者就地编辑卡片（后端记录修订历史并重算向量，后续写作按最新设定召回） */
 export function updateStoryMemory(
   memoryId: string,
-  patch: { title?: string; content?: string; importance?: number },
+  patch: { title?: string; content?: string; importance?: number; expectedVersion: number },
 ): Promise<{ memory: StoryMemoryCard }> {
   return requestData<{ memory: StoryMemoryCard }>(`/api/agent/memory/${memoryId}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
+}
+
+export function deleteStoryMemory(memoryId: string, expectedVersion: number): Promise<{ id: string; deleted: boolean }> {
+  return requestData(`/api/agent/memory/${memoryId}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion }) })
 }
 
 export type MemoryReviewItem = {

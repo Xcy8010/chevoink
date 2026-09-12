@@ -58,7 +58,7 @@ export async function executeDurableMemorySave(ctx: ToolContext, tool: AgentTool
     return runtimeJson({ toolResult: { ...result, summary: result.summary ?? '记忆已保存',
       observedMemories: [{ kind: 'memory', id: saved.id, hash: memoryTargetHash(saved) }] } }).value
   }).catch(async error => {
-    if (!(error instanceof DataAccessError) || !['MEMORY_TARGET_MISSING', 'MEMORY_BASELINE_REQUIRED', 'MEMORY_SOURCE_REQUIRED'].includes(error.code)) throw error
+    if (!(error instanceof DataAccessError) || !['MEMORY_TARGET_MISSING', 'MEMORY_BASELINE_REQUIRED', 'MEMORY_SOURCE_REQUIRED', 'MEMORY_DELETED', 'MEMORY_EVIDENCE_MISMATCH'].includes(error.code)) throw error
     return recordToolFailure(lease, { operationId: prepared.operation.id, inputHash: prepared.operation.inputHash, code: error.code, output: error.message, summary: '记忆未写入' })
   })
   await reduceExecutionReceipt(lease, { expectedRevision: prepared.pending.revision, expectedHash: prepared.pending.snapshotHash, operationId: prepared.operation.id })

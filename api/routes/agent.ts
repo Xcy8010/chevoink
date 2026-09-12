@@ -42,7 +42,8 @@ import { parseBody } from '../lib/parse-body.js'
 import { DataAccessError, prisma } from '../lib/prisma.js'
 import { sendRouteError } from '../lib/route-error.js'
 import { compactSessionContext, getContextDetail, getContextState, listActiveDirectives } from '../lib/agent/context-engine.js'
-import { getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, listStoryMemories, listStoryMemorySets, resolveMemoryReview, startMemoryGraphJob, updateStoryMemoryEntry } from '../lib/agent/story-memory.js'
+import { deleteStoryMemoryEntry, getMemoryGraph, getMemoryGraphJob, listMemoryReviewInbox, listStoryMemories, listStoryMemorySets, resolveMemoryReview, startMemoryGraphJob, updateStoryMemoryEntry } from '../lib/agent/story-memory.js'
+import { storyMemoryPatchSchema, storyMemoryDeleteSchema } from '../../shared/contracts/memory-contracts.js'
 import { requireAgent2Feature } from '../lib/agent2-feature-flags.js'
 import {
   createNovelSkillDraft,
@@ -431,12 +432,6 @@ const storyMemoryTypeSchema = z.enum([
   'storyBible', 'authorProfile',
 ])
 
-const storyMemoryPatchSchema = z.object({
-  title: z.string().trim().min(1).max(160).optional(),
-  content: z.string().trim().min(1).max(8000).optional(),
-  importance: z.number().int().min(1).max(100).optional(),
-})
-
 router.get('/novels/:novelId/memories', async (req: Request, res: Response): Promise<void> => {
   const requestId = createRequestId()
   try {
@@ -445,7 +440,8 @@ router.get('/novels/:novelId/memories', async (req: Request, res: Response): Pro
     const memoryType = rawType ? storyMemoryTypeSchema.parse(rawType) : undefined
     const page = queryPositiveInt(req.query.page, 1)
     const pageSize = Math.min(50, queryPositiveInt(req.query.pageSize, 12))
-    const payload = await listStoryMemories(userId, req.params.novelId, { memoryType, page, pageSize })
+    const title = typeof req.query.title === 'string' ? z.string().trim().min(1).max(160).parse(req.query.title) : undefined
+    const payload = await listStoryMemories(userId, req.params.novelId, { memoryType, title, page, pageSize })
     res.status(200).json(buildSuccess(requestId, payload))
   } catch (error) {
     sendRouteError(res, requestId, error)
@@ -461,6 +457,16 @@ router.get('/novels/:novelId/memory-sets', async (req: Request, res: Response): 
   } catch (error) {
     sendRouteError(res, requestId, error)
   }
+})
+
+router.delete('/memory/:memoryId', async (req: Request, res: Response): Promise<void> => {
+  const requestId = createRequestId()
+  try {
+    const userId = requireSessionUserId(req)
+    const body = parseBody(storyMemoryDeleteSchema, req.body, '请确认要删除的卡片版本。')
+    const result = await deleteStoryMemoryEntry(userId, req.params.memoryId, body.expectedVersion)
+    res.status(200).json(buildSuccess(requestId, result))
+  } catch (error) { sendRouteError(res, requestId, error) }
 })
 
 router.patch('/memory/:memoryId', async (req: Request, res: Response): Promise<void> => {

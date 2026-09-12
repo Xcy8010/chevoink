@@ -75,6 +75,14 @@ export type MemoryGraphNode = z.infer<typeof memoryGraphNodeSchema>
 export type MemoryGraphEdge = z.infer<typeof memoryGraphEdgeSchema>
 export type MemoryGraph = z.infer<typeof memoryGraphSchema>
 
+export const storyMemoryPatchSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  content: z.string().trim().min(1).max(8000).optional(),
+  importance: z.number().int().min(1).max(100).optional(),
+  expectedVersion: z.number().int().positive(),
+})
+export const storyMemoryDeleteSchema = z.object({ expectedVersion: z.number().int().positive() })
+
 export const memoryGraphJobStatusSchema = z.enum(['pending', 'running', 'completed', 'failed'])
 export type MemoryGraphJobStatus = z.infer<typeof memoryGraphJobStatusSchema>
 
@@ -88,6 +96,7 @@ export const storyMemoryCardSchema = z.object({
   importance: z.number().int().min(0).max(100),
   status: storyMemoryStatusSchema,
   version: z.number().int().nonnegative(),
+  reviewStatus: memoryReviewStatusSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 })

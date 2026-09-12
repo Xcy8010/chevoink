@@ -1,18 +1,8 @@
 import { z } from 'zod'
 
-import { listMemoryReviewInbox, saveEntityRelation, saveStoryEvent } from '../story-memory.js'
-import { defineTool, type ToolContext } from './types.js'
-import { DataAccessError, prisma } from '../../prisma.js'
-
-async function memorySource(ctx: ToolContext, args: { sourceChapterId?: string; revision?: number }) {
-  if (!args.sourceChapterId) {
-    if (args.revision !== undefined) throw new DataAccessError(400, 'MEMORY_SOURCE_REQUIRED', '章节版本必须同时指定来源章节，未写入记忆。')
-    return { sourceId: ctx.runId }
-  }
-  const chapter = await (ctx.transaction ?? prisma).chapter.findFirst({ where: { id: args.sourceChapterId, novelId: ctx.novelId, authorId: ctx.userId }, select: { id: true, revision: true } })
-  if (!chapter || (args.revision !== undefined && args.revision !== chapter.revision)) throw new DataAccessError(409, 'MEMORY_SOURCE_REQUIRED', '来源章节不存在或版本已变化，请重新读取。')
-  return { sourceId: chapter.id, revision: chapter.revision }
-}
+import { listMemoryReviewInbox, saveStoryMemory } from '../story-memory.js'
+import { defineTool } from './types.js'
+import { resolveMemorySource } from './memory-source.js'
 
 export const memoryReviewListTool = defineTool({
   name: 'memory_review_list', title: '查看记忆冲突',
@@ -29,34 +19,45 @@ export const memoryReviewListTool = defineTool({
 
 export const memoryRelationSaveTool = defineTool({
   name: 'memory_relation_save', title: '保存人物关系',
-  description: '保存有来源的人物关系及其剧情阶段。关系随剧情变化时传 validFrom/validTo，禁止把无证据推测标成确定事实。',
+  description: '提交有来源的人物关系候选，作者确认前不进入事实召回或关系图。关系变化传validFrom/validTo；提供revision、sourceQuote核对原文，不得用confidence自认事实。',
   parameters: z.object({
     fromName: z.string().min(1).max(128), toName: z.string().min(1).max(128), relationType: z.string().min(1).max(64),
     state: z.string().max(1000).optional(), validFrom: z.number().int().positive().optional(), validTo: z.number().int().positive().optional(),
     sourceChapterId: z.string().optional(), revision: z.number().int().positive().optional(), confidence: z.number().min(0).max(1).default(1),
+    sourceQuote: z.string().trim().min(1).max(4000).optional(),
   }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
   async execute(ctx, args) {
-    const source = await memorySource(ctx, args)
-    const relation = await saveEntityRelation({
-      userId: ctx.userId, novelId: ctx.novelId, ...args, ...source,
+    const evidence = await resolveMemorySource(ctx, args)
+    const relation = await saveStoryMemory({
+      userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId, sourceChapterId: args.sourceChapterId,
+      memoryType: 'relationshipState', layer: 'L2', title: `${args.fromName}→${args.toName}:${args.relationType}`,
+      content: `${args.fromName}与${args.toName}的关系为${args.relationType}${args.state ? `，当前状态：${args.state}` : ''}${args.validFrom ? `；自第${args.validFrom}章` : ''}${args.validTo ? `；至第${args.validTo}章` : ''}`,
+      importance: 75, confidence: Math.min(args.confidence, evidence.confidence), status: 'inferred', evidence, agentGenerated: true,
     }, ctx.transaction)
-    return { savedMemoryId: relation.savedMemoryId, output: `已保存人物关系 relationId=${relation.id}：${args.fromName} → ${args.toName}（${args.relationType}）。`, summary: `关系 ${args.fromName}→${args.toName}` }
+    return { savedMemoryId: relation.id, output: `关系候选 memoryId=${relation.id}：${args.fromName} → ${args.toName}，${relation.action === 'conflict' ? '等待作者审核，未覆盖旧关系' : '已有相同记忆，未重复写入'}。`, summary: `关系候选 ${args.fromName}→${args.toName}` }
   },
 })
 
 export const memoryEventSaveTool = defineTool({
   name: 'memory_event_save', title: '保存故事事件',
-  description: '把关键事件按时间、地点、参与者、因果和来源保存到时间线。无章节来源的内容必须来自作者明确输入。',
+  description: '提交关键事件候选，保留时间、地点、参与者、因果和来源；作者确认前不参与事实召回。提供revision和逐字sourceQuote，禁止把拟定情节当已发生事件。',
   parameters: z.object({
     title: z.string().min(1).max(160), description: z.string().min(1).max(4000), storyTime: z.string().max(160).optional(),
     location: z.string().max(160).optional(), participants: z.array(z.string()).max(30).default([]), causes: z.array(z.string()).max(20).default([]),
     effects: z.array(z.string()).max(20).default([]), sourceChapterId: z.string().optional(), revision: z.number().int().positive().optional(), confidence: z.number().min(0).max(1).default(1),
+    sourceQuote: z.string().trim().min(1).max(4000).optional(),
   }),
   permission: { plan: 'allow', build: 'allow', review: 'allow' }, readOnly: false,
   async execute(ctx, args) {
-    const source = await memorySource(ctx, args)
-    const event = await saveStoryEvent({ userId: ctx.userId, novelId: ctx.novelId, ...args, ...source }, ctx.transaction)
-    return { savedMemoryId: event.savedMemoryId, output: `已保存故事事件 eventId=${event.id}：${args.title}。`, summary: `时间线事件「${args.title}」` }
+    const evidence = await resolveMemorySource(ctx, args)
+    const event = await saveStoryMemory({ userId: ctx.userId, novelId: ctx.novelId, runId: ctx.runId,
+      sourceChapterId: args.sourceChapterId, memoryType: 'timelineEvent', layer: 'L1', title: args.title,
+      content: [args.description, args.storyTime && `时间：${args.storyTime}`, args.location && `地点：${args.location}`,
+        args.participants.length && `参与者：${args.participants.join('、')}`, args.causes.length && `原因：${args.causes.join('；')}`,
+        args.effects.length && `结果：${args.effects.join('；')}`].filter(Boolean).join('\n'),
+      importance: 75, confidence: Math.min(args.confidence, evidence.confidence), status: 'inferred', evidence, agentGenerated: true,
+    }, ctx.transaction)
+    return { savedMemoryId: event.id, output: `事件候选 memoryId=${event.id}：${args.title}，${event.action === 'conflict' ? '等待作者审核，未作为已发生事实' : '已有相同记忆，未重复写入'}。`, summary: `事件候选「${args.title}」` }
   },
 })

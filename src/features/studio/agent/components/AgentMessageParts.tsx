@@ -896,7 +896,10 @@ const ToolCallCard = memo(function ToolCallCard({
   const argsRecord = typeof part.args === 'object' && part.args !== null ? (part.args as Record<string, unknown>) : null
   // 记忆沉淀卡：去掉参数展开，点击整行去记忆中心看对应卡片
   const spotlightType = part.status === 'success' ? memorySpotlightType(part.toolName, part.args) : null
-  const spotlightTitle = spotlightType && typeof argsRecord?.title === 'string' ? argsRecord.title : ''
+  const spotlightTitle = part.toolName === 'memory_relation_save' && typeof argsRecord?.fromName === 'string'
+    && typeof argsRecord.toName === 'string' && typeof argsRecord.relationType === 'string'
+    ? `${argsRecord.fromName}→${argsRecord.toName}:${argsRecord.relationType}`
+    : spotlightType && typeof argsRecord?.title === 'string' ? argsRecord.title : ''
   const rowExpandable = spotlightType === null && (expandable || collapsible)
   // 质量报告：默认折叠、点击头部展开回看（报告条目多，平铺会把对话流冲得很长）
   const qualityReport = part.display?.kind === 'qualityReport'

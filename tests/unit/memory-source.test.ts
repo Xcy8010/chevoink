@@ -1,0 +1,46 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import { resolveMemorySource } from '../../api/lib/agent/tools/memory-source.js'
+import { memorySaveTool } from '../../api/lib/agent/tools/write-tools.js'
+import { memoryEventSaveTool, memoryRelationSaveTool } from '../../api/lib/agent/tools/memory-tools.js'
+import { saveStoryMemory } from '../../api/lib/agent/story-memory.js'
+import { prisma } from '../../api/lib/prisma.js'
+import type { ToolContext } from '../../api/lib/agent/tools/types.js'
+
+vi.mock('../../api/lib/prisma.js', () => ({ prisma: { chapter: { findFirst: vi.fn() } },
+  DataAccessError: class extends Error { constructor(public statusCode: number, public code: string, message: string) { super(message) } } }))
+vi.mock('../../api/lib/agent/story-memory.js', () => ({ saveStoryMemory: vi.fn(), listMemoryReviewInbox: vi.fn() }))
+const ctx = { userId: 'u', novelId: 'n', runId: 'r', sessionId: 's', signal: new AbortController().signal } as ToolContext
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(prisma.chapter.findFirst).mockResolvedValue({ id: 'c', revision: 2, content: '林舟把钥匙交给顾棠。' } as never)
+  vi.mocked(saveStoryMemory).mockResolvedValue({ id: 'proposal', status: 'inferred', action: 'conflict' })
+})
+it('binds chapter scope/revision and validates literal quote', async () => {
+  const evidence = await resolveMemorySource(ctx, { sourceChapterId: 'c', revision: 2, sourceQuote: '钥匙交给顾棠' })
+  expect(prisma.chapter.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c', novelId: 'n', authorId: 'u' } }))
+  expect(evidence).toMatchObject({ sourceType: 'chapter', revision: 2, span: { start: 3, end: 9, quoteHash: expect.stringMatching(/^[a-f0-9]{64}$/) } })
+})
+it('rejects forged, cross-work, stale or missing evidence before a memory write', async () => {
+  await expect(resolveMemorySource(ctx, { sourceChapterId: 'c', revision: 1 })).rejects.toMatchObject({ code: 'MEMORY_SOURCE_REQUIRED' })
+  await expect(resolveMemorySource(ctx, { sourceChapterId: 'c', sourceQuote: '钥匙已销毁' })).rejects.toMatchObject({ code: 'MEMORY_EVIDENCE_MISMATCH' })
+  await expect(resolveMemorySource(ctx, { revision: 2 })).rejects.toMatchObject({ code: 'MEMORY_SOURCE_REQUIRED' })
+  vi.mocked(prisma.chapter.findFirst).mockResolvedValue(null)
+  await expect(resolveMemorySource(ctx, { sourceChapterId: 'other' })).rejects.toMatchObject({ code: 'MEMORY_SOURCE_REQUIRED' })
+  expect(saveStoryMemory).not.toHaveBeenCalled()
+})
+it('does not pretend a run ID is an author message or honor model confirmation', async () => {
+  expect(await resolveMemorySource(ctx, {})).toMatchObject({ sourceType: 'artifact', sourceId: 'r' })
+  const result = await memorySaveTool.execute(ctx, memorySaveTool.parameters.parse({ memoryType: 'worldbuilding', title: '设定', content: '模型推断', importance: 70, overwrite: true }))
+  expect(saveStoryMemory).toHaveBeenCalledWith(expect.objectContaining({ agentGenerated: true, status: 'inferred', evidence: expect.objectContaining({ sourceType: 'artifact' }) }), undefined)
+  expect(result.output).toContain('尚未参与事实召回')
+})
+it('relationship and event tools use proposals, not immediate graph/timeline writes', async () => {
+  await memoryRelationSaveTool.execute(ctx, memoryRelationSaveTool.parameters.parse({ fromName: '甲', toName: '乙', relationType: '朋友', confidence: 1 }))
+  await memoryEventSaveTool.execute(ctx, memoryEventSaveTool.parameters.parse({ title: '事件', description: '可能到访', confidence: 1 }))
+  expect(vi.mocked(saveStoryMemory).mock.calls).toHaveLength(2)
+  for (const [input] of vi.mocked(saveStoryMemory).mock.calls) expect(input).toMatchObject({ agentGenerated: true, status: 'inferred' })
+})
+it('oversized memory text fails validation instead of silently truncating facts', () => {
+  const raw = { memoryType: 'worldbuilding', title: '设定', content: '字'.repeat(4001), importance: 80 }
+  expect(memorySaveTool.parameters.safeParse(memorySaveTool.coerceArgs!(raw)).success).toBe(false)
+})
