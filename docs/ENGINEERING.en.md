@@ -1,5 +1,7 @@
 # Chevoink Engineering Documentation
 
+2026-09-12 Change-detail navigation: expanded memory, plan and chapter names are underlined buttons independent of disclosure toggles. Chapters/plans use receipt target IDs, including renamed plans. Memory navigation reuses exact type/title matching within the current novel; legacy summaries never justify selecting an ambiguous match. Failed/denied/running/deletion records are not presented as available document links, and unloaded/deleted targets show a message. At the user's request, local acceptance checks stopped; the user will verify production interactions. Release still requires CI on the same commit.
+
 Structured relation/event proposals are stored in nullable `graph_proposal`. Only author confirmation of unchanged text projects them into graph/timeline in the same transaction, without duplicate confirmation writes. Free-text edits withdraw that card's old projection and retain the revised memory for retrieval, rather than guessing new structured fields; the editor explains this boundary. The additive nullable-column migration remains compatible with older code.
 
 Memory card actions: edit/delete icons stay at the top-right of summary/full-text cards, with the same action group in details. Icon-only buttons retain accessible names, hover titles and 44px hit targets. Body scrolling does not move the actions; deletion still requires separate confirmation. Release requires isolated-database CI on the same commit; locally skipped database tests are not counted as passes.

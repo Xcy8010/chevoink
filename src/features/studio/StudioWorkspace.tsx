@@ -1550,6 +1550,11 @@ export default function StudioWorkspace() {
       ? display.chapterId
       : typeof args.chapterId === 'string' ? args.chapterId : null
     if (chapterId) {
+      if (!chapters.some((chapter) => chapter.id === chapterId)) {
+        toast.error('目标章节尚未载入或已删除，请刷新作品后重试。')
+        clearToolNavigationRequest()
+        return
+      }
       window.dispatchEvent(new Event('chevoink:work-open-document'))
       selectChapterFromToolRef.current(chapterId)
       if (workspacePerspective === 'work') {
@@ -1560,8 +1565,8 @@ export default function StudioWorkspace() {
         setIdeTreeOpen(true)
         setIdeSidebarTab('work')
       }
-    } else if (display?.kind === 'planFile' || display?.kind === 'planDiff' || toolNavigationRequest.toolName.startsWith('plan_')) {
-      const artifactId = display?.kind === 'planFile' || display?.kind === 'planDiff'
+    } else if (display?.kind === 'planFile' || display?.kind === 'planDiff' || display?.kind === 'planRename' || toolNavigationRequest.toolName.startsWith('plan_')) {
+      const artifactId = display?.kind === 'planFile' || display?.kind === 'planDiff' || display?.kind === 'planRename'
         ? display.artifactId
         : typeof args.planId === 'string' ? args.planId : null
       const target = savedPlanFiles.find((plan) => plan.id === artifactId || plan.backendArtifactId === artifactId)
@@ -1576,6 +1581,8 @@ export default function StudioWorkspace() {
           setIdeTreeOpen(true)
           setIdeSidebarTab('work')
         }
+      } else {
+        toast.error('目标计划尚未载入或已删除，请刷新作品后重试。')
       }
     } else if (display?.kind === 'taskOrchestration') {
       // 编排卡片里点某个并行窗口：直接切到那个任务窗口（主控还在跑时由切窗逻辑自己拦下来）
@@ -1585,7 +1592,7 @@ export default function StudioWorkspace() {
       }
     }
     clearToolNavigationRequest()
-  }, [clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective, setIdeSidebarTab, setIdeTreeOpen, setWorkInspectorTab, setWorkRightOpen, setWorkViewer])
+  }, [chapters, toast, clearToolNavigationRequest, savedPlanFiles, toolNavigationRequest, workspacePerspective, setIdeSidebarTab, setIdeTreeOpen, setWorkInspectorTab, setWorkRightOpen, setWorkViewer])
 
   // 记忆沉淀卡点击：把记忆面板切到可见位置，由当前可见的记忆中心实例开覆层闪卡
   useEffect(() => {

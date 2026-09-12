@@ -3,7 +3,8 @@ import { BookCopy, Brain, ChevronDown, ChevronRight, FileText, FolderTree, GitCo
 
 import { cn } from '@/lib/utils'
 import type { StudioPayload } from '../../../../shared/contracts/index.js'
-import type { WorkspaceActivity } from '../agent/agentStore'
+import { useAgentStore, type WorkspaceActivity } from '../agent/agentStore'
+import { resolveActivityNavigation } from '../agent/activity-navigation'
 import type { ProjectNotesState, WorkspacePlanFile } from '../types'
 
 export type WorkInspectorTab = 'work' | 'context' | 'changes' | 'memory' | 'skills'
@@ -61,6 +62,11 @@ function Delta({ added, removed }: { added: number; removed: number }) {
 
 function ChangesTree({ activities, pendingReviewCount }: { activities: WorkspaceActivity[]; pendingReviewCount: number }) {
   const [expandedCalls, setExpandedCalls] = useState<Set<string>>(() => new Set())
+  const messages = useAgentStore((state) => state.messages)
+  const requestToolNavigation = useAgentStore((state) => state.requestToolNavigation)
+  const requestMemorySpotlight = useAgentStore((state) => state.requestMemorySpotlight)
+  const toolParts = useMemo(() => new Map(messages.flatMap((message) => message.parts
+    .filter((part) => part.type === 'tool-call').map((part) => [part.callId, part] as const))), [messages])
   const groups = useMemo(() => {
     const map = new Map<string, { label: string; items: WorkspaceActivity[] }>()
     for (const activity of activities) {
@@ -85,9 +91,22 @@ function ChangesTree({ activities, pendingReviewCount }: { activities: Workspace
             {group.items.map((activity) => {
               const delta = activityDelta(activity)
               const open = expandedCalls.has(activity.callId)
+              const target = resolveActivityNavigation(activity, toolParts.get(activity.callId))
+              const summary = activity.summary || activity.label
+              const titleOffset = target ? summary.indexOf(target.title) : -1
+              const targetLink = target ? <button type="button"
+                aria-label={`查看${target.kind === 'memory' ? '记忆' : '文档'}：${target.title}`}
+                className="inline-flex min-h-8 items-center rounded-sm text-left text-[var(--text-primary)] underline decoration-current underline-offset-4 hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                onClick={() => {
+                  if (target.kind === 'memory') requestMemorySpotlight(target.memoryType, target.title)
+                  else requestToolNavigation(target.toolName, target.args, target.display)
+                }}>{target.title}</button> : null
+              const linkedSummary = target && titleOffset >= 0
+                ? <>{summary.slice(0, titleOffset)}{targetLink}{summary.slice(titleOffset + target.title.length)}</>
+                : <>{summary}{targetLink ? <><br />{targetLink}</> : null}</>
               return <div key={activity.callId} className="border-b border-[var(--border-subtle)] last:border-b-0">
                 <button type="button" onClick={() => setExpandedCalls((current) => { const next = new Set(current); if (next.has(activity.callId)) next.delete(activity.callId); else next.add(activity.callId); return next })} className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-[var(--surface-muted)]"><FileText className="h-3.5 w-3.5 text-[var(--text-tertiary)]" /><span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{activity.toolName}</span><Delta {...delta} /><span className={cn('text-[10px]', activity.status === 'failed' ? 'text-rose-500' : activity.accepted ? 'text-emerald-600' : 'text-[var(--text-tertiary)]')}>{activity.status === 'running' ? '执行中' : activity.status === 'failed' ? '失败' : activity.accepted ? '已接受' : '已完成'}</span>{open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}</button>
-                {open ? <div className="bg-[var(--surface-muted)]/45 px-4 py-2 text-[10px] leading-5 text-[var(--text-secondary)]"><p>{activity.summary || activity.label}</p>{typeof activity.before === 'string' && typeof activity.after === 'string' ? <div className="mt-2 grid gap-2"><div className="rounded-[6px] border border-rose-500/20 bg-rose-500/5 p-2"><p className="mb-1 font-medium text-rose-500">修改前</p><pre className="max-h-24 overflow-auto whitespace-pre-wrap font-sans">{activity.before || '（空）'}</pre></div><div className="rounded-[6px] border border-emerald-500/20 bg-emerald-500/5 p-2"><p className="mb-1 font-medium text-emerald-600">修改后</p><pre className="max-h-24 overflow-auto whitespace-pre-wrap font-sans">{activity.after || '（空）'}</pre></div></div> : null}<p className="mt-2 font-mono text-[var(--text-tertiary)]">call {activity.callId}</p></div> : null}
+                {open ? <div className="bg-[var(--surface-muted)]/45 px-4 py-2 text-[10px] leading-5 text-[var(--text-secondary)]"><p className="break-words">{linkedSummary}</p>{typeof activity.before === 'string' && typeof activity.after === 'string' ? <div className="mt-2 grid gap-2"><div className="rounded-[6px] border border-rose-500/20 bg-rose-500/5 p-2"><p className="mb-1 font-medium text-rose-500">修改前</p><pre className="max-h-24 overflow-auto whitespace-pre-wrap font-sans">{activity.before || '（空）'}</pre></div><div className="rounded-[6px] border border-emerald-500/20 bg-emerald-500/5 p-2"><p className="mb-1 font-medium text-emerald-600">修改后</p><pre className="max-h-24 overflow-auto whitespace-pre-wrap font-sans">{activity.after || '（空）'}</pre></div></div> : null}<p className="mt-2 font-mono text-[var(--text-tertiary)]">call {activity.callId}</p></div> : null}
               </div>
             })}
           </div>
