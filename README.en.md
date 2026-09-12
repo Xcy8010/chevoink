@@ -4,11 +4,11 @@
   </a>
 </p>
 
-<h3 align="center">Put inspiration into words. Let stories grow.</h3>
+<h3 align="center">A spark of inspiration. A world in words.</h3>
 
 <p align="center">
-  An AI-powered platform for writing, reading, and sharing stories.<br>
-  Research, plan, write, and revise with Chevoink Agent — with a workflow you can trace and review.<br>
+  Your AI creative partner, connecting ideas, stories, and readers.<br>
+  Research, plan, write, and revise with Chevoink Agent — a home for creating novels and discovering, reading, and sharing stories.<br>
   <sub>Web · Windows · Android</sub>
 </p>
 

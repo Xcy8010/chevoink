@@ -4,11 +4,11 @@
   </a>
 </p>
 
-<h3 align="center">让灵感落笔，让故事生长。</h3>
+<h3 align="center">一念启创，落墨成域。</h3>
 
 <p align="center">
-  AI 驱动的小说创作、阅读与交流平台。<br>
-  与 Chevoink Agent 一起研究、规划、写作与改稿，让创作过程可追踪、可审阅。<br>
+  以 AI 为创作伙伴，连接灵感、作品与读者。<br>
+  与 Chevoink Agent 一起研究、规划、写作与改稿，在这里创作小说，也发现、阅读与分享故事。<br>
   <sub>Web · Windows · Android</sub>
 </p>
 
