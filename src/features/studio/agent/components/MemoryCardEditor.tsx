@@ -99,6 +99,7 @@ export default function MemoryCardEditor({ card, novelId, onClose, onSaved }: { 
   }
   return <MemoryModal title="编辑记忆卡片" onClose={requestClose}>
     <p className="mb-3 text-xs leading-5 text-[var(--text-secondary)]">草稿保留在当前浏览器标签页，保存后才生效。{card.reviewStatus === 'pending' ? '这是待审核候选；保存修订即确认此设定。' : '模型候选不会直接覆盖作者修订。'}</p>
+    {['relationshipState', 'timelineEvent'].includes(card.memoryType) && <p className="mb-3 text-xs leading-5 text-[var(--text-secondary)]">原样确认会同步工具提供的结构化关系/事件；修改标题或正文后，仅以修订后的卡片参与记忆召回，不沿用旧结构化字段。</p>}
     {storageError && <p role="alert" className="mb-3 text-sm text-amber-600">浏览器无法暂存草稿，请勿刷新或离开，先保存修订。</p>}
     {stale && <div className="mb-3 rounded-xl border p-3 text-sm">草稿基于旧版卡片。请与最新内容核对后再保存。
       <details><summary className="cursor-pointer py-2">查看服务器最新内容</summary><p className="whitespace-pre-wrap break-words">{card.title}{'\n'}{card.content}</p></details>

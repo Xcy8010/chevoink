@@ -261,9 +261,24 @@ describe.runIf(available)('story memory graph transaction boundary', () => {
       expect(await executeDurableToolStep(lease, new AbortController().signal)).toMatchObject({ kind: 'tool', result: failed ? { outcome: 'failed' } : { savedMemoryId: expect.any(String) } })
       expect(await executeDurableToolStep(lease, new AbortController().signal)).toMatchObject({ kind: 'idle' })
       expect(await prisma.projectMemoryEntry.count({ where: { novelId: f.novelId } })).toBe(failed ? 0 : 1)
-      expect(await prisma.storyEvent.count({ where: { novelId: f.novelId } })).toBe(scenario === 'event' ? 1 : 0)
-      expect(await prisma.storyEntity.count({ where: { novelId: f.novelId } })).toBe(scenario === 'relation' ? 2 : 0)
+      expect(await prisma.storyEvent.count({ where: { novelId: f.novelId } })).toBe(0)
+      expect(await prisma.storyEntity.count({ where: { novelId: f.novelId } })).toBe(0)
       expect(await prisma.agentEffectReceipt.count({ where: { operation: { taskRootId: f.rootId } } })).toBe(1)
+      if (!failed) {
+        const memory = await prisma.projectMemoryEntry.findFirstOrThrow({ where: { novelId: f.novelId } })
+        expect(memory.reviewStatus).toBe('pending')
+        await storyMemory.resolveMemoryReview(f.userId, memory.id, true)
+        expect(await prisma.storyEvent.count({ where: { novelId: f.novelId, status: 'confirmed' } })).toBe(scenario === 'event' ? 1 : 0)
+        expect(await prisma.storyEntity.count({ where: { novelId: f.novelId } })).toBe(scenario === 'relation' ? 2 : 0)
+        expect(await prisma.entityRelation.count({ where: { sourceId: memory.id } })).toBe(scenario === 'relation' ? 1 : 0)
+        await expect(storyMemory.resolveMemoryReview(f.userId, memory.id, true)).rejects.toMatchObject({ code: 'MEMORY_REVIEW_STALE' })
+        // Editing prose must not leave previously projected structured facts active.
+        const edited = await storyMemory.updateStoryMemoryEntry(f.userId, memory.id, { content: '作者修改了原事实', expectedVersion: 2 })
+        expect(await prisma.storyEvent.count({ where: { novelId: f.novelId, status: 'confirmed' } })).toBe(0)
+        expect(await prisma.entityRelation.count({ where: { sourceId: memory.id } })).toBe(0)
+        await storyMemory.deleteStoryMemoryEntry(f.userId, memory.id, edited.version)
+        expect(await prisma.projectMemoryEntry.findUniqueOrThrow({ where: { id: memory.id } })).toMatchObject({ status: 'invalid' })
+      }
     })
   })
 

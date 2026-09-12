@@ -7,6 +7,7 @@ import type { MemoryEvidence, MemoryGraph, MemorySearchHit } from '../../../shar
 import { generateTextCompletion } from '../ai-service.js'
 import { getAuxiliaryModelRuntime } from '../credits.js'
 import { DataAccessError, prisma } from '../prisma.js'
+import { memoryGraphProposalSchema, projectReviewedMemoryGraph, type MemoryGraphProposal } from './memory-graph-proposal.js'
 
 type EvidenceInput = {
   sourceType: MemoryEvidence['sourceType']
@@ -37,6 +38,7 @@ type SaveMemoryInput = {
   agentGenerated?: boolean
   /** Deterministic server projections only; never accepted from tool arguments. */
   systemDerived?: boolean
+  graphProposal?: MemoryGraphProposal
 }
 
 function normalize(value: string): string {
@@ -144,6 +146,7 @@ export async function saveStoryMemory(input: SaveMemoryInput, transaction?: Pris
       memoryType: input.memoryType, layer: input.layer, title: canonicalTitle, content,
       importance: input.importance, confidence: Math.min(input.confidence, 0.8),
       status: 'inferred', reviewStatus: 'pending', embedding: hashVector(`${canonicalTitle}\n${content}`),
+      ...(input.graphProposal ? { graphProposal: { title: canonicalTitle, content, proposal: memoryGraphProposalSchema.parse(input.graphProposal) } } : {}),
     } })
     await addEvidence(candidate.id, input.evidence, db)
     if (baseline) await db.memoryRevision.create({ data: { memoryId: candidate.id, before: baseline.content, after: content,
@@ -776,6 +779,7 @@ export async function resolveMemoryReview(userId: string, memoryId: string, acce
     })
     // 接受候选即代表新事实生效：同名单卡旧版本一律 superseded，避免新旧设定同时参与检索造成混乱
     if (accepted) {
+      await projectReviewedMemoryGraph(tx, updated, memory.title)
       await invalidateDerivedMemory(tx, memory.novelId)
       await tx.projectMemoryEntry.updateMany({
         where: {
@@ -898,6 +902,7 @@ export async function updateStoryMemoryEntry(userId: string, memoryId: string, p
           where: { id: memory.id },
           data: { title, content, importance, status: 'confirmed', reviewStatus: 'accepted', confidence: 1, version: { increment: 1 }, embedding: hashVector(`${title}\n${content}`) },
       })
+      await projectReviewedMemoryGraph(tx, { ...memory, title, content }, memory.reviewStatus === 'pending' ? memory.title : undefined)
       if (memory.reviewStatus === 'pending') await tx.projectMemoryEntry.updateMany({ where: { novelId: memory.novelId,
         memoryType: memory.memoryType, title: memory.title, id: { not: memory.id }, status: { notIn: ['invalid', 'superseded'] } },
         data: { status: 'superseded', reviewStatus: 'none', version: { increment: 1 } } })
@@ -972,11 +977,11 @@ export async function deleteStoryMemoryEntry(userId: string, memoryId: string, e
     await tx.memoryRevision.create({ data: { memoryId, before: memory.content, after: '', reason: 'author_delete' } })
     await tx.projectMemoryEntry.update({ where: { id: memoryId }, data: { status: 'invalid', reviewStatus: 'rejected', embedding: [], version: { increment: 1 } } })
     if (memory.memoryType === 'characterCard') await tx.storyEntity.updateMany({ where: { novelId: memory.novelId, entityType: 'character', canonicalName: memory.title, description: memory.content }, data: { status: 'invalid' } })
-    const sourceIds = memory.evidence.map(item => item.sourceId)
+    const sourceIds = [memory.id, ...memory.evidence.map(item => item.sourceId)]
     if (memory.memoryType === 'timelineEvent') await tx.storyEvent.updateMany({ where: { novelId: memory.novelId, title: memory.title, sourceId: { in: sourceIds } }, data: { status: 'invalid' } })
     if (memory.memoryType === 'relationshipState') {
       const relations = await tx.entityRelation.findMany({ where: { fromEntity: { novelId: memory.novelId }, sourceId: { in: sourceIds } }, include: { fromEntity: true, toEntity: true } })
-      const ids = relations.filter(item => `${item.fromEntity.canonicalName}→${item.toEntity.canonicalName}:${item.relationType}` === memory.title).map(item => item.id)
+      const ids = relations.filter(item => item.sourceId === memory.id || `${item.fromEntity.canonicalName}→${item.toEntity.canonicalName}:${item.relationType}` === memory.title).map(item => item.id)
       if (ids.length) await tx.entityRelation.deleteMany({ where: { id: { in: ids } } })
     }
     return { id: memoryId, deleted: true }

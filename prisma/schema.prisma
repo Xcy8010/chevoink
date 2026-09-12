@@ -1907,6 +1907,7 @@ model ProjectMemoryEntry {
   content         String
   importance      Int                @default(50)
   embeddingRef    String?            @map("embedding_ref") @db.VarChar(255)
+  graphProposal   Json?              @map("graph_proposal")
   layer           StoryMemoryLayer   @default(L1)
   status          StoryMemoryStatus  @default(confirmed)
   reviewStatus    MemoryReviewStatus @default(none) @map("review_status")

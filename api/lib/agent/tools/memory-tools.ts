@@ -34,6 +34,7 @@ export const memoryRelationSaveTool = defineTool({
       memoryType: 'relationshipState', layer: 'L2', title: `${args.fromName}→${args.toName}:${args.relationType}`,
       content: `${args.fromName}与${args.toName}的关系为${args.relationType}${args.state ? `，当前状态：${args.state}` : ''}${args.validFrom ? `；自第${args.validFrom}章` : ''}${args.validTo ? `；至第${args.validTo}章` : ''}`,
       importance: 75, confidence: Math.min(args.confidence, evidence.confidence), status: 'inferred', evidence, agentGenerated: true,
+      graphProposal: { kind: 'relation', fromName: args.fromName, toName: args.toName, relationType: args.relationType, state: args.state, validFrom: args.validFrom, validTo: args.validTo },
     }, ctx.transaction)
     return { savedMemoryId: relation.id, output: `关系候选 memoryId=${relation.id}：${args.fromName} → ${args.toName}，${relation.action === 'conflict' ? '等待作者审核，未覆盖旧关系' : '已有相同记忆，未重复写入'}。`, summary: `关系候选 ${args.fromName}→${args.toName}` }
   },
@@ -57,6 +58,7 @@ export const memoryEventSaveTool = defineTool({
         args.participants.length && `参与者：${args.participants.join('、')}`, args.causes.length && `原因：${args.causes.join('；')}`,
         args.effects.length && `结果：${args.effects.join('；')}`].filter(Boolean).join('\n'),
       importance: 75, confidence: Math.min(args.confidence, evidence.confidence), status: 'inferred', evidence, agentGenerated: true,
+      graphProposal: { kind: 'event', description: args.description, storyTime: args.storyTime, location: args.location, participants: args.participants, causes: args.causes, effects: args.effects },
     }, ctx.transaction)
     return { savedMemoryId: event.id, output: `事件候选 memoryId=${event.id}：${args.title}，${event.action === 'conflict' ? '等待作者审核，未作为已发生事实' : '已有相同记忆，未重复写入'}。`, summary: `事件候选「${args.title}」` }
   },
