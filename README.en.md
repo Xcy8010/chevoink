@@ -1,18 +1,37 @@
-# <img src="public/favicon.png" alt="Chevoink" width="40" height="40"> Chevoink 启创墨域
+<p align="center">
+  <a href="https://chevoink.chevolink.com">
+    <img src="docs/assets/chevoink-readme-banner.png" alt="Chevoink 启创墨域 — AI writing and reading platform" width="1200">
+  </a>
+</p>
 
-[简体中文](./README.md) | **English**
+<h3 align="center">Put inspiration into words. Let stories grow.</h3>
 
-An AI-driven, full-stack novel writing and reading platform. **Chevoink Agent 3.0** organizes genre research, Story Charter, Skill OS, scene tasks, long-form memory, a human-quality gate, and versioned tool execution into one traceable creative workflow. Readers can discover, follow, listen to, and discuss books. The product is available on the web and as an Android app (Capacitor shell + in-app updates).
+<p align="center">
+  An AI-powered platform for writing, reading, and sharing stories.<br>
+  Research, plan, write, and revise with Chevoink Agent — with a workflow you can trace and review.<br>
+  <sub>Web · Windows · Android</sub>
+</p>
 
-Live site: <https://chevoink.chevolink.com>
+<p align="center">
+  <a href="https://github.com/Xcy8010/chevoink/releases"><img src="https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&amp;color=14b8a6" alt="Latest release"></a>
+  <a href="https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml"><img src="https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/Xcy8010/chevoink/stargazers"><img src="https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&amp;logo=github&amp;label=Stars" alt="GitHub Stars"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="License AGPL-3.0"></a>
+  <a href="#community"><img src="https://img.shields.io/badge/QQ-158443235-14b8a6" alt="QQ group 158443235"></a>
+</p>
 
-[![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
-[![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#license)
-[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#tech-stack)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#tech-stack)
-[![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
-[![QQ Group](https://img.shields.io/badge/QQ%20Group-158443235-blue?logo=tencentqq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
+<p align="center">
+  <a href="https://chevoink.chevolink.com"><strong>Try Online</strong></a> ·
+  <a href="#product-preview">Preview</a> ·
+  <a href="#feature-overview">Features</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="https://github.com/Xcy8010/chevoink/releases">Download</a> ·
+  <a href="#community">Community</a>
+</p>
+
+<p align="center"><a href="./README.md">简体中文</a> · <strong>English</strong></p>
+
+---
 
 ## Product Preview
 

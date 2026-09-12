@@ -1,18 +1,37 @@
-# <img src="public/favicon.png" alt="启创墨域" width="40" height="40"> 启创墨域 Chevoink
+<p align="center">
+  <a href="https://chevoink.chevolink.com">
+    <img src="docs/assets/chevoink-readme-banner.png" alt="Chevoink 启创墨域 — AI 创作与阅读平台" width="1200">
+  </a>
+</p>
 
-**简体中文** | [English](./README.en.md)
+<h3 align="center">让灵感落笔，让故事生长。</h3>
 
-这是一个 AI 应用——AI 驱动的全栈小说创作与阅读平台。**Chevoink Agent 3.0** 把题材研究、Story Charter、Skill OS、场景任务、长篇记忆、人类感质量门与版本化工具执行组织成一条可追踪创作流水线；读者可以在书城发现、追更、听书，社区提供帖子、话题与私信互动。支持网页端与安卓 APP（Capacitor 壳 + 应用内更新）。
+<p align="center">
+  AI 驱动的小说创作、阅读与交流平台。<br>
+  与 Chevoink Agent 一起研究、规划、写作与改稿，让创作过程可追踪、可审阅。<br>
+  <sub>Web · Windows · Android</sub>
+</p>
 
-线上地址：<https://chevoink.chevolink.com>
+<p align="center">
+  <a href="https://github.com/Xcy8010/chevoink/releases"><img src="https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&amp;color=14b8a6" alt="最新 Release"></a>
+  <a href="https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml"><img src="https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://github.com/Xcy8010/chevoink/stargazers"><img src="https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&amp;logo=github&amp;label=Stars" alt="GitHub Stars"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="License AGPL-3.0"></a>
+  <a href="#交流群"><img src="https://img.shields.io/badge/QQ-158443235-14b8a6" alt="QQ 交流群 158443235"></a>
+</p>
 
-[![CI](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml/badge.svg)](https://github.com/Xcy8010/chevoink/actions/workflows/ci.yml)
-[![GitHub stars](https://img.shields.io/github/stars/Xcy8010/chevoink?style=flat&logo=github&label=Stars)](https://github.com/Xcy8010/chevoink/stargazers)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-orange)](#license)
-[![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#技术栈)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](#技术栈)
-[![Release](https://img.shields.io/github/v/release/Xcy8010/chevoink?label=Release&color=gold)](https://github.com/Xcy8010/chevoink/releases)
-[![QQ 交流群](https://img.shields.io/badge/QQ%E4%BA%A4%E6%B5%81%E7%BE%A4-158443235-blue?logo=tencentqq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=O%2Bhtn0O51Qt5fW67Pj%2BSV7v0QI1%2FESTce7xHduNryLjTadVyekW9TMJcs0Wd5Qap&busi_data=eyJncm91cENvZGUiOiIxNTg0NDMyMzUiLCJ0b2tlbiI6ImdkU3I4ckRWR1M1L3hjTklTTGxHUnVYdVJ6bFNJeXN0c2ozbk1qd0pEeXpZb0JrdkZsbVNyUGtXY3lHZUFGYXQiLCJ1aW4iOiIyNDQ5MTI5ODYyIn0%3D&data=ys8RFeB2nMSORLKaLMkGLLRE8N8WU2t9WCjktU9Dg5YogAZktMZLLLMTj5t2KvcXA8K4p4J2NLPUEV0FO9OpRw&svctype=4&tempid=h5_group_info)
+<p align="center">
+  <a href="https://chevoink.chevolink.com"><strong>在线体验</strong></a> ·
+  <a href="#产品预览">产品预览</a> ·
+  <a href="#功能一览">核心能力</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="https://github.com/Xcy8010/chevoink/releases">客户端下载</a> ·
+  <a href="#交流群">社区交流</a>
+</p>
+
+<p align="center"><strong>简体中文</strong> · <a href="./README.en.md">English</a></p>
+
+---
 
 ## 产品预览
 
